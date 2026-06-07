@@ -136,3 +136,39 @@ describe("promoteCandidate", () => {
     expect(Number.isFinite(d.delta)).toBe(true);
   });
 });
+
+describe("promoteCandidate — strict-improvement mode (Slice 2)", () => {
+  it("blocks a tie when requireStrictImprovement is on (must beat, not match)", async () => {
+    const tieBaseline: EvalGateBaseline = { score: 1.0, failureClusters: {} };
+    const d = await promoteCandidate(CANDIDATE, passingSuite(), tieBaseline, {
+      requireStrictImprovement: true,
+    });
+    expect(d.promoted).toBe(false);
+    expect(d.blockedBy).toBe("no_improvement");
+    expect(d.delta).toBe(0);
+  });
+
+  it("promotes a strictly-better candidate under strict mode", async () => {
+    const lowBaseline: EvalGateBaseline = { score: 0.0, failureClusters: {} };
+    const d = await promoteCandidate(CANDIDATE, passingSuite(), lowBaseline, {
+      requireStrictImprovement: true,
+    });
+    expect(d.promoted).toBe(true);
+    expect(d.delta).toBeGreaterThan(0);
+  });
+
+  it("still blocks a regression under strict mode (regression takes priority)", async () => {
+    const highBaseline: EvalGateBaseline = { score: 1.0, failureClusters: {} };
+    const d = await promoteCandidate(CANDIDATE, failingSuite(), highBaseline, {
+      requireStrictImprovement: true,
+    });
+    expect(d.promoted).toBe(false);
+    expect(d.blockedBy).toBe("regression");
+  });
+
+  it("default mode still allows a tie (backward compatible)", async () => {
+    const tieBaseline: EvalGateBaseline = { score: 1.0, failureClusters: {} };
+    const d = await promoteCandidate(CANDIDATE, passingSuite(), tieBaseline);
+    expect(d.promoted).toBe(true);
+  });
+});

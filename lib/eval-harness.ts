@@ -3,7 +3,17 @@ export type EvalGrader =
   | { type: "contains"; weight: number; values: string[] }
   | { type: "tool_call"; weight: number; required?: string[]; forbidden?: string[] }
   | { type: "state_check"; weight: number; expect: Record<string, unknown> }
-  | { type: "llm_rubric"; weight: number; rubric: string };
+  | {
+      type: "llm_rubric";
+      weight: number;
+      rubric: string;
+      /**
+       * Slice 2: a pre-computed judge verdict. When present it is honored
+       * synchronously here (the harness stays sync); when absent the grader
+       * scores the original 0.75 "pending" so legacy callers are unchanged.
+       */
+      verdict?: { pass: boolean; score?: number; reason?: string };
+    };
 
 export type EvalFixture = {
   id: string;
@@ -88,6 +98,11 @@ function scoreGrader(fixture: EvalFixture, grader: EvalGrader): { score: number;
     const state = fixture.actual.state ?? {};
     const matched = expectedEntries.every(([key, value]) => JSON.stringify(state[key]) === JSON.stringify(value));
     return { score: matched ? 1 : 0, failureTags: matched ? [] : ["state_mismatch"] };
+  }
+  // llm_rubric: honor a pre-computed judge verdict (Slice 2); else score "pending".
+  if (grader.verdict) {
+    const score = grader.verdict.score ?? (grader.verdict.pass ? 1 : 0);
+    return { score: round(score), failureTags: grader.verdict.pass ? [] : ["rubric_failed"] };
   }
   return { score: 0.75, failureTags: ["llm_judge_pending"] };
 }

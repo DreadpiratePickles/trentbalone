@@ -53,6 +53,13 @@ export type RunSkillIterationInput = {
   deps: IterationDeps;
   /** Override per-eval graders (mechanical grading / tests). */
   gradersFor?: (ev: SkillEval) => EvalGrader[];
+  /**
+   * Slice 2: require the candidate to STRICTLY beat the baseline on the targeted
+   * metric (delta > 0), not merely tie. Pair with a live-primed `actuals` provider
+   * + judged `gradersFor` so the comparison is against real candidate output.
+   * Default (off) keeps the Slice 1 tie-allowed rule.
+   */
+  requireStrictImprovement?: boolean;
   /** Skip the Foundry LLM (tests / cost control). */
   skipLLM?: boolean;
   /** Candidate version label. */
@@ -69,7 +76,7 @@ export type IterationOutcome = {
   /** Set when decision === "pending_approval". */
   approvalId?: string;
   /** Set when decision === "rejected". */
-  blockedBy?: "regression" | "new_failure_cluster";
+  blockedBy?: "regression" | "new_failure_cluster" | "no_improvement";
   /** Full candidate SKILL.md content (for callers/UI). */
   candidateContent?: string;
 };
@@ -108,6 +115,7 @@ export async function runSkillIteration(input: RunSkillIterationInput): Promise<
     { id: draft.id, type: "skill", version },
     frozenSuite,
     baseline,
+    { requireStrictImprovement: input.requireStrictImprovement ?? false },
   );
 
   const triggers = draft.triggeredBy;

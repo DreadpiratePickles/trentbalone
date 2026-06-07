@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runEvalSuite } from "@/lib/eval-harness";
+import { runEvalSuite, type EvalFixture } from "@/lib/eval-harness";
 
 describe("eval harness", () => {
   it("scores seat and plug fixtures with deterministic graders and failure tags", async () => {
@@ -32,5 +32,54 @@ describe("eval harness", () => {
     expect(result.score).toBe(0.5);
     expect(result.delta).toBeCloseTo(-0.2);
     expect(result.fixtures[1].failureTags).toContain("missing_tool_call");
+  });
+});
+
+function rubricFixture(graders: EvalFixture["graders"], actual: EvalFixture["actual"] = {}): EvalFixture {
+  return { id: "f1", rubricId: "r", input: "x", actual, graders };
+}
+
+describe("eval harness — llm_rubric verdicts (Slice 2)", () => {
+  it("scores 0.75 (pending) when no verdict is attached — preserves original behavior", async () => {
+    const res = await runEvalSuite({
+      subjectType: "plug",
+      subjectId: "s",
+      version: "v1",
+      fixtures: [rubricFixture([{ type: "llm_rubric", weight: 1, rubric: "addresses prompt" }])],
+    });
+    expect(res.score).toBe(0.75);
+    expect(res.failureClusters.llm_judge_pending).toBe(1);
+  });
+
+  it("honors a pass verdict (score 1, no failure tag)", async () => {
+    const res = await runEvalSuite({
+      subjectType: "plug",
+      subjectId: "s",
+      version: "v1",
+      fixtures: [rubricFixture([{ type: "llm_rubric", weight: 1, rubric: "r", verdict: { pass: true } }])],
+    });
+    expect(res.score).toBe(1);
+    expect(res.failureClusters).toEqual({});
+  });
+
+  it("honors a fail verdict (score 0, rubric_failed cluster)", async () => {
+    const res = await runEvalSuite({
+      subjectType: "plug",
+      subjectId: "s",
+      version: "v1",
+      fixtures: [rubricFixture([{ type: "llm_rubric", weight: 1, rubric: "r", verdict: { pass: false } }])],
+    });
+    expect(res.score).toBe(0);
+    expect(res.failureClusters.rubric_failed).toBe(1);
+  });
+
+  it("honors a graded partial score from the verdict", async () => {
+    const res = await runEvalSuite({
+      subjectType: "plug",
+      subjectId: "s",
+      version: "v1",
+      fixtures: [rubricFixture([{ type: "llm_rubric", weight: 1, rubric: "r", verdict: { pass: true, score: 0.6 } }])],
+    });
+    expect(res.score).toBe(0.6);
   });
 });

@@ -8,11 +8,13 @@
  * Deliberately NON-blocking: each task-type group is wrapped in try/catch and the
  * function never throws — errors are collected into the returned report.
  *
- * SCOPE NOTE (Slice 2 deferral): live candidate execution that produces fresh eval
- * "actuals" is NOT built yet, so there is nothing real to score a candidate against.
- * Therefore this sweep does NO numeric eval-gating — drafts go straight to a human-
- * review approval (decision "pending_approval", unscored). Numeric eval-gate scoring
- * lands in Slice 2; nothing here auto-promotes to the live skill set.
+ * SCOPE NOTE: live candidate execution (Slice 2) now EXISTS as opt-in primitives —
+ * `LiveActualsProvider` (fresh actuals via an injected orchestrator runner),
+ * `buildJudgedGradersFor` + `createLlmJudge` (real `evals.json` grading), and the
+ * `requireStrictImprovement` eval-gate mode. This sweep still deliberately does NO
+ * numeric eval-gating: drafts go straight to a human-review approval (decision
+ * "pending_approval", unscored). Wiring the Slice 2 primitives + a per-skill frozen
+ * suite/baseline into this overnight path is Slice 3; nothing here auto-promotes.
  */
 
 import { appendAuditLog } from "@/lib/audit-log";

@@ -33,8 +33,19 @@ export type EvalGateDecision = {
   score: number;
   /** Signed delta vs baseline.score. */
   delta: number;
-  blockedBy?: "regression" | "new_failure_cluster";
+  blockedBy?: "regression" | "new_failure_cluster" | "no_improvement";
   result: EvalSuiteResult;
+};
+
+export type PromoteOptions = {
+  /**
+   * Slice 2: when true, the candidate must STRICTLY beat the baseline
+   * (delta > 0) — a tie is not enough. Apply this to the *targeted* skill metric
+   * so a candidate only promotes when it measurably improves the thing it
+   * changed. Default (false) keeps the original ≥ rule (tie allowed) used for the
+   * full frozen suite.
+   */
+  requireStrictImprovement?: boolean;
 };
 
 /**
@@ -61,6 +72,7 @@ export async function promoteCandidate(
   candidate: EvalGateCandidate,
   frozenSuite: Omit<EvalSuiteInput, "subjectId" | "previousScore">,
   baseline: EvalGateBaseline,
+  options?: PromoteOptions,
 ): Promise<EvalGateDecision> {
   const result = await runEvalSuite({
     ...frozenSuite,
@@ -72,6 +84,10 @@ export async function promoteCandidate(
 
   if (delta < 0) {
     return { promoted: false, score: result.score, delta, blockedBy: "regression", result };
+  }
+
+  if (options?.requireStrictImprovement && delta === 0) {
+    return { promoted: false, score: result.score, delta, blockedBy: "no_improvement", result };
   }
 
   if (hasNewFailureCluster(result.failureClusters, baseline.failureClusters)) {
