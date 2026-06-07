@@ -1,0 +1,4 @@
+interface:
+  display_name: "Obsidian Mind"
+  short_description: "Work in the Obsidian Mind vault template"
+  default_prompt: "Use the repo's AGENTS.md and CLAUDE.md, preserve the vault structure, and prefer the installed Obsidian skills for markdown, bases, canvas, CLI, and web clipping."

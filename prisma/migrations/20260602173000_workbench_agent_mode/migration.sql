@@ -1,0 +1,2 @@
+ALTER TABLE "WorkbenchSession"
+  ADD COLUMN IF NOT EXISTS "agentMode" TEXT NOT NULL DEFAULT 'build';

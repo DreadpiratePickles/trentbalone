@@ -1,0 +1,37 @@
+# gitleaks configuration for Trent
+# Install: brew install gitleaks
+# Run:     gitleaks detect --source . --config .gitleaks.toml
+# Pre-commit: add to .git/hooks/pre-commit or use pre-commit framework
+
+title = "Trent gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "trent-encryption-key"
+description = "Trent SECRET_ENCRYPTION_KEY"
+regex = '''SECRET_ENCRYPTION_KEY\s*=\s*["']?[0-9a-fA-F]{60,}'''
+tags = ["key", "trent"]
+
+[[rules]]
+id = "trent-env-file"
+description = "Raw .env file committed"
+path = '''(^|/)\.env$'''
+tags = ["env", "trent"]
+
+[allowlist]
+description = "Global allow list"
+paths = [
+  ".env.example",
+  ".gitleaks.toml",
+  "vitest.config.ts",   # contains DATABASE_URL pointing to test.db
+  "vitest.setup.ts",
+]
+regexes = [
+  # placeholder values
+  '''REPLACE_WITH''',
+  '''sk-\.\.\.''',
+  '''sk-ant-\.\.\.''',
+  '''00000000000000000000000000000000''',
+]

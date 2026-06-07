@@ -1,0 +1,1 @@
+ALTER TYPE "AgentRole" ADD VALUE IF NOT EXISTS 'sales';

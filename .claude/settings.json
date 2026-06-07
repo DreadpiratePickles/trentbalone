@@ -1,0 +1,58 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CMD=\"$CLAUDE_TOOL_INPUT\"; if echo \"$CMD\" | grep -qE '(lib/provisioning|api/provisioning|api/teardown)' && echo \"$CMD\" | grep -qE '(curl|fetch|provision|teardown)'; then echo '[pre-provision hook] Checking Phase 2 budget cap before provisioning action'; fi; true",
+            "description": "Pre-provision hook: flag provisioning actions for budget cap awareness"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE_PATH=\"$CLAUDE_FILE_PATH\"; if [[ \"$FILE_PATH\" == *.ts || \"$FILE_PATH\" == *.tsx ]]; then timeout 60 npx tsc --noEmit --pretty false --incremental --tsBuildInfoFile node_modules/.cache/tsc-hook.tsbuildinfo 2>&1 | tail -20; fi",
+            "description": "Type-check after TypeScript edits (incremental + timeout-capped)"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE_PATH=\"$CLAUDE_FILE_PATH\"; if echo \"$FILE_PATH\" | grep -q 'lib/provisioning/'; then echo \"[post-provisioner hook] Provisioner file edited: $FILE_PATH — run tests: npx vitest run $FILE_PATH\"; fi; true",
+            "description": "Post-provision hook: remind to run tests after editing a provisioner"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git diff --name-only HEAD 2>/dev/null | xargs grep -l 'console\\.log' 2>/dev/null | while read f; do echo \"[hook] console.log found in $f\"; done; true",
+            "description": "Warn about console.log in modified files at session end"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PROVISIONERS=$(git diff --name-only HEAD 2>/dev/null | grep 'lib/provisioning/' | grep -v '.test.' | head -5); if [ -n \"$PROVISIONERS\" ]; then echo \"[session-end hook] Phase 3 provisioners modified this session:\"; echo \"$PROVISIONERS\"; echo \"[session-end hook] Reminder: real-provider validation required before ship (no mocks sufficient)\"; fi; true",
+            "description": "Session-end: remind about real-provider validation for modified provisioners"
+          }
+        ]
+      }
+    ]
+  }
+}

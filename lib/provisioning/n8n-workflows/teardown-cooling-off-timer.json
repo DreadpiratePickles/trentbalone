@@ -1,0 +1,163 @@
+{
+  "name": "trent-teardown-cooling-off-timer",
+  "description": "Manages the 30-day teardown cooling-off state machine. On teardown.initiate webhook: starts timer. Day 25: sends reminder. Day 30: triggers human escalation approval. Cancellation stops the timer.",
+  "nodes": [
+    {
+      "id": "teardown-initiate-webhook",
+      "name": "Teardown Initiate Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "path": "trent/teardown-initiated",
+        "httpMethod": "POST",
+        "responseMode": "onReceived"
+      }
+    },
+    {
+      "id": "set-teardown-vars",
+      "name": "Extract Teardown Variables",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [450, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "name": "companyId", "value": "={{ $json.body.companyId }}", "type": "string" },
+            { "name": "coolingOffEndsAt", "value": "={{ $json.body.coolingOffEndsAt }}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "wait-25-days",
+      "name": "Wait 25 Days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "parameters": { "amount": 25, "unit": "days" }
+    },
+    {
+      "id": "check-cancelled-25",
+      "name": "Check Teardown Still Active (Day 25)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.TRENT_API_BASE_URL}}/api/teardown?companyId={{$('set-teardown-vars').item.json.companyId}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      }
+    },
+    {
+      "id": "is-still-cooling-off-25",
+      "name": "Still cooling_off?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1050, 300],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.teardown.state }}",
+              "rightValue": "cooling_off",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "send-day-25-reminder",
+      "name": "Send Day-25 Reminder Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1250, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.TRENT_API_BASE_URL}}/api/webhooks/n8n/teardown-reminder",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ companyId: $('set-teardown-vars').item.json.companyId, daysRemaining: 5, coolingOffEndsAt: $('set-teardown-vars').item.json.coolingOffEndsAt }) }}"
+      }
+    },
+    {
+      "id": "wait-5-more-days",
+      "name": "Wait 5 More Days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1450, 200],
+      "parameters": { "amount": 5, "unit": "days" }
+    },
+    {
+      "id": "check-cancelled-30",
+      "name": "Check Teardown Still Active (Day 30)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1650, 200],
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.TRENT_API_BASE_URL}}/api/teardown?companyId={{$('set-teardown-vars').item.json.companyId}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      }
+    },
+    {
+      "id": "is-still-cooling-off-30",
+      "name": "Still cooling_off at Day 30?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1850, 200],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.teardown.state }}",
+              "rightValue": "cooling_off",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "create-deletion-approval",
+      "name": "Create Human Escalation Approval",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2050, 100],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.TRENT_API_BASE_URL}}/api/approvals",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ companyId: $('set-teardown-vars').item.json.companyId, action: 'teardown.permanent_delete', reason: 'Cooling-off period of 30 days has expired. Permanent deletion requires human confirmation.', irreversibilityRating: 'permanent' }) }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      }
+    }
+  ],
+  "connections": {
+    "Teardown Initiate Webhook": { "main": [[{ "node": "Extract Teardown Variables", "type": "main", "index": 0 }]] },
+    "Extract Teardown Variables": { "main": [[{ "node": "Wait 25 Days", "type": "main", "index": 0 }]] },
+    "Wait 25 Days": { "main": [[{ "node": "Check Teardown Still Active (Day 25)", "type": "main", "index": 0 }]] },
+    "Check Teardown Still Active (Day 25)": { "main": [[{ "node": "Still cooling_off?", "type": "main", "index": 0 }]] },
+    "Still cooling_off?": {
+      "main": [
+        [{ "node": "Send Day-25 Reminder Notification", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Send Day-25 Reminder Notification": { "main": [[{ "node": "Wait 5 More Days", "type": "main", "index": 0 }]] },
+    "Wait 5 More Days": { "main": [[{ "node": "Check Teardown Still Active (Day 30)", "type": "main", "index": 0 }]] },
+    "Check Teardown Still Active (Day 30)": { "main": [[{ "node": "Still cooling_off at Day 30?", "type": "main", "index": 0 }]] },
+    "Still cooling_off at Day 30?": {
+      "main": [
+        [{ "node": "Create Human Escalation Approval", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

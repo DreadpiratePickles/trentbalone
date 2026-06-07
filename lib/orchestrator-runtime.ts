@@ -1,0 +1,1016 @@
+import { z } from "zod";
+import { type ToolAdapter } from "@/lib/tools";
+import { getAgentRuntime } from "@/lib/agent-runtime";
+import { assertAgentTokenBudget, assertSpendAvailable } from "@/lib/spend";
+import { store } from "@/lib/store";
+import { getApprovalExpiryHours } from "@/lib/tools";
+import {
+  buildAgentRoutingContext,
+  formatRouteRecommendation,
+  recommendSeatForObjective,
+} from "@/lib/agent-routing-context";
+import {
+  buildContentMissionApprovalPacket,
+  buildContentMissionDossier,
+  buildContentMissionFallbackPlan,
+  buildContentMissionProtocolBrief,
+  isContentMissionObjective,
+} from "@/lib/content-mission";
+import { buildPlatformAuthReadiness, inferPlatformRequirements } from "@/lib/platform-auth-readiness";
+import type { AgentExecution, AgentEnvironmentConfig, AgentRole, Approval, Company, Cycle, Task, ToolCallRecord } from "@/lib/types";
+import { makeId, nowIso } from "@/lib/utils";
+import { callJson, callText, MODELS, MAX_TOKENS } from "@/lib/ai-client";
+import { runSeatAgent, type SeatLoopResumeSeed } from "@/lib/seat-agent-loop";
+import type { WorkRequest } from "@/lib/planner";
+import { getSeatManifest } from "@/lib/seat-manifest";
+import { routeToolsForStep } from "@/lib/semantic-router";
+import { getDegradedTools } from "@/lib/tool-health-cache";
+import { getRuntimeEvalOverrides } from "@/lib/runtime-eval-overrides";
+import { emitJobEvent } from "@/lib/job-events";
+import { buildCompanySkillPrelude } from "@/lib/agent-skill-instructions";
+import { InMemorySkillDraftStore, type SkillDraftStore } from "@/lib/skill-foundry";
+import { PrismaSkillDraftStore } from "@/lib/self-improvement/skill-draft-store.prisma";
+
+/**
+ * Skill reuse (OpenSpace): inject a company's live distilled skills into the seat
+ * prompt so agents follow proven procedures instead of re-deriving them. Behind a
+ * flag, default OFF → prod behavior unchanged until the live skill store + trace
+ * derivation (Slice 2) are validated end-to-end.
+ */
+const SKILL_INJECTION_ENABLED = process.env.SKILL_INJECTION_ENABLED === "1";
+
+let liveSkillStore: SkillDraftStore | null = null;
+function getLiveSkillStore(): SkillDraftStore {
+  if (liveSkillStore) return liveSkillStore;
+  // Prisma-backed when a DB is configured, else an (empty) in-memory store so
+  // injection safely no-ops in DB-less dev/test.
+  liveSkillStore = process.env.DATABASE_URL
+    ? new PrismaSkillDraftStore()
+    : new InMemorySkillDraftStore();
+  return liveSkillStore;
+}
+
+const TOKEN_ESTIMATE_PER_STEP = 1500;
+// ── Model config ──────────────────────────────────────────────────────────────
+const PLANNER_MODEL    = process.env.PLANNER_MODEL    ?? MODELS.STRONG;
+const SPECIALIST_MODEL = process.env.SPECIALIST_MODEL ?? MODELS.DEFAULT;
+const CRITIC_MODEL     = process.env.CRITIC_MODEL     ?? MODELS.CRITIC;
+
+const stepSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  rationale: z.string(),
+  agentRole: z.enum([
+    "ceo", "engineer", "growth", "content", "support",
+    "finance", "analyst", "escalation", "sales",
+  ]),
+  dependsOn: z.array(z.string()).default([]),
+  expectedOutput: z.string(),
+  riskLevel: z.enum(["low", "medium", "high"]),
+  needsApproval: z.boolean().default(false),
+});
+
+const planSchema = z.object({
+  objective: z.string(),
+  reasoning: z.string(),
+  steps: z.array(stepSchema).min(1).max(12),
+  successCriteria: z.array(z.string()),
+  blockers: z.array(z.string()).default([]),
+});
+
+const critiqueSchema = z.object({
+  verdict: z.enum(["pass", "retry", "replan", "escalate"]),
+  reason: z.string(),
+  improvement: z.string().optional(),
+});
+
+type RawOrchestrationPlan = z.infer<typeof planSchema>;
+
+export type OrchestrationStep = Omit<z.infer<typeof stepSchema>, "dependsOn" | "needsApproval"> & {
+  dependsOn: string[];
+  needsApproval: boolean;
+};
+
+export type OrchestrationPlan = Omit<RawOrchestrationPlan, "steps" | "blockers"> & {
+  steps: OrchestrationStep[];
+  blockers: string[];
+};
+
+export type OrchestrationCritique = z.infer<typeof critiqueSchema>;
+
+export type SeatLoopResumeState = SeatLoopResumeSeed;
+
+export type StepRecord = OrchestrationStep & {
+  status: "pending" | "running" | "completed" | "failed" | "blocked" | "awaiting_approval";
+  output?: string;
+  critique?: OrchestrationCritique;
+  startedAt?: string;
+  completedAt?: string;
+  model?: string;
+  tokens?: number;
+  costCents?: number;
+  toolCalls?: ToolCallRecord[];
+  approvalId?: string;
+  /** Mid-loop tool-use state persisted while awaiting founder approval. */
+  seatLoopState?: SeatLoopResumeState;
+  /** The queue Task created for this step — closed when the step finishes. */
+  taskId?: string;
+};
+
+/** Thrown when a seat agent loop pauses for tool approval — not a step failure. */
+export class SeatLoopAwaitingApprovalError extends Error {
+  readonly seatLoopState: SeatLoopResumeState;
+  readonly toolCalls: ToolCallRecord[];
+  readonly tokens: number;
+  readonly costCents: number;
+  readonly model: string;
+
+  constructor(input: {
+    seatLoopState: SeatLoopResumeState;
+    toolCalls: ToolCallRecord[];
+    tokens: number;
+    costCents: number;
+    model: string;
+  }) {
+    super("seat loop paused for tool approval");
+    this.name = "SeatLoopAwaitingApprovalError";
+    this.seatLoopState = input.seatLoopState;
+    this.toolCalls = input.toolCalls;
+    this.tokens = input.tokens;
+    this.costCents = input.costCents;
+    this.model = input.model;
+  }
+}
+
+function findLastToolCall(
+  toolCalls: ToolCallRecord[],
+  predicate: (record: ToolCallRecord) => boolean,
+): ToolCallRecord | undefined {
+  for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
+    const record = toolCalls[index];
+    if (predicate(record)) return record;
+  }
+  return undefined;
+}
+
+/** Coerce a model field (string | string[] | object[]) into readable bullet text. */
+function toTextList(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value.map(stringifyItem).filter(Boolean).join("\n");
+}
+
+/** Render one item as text — never "[object Object]". */
+function stringifyItem(item: unknown): string {
+  if (item == null) return "";
+  if (typeof item === "string") return item;
+  if (typeof item !== "object") return String(item);
+  const o = item as Record<string, unknown>;
+  const preferred = [o.title, o.point, o.summary, o.text, o.detail, o.description, o.recommendation, o.finding, o.value]
+    .filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+  if (preferred.length) return preferred.join(" — ");
+  try {
+    return JSON.stringify(item);
+  } catch {
+    return "";
+  }
+}
+
+export function normalizePlan(plan: RawOrchestrationPlan): OrchestrationPlan {
+  return {
+    ...plan,
+    blockers: plan.blockers ?? [],
+    steps: plan.steps.map((step) => ({
+      ...step,
+      dependsOn: step.dependsOn ?? [],
+      needsApproval: step.needsApproval ?? false,
+    })),
+  };
+}
+
+export function repairOrchestrationPlanRoutes(plan: OrchestrationPlan): OrchestrationPlan {
+  const route = recommendSeatForObjective(plan.objective);
+  if (route.role === "ceo" || plan.steps.some((step) => step.agentRole === route.role)) return plan;
+
+  const steps = plan.steps.map((step) => ({ ...step, dependsOn: [...step.dependsOn] }));
+  const lastIndex = steps.length - 1;
+  let finalIndex = -1;
+  for (let index = steps.length - 1; index > 0; index--) {
+    const step = steps[index];
+    if (step.agentRole === "ceo" && /consolidat|summar|final|surface|review/i.test(step.title)) {
+      finalIndex = index;
+      break;
+    }
+  }
+  finalIndex = Math.max(0, finalIndex);
+  const insertIndex = finalIndex > 0 ? finalIndex : lastIndex + 1;
+  const prerequisite = steps[Math.max(0, insertIndex - 1)];
+  const specialistId = nextStepId(steps);
+  const specialist: OrchestrationStep = {
+    id: specialistId,
+    title: `Execute primary workstream with ${route.tool}`,
+    rationale: "Planner returned a CEO-only graph; route repair assigns the actual work to the capable specialist.",
+    agentRole: route.role,
+    dependsOn: prerequisite ? [prerequisite.id] : [],
+    expectedOutput: `Produce the requested deliverable using ${route.tool} when available, with concrete output and verification notes.`,
+    riskLevel: "medium",
+    needsApproval: /\b(publish|send|merge|deploy|spend|charge|refund|withdraw|delete)\b/i.test(plan.objective),
+  };
+
+  steps.splice(insertIndex, 0, specialist);
+  const finalStep = steps[insertIndex + 1];
+  if (finalStep && finalStep.agentRole === "ceo" && !finalStep.dependsOn.includes(specialistId)) {
+    finalStep.dependsOn = [...finalStep.dependsOn, specialistId];
+  }
+  return { ...plan, steps };
+}
+
+function nextStepId(steps: OrchestrationStep[]): string {
+  const max = steps.reduce((highest, step) => {
+    const match = /^s(\d+)$/.exec(step.id);
+    return match ? Math.max(highest, Number(match[1])) : highest;
+  }, 0);
+  let id = `s${max + 1}`;
+  while (steps.some((step) => step.id === id)) id = `s${Number(id.slice(1)) + 1}`;
+  return id;
+}
+
+// callJson and callText are imported from lib/ai-client.ts.
+// Local wrappers below adapt the shared interface (which throws) to the fallback
+// pattern the orchestrator uses — callers can still pass a deterministic fallback
+// but failures are now logged, not swallowed silently.
+
+/** A stage label for operator-visible LLM failures. */
+type LlmFailureStage = "planner" | "critic" | "consolidator";
+
+/** Operator-visibility context — threads a company/run id so a real failure can
+ *  surface as a job event. Optional everywhere so the no-key offline path and
+ *  existing callers/tests are unaffected. */
+type LlmVisibility = {
+  stage: LlmFailureStage;
+  companyId?: string;
+  jobRunId?: string;
+};
+
+/**
+ * The "OPENAI_API_KEY is not configured" error is the EXPECTED dev/test/offline
+ * mode — the orchestrator silently falls back. Treat any error whose message
+ * mentions "not configured" (case-insensitive) as the benign offline case;
+ * everything else is a genuine failure an operator should see.
+ */
+function isNotConfiguredError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /not configured/i.test(message);
+}
+
+/**
+ * Make a genuine LLM failure visible to the operator WITHOUT changing control
+ * flow: log it, and (when we have a company/run id) emit a non-terminal job
+ * event so the failure shows up in the run feed. The benign "not configured"
+ * offline case stays completely silent here.
+ */
+function reportLlmFailure(err: unknown, model: string, visibility?: LlmVisibility): void {
+  if (isNotConfiguredError(err)) return; // benign offline mode — stay silent
+  const stage = visibility?.stage ?? "planner";
+  const message = err instanceof Error ? err.message : String(err);
+  console.error("orchestrator.llm_failure", { stage, model, error: message });
+  if (visibility?.jobRunId) {
+    emitJobEvent({
+      jobRunId: visibility.jobRunId,
+      companyId: visibility.companyId,
+      status: "step",
+      summary: `⚠ ${stage} LLM call failed (${model}): ${message} — using fallback`,
+      at: nowIso(),
+      step: { phase: "agent_retry", label: `${stage} LLM failure — using fallback` },
+    });
+  }
+}
+
+async function callJsonWithFallback<T>(
+  model: string,
+  system: string,
+  user: string,
+  schema: z.ZodTypeAny,
+  fallback: T,
+  visibility?: LlmVisibility,
+): Promise<T> {
+  try {
+    const result = await callJson<T>(model, system, user, schema, MAX_TOKENS.PLANNING, {
+      createCompletion: getRuntimeEvalOverrides()?.orchestration?.createCompletion,
+    });
+    return result.data;
+  } catch (err) {
+    reportLlmFailure(err, model, visibility);
+    return fallback;
+  }
+}
+
+async function callTextWithFallback(
+  model: string,
+  system: string,
+  user: string,
+  fallback: string,
+  visibility?: LlmVisibility,
+) {
+  try {
+    const result = await callText(model, system, user, MAX_TOKENS.PROSE);
+    return { text: result.text, model, tokens: result.tokens };
+  } catch (err) {
+    reportLlmFailure(err, model, visibility);
+    return { text: fallback, model: "fallback", tokens: 0 };
+  }
+}
+
+/** Specialist seats engaged on a full autonomous company run (CEO bookends). */
+const FULL_TEAM_SEATS: AgentRole[] = [
+  "engineer", "growth", "content", "support", "analyst", "finance", "sales",
+];
+
+export async function generateOrchestrationPlan(
+  company: Company,
+  objective: string,
+  memory: string,
+  options?: { fullTeam?: boolean; runId?: string },
+): Promise<OrchestrationPlan> {
+  const fullTeam = options?.fullTeam ?? false;
+  const prompts = buildOrchestrationPlanningPrompts(company, objective, memory, { fullTeam });
+  const route = recommendSeatForObjective(objective);
+  const fallbackNeedsApproval = /\b(publish|send|merge|deploy|spend|charge|refund|withdraw|delete)\b/i.test(objective);
+  const fallbackPrimaryRole = route.role === "ceo" ? "engineer" : route.role;
+  const contentMission = isContentMissionObjective(objective);
+
+  const fallback: OrchestrationPlan = contentMission
+    ? buildContentMissionFallbackPlan(objective)
+    : fullTeam
+    ? buildFullTeamFallbackPlan(objective)
+    : {
+        objective,
+        reasoning: "LLM unavailable — using deterministic fallback plan.",
+        steps: [
+          {
+            id: "s1",
+            title: "Scope objective and identify the leverage points",
+            rationale: "Establish what done looks like.",
+            agentRole: "ceo",
+            dependsOn: [],
+            expectedOutput: "Crisp 2-line success definition + 1 risk.",
+            riskLevel: "low",
+            needsApproval: false,
+          },
+          {
+            id: "s2",
+            title: `Execute primary workstream with ${route.tool}`,
+            rationale: "Ship the actual deliverable with the smallest capable specialist.",
+            agentRole: fallbackPrimaryRole,
+            dependsOn: ["s1"],
+            expectedOutput: `First-pass deliverable using ${route.tool} when available, with notes and approval needs.`,
+            riskLevel: "medium",
+            needsApproval: fallbackNeedsApproval,
+          },
+          {
+            id: "s3",
+            title: "Consolidate and surface the final artifact",
+            rationale: "Wrap up with a tight summary the founder can act on.",
+            agentRole: "ceo",
+            dependsOn: ["s2"],
+            expectedOutput: "Single-screen summary + next-action.",
+            riskLevel: "low",
+            needsApproval: false,
+          },
+        ],
+        successCriteria: ["Deliverable produced", "No unapproved external sends"],
+        blockers: [],
+      };
+
+  const rawPlan = await callJsonWithFallback<RawOrchestrationPlan>(
+    PLANNER_MODEL,
+    prompts.system,
+    prompts.user,
+    planSchema,
+    fallback,
+    { stage: "planner", companyId: company.id, jobRunId: options?.runId },
+  );
+  return repairOrchestrationPlanRoutes(normalizePlan(rawPlan));
+}
+
+/**
+ * Deterministic full-company plan: every specialist seat gets one substantive
+ * step (CEO scopes first, CEO consolidates last). Used as the autonomous-mode
+ * fallback and as the shape the planner is told to produce.
+ */
+function buildFullTeamFallbackPlan(objective: string): OrchestrationPlan {
+  // Each seat does its DOMAIN'S part of the actual objective — not generic
+  // company busywork. The objective is woven into every step so a request like
+  // "analyze SpaceX stocks and make a slideshow" routes the financial analysis to
+  // finance/analyst and the slide deck to content/engineer, instead of every seat
+  // defaulting to boilerplate ops work.
+  const seatBrief: Record<AgentRole, string> = {
+    ceo: "",
+    engineer: "Do the technical/build part of the goal — scaffold or produce any app, script, data pipeline, or document generation it needs.",
+    growth: "Do the growth/distribution part of the goal — positioning, channels, or how to get this in front of the right audience (only if relevant).",
+    content: "Produce the written/visual deliverable the goal needs — report copy, slide content, narrative — labeled DRAFT.",
+    support: "Do the customer-facing part of the goal — only if the goal touches customers; otherwise say it's out of scope in one line.",
+    analyst: "Do the data/research analysis the goal needs — gather the key numbers, trends, comparisons, and findings.",
+    finance: "Do the financial analysis the goal needs — figures, valuations, risk, runway, or unit economics relevant to the goal.",
+    sales: "Do the pipeline/prospect part of the goal — only if the goal involves selling or outreach; otherwise say it's out of scope in one line.",
+    escalation: "",
+  };
+  const steps: OrchestrationStep[] = [
+    {
+      id: "s1",
+      title: `Scope the goal: ${objective.slice(0, 80)}`,
+      rationale: "CEO breaks the founder's goal into what each specialist should deliver.",
+      agentRole: "ceo",
+      dependsOn: [],
+      expectedOutput: `Restate the goal in 2 lines and assign each seat the specific part of "${objective}" it should deliver.`,
+      riskLevel: "low",
+      needsApproval: false,
+    },
+    ...FULL_TEAM_SEATS.map((seat, i): OrchestrationStep => ({
+      id: `s${i + 2}`,
+      title: `${seat}: deliver your part of the goal`,
+      rationale: `Engage the ${seat} seat on the founder's actual goal.`,
+      agentRole: seat,
+      dependsOn: ["s1"],
+      expectedOutput: `${seatBrief[seat] || `Deliver the ${seat} seat's part of the goal`} Goal: "${objective}".`,
+      riskLevel: "medium",
+      needsApproval: false,
+    })),
+    {
+      id: "s9",
+      title: "Consolidate every seat's work into a founder report",
+      rationale: "CEO synthesizes all specialist output into one decision-ready brief.",
+      agentRole: "ceo",
+      dependsOn: FULL_TEAM_SEATS.map((_, i) => `s${i + 2}`),
+      expectedOutput: `Synthesize every seat's output into one report that directly answers the goal "${objective}": TL;DR, the actual deliverable/findings, risks, and the single next action.`,
+      riskLevel: "low",
+      needsApproval: false,
+    },
+  ];
+  return {
+    objective,
+    reasoning: "Full autonomous company run — every seat does its part of the founder's goal.",
+    steps,
+    successCriteria: [`The goal "${objective.slice(0, 60)}" is directly addressed`, "A consolidated founder report with the deliverable and next actions"],
+    blockers: [],
+  };
+}
+
+export function buildOrchestrationPlanningPrompts(
+  company: Company,
+  objective: string,
+  memory: string,
+  options?: { fullTeam?: boolean },
+): { system: string; user: string } {
+  const fullTeam = options?.fullTeam ?? false;
+  const route = recommendSeatForObjective(objective);
+  const contentMissionBrief = buildContentMissionProtocolBrief(objective);
+  const teamRule = fullTeam
+    ? "  4. FULL AUTONOMOUS COMPANY RUN: engage EVERY relevant specialist seat (engineer, growth, content, support, analyst, finance, sales) with at least one substantive step doing real work in its domain, then a final ceo step that consolidates everything. Use up to 12 steps."
+    : "  4. Keep step count tight: 3–8 for most objectives, max 12.";
+  const system = [
+    "You are Trent's chief orchestrator — the long-horizon planner that decomposes an objective into a multi-agent task graph.",
+    "You operate like Devin: think before doing, identify dependencies, predict blockers, and assign each step to the right specialist.",
+    buildAgentRoutingContext(company.id),
+    formatRouteRecommendation("objective", route),
+    "Plan rules:",
+    "  1. Steps must form a DAG — every dependsOn id must reference an earlier step id.",
+    "  2. Always include a final ceo step that consolidates the output.",
+    "  3. Mark needsApproval=true for any external sends, public posts, paid actions, code merges.",
+    teamRule,
+    "  5. successCriteria must be measurable.",
+    contentMissionBrief,
+    "Output strict JSON matching the schema.",
+  ].filter(Boolean).join("\n");
+
+  const user = [
+    `Company: ${company.name}`,
+    `Vision: ${company.brief.vision || "—"}`,
+    `Goal: ${company.brief.goals || "—"}`,
+    `ICP: ${company.brief.icp || "—"}`,
+    "",
+    `Past company memory (relevance-ranked):\n${memory || "(no prior memory)"}`,
+    "",
+    `Objective: ${objective}`,
+    "",
+    "Respond as JSON: { objective, reasoning, steps:[{id,title,rationale,agentRole,dependsOn,expectedOutput,riskLevel,needsApproval}], successCriteria:[], blockers:[] }",
+  ].join("\n");
+  return { system, user };
+}
+
+export async function critiqueStepOutput(
+  step: OrchestrationStep,
+  output: string,
+  visibility?: { companyId?: string; runId?: string },
+): Promise<OrchestrationCritique> {
+  const system = [
+    "You are Trent's quality supervisor. Review the output of an agent step against its expected output.",
+    "Return JSON: { verdict: 'pass'|'retry'|'replan'|'escalate', reason, improvement? }.",
+    "Use 'pass' for sufficient work, 'retry' for fixable gaps in the same step, 'replan' when the plan shape is wrong and remaining steps must change, 'escalate' for unsafe/uncertain outputs needing founder review.",
+    "Be terse and direct.",
+  ].join("\n");
+  const user = [
+    `Step: ${step.title} (role=${step.agentRole}, risk=${step.riskLevel})`,
+    `Expected: ${step.expectedOutput}`,
+    "",
+    `Output:\n${output.slice(0, 2400)}`,
+  ].join("\n");
+
+  return callJsonWithFallback(
+    CRITIC_MODEL,
+    system,
+    user,
+    critiqueSchema,
+    { verdict: "pass", reason: "supervisor offline — auto-pass." },
+    { stage: "critic", companyId: visibility?.companyId, jobRunId: visibility?.runId },
+  );
+}
+
+export async function consolidateRun(
+  plan: OrchestrationPlan,
+  steps: StepRecord[],
+  visibility?: { companyId?: string; runId?: string },
+): Promise<string> {
+  const completed = steps.filter((step) => step.status === "completed");
+  const failed = steps.filter((step) => step.status === "failed");
+  const contentApprovalPacket = buildContentMissionApprovalPacket(plan, steps);
+  const system = [
+    "You are the consolidator. Write a final brief that a founder can read in 60 seconds and act on.",
+    "Format:",
+    "  TL;DR — one sentence.",
+    "  WHAT SHIPPED — 2-4 bullets.",
+    "  RISKS / BLOCKERS — bullets, or 'none'.",
+    "  ↗ NEXT ACTION — a single direct ask.",
+  ].join("\n");
+  const user = [
+    `Objective: ${plan.objective}`,
+    `Success criteria: ${plan.successCriteria.join("; ")}`,
+    "",
+    `Completed (${completed.length}):`,
+    ...completed.map((step) => `- ${step.title}: ${step.output?.slice(0, 300) ?? ""}`),
+    "",
+    failed.length ? `Failed (${failed.length}):\n${failed.map((step) => `- ${step.title}`).join("\n")}` : "",
+    contentApprovalPacket ? `\nContent/social/ads approval packet to preserve exactly:\n${contentApprovalPacket}` : "",
+  ].filter(Boolean).join("\n");
+
+  const result = await callTextWithFallback(
+    SPECIALIST_MODEL,
+    system,
+    user,
+    contentApprovalPacket || "Run completed — see step outputs.",
+    { stage: "consolidator", companyId: visibility?.companyId, jobRunId: visibility?.runId },
+  );
+  if (!contentApprovalPacket) return result.text;
+  return result.text.trim() === contentApprovalPacket.trim()
+    ? contentApprovalPacket
+    : `${contentApprovalPacket}\n\n${result.text}`;
+}
+
+export async function saveCycleForRun(
+  companyId: string,
+  runId: string,
+  objective: string,
+  trigger: "manual" | "scheduled" = "manual",
+): Promise<string> {
+  const cycle: Cycle = {
+    id: runId,
+    companyId,
+    trigger,
+    kind: "ad_hoc_dag",
+    status: "running",
+    phases: ["plan", "execute", "consolidate"],
+    summary: objective.slice(0, 200),
+    startedAt: nowIso(),
+  };
+  await store.saveCycle(cycle);
+  return cycle.id;
+}
+
+export async function createTaskForStep(
+  companyId: string,
+  runId: string,
+  step: OrchestrationStep,
+): Promise<Task> {
+  return store.createTask({
+    companyId,
+    title: step.title,
+    prompt: step.expectedOutput,
+    status: step.needsApproval ? "waiting_approval" : "queued",
+    priority: step.riskLevel === "high" ? "high" : "medium",
+    agentRole: step.agentRole,
+    tags: ["orchestration", runId, step.id],
+  });
+}
+
+export async function createApprovalForStep(
+  company: Company,
+  runId: string,
+  step: OrchestrationStep,
+): Promise<Approval> {
+  const expiryHours = getApprovalExpiryHours("", company.approvalExpiryOverrides);
+  const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
+  return store.createApproval({
+    companyId: company.id,
+    action: step.title,
+    reason: step.rationale,
+    previewContent: step.expectedOutput,
+    previewKind: "generic",
+    expiresAt,
+    toolName: `orchestration:${runId}:${step.id}`,
+  });
+}
+
+export async function createApprovalForSeatTool(
+  company: Company,
+  runId: string,
+  step: OrchestrationStep,
+  pendingTool: { adapter: string; action: string; summary: string },
+): Promise<Approval> {
+  const expiryHours = getApprovalExpiryHours(pendingTool.adapter, company.approvalExpiryOverrides);
+  const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
+  return store.createApproval({
+    companyId: company.id,
+    action: `${step.title}: ${pendingTool.adapter}`,
+    reason: `Seat ${step.agentRole} requested tool action requiring approval: ${pendingTool.action}`,
+    previewContent: pendingTool.summary,
+    previewKind: "generic",
+    expiresAt,
+    toolName: `orchestration:${runId}:${step.id}:tool:${pendingTool.adapter}`,
+  });
+}
+
+export async function toolsForStep(
+  stepText: string,
+  environment: Pick<AgentEnvironmentConfig, "tools">,
+  k = 3,
+): Promise<ToolAdapter[]> {
+  return routeToolsForStep(stepText, environment, k);
+}
+
+export async function toolForStep(
+  stepText: string,
+  environment: Pick<AgentEnvironmentConfig, "tools">,
+): Promise<ToolAdapter | undefined> {
+  const tools = await toolsForStep(stepText, environment, 1);
+  return tools[0];
+}
+
+export type RuntimeStep = {
+  id: string;
+  title: string;
+  agentRole: AgentRole;
+  rationale: string;
+  expectedOutput: string;
+  riskLevel: string;
+  dependsOn: string[];
+  needsApproval?: boolean;
+};
+
+export type StepExecutionInput = {
+  step: RuntimeStep;
+  company: Company;
+  previousOutputs: Record<string, string>;
+  cycleId?: string;
+  approvalGranted?: boolean;
+  /** Prior mid-loop tool history when resuming after durable tool approval. */
+  resumeSeed?: SeatLoopResumeState;
+  /** The overall run objective — injected so every seat does work that serves it. */
+  objective?: string;
+};
+
+export type StepExecutionResult = {
+  output: string;
+  model: string;
+  tokens: number;
+  costCents: number;
+  toolCalls: ToolCallRecord[];
+  execution: AgentExecution;
+  /** Work the agent is requesting from other agents — routed by the orchestrator. */
+  workRequests: WorkRequest[];
+};
+
+/**
+ * Fetch live company data relevant to the seat's declared contextNeeds so agents
+ * are not running blind. Each fetch is guarded by the manifest's contextNeeds to
+ * avoid unnecessary DB round-trips.
+ */
+async function buildLiveContext(
+  companyId: string,
+  company: Company,
+  role: AgentRole,
+  missionText = "",
+): Promise<Record<string, unknown>> {
+  const needs = new Set(getSeatManifest(role).contextNeeds);
+  const ctx: Record<string, unknown> = {};
+
+  // Company metrics and budget are already on the Company object
+  if (needs.has("metrics") || needs.has("dataFreshness")) ctx.metrics = company.metrics;
+  if (needs.has("budget") || needs.has("billingState")) {
+    ctx.budget = { totalCents: company.budgetCents, weeklyCents: company.weeklyBudgetCents ?? null };
+  }
+  if (needs.has("contentMission")) {
+    const missionDossier = buildContentMissionDossier(missionText);
+    if (missionDossier) ctx.contentMission = missionDossier;
+  }
+
+  // Parallel DB fetches — only what each seat actually needs
+  const needsTasks     = needs.has("activeTasks") || needs.has("taskSpec");
+  const needsApprovals = needs.has("approvals") || needs.has("approvalPolicy");
+  const needsUsage     = needs.has("usage") || needs.has("billingState");
+  const needsReports   = needs.has("reports") || needs.has("metrics") || needs.has("dataFreshness");
+  const needsDocs      = needs.has("productDocs") || needs.has("tonePolicy");
+  const needsPlatform  = needs.has("platformReadiness");
+
+  const [tasks, approvals, usage, reports, docs, socialAccounts, marketingAccounts] = await Promise.all([
+    needsTasks     ? store.listTasks(companyId)     : Promise.resolve(null),
+    needsApprovals ? store.listApprovals(companyId) : Promise.resolve(null),
+    needsUsage     ? store.listUsage(companyId)     : Promise.resolve(null),
+    needsReports   ? store.listReports(companyId)   : Promise.resolve(null),
+    needsDocs      ? store.listDocuments(companyId) : Promise.resolve(null),
+    needsPlatform  ? store.listSocialAccounts(companyId) : Promise.resolve(null),
+    needsPlatform  ? store.listMarketingAccounts(companyId) : Promise.resolve(null),
+  ]);
+
+  if (tasks) {
+    ctx.activeTasks = tasks
+      .filter(t => t.status !== "completed" && t.status !== "failed")
+      .slice(0, 8)
+      .map(t => ({ title: t.title, status: t.status, agentRole: t.agentRole, priority: t.priority }));
+  }
+  if (approvals) {
+    ctx.pendingApprovals = approvals
+      .filter(a => a.status === "pending")
+      .slice(0, 5)
+      .map(a => ({ action: a.action, reason: a.reason, expiresAt: a.expiresAt }));
+  }
+  if (usage) {
+    const totalSpentCents = usage.reduce((s, u) => s + (u.amountCents ?? 0), 0);
+    ctx.usageSummary = {
+      totalSpentCents,
+      recentItems: usage.slice(0, 5).map(u => ({ description: u.description, amountCents: u.amountCents })),
+    };
+  }
+  if (reports) {
+    ctx.recentReports = reports
+      .slice(0, 3)
+      .map(r => ({ title: r.title, type: r.type, findings: r.findings.slice(0, 3), recommendations: r.recommendations.slice(0, 3) }));
+  }
+  if (docs) {
+    const episodic = docs.filter(d => d.memoryTier === "episodic").slice(0, 3)
+      .map(d => ({ title: d.title, summary: d.content.slice(0, 400) }));
+    if (episodic.length > 0) ctx.recentMemory = episodic;
+    if (needsDocs) {
+      const productDocs = docs.filter(d => d.type === "brief" || d.type === "weekly_report").slice(0, 3)
+        .map(d => ({ title: d.title, summary: d.content.slice(0, 500) }));
+      if (productDocs.length > 0) ctx.productDocs = productDocs;
+    }
+  }
+  if (needsPlatform && socialAccounts && marketingAccounts) {
+    const inferred = inferPlatformRequirements(missionText);
+    const readiness = buildPlatformAuthReadiness({
+      socialAccounts,
+      marketingAccounts,
+      ...inferred,
+    });
+    ctx.platformReadiness = {
+      ...readiness,
+      ...inferred,
+      socialAccounts: socialAccounts.map((account) => ({
+        platform: account.platform,
+        status: account.status,
+        externalHandle: account.externalHandle,
+        scopes: account.scopes,
+        hasCredentials: Boolean(account.credentialsRef),
+        autoPublishEnabled: account.autoPublishEnabled,
+      })),
+      marketingAccounts: marketingAccounts.map((account) => ({
+        platform: account.platform,
+        status: account.status,
+        currency: account.currency,
+        dailyBudgetCents: account.dailyBudgetCents ?? null,
+        paymentStatus: account.paymentStatus,
+        consentForServerEvents: account.consentForServerEvents,
+      })),
+    };
+  }
+  return ctx;
+}
+
+export async function executeStepWithRuntime(input: StepExecutionInput): Promise<StepExecutionResult> {
+  const { step, company, previousOutputs } = input;
+  const startedAt = Date.now();
+
+  if (getRuntimeEvalOverrides()?.orchestration?.forceBrokenExecution) {
+    throw new Error("forced integration regression failure");
+  }
+
+  await assertSpendAvailable(company.id, 1, `Orchestration step ${step.id}`);
+  await assertAgentTokenBudget(company.id, step.agentRole, TOKEN_ESTIMATE_PER_STEP);
+
+  const runtime = await getAgentRuntime(company.id, step.agentRole);
+  const stepText = `${step.title} ${step.expectedOutput}`;
+  // Health-aware grounding: skip tools the metric monitor flagged as degraded
+  // (published by the heartbeat sweep). Empty set on a miss → prior behavior.
+  const degradedTools = getDegradedTools(company.id);
+  const rankedTools = await routeToolsForStep(stepText, runtime.environment, 3, { degradedTools });
+  const toolGuidance = rankedTools.length
+    ? rankedTools.map((tool) => tool.name)
+    : runtime.environment.tools;
+
+  // Build the subtask for the seat agent loop (uses proper tier routing via model-gateway).
+  const dependencyContext = step.dependsOn
+    .map((dep) => `[${dep}]: ${previousOutputs[dep]?.slice(0, 1000) ?? "(missing)"}`)
+    .join("\n");
+
+  // Fetch live company context (tasks, approvals, usage, reports, memory) for this seat.
+  const liveContext = await buildLiveContext(
+    company.id,
+    company,
+    step.agentRole,
+    [input.objective, step.title, step.expectedOutput].filter(Boolean).join("\n"),
+  );
+  const platformReadiness = liveContext.platformReadiness as { ready?: boolean; blockers?: unknown[] } | undefined;
+
+  // The seat's task is its step — but it MUST serve the overall run objective.
+  // Without this, seats only saw their generic step text and produced off-topic
+  // work (e.g. "check spend vs budget" for a "analyze SpaceX stocks" objective).
+  const seatObjective = input.objective
+    ? `${step.title}: ${step.expectedOutput}\n\nThis is one step of the founder's overall goal: "${input.objective}". Do the part of THAT goal that belongs to the ${step.agentRole} seat. If this goal is outside your domain, say so in one line instead of inventing unrelated work.`
+    : `${step.title}: ${step.expectedOutput}`;
+
+  const subtask = {
+    id: step.id,
+    seat: step.agentRole,
+    objective: seatObjective,
+    outputContractId: `orchestration:${step.id}`,
+    toolGuidance,
+    boundaries: runtime.environment.approvalRequiredFor,
+    input: { rationale: step.rationale, dependencyOutputs: dependencyContext },
+    contextBundle: {
+      company:         { name: company.name, brief: company.brief },
+      overallObjective: input.objective ?? step.title,
+      missionContract: runtime.slotContract.mission,
+      deliverables:    runtime.slotContract.deliverables,
+      riskLevel:       step.riskLevel,
+      ...liveContext,
+    },
+    classification: {
+      type:          step.agentRole,
+      complexity:    (step.riskLevel === "high" ? "complex" : "standard") as "complex" | "standard",
+      reversibility: (step.needsApproval ? "irreversible" : "reversible") as "irreversible" | "reversible",
+    },
+    budgetCents: runtime.environment.budgetCentsPerRun ?? 500,
+  };
+
+  // Skill reuse: prepend the company's live distilled skills for this step so the
+  // seat follows proven procedures. Guarded + best-effort; a failure or an empty
+  // store leaves the prompt unchanged. `skillApplied` feeds the OpenSpace applied
+  // rate once Slice 2 derives traces from these steps.
+  let systemPrompt = runtime.systemPrompt;
+  let skillApplied = false;
+  if (SKILL_INJECTION_ENABLED) {
+    const { prelude, applied } = await buildCompanySkillPrelude(
+      company.id,
+      getLiveSkillStore(),
+      stepText,
+    ).catch(() => ({ prelude: "", applied: false }));
+    if (prelude) {
+      systemPrompt = `${prelude}\n\n${runtime.systemPrompt}`;
+      skillApplied = applied;
+    }
+  }
+  void skillApplied; // recorded on the trace once live trace derivation (Slice 2) lands
+
+  const agentResult = await runSeatAgent({
+    companyId: company.id,
+    runtime,
+    subtask,
+    systemPrompt,
+    dynamicPrompt: dependencyContext
+      ? `Previous step outputs:\n${dependencyContext}`
+      : undefined,
+    approvalGranted: input.approvalGranted,
+    resumeSeed: input.resumeSeed,
+    executeSeatModelFn: getRuntimeEvalOverrides()?.orchestration?.executeSeatModelFn,
+  });
+
+  if (agentResult.pausedForApproval) {
+    const pending = agentResult.pendingToolCall;
+    const pendingRecord = findLastToolCall(agentResult.toolCalls, (record) => record.status === "needs_approval");
+    if (!pending || !pendingRecord || agentResult.loopStep == null) {
+      throw new Error("seat loop paused for approval without resumable state");
+    }
+    throw new SeatLoopAwaitingApprovalError({
+      seatLoopState: {
+        toolCalls: agentResult.toolCalls,
+        loopStep: agentResult.loopStep,
+        tokens: agentResult.tokens,
+        costCents: agentResult.costCents,
+        model: agentResult.model,
+        pendingToolCall: pending,
+      },
+      toolCalls: agentResult.toolCalls,
+      tokens: agentResult.tokens,
+      costCents: agentResult.costCents,
+      model: agentResult.model,
+    });
+  }
+
+  const toolCalls: ToolCallRecord[] = [...agentResult.toolCalls];
+  if (platformReadiness) {
+    const blockers = Array.isArray(platformReadiness.blockers)
+      ? platformReadiness.blockers.filter((item): item is string => typeof item === "string")
+      : [];
+    toolCalls.push({
+      adapter: "platform_readiness",
+      action: "check",
+      status: platformReadiness.ready ? "completed" : "needs_approval",
+      summary: platformReadiness.ready
+        ? "Platform readiness passed for this content/social/ads mission."
+        : `Platform readiness blocked external action: ${blockers.join("; ") || "missing platform readiness"}`,
+    });
+  }
+
+  const seatResult = {
+    output: agentResult.output,
+    model: agentResult.model,
+    tokens: agentResult.tokens,
+    costCents: agentResult.costCents,
+    error: agentResult.error,
+  };
+
+  // Extract text output — the model responds with JSON {summary, findings, recommendations, workRequests}.
+  // findings/recommendations may come back as arrays of strings OR objects; coerce
+  // each item to readable text so we never render "[object Object]".
+  const rawOutput = seatResult.output as Record<string, unknown> | null;
+  const summary     = typeof rawOutput?.summary === "string" ? rawOutput.summary : "";
+  const findings    = toTextList(rawOutput?.findings);
+  const recommendations = toTextList(rawOutput?.recommendations);
+  const output = [summary, findings, recommendations].filter(Boolean).join("\n\n")
+    || (seatResult.error ?? "(no output)");
+
+  // Extract work requests the agent wants routed to other agents.
+  const rawWorkRequests = Array.isArray(rawOutput?.workRequests) ? rawOutput.workRequests : [];
+  const workRequests: WorkRequest[] = rawWorkRequests
+    .filter((r): r is Record<string, unknown> => r !== null && typeof r === "object")
+    .map((r) => ({
+      id:         makeId("wreq"),
+      cycleId:    input.cycleId ?? step.id,
+      companyId:  company.id,
+      requester:  step.agentRole,
+      capability: typeof r.capability === "string" ? r.capability : String(r.capability ?? ""),
+      input:      r.input ?? null,
+      budgetCents: typeof r.budgetCents === "number" ? r.budgetCents : 100,
+      depth:       0,
+    }))
+    .filter((r) => r.capability.length > 0);
+
+  const execRecord: AgentExecution = {
+    id:         makeId("exec"),
+    companyId:  company.id,
+    cycleId:    input.cycleId,
+    agentRole:  step.agentRole,
+    input:      [
+      `Step ${step.id}: ${step.title}`,
+      `Mission: ${runtime.slotContract.mission}`,
+      `Profile: ${runtime.profile?.name ?? runtime.v3Profile?.name ?? "Trent default"}`,
+      `Model tier: ${seatResult.model}`,
+    ].join("\n"),
+    output,
+    toolCalls,
+    status:     seatResult.error ? "failed" : "completed",
+    model:      seatResult.model,
+    tokens:     seatResult.tokens,
+    costCents:  seatResult.costCents,
+    durationMs: Date.now() - startedAt,
+    createdAt:  nowIso(),
+  };
+
+  return { output, model: seatResult.model, tokens: seatResult.tokens, costCents: seatResult.costCents, toolCalls, workRequests, execution: execRecord };
+}
+
+export type OrchestrationTransition =
+  | "run_start"
+  | "step_start"
+  | "step_approved"
+  | "step_rejected"
+  | "run_done"
+  | "run_failed"
+  | "run_cancelled";
+
+export async function auditTransition(
+  companyId: string,
+  transition: OrchestrationTransition,
+  runId: string,
+  summary: string,
+): Promise<void> {
+  const actor = transition === "run_failed" ? "system" : "agent";
+  await store.addAudit(
+    companyId,
+    actor,
+    `orchestration.${transition}`,
+    "orchestration",
+    runId,
+    summary,
+  ).catch(() => {});
+}

@@ -1,0 +1,1350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Trent — Brand & Product Bible · Edition 02</title>
+<meta name="description" content="The brand and product bible for Trent, the AI cofounder operating system." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ─── Tokens ───────────────────────────────────────── */
+  :root{
+    --obsidian:#0A0A0F;
+    --ink:#11111A;
+    --steel:#1B1B26;
+    --slate:#262633;
+    --haze:#4A4A57;
+    --mist:#94A3B8;
+    --bone:#F1ECE2;
+    --bone-2:#E6E0D3;
+    --pulse:#6EE7B7;       /* AI signal — mint */
+    --pulse-deep:#10B981;
+    --ember:#FB923C;       /* human moment — copper */
+    --ember-deep:#EA580C;
+    --signal:#A5F3D2;
+    --danger:#F87171;
+    --display: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+    --serif: "Instrument Serif", "Times New Roman", serif;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+    --grid: 8px;
+    --maxw: 1280px;
+    --r-sm: 6px;
+    --r-md: 14px;
+    --r-lg: 22px;
+    --r-xl: 32px;
+    --shadow-soft: 0 1px 0 rgba(255,255,255,.04) inset, 0 30px 80px -30px rgba(0,0,0,.6);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--obsidian);color:var(--bone);font-family:var(--display);-webkit-font-smoothing:antialiased;font-feature-settings:"ss01","cv11"}
+  body{overflow-x:hidden}
+  a{color:inherit;text-decoration:none}
+  ::selection{background:var(--pulse);color:var(--obsidian)}
+
+  /* ─── Layout helpers ──────────────────────────────── */
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 32px}
+  section{padding:120px 0;border-top:1px solid rgba(255,255,255,.06);position:relative}
+  section:first-of-type{border-top:0}
+  .eyebrow{display:inline-flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--mist);margin-bottom:24px}
+  .eyebrow::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--pulse);box-shadow:0 0 0 4px rgba(110,231,183,.15)}
+  .h1{font-family:var(--display);font-size:clamp(48px,8vw,120px);line-height:.92;letter-spacing:-.04em;font-weight:800;margin:0 0 24px}
+  .h2{font-family:var(--display);font-size:clamp(36px,5vw,72px);line-height:1;letter-spacing:-.035em;font-weight:700;margin:0 0 24px}
+  .h3{font-family:var(--display);font-size:clamp(22px,2.4vw,32px);line-height:1.1;letter-spacing:-.02em;font-weight:600;margin:0 0 12px}
+  .h4{font-family:var(--display);font-size:18px;line-height:1.2;letter-spacing:-.01em;font-weight:600;margin:0 0 8px}
+  .lead{font-family:var(--serif);font-style:italic;font-size:clamp(22px,2.6vw,34px);line-height:1.35;color:var(--bone-2);max-width:60ch;font-weight:400}
+  .body{font-size:16px;line-height:1.65;color:#CFCAC0;max-width:62ch}
+  .meta{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--haze)}
+  .row{display:grid;gap:32px}
+  .row.cols-2{grid-template-columns:1fr 1fr}
+  .row.cols-3{grid-template-columns:repeat(3,1fr)}
+  .row.cols-4{grid-template-columns:repeat(4,1fr)}
+  .row.cols-5{grid-template-columns:repeat(5,1fr)}
+  @media(max-width:980px){.row.cols-2,.row.cols-3,.row.cols-4,.row.cols-5{grid-template-columns:1fr 1fr}}
+  @media(max-width:640px){.wrap{padding:0 20px}section{padding:80px 0}.row.cols-2,.row.cols-3,.row.cols-4,.row.cols-5{grid-template-columns:1fr}}
+
+  /* ─── Nav / scroll progress ─────────────────────── */
+  .topbar{position:fixed;top:0;left:0;right:0;z-index:60;display:flex;align-items:center;justify-content:space-between;padding:18px 32px;background:linear-gradient(180deg,rgba(10,10,15,.92),rgba(10,10,15,.5) 80%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .topbar .mark{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--bone)}
+  .topbar nav{display:flex;gap:6px;flex-wrap:wrap}
+  .topbar nav a{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mist);padding:8px 12px;border-radius:999px;border:1px solid transparent;transition:all .2s}
+  .topbar nav a:hover{color:var(--bone);border-color:rgba(255,255,255,.08);background:rgba(255,255,255,.03)}
+  .scroll-progress{position:fixed;top:0;left:0;height:2px;background:linear-gradient(90deg,var(--pulse),var(--ember));z-index:70;width:0%}
+  @media(max-width:780px){.topbar nav{display:none}}
+
+  /* ─── Hero ─────────────────────────────────────── */
+  .hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden;padding:160px 0 120px}
+  .hero::before{content:"";position:absolute;inset:-20% -10% auto auto;width:80%;height:120%;background:
+    radial-gradient(closest-side at 30% 40%, rgba(110,231,183,.18), transparent 65%),
+    radial-gradient(closest-side at 80% 70%, rgba(251,146,60,.12), transparent 60%);
+    filter:blur(40px);pointer-events:none}
+  .hero-grid{position:absolute;inset:0;background-image:
+    linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+    background-size:64px 64px;mask-image:radial-gradient(ellipse at 50% 30%,#000 30%,transparent 75%);
+    -webkit-mask-image:radial-gradient(ellipse at 50% 30%,#000 30%,transparent 75%)}
+  .hero .wrap{position:relative}
+  .hero-tag{font-family:var(--mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--mist);display:flex;align-items:center;gap:14px;margin-bottom:32px}
+  .hero-tag .pulse-dot{width:8px;height:8px;border-radius:50%;background:var(--pulse);box-shadow:0 0 0 6px rgba(110,231,183,.18);animation:pulse 2.4s infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(110,231,183,.4)}50%{box-shadow:0 0 0 12px rgba(110,231,183,0)}}
+  .wordmark{font-family:var(--display);font-weight:900;font-size:clamp(96px,18vw,260px);letter-spacing:-.06em;line-height:.85;margin:0;display:flex;align-items:baseline;gap:.06em}
+  .wordmark .dot{width:.18em;height:.18em;border-radius:50%;background:var(--pulse);align-self:flex-end;margin-bottom:.18em;box-shadow:0 0 40px rgba(110,231,183,.5)}
+  .hero h1.sub{font-family:var(--serif);font-style:italic;font-weight:400;font-size:clamp(28px,4.6vw,56px);line-height:1.05;letter-spacing:-.015em;color:var(--bone-2);max-width:18ch;margin:24px 0 0}
+  .hero h1.sub em{font-family:var(--serif);font-style:italic;color:var(--pulse);}
+  .hero .meta-row{margin-top:64px;display:grid;grid-template-columns:repeat(4,1fr);gap:24px;border-top:1px solid rgba(255,255,255,.08);padding-top:24px}
+  @media(max-width:780px){.hero .meta-row{grid-template-columns:repeat(2,1fr)}}
+  .hero .meta-row div .k{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--haze);margin-bottom:8px}
+  .hero .meta-row div .v{font-family:var(--display);font-size:17px;font-weight:500;color:var(--bone)}
+
+  /* ─── Manifesto ────────────────────────────────── */
+  .manifesto p{font-family:var(--serif);font-style:italic;font-size:clamp(28px,3.6vw,48px);line-height:1.25;color:var(--bone);max-width:24ch;margin:0}
+  .manifesto p span.accent{color:var(--pulse);font-style:italic}
+  .manifesto p span.ember{color:var(--ember);font-style:italic}
+  .manifesto .columns{display:grid;grid-template-columns:1.2fr 1fr;gap:64px;align-items:start;margin-top:64px}
+  @media(max-width:880px){.manifesto .columns{grid-template-columns:1fr}}
+  .manifesto .lines p{font-family:var(--display);font-style:normal;font-size:16px;line-height:1.7;color:#CFCAC0;max-width:48ch;margin:0 0 20px}
+
+  /* ─── Cards ─────────────────────────────────── */
+  .card{background:var(--ink);border:1px solid rgba(255,255,255,.07);border-radius:var(--r-lg);padding:28px;position:relative;overflow:hidden;transition:transform .35s ease,border-color .35s,background .35s}
+  .card:hover{transform:translateY(-4px);border-color:rgba(110,231,183,.4)}
+  .card .num{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--haze);margin-bottom:24px}
+  .card .title{font-family:var(--display);font-size:22px;font-weight:600;letter-spacing:-.01em;margin:0 0 8px}
+  .card .desc{color:#B8B2A4;font-size:14px;line-height:1.6;margin:0}
+  .card .icon{width:36px;height:36px;border-radius:10px;background:rgba(110,231,183,.08);display:flex;align-items:center;justify-content:center;margin-bottom:20px;color:var(--pulse);border:1px solid rgba(110,231,183,.2)}
+  .card.ember .icon{background:rgba(251,146,60,.08);color:var(--ember);border-color:rgba(251,146,60,.2)}
+
+  /* ─── Personality sliders ───────────────────── */
+  .slider{display:grid;grid-template-columns:140px 1fr 140px;align-items:center;gap:18px;padding:18px 0;border-top:1px solid rgba(255,255,255,.06)}
+  .slider:first-child{border-top:0}
+  .slider .end{font-family:var(--mono);font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--haze)}
+  .slider .end.r{text-align:right}
+  .slider .end.active{color:var(--bone)}
+  .slider .track{height:2px;background:rgba(255,255,255,.08);position:relative;border-radius:2px}
+  .slider .thumb{position:absolute;top:50%;width:14px;height:14px;border-radius:50%;background:var(--pulse);transform:translate(-50%,-50%);box-shadow:0 0 0 6px rgba(110,231,183,.15)}
+  .slider .label{position:absolute;top:-26px;transform:translateX(-50%);font-family:var(--mono);font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--pulse);white-space:nowrap}
+
+  /* ─── Voice rows ────────────────────────── */
+  .voice{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid rgba(255,255,255,.07);border-radius:var(--r-lg);overflow:hidden}
+  .voice > div{padding:28px;border-top:1px solid rgba(255,255,255,.05)}
+  .voice > div:nth-child(odd){border-right:1px solid rgba(255,255,255,.05);background:rgba(255,255,255,.01)}
+  .voice .yes{background:rgba(110,231,183,.04)}
+  .voice .no{background:rgba(248,113,113,.02)}
+  .voice .label{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:10px}
+  .voice .yes .label{color:var(--pulse)}
+  .voice .no .label{color:var(--danger)}
+  .voice p{margin:0;font-size:16px;line-height:1.55}
+  .voice .no p{color:#9a9388;text-decoration:line-through;text-decoration-color:rgba(248,113,113,.4)}
+  @media(max-width:740px){.voice{grid-template-columns:1fr}.voice > div:nth-child(odd){border-right:0}}
+
+  /* ─── Color swatches ────────────────────── */
+  .palette{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+  @media(max-width:880px){.palette{grid-template-columns:repeat(2,1fr)}}
+  .swatch{border-radius:var(--r-lg);padding:24px;min-height:220px;display:flex;flex-direction:column;justify-content:space-between;cursor:pointer;position:relative;overflow:hidden;transition:transform .3s;border:1px solid rgba(255,255,255,.06)}
+  .swatch:hover{transform:translateY(-3px)}
+  .swatch .name{font-family:var(--display);font-weight:600;font-size:20px;letter-spacing:-.01em}
+  .swatch .role{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;opacity:.7}
+  .swatch .hex{font-family:var(--mono);font-size:13px;letter-spacing:.05em;display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid currentColor;opacity:.85}
+  .swatch .hex .copy{font-size:9px;letter-spacing:.2em;opacity:.6}
+  .swatch.dark{color:var(--bone)}
+  .swatch.light{color:var(--obsidian)}
+
+  /* ─── Type specimens ─────────────────────── */
+  .type-card{background:var(--ink);border:1px solid rgba(255,255,255,.07);border-radius:var(--r-lg);padding:36px;display:grid;grid-template-columns:200px 1fr;gap:32px;align-items:center}
+  @media(max-width:780px){.type-card{grid-template-columns:1fr}}
+  .type-card .meta{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+  .type-card .specimen{font-size:clamp(48px,7vw,110px);line-height:.95;letter-spacing:-.04em;color:var(--bone)}
+  .type-card.serif .specimen{font-family:var(--serif);font-style:italic;color:var(--pulse);letter-spacing:-.02em;font-weight:400}
+  .type-card.mono .specimen{font-family:var(--mono);font-size:clamp(28px,4vw,52px);letter-spacing:-.01em;color:var(--bone-2)}
+  .type-card .specimen-meta{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--mist);margin-top:14px;display:flex;gap:18px;flex-wrap:wrap}
+
+  /* ─── Logo system ────────────────────────── */
+  .logo-canvas{aspect-ratio:1;background:var(--ink);border:1px solid rgba(255,255,255,.06);border-radius:var(--r-lg);display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+  .logo-canvas.light{background:var(--bone)}
+  .logo-canvas.signal{background:linear-gradient(135deg,#0A0A0F,#1B2A22)}
+  .logo-canvas .grid-bg{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);background-size:32px 32px;opacity:.6}
+  .logo-mark{width:80px;height:80px;position:relative;z-index:2}
+  .logo-wordmark{font-family:var(--display);font-weight:900;font-size:64px;letter-spacing:-.06em;line-height:.85;display:flex;align-items:baseline;gap:.05em;z-index:2;position:relative}
+  .logo-wordmark .dot{width:.18em;height:.18em;border-radius:50%;background:var(--pulse);align-self:flex-end;margin-bottom:.16em}
+  .light .logo-wordmark{color:var(--obsidian)}
+  .light .logo-wordmark .dot{background:var(--ember-deep)}
+  .logo-caption{position:absolute;bottom:16px;left:20px;right:20px;display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--haze)}
+  .light .logo-caption{color:#7c7569}
+
+  /* ─── Moodboard ─────────────────────────── */
+  .mood{display:grid;grid-template-columns:repeat(6,1fr);grid-auto-rows:140px;gap:14px}
+  @media(max-width:880px){.mood{grid-template-columns:repeat(3,1fr)}}
+  .mood > div{border-radius:var(--r-md);overflow:hidden;position:relative;border:1px solid rgba(255,255,255,.05);display:flex;align-items:flex-end;padding:14px;color:var(--bone);font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase}
+  .m1{grid-column:span 2;grid-row:span 2;background:radial-gradient(circle at 30% 30%,#10B981 0%,#0A0A0F 70%)}
+  .m2{grid-column:span 2;background:linear-gradient(135deg,#FB923C,#7C2D12)}
+  .m3{grid-column:span 2;background:repeating-linear-gradient(45deg,#1B1B26,#1B1B26 12px,#11111A 12px,#11111A 24px)}
+  .m4{grid-column:span 1;background:linear-gradient(180deg,#F1ECE2,#E6E0D3);color:var(--obsidian)}
+  .m5{grid-column:span 1;background:radial-gradient(circle at 70% 70%,#6EE7B7 0%,#064E3B 60%,#0A0A0F 100%)}
+  .m6{grid-column:span 2;background:
+    linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px),
+    var(--obsidian);background-size:16px 16px,16px 16px}
+  .m7{grid-column:span 2;background:linear-gradient(120deg,#0A0A0F 0%,#0A0A0F 40%,#FB923C 100%)}
+  .m8{grid-column:span 2;background:#F1ECE2;color:var(--obsidian);display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-style:italic;font-size:28px;letter-spacing:-.02em;text-transform:none}
+
+  /* ─── Console (app mockup) ─────────────── */
+  .console{border:1px solid rgba(255,255,255,.08);border-radius:var(--r-xl);overflow:hidden;background:var(--ink);box-shadow:var(--shadow-soft)}
+  .console-bar{display:flex;align-items:center;gap:8px;padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.02)}
+  .console-bar .dots{display:flex;gap:6px}
+  .console-bar .dots span{width:10px;height:10px;border-radius:50%;background:var(--slate)}
+  .console-bar .url{margin-left:14px;font-family:var(--mono);font-size:11px;color:var(--mist);background:var(--steel);padding:6px 12px;border-radius:6px;flex:1;max-width:280px}
+  .console-bar .live{margin-left:auto;font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--pulse);display:flex;align-items:center;gap:8px}
+  .console-bar .live::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--pulse);box-shadow:0 0 0 4px rgba(110,231,183,.2)}
+  .console-body{display:grid;grid-template-columns:220px 1fr 280px;min-height:540px}
+  @media(max-width:980px){.console-body{grid-template-columns:1fr}}
+  .console .side{padding:24px 18px;border-right:1px solid rgba(255,255,255,.05);background:rgba(0,0,0,.18)}
+  .console .side .group{font-family:var(--mono);font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--haze);margin:18px 0 8px}
+  .console .side a{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:8px;font-size:13px;color:#CFCAC0;margin:2px 0}
+  .console .side a.active{background:rgba(110,231,183,.06);color:var(--bone);box-shadow:inset 0 0 0 1px rgba(110,231,183,.18)}
+  .console .side a .badge{font-family:var(--mono);font-size:10px;color:var(--haze);background:var(--steel);padding:2px 6px;border-radius:4px}
+  .console .main{padding:28px 24px}
+  .console .main h4{font-size:20px;font-weight:600;letter-spacing:-.01em;margin:0 0 4px}
+  .console .main .sub{font-family:var(--mono);font-size:11px;color:var(--mist);margin-bottom:24px;display:flex;gap:14px}
+  .console .main .sub b{color:var(--pulse);font-weight:500}
+  .agent-row{display:grid;grid-template-columns:30px 1fr auto auto;gap:14px;align-items:center;padding:12px 14px;border:1px solid rgba(255,255,255,.05);border-radius:10px;margin:8px 0;background:rgba(255,255,255,.01);font-size:13px}
+  .agent-row .ar-icon{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;font-weight:600;background:rgba(110,231,183,.08);color:var(--pulse);border:1px solid rgba(110,231,183,.16)}
+  .agent-row .ar-task{color:var(--bone)}
+  .agent-row .ar-task small{display:block;color:var(--haze);font-family:var(--mono);font-size:10px;letter-spacing:.1em;margin-top:2px}
+  .agent-row .ar-stat{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--pulse);padding:4px 8px;background:rgba(110,231,183,.08);border-radius:4px}
+  .agent-row .ar-stat.approval{color:var(--ember);background:rgba(251,146,60,.08)}
+  .agent-row .ar-stat.done{color:var(--haze);background:transparent}
+  .agent-row .ar-time{font-family:var(--mono);font-size:10px;color:var(--haze)}
+  .console .right{border-left:1px solid rgba(255,255,255,.05);padding:24px 20px;background:rgba(0,0,0,.18)}
+  .console .right h5{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--mist);margin:0 0 12px}
+  .cycle{display:flex;align-items:center;gap:10px;padding:8px 10px;font-size:12px;color:#CFCAC0;border-left:2px solid var(--pulse);margin:6px 0;background:rgba(110,231,183,.03)}
+  .cycle.ember{border-left-color:var(--ember);background:rgba(251,146,60,.04)}
+  .cycle .time{font-family:var(--mono);font-size:10px;color:var(--haze);margin-left:auto}
+  .approval-card{margin-top:18px;border:1px solid rgba(251,146,60,.25);background:rgba(251,146,60,.04);padding:16px;border-radius:12px}
+  .approval-card .ac-title{font-size:13px;font-weight:600;color:var(--ember);margin-bottom:6px;display:flex;align-items:center;gap:6px}
+  .approval-card .ac-body{font-size:12px;color:#BFBAA8;line-height:1.5}
+  .approval-card .ac-actions{display:flex;gap:8px;margin-top:12px}
+  .approval-card button{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;padding:8px 14px;border-radius:6px;border:0;cursor:pointer}
+  .approval-card .approve{background:var(--pulse);color:var(--obsidian)}
+  .approval-card .reject{background:transparent;color:var(--mist);border:1px solid var(--slate)}
+
+  /* ─── Agent roster ────────────────────────── */
+  .agents{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media(max-width:980px){.agents{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:640px){.agents{grid-template-columns:1fr}}
+  .agent{background:var(--ink);border:1px solid rgba(255,255,255,.06);border-radius:var(--r-md);padding:20px;position:relative;overflow:hidden;transition:border-color .3s,transform .3s}
+  .agent:hover{border-color:rgba(110,231,183,.3);transform:translateY(-2px)}
+  .agent::before{content:"";position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--pulse),transparent);opacity:.5}
+  .agent .role{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--pulse);margin-bottom:8px;display:flex;align-items:center;gap:8px}
+  .agent .role::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--pulse)}
+  .agent .name{font-family:var(--display);font-size:18px;font-weight:600;letter-spacing:-.01em;margin:0 0 8px}
+  .agent .desc{font-size:13px;color:#A8A296;line-height:1.55;margin:0}
+  .agent.ember .role{color:var(--ember)}
+  .agent.ember .role::before{background:var(--ember)}
+  .agent.ember::before{background:linear-gradient(90deg,transparent,var(--ember),transparent)}
+
+  /* ─── Strategy timeline ──────────────────── */
+  .timeline{position:relative;padding-left:48px}
+  .timeline::before{content:"";position:absolute;left:18px;top:8px;bottom:8px;width:1px;background:linear-gradient(180deg,var(--pulse),var(--ember),transparent)}
+  .ph{position:relative;padding:24px 0 32px}
+  .ph::before{content:"";position:absolute;left:-36px;top:30px;width:12px;height:12px;border-radius:50%;background:var(--obsidian);border:2px solid var(--pulse);box-shadow:0 0 0 4px rgba(110,231,183,.1)}
+  .ph.ember::before{border-color:var(--ember);box-shadow:0 0 0 4px rgba(251,146,60,.1)}
+  .ph .pmeta{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--haze);margin-bottom:8px}
+  .ph .ptitle{font-family:var(--display);font-size:24px;font-weight:600;margin:0 0 8px;letter-spacing:-.01em}
+  .ph .pbody{font-size:15px;color:#B8B2A4;line-height:1.6;margin:0;max-width:60ch}
+
+  /* ─── Differentiation matrix ─────────────── */
+  .matrix{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;border:1px solid rgba(255,255,255,.06);border-radius:var(--r-md);overflow:hidden}
+  .matrix > div{padding:16px 18px;border-bottom:1px solid rgba(255,255,255,.05);font-size:13px}
+  .matrix > div:nth-child(4n+2),.matrix > div:nth-child(4n+3),.matrix > div:nth-child(4n+4){border-left:1px solid rgba(255,255,255,.05);text-align:center}
+  .matrix .hd{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--mist);background:rgba(255,255,255,.02)}
+  .matrix .cat{color:var(--bone)}
+  .matrix .yes{color:var(--pulse)}
+  .matrix .no{color:var(--haze)}
+  .matrix .mid{color:var(--ember)}
+  @media(max-width:780px){.matrix{font-size:12px}.matrix > div{padding:12px 10px}}
+
+  /* ─── Guidelines: do/don't logo blocks ───── */
+  .lg-card{background:var(--ink);border:1px solid rgba(255,255,255,.06);border-radius:var(--r-md);padding:18px;display:flex;flex-direction:column;gap:12px}
+  .lg-canvas{aspect-ratio:1.6;background:var(--steel);border-radius:8px;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+  .lg-canvas .mini{font-family:var(--display);font-weight:900;font-size:38px;letter-spacing:-.05em;display:flex;align-items:baseline;gap:.05em;color:var(--bone)}
+  .lg-canvas .mini .dot{width:.18em;height:.18em;border-radius:50%;background:var(--pulse);align-self:flex-end;margin-bottom:.16em}
+  .lg-canvas.bad-stretch .mini{transform:scaleX(1.6)}
+  .lg-canvas.bad-rotate .mini{transform:rotate(-12deg)}
+  .lg-canvas.bad-color{background:#FF00CC}
+  .lg-canvas.bad-color .mini .dot{background:#fff}
+  .lg-canvas.bad-shadow .mini{text-shadow:3px 3px 0 var(--ember)}
+  .lg-canvas.good-mono{background:var(--bone)}
+  .lg-canvas.good-mono .mini{color:var(--obsidian)}
+  .lg-canvas.good-mono .mini .dot{background:var(--obsidian)}
+  .lg-canvas.good-clear{background:var(--steel)}
+  .lg-tag{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;display:flex;align-items:center;gap:6px}
+  .lg-tag.yes{color:var(--pulse)}
+  .lg-tag.no{color:var(--danger)}
+  .lg-cap{font-size:12px;color:var(--mist);line-height:1.5}
+
+  /* ─── Footer ─────────────────────────────── */
+  footer{padding:80px 0 60px;border-top:1px solid rgba(255,255,255,.06);background:linear-gradient(180deg,transparent,rgba(110,231,183,.02))}
+  footer .row{align-items:end}
+  footer .colophon{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mist);line-height:2}
+  footer .signoff{font-family:var(--serif);font-style:italic;font-size:32px;line-height:1.1;color:var(--bone);max-width:14ch;letter-spacing:-.02em}
+  footer .signoff .pulse{color:var(--pulse)}
+
+  /* ─── Misc ──────────────────────────────── */
+  .pill{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.08);font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mist)}
+  .pill .d{width:6px;height:6px;border-radius:50%;background:var(--pulse)}
+  .stack > * + *{margin-top:24px}
+  .glyph-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:14px}
+  @media(max-width:780px){.glyph-grid{grid-template-columns:repeat(3,1fr)}}
+  .glyph{aspect-ratio:1;background:var(--ink);border:1px solid rgba(255,255,255,.06);border-radius:var(--r-md);display:flex;align-items:center;justify-content:center;color:var(--bone-2)}
+
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--bone);color:var(--obsidian);padding:10px 20px;border-radius:999px;font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;opacity:0;pointer-events:none;transition:all .3s;z-index:100}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  /* ─── The Hire (v2) ───────────────────────── */
+  .hire-stack{display:grid;grid-template-columns:1.05fr 1fr;gap:48px;align-items:center;margin-top:48px}
+  @media(max-width:960px){.hire-stack{grid-template-columns:1fr}}
+  .hire-big{font-family:var(--display);font-weight:800;font-size:clamp(48px,7vw,104px);line-height:.94;letter-spacing:-.045em;margin:0}
+  .hire-big .strike{position:relative;display:inline-block;color:var(--haze)}
+  .hire-big .strike::after{content:"";position:absolute;left:-2%;right:-2%;top:54%;height:6px;background:var(--ember);transform:rotate(-3deg);border-radius:3px}
+  .hire-big .keep{color:var(--pulse)}
+
+  .vs{border:1px solid rgba(255,255,255,.08);border-radius:var(--r-lg);overflow:hidden;background:var(--ink)}
+  .vs-row{display:grid;grid-template-columns:1.1fr 1fr 1fr;padding:14px 18px;border-top:1px solid rgba(255,255,255,.05);font-size:13px;align-items:center}
+  .vs-row.hd{background:rgba(255,255,255,.02);border-top:0}
+  .vs-row .lbl{color:var(--bone)}
+  .vs-row .old{font-family:var(--mono);font-size:12px;color:var(--haze);text-align:center;text-decoration:line-through;text-decoration-color:rgba(248,113,113,.4)}
+  .vs-row .new{font-family:var(--mono);font-size:12px;color:var(--pulse);text-align:center}
+  .vs-row.hd .old, .vs-row.hd .new, .vs-row.hd .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--mist);text-decoration:none}
+
+  .tag-strip{display:flex;gap:8px;flex-wrap:wrap;margin-top:24px}
+  .tag-strip .tg{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--mist);padding:8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.02)}
+  .tag-strip .tg b{color:var(--pulse);font-weight:500}
+
+  /* ─── Needs doing (v2) ────────────────────── */
+  .needs-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:40px}
+  @media(max-width:960px){.needs-grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:640px){.needs-grid{grid-template-columns:1fr}}
+  .need{background:var(--ink);border:1px solid rgba(255,255,255,.06);border-radius:var(--r-md);padding:22px 22px 20px;display:flex;flex-direction:column;gap:14px;position:relative;overflow:hidden;transition:transform .25s,border-color .25s}
+  .need:hover{transform:translateY(-3px);border-color:rgba(110,231,183,.3)}
+  .need .ask{font-family:var(--serif);font-style:italic;font-size:20px;line-height:1.25;color:var(--bone);margin:0}
+  .need .arrow{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--haze);display:flex;align-items:center;gap:6px}
+  .need .arrow::before{content:"→";color:var(--pulse)}
+  .need .who{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--pulse);display:flex;align-items:center;gap:8px}
+  .need .who .chip{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;background:rgba(110,231,183,.1);border:1px solid rgba(110,231,183,.2);font-weight:600}
+  .need .ans{font-size:13px;line-height:1.55;color:#A8A296;margin:0}
+  .need.ember .who{color:var(--ember)}
+  .need.ember .who .chip{background:rgba(251,146,60,.1);border-color:rgba(251,146,60,.25)}
+  .need.ember .arrow::before{color:var(--ember)}
+
+  .got-it{margin-top:48px;border:1px solid rgba(110,231,183,.18);background:linear-gradient(135deg,rgba(110,231,183,.04),rgba(251,146,60,.03));border-radius:var(--r-lg);padding:48px;text-align:center}
+  .got-it p{font-family:var(--serif);font-style:italic;font-size:clamp(28px,4vw,56px);line-height:1.15;margin:0;color:var(--bone);letter-spacing:-.02em}
+  .got-it p .pulse{color:var(--pulse)}
+  .got-it small{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--mist);margin-top:18px}
+
+  /* ─── Landing recommendations (v2) ────────── */
+  .copy-cmp{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid rgba(255,255,255,.08);border-radius:var(--r-lg);overflow:hidden;background:var(--ink)}
+  @media(max-width:780px){.copy-cmp{grid-template-columns:1fr}}
+  .copy-cmp > div{padding:28px 30px;display:flex;flex-direction:column;gap:14px}
+  .copy-cmp .col-old{border-right:1px solid rgba(255,255,255,.06);background:rgba(248,113,113,.025)}
+  .copy-cmp .col-new{background:rgba(110,231,183,.03)}
+  .copy-cmp .col-old .stamp{color:var(--danger)}
+  .copy-cmp .col-new .stamp{color:var(--pulse)}
+  .copy-cmp .stamp{font-family:var(--mono);font-size:10px;letter-spacing:.22em;text-transform:uppercase;display:flex;align-items:center;gap:8px}
+  .copy-cmp .stamp::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+  .copy-cmp .copy{font-family:var(--display);font-weight:600;font-size:22px;line-height:1.2;letter-spacing:-.01em;color:var(--bone)}
+  .copy-cmp .copy.serif{font-family:var(--serif);font-style:italic;font-weight:400;font-size:24px;color:var(--bone-2)}
+  .copy-cmp .note{font-size:12px;color:var(--mist);line-height:1.55}
+  .copy-cmp .copy.small{font-size:15px;font-weight:500}
+
+  .rec{display:grid;grid-template-columns:80px 1fr;gap:24px;padding:24px 0;border-top:1px solid rgba(255,255,255,.06)}
+  .rec:first-of-type{border-top:0}
+  .rec .ix{font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--pulse)}
+  .rec h4{margin:0 0 8px;font-family:var(--display);font-size:20px;font-weight:600;letter-spacing:-.01em;color:var(--bone)}
+  .rec p{margin:0;font-size:14px;color:#B8B2A4;line-height:1.65;max-width:62ch}
+  .rec ul{margin:12px 0 0;padding-left:18px;font-size:13px;color:#A8A296;line-height:1.7}
+  .rec ul li::marker{color:var(--pulse)}
+
+  .demo-band{margin-top:24px;border:1px dashed rgba(110,231,183,.25);border-radius:var(--r-md);padding:24px;background:rgba(110,231,183,.02);display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
+  .demo-band .left{font-family:var(--serif);font-style:italic;font-size:20px;color:var(--bone)}
+  .demo-band .left b{font-family:var(--display);font-style:normal;font-weight:600;color:var(--pulse)}
+  .demo-band .right{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--mist)}
+</style>
+</head>
+<body>
+
+<div class="scroll-progress" id="prog"></div>
+
+<header class="topbar">
+  <div class="mark">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="2.5" y="2.5" width="19" height="19" rx="3" stroke="#F1ECE2" stroke-width="1.5"/><line x1="6" y1="9" x2="14" y2="9" stroke="#F1ECE2" stroke-width="1.5"/><line x1="6" y1="13" x2="18" y2="13" stroke="#F1ECE2" stroke-width="1.5"/><line x1="6" y1="17" x2="11" y2="17" stroke="#F1ECE2" stroke-width="1.5"/><circle cx="18" cy="6" r="1.8" fill="#6EE7B7"/></svg>
+    Trent / Brand Book v2
+  </div>
+  <nav>
+    <a href="#manifesto">Manifesto</a>
+    <a href="#thehire">The Hire</a>
+    <a href="#needs">Needs</a>
+    <a href="#strategy">Strategy</a>
+    <a href="#voice">Voice</a>
+    <a href="#identity">Identity</a>
+    <a href="#product">Product</a>
+    <a href="#landing">Landing</a>
+  </nav>
+</header>
+
+<!-- ═══ HERO ═══ -->
+<section class="hero" id="top">
+  <div class="hero-grid"></div>
+  <div class="wrap">
+    <div class="hero-tag"><span class="pulse-dot"></span> Trent / Brand &amp; Product Bible · Edition 02 · May 2026 · supersedes ed.01</div>
+    <h1 class="wordmark">trent<span class="dot"></span></h1>
+    <h1 class="sub">The <em>one hire</em><br/>who does <em>it all.</em></h1>
+
+    <p style="margin:32px 0 0;max-width:42ch;font-size:18px;line-height:1.55;color:#CFCAC0">
+      Nine specialists. One subscription. Always on the queue. Trent is your other founder — and the rest of your team, in a single hire.
+    </p>
+
+    <div class="meta-row">
+      <div><div class="k">Category</div><div class="v">AI employee operating system</div></div>
+      <div><div class="k">Built for</div><div class="v">Solo founders &amp; small teams</div></div>
+      <div><div class="k">Coverage</div><div class="v">9 roles · 24/7 · every function</div></div>
+      <div><div class="k">Promise</div><div class="v">Needs doing? Trent's got it.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ MANIFESTO ═══ -->
+<section id="manifesto">
+  <div class="wrap">
+    <div class="eyebrow">01 — Manifesto</div>
+    <div class="manifesto">
+      <p>
+        Every founder we know<br/>
+        is one trusted person <span class="accent">short.</span><br/>
+        Not another tool.<br/>
+        A <span class="ember">partner</span>.
+      </p>
+      <div class="columns">
+        <div class="lines">
+          <p>Someone who shows up before the coffee. Who holds the operating reins while you hold the vision. Who ships the code, drafts the emails, watches the metrics, and tells you the one decision that actually matters today.</p>
+          <p>We built Trent to be that partner. A calm, capable cofounder that runs in cycles — 24 hours a day, 7 days a week — surfaces decisions instead of demands, and gets sharper every week your company runs.</p>
+          <p>You bring the vision and the judgment. Trent runs the company.</p>
+        </div>
+        <div>
+          <div class="pill"><span class="d"></span> Operating principle</div>
+          <p class="lead" style="margin-top:18px">A cofounder isn't measured by the questions they answer — but by the work they finish while you sleep.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ THE HIRE (v2) ═══ -->
+<section id="thehire">
+  <div class="wrap">
+    <div class="eyebrow">02 — The hire</div>
+    <h2 class="hire-big">
+      Hire <span class="strike">a team.</span><br/>
+      Hire <span class="keep">trent.</span>
+    </h2>
+
+    <div class="hire-stack">
+      <div>
+        <p class="lead">One employee. Every role. Always on.</p>
+        <p class="body" style="margin-top:18px">
+          You used to need nine people to run a company. A product manager. An engineer. A growth marketer. A finance lead. A content writer. An ops generalist. A customer success rep. A legal reviewer. A strategist who reads the whole board on Sunday.
+        </p>
+        <p class="body" style="margin-top:12px">
+          Trent is all nine. One subscription. One operating model. One queue you actually read. The whole team — including the cofounder you didn't have — in a single hire.
+        </p>
+        <div class="tag-strip">
+          <div class="tg">one <b>subscription</b></div>
+          <div class="tg">nine <b>roles staffed</b></div>
+          <div class="tg">zero <b>hiring loops</b></div>
+          <div class="tg">zero <b>onboarding</b></div>
+          <div class="tg">zero <b>days off</b></div>
+        </div>
+      </div>
+
+      <div class="vs">
+        <div class="vs-row hd">
+          <div class="lbl">Role</div><div class="old">The old way</div><div class="new">With trent</div>
+        </div>
+        <div class="vs-row"><div class="lbl">Product manager</div><div class="old">$160k + benefits</div><div class="new">included</div></div>
+        <div class="vs-row"><div class="lbl">Engineer</div><div class="old">$190k + equity</div><div class="new">included</div></div>
+        <div class="vs-row"><div class="lbl">Growth</div><div class="old">$140k + ad budget</div><div class="new">included</div></div>
+        <div class="vs-row"><div class="lbl">Finance / ops</div><div class="old">$130k</div><div class="new">included</div></div>
+        <div class="vs-row"><div class="lbl">Marketing</div><div class="old">$120k</div><div class="new">included</div></div>
+        <div class="vs-row"><div class="lbl">Customer success</div><div class="old">$95k</div><div class="new">included</div></div>
+        <div class="vs-row"><div class="lbl">Legal review</div><div class="old">$400 / hr retainer</div><div class="new">included</div></div>
+        <div class="vs-row"><div class="lbl">Strategy / planning</div><div class="old">consultant TBD</div><div class="new">included</div></div>
+        <div class="vs-row"><div class="lbl">Cofounder</div><div class="old">none available</div><div class="new">included</div></div>
+        <div class="vs-row" style="background:rgba(110,231,183,.03)"><div class="lbl" style="font-weight:600">Total</div><div class="old">$1M+ / yr</div><div class="new" style="font-weight:600;color:var(--pulse)">one subscription</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ BRAND PILLARS ═══ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">03 — Brand pillars</div>
+    <h2 class="h2">Five non-negotiables.</h2>
+    <p class="body" style="margin-bottom:48px">Trent's brand and product are governed by the same five principles. Every screen, every word, every cycle Trent runs should make at least one of these more obviously true.</p>
+
+    <div class="row cols-3" style="gap:16px">
+      <div class="card">
+        <div class="icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+        <div class="num">P / 01</div>
+        <h3 class="title">Always operating.</h3>
+        <p class="desc">Cycles run on a schedule, not on whether you opened the app. The company keeps moving while you sleep, while you ship, while you live.</p>
+      </div>
+      <div class="card ember">
+        <div class="icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 12h6l2-5 4 10 2-5h2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div class="num">P / 02</div>
+        <h3 class="title">Permission-first.</h3>
+        <p class="desc">Autonomy with approvals is the default. Risky moves — money, sends, deploys, deletions — stop and ask. You hold the keys; Trent holds the queue.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="13" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="13" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6"/></svg></div>
+        <div class="num">P / 03</div>
+        <h3 class="title">Whole-business.</h3>
+        <p class="desc">Strategy, code, marketing, support, finance — one operating loop. Not an AI developer. Not a chat tool. A complete company runtime.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 19V8l8-5 8 5v11" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 19v-6h6v6" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+        <div class="num">P / 04</div>
+        <h3 class="title">Memory that compounds.</h3>
+        <p class="desc">Every decision, doc, customer note, and metric stays. The company gets smarter every week — not just the model.</p>
+      </div>
+      <div class="card ember">
+        <div class="icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 6l9-3 9 3v6c0 5-4 8-9 9-5-1-9-4-9-9V6z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+        <div class="num">P / 05</div>
+        <h3 class="title">Operator-grade.</h3>
+        <p class="desc">A serious console for serious work. Audit logs, budgets, kill switches, observability. The opposite of a slick chat box.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div class="num">P / 06</div>
+        <h3 class="title">Report, don't perform.</h3>
+        <p class="desc">No emoji parties. No hype copy. Trent shows what it did, what it'll do next, and what it needs from you. That's the whole show.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ NEEDS DOING (v2) ═══ -->
+<section id="needs">
+  <div class="wrap">
+    <div class="eyebrow">03 — Needs doing?</div>
+    <h2 class="h2">Trent's got it.</h2>
+    <p class="body" style="margin-bottom:8px">A brand promise only matters if it's specific. Here's what walks into the queue on any given day — and which member of your one-employee team picks it up.</p>
+
+    <div class="needs-grid">
+      <div class="need">
+        <p class="ask">"Need this PR reviewed and merged before standup?"</p>
+        <div class="arrow">handled by</div>
+        <div class="who"><span class="chip">EG</span> engineer</div>
+        <p class="ans">Pulls the branch. Runs the tests. Comments inline. Merges on your nod, or sends back with a one-line reason.</p>
+      </div>
+      <div class="need ember">
+        <p class="ask">"Need that vendor contract checked before I sign?"</p>
+        <div class="arrow">handled by</div>
+        <div class="who"><span class="chip">LG</span> legal</div>
+        <p class="ans">Reads it. Flags risk in plain English. Highlights the three clauses you actually need to read.</p>
+      </div>
+      <div class="need">
+        <p class="ask">"Need a landing page shipped by Friday?"</p>
+        <div class="arrow">handled by</div>
+        <div class="who"><span class="chip">PM</span> + <span class="chip">EG</span> + <span class="chip">MK</span></div>
+        <p class="ans">PM writes the spec. EG builds &amp; deploys. MK drafts the copy. You approve once.</p>
+      </div>
+      <div class="need ember">
+        <p class="ask">"Need our burn rate and runway, now?"</p>
+        <div class="arrow">handled by</div>
+        <div class="who"><span class="chip">FN</span> finance</div>
+        <p class="ans">Pulls every ledger. Spits out runway in months, burn trend, three biggest line items. No spreadsheet required.</p>
+      </div>
+      <div class="need">
+        <p class="ask">"Need 3 LinkedIn posts in the brand voice?"</p>
+        <div class="arrow">handled by</div>
+        <div class="who"><span class="chip">MK</span> marketing</div>
+        <p class="ans">Drafts three. Tone-matched. Schedules on approve. Never auto-publishes anything with your name on it.</p>
+      </div>
+      <div class="need ember">
+        <p class="ask">"Need this angry customer handled — without making it worse?"</p>
+        <div class="arrow">handled by</div>
+        <div class="who"><span class="chip">CS</span> customer success</div>
+        <p class="ans">Reads the whole thread. Drafts a warm, factual reply. Escalates to you with a 30-second summary.</p>
+      </div>
+      <div class="need">
+        <p class="ask">"Need to know what actually moved last week?"</p>
+        <div class="arrow">handled by</div>
+        <div class="who"><span class="chip">ST</span> strategy</div>
+        <p class="ans">Synthesises every other agent's week into a Sunday letter. Prose, not dashboards. From your other founder.</p>
+      </div>
+      <div class="need">
+        <p class="ask">"Need to know if the Stripe integration is still healthy?"</p>
+        <div class="arrow">handled by</div>
+        <div class="who"><span class="chip">OT</span> ops</div>
+        <p class="ans">Watches every webhook, every adapter, every vendor's status page. Fixes things before you notice.</p>
+      </div>
+      <div class="need">
+        <p class="ask">"Need a growth experiment designed and shipped this week?"</p>
+        <div class="arrow">handled by</div>
+        <div class="who"><span class="chip">GR</span> growth</div>
+        <p class="ans">Picks the channel. Defines the test. Sets the spend cap. Stops before any money moves. Reports what worked.</p>
+      </div>
+    </div>
+
+    <div class="got-it">
+      <p>Whatever it is — <span class="pulse">Trent's got it.</span></p>
+      <small>● the brand promise · ed.02</small>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ STRATEGY ═══ -->
+<section id="strategy">
+  <div class="wrap">
+    <div class="eyebrow">04 — Brand strategy</div>
+    <div class="row cols-2" style="gap:64px">
+      <div>
+        <h2 class="h2">Positioning.</h2>
+        <p class="lead">For solo founders building the next thing, Trent is the AI cofounder operating system that runs your company while you sleep — planning, shipping, marketing, supporting customers, reporting back — with you holding the keys.</p>
+        <p class="body" style="margin-top:24px"><span class="meta">Frame of reference →</span> not an AI assistant. Not an AI developer. A company runtime. The closest comparison isn't ChatGPT — it's a Chief of Staff who also writes the code.</p>
+      </div>
+      <div>
+        <div class="meta" style="margin-bottom:14px">Differentiation matrix</div>
+        <div class="matrix">
+          <div class="hd">Capability</div>
+          <div class="hd">Trent</div>
+          <div class="hd">Coding assistants</div>
+          <div class="hd">Chat tools</div>
+
+          <div class="cat">Persistent company memory</div>
+          <div class="yes">●</div>
+          <div class="no">—</div>
+          <div class="mid">◐</div>
+
+          <div class="cat">Role-based agent team</div>
+          <div class="yes">●</div>
+          <div class="no">—</div>
+          <div class="no">—</div>
+
+          <div class="cat">Scheduled autonomous cycles</div>
+          <div class="yes">●</div>
+          <div class="no">—</div>
+          <div class="no">—</div>
+
+          <div class="cat">Approvals · budgets · kill switch</div>
+          <div class="yes">●</div>
+          <div class="mid">◐</div>
+          <div class="no">—</div>
+
+          <div class="cat">Code → ship → distribute</div>
+          <div class="yes">●</div>
+          <div class="mid">◐</div>
+          <div class="no">—</div>
+
+          <div class="cat">Public company dashboard</div>
+          <div class="yes">●</div>
+          <div class="no">—</div>
+          <div class="no">—</div>
+
+          <div class="cat">Cost &amp; audit telemetry</div>
+          <div class="yes">●</div>
+          <div class="no">—</div>
+          <div class="no">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:96px">
+      <h3 class="h3">Growth &amp; evolution.</h3>
+      <div class="timeline">
+        <div class="ph">
+          <div class="pmeta">Phase 01 · 2026</div>
+          <div class="ptitle">The operator console.</div>
+          <p class="pbody">Prove the loop. Multi-company portfolio, 9 agents, in-memory store, run-now cycles, approvals, reports, audit. Brand stance: serious, technical, calm.</p>
+        </div>
+        <div class="ph ember">
+          <div class="pmeta">Phase 02 · 2026 → 2027</div>
+          <div class="ptitle">Durable runtime.</div>
+          <p class="pbody">Postgres + Prisma persistence, Redis/BullMQ scheduled cycles, real GitHub writes behind approvals, encrypted secrets, Stripe billing &amp; credits, live execution streaming. Brand stance: production-grade.</p>
+        </div>
+        <div class="ph">
+          <div class="pmeta">Phase 03 · 2027</div>
+          <div class="ptitle">The full company surface.</div>
+          <p class="pbody">Email send, social scheduling, Meta Ads, support inbox, browser sessions, hosted deploys, public subdomains, agent lab &amp; evals. Brand stance: trusted enough for revenue.</p>
+        </div>
+        <div class="ph ember">
+          <div class="pmeta">Phase 04 · 2028+</div>
+          <div class="ptitle">The cofounder marketplace.</div>
+          <p class="pbody">Specialist agents from third parties, role marketplaces, company templates, peer benchmarking across portfolios. Brand stance: the operating layer for the next generation of solo-built companies.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ PERSONALITY & VOICE ═══ -->
+<section id="voice">
+  <div class="wrap">
+    <div class="eyebrow">05 — Personality &amp; voice</div>
+    <h2 class="h2">Calm. Capable.<br/>Allergic to hype.</h2>
+    <p class="body" style="margin-bottom:48px">Trent is the partner who's already three steps ahead but never makes a show of it. Authority without ego. Precision without coldness. If a sentence sounds like a launch tweet, rewrite it.</p>
+
+    <div class="row cols-2" style="gap:48px">
+      <div>
+        <div class="meta" style="margin-bottom:20px">Personality calibration</div>
+        <div style="background:var(--ink);border:1px solid rgba(255,255,255,.06);border-radius:var(--r-lg);padding:28px 32px">
+          <div class="slider">
+            <div class="end">Calm</div>
+            <div class="track"><div class="thumb" style="left:18%"><span class="label">Calm</span></div></div>
+            <div class="end r">Urgent</div>
+          </div>
+          <div class="slider">
+            <div class="end active">Plain</div>
+            <div class="track"><div class="thumb" style="left:12%"><span class="label">Plain</span></div></div>
+            <div class="end r">Poetic</div>
+          </div>
+          <div class="slider">
+            <div class="end">Reserved</div>
+            <div class="track"><div class="thumb" style="left:25%"><span class="label">Reserved</span></div></div>
+            <div class="end r">Expressive</div>
+          </div>
+          <div class="slider">
+            <div class="end">Conservative</div>
+            <div class="track"><div class="thumb" style="left:62%"><span class="label">Quietly bold</span></div></div>
+            <div class="end r active">Bold</div>
+          </div>
+          <div class="slider">
+            <div class="end active">Serious</div>
+            <div class="track"><div class="thumb" style="left:22%"><span class="label">Serious, with dry wit</span></div></div>
+            <div class="end r">Playful</div>
+          </div>
+          <div class="slider">
+            <div class="end">Human</div>
+            <div class="track"><div class="thumb" style="left:48%"><span class="label">Operator</span></div></div>
+            <div class="end r">Technical</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="meta" style="margin-bottom:20px">Voice principles</div>
+        <div class="stack">
+          <div class="card"><h3 class="title">Direct &gt; clever.</h3><p class="desc">Short sentences. Active voice. Verbs do the work. If a metaphor doesn't earn its keep, cut it.</p></div>
+          <div class="card"><h3 class="title">Use operator vocabulary.</h3><p class="desc"><span style="font-family:var(--mono);color:var(--pulse)">cycle</span>, <span style="font-family:var(--mono);color:var(--pulse)">queue</span>, <span style="font-family:var(--mono);color:var(--pulse)">approval</span>, <span style="font-family:var(--mono);color:var(--pulse)">ship</span>, <span style="font-family:var(--mono);color:var(--pulse)">budget</span>, <span style="font-family:var(--mono);color:var(--pulse)">deploy</span>. Trent runs a company; speak the language.</p></div>
+          <div class="card"><h3 class="title">Always close the loop.</h3><p class="desc">Three beats: what we did, what's next, what we need from you. Every message ends in clarity, not a cliffhanger.</p></div>
+          <div class="card"><h3 class="title">No hype, no apology.</h3><p class="desc">No "🚀", no "we're so excited", no "we're sorry for the inconvenience". State the state. Hand back control.</p></div>
+          <div class="card ember"><h3 class="title">"Trent's got it." is the heartbeat.</h3><p class="desc">The most repeated phrase in the brand. Used after every confirmation, every queue acknowledgement, every "done." It's not a tagline — it's how the product replies.</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:64px">
+      <div class="meta" style="margin-bottom:16px">Voice in the wild — yes / no</div>
+      <div class="voice">
+        <div class="yes"><div class="label">● Yes</div><p>Shipped onboarding refactor. 3 PRs merged, 1 awaiting your approval.</p></div>
+        <div class="no"><div class="label">✕ Not Trent</div><p>🚀 Big day! We made some awesome improvements to onboarding and we're so excited to share them!!</p></div>
+
+        <div class="yes"><div class="label">● Yes</div><p>Growth cycle paused. Budget cap reached for the week. Resume, or roll fresh budget Monday?</p></div>
+        <div class="no"><div class="label">✕ Not Trent</div><p>Oops! Looks like we hit a small bump. Don't worry — your ads are safe!</p></div>
+
+        <div class="yes"><div class="label">● Yes</div><p>One decision for you today: approve the pricing page copy. Everything else is on track.</p></div>
+        <div class="no"><div class="label">✕ Not Trent</div><p>Hey there! Just checking in — do you maybe want to take a look at a few things?</p></div>
+
+        <div class="yes"><div class="label">● Yes</div><p>Customer reply drafted. Tone: warm, factual. Send as-is?</p></div>
+        <div class="no"><div class="label">✕ Not Trent</div><p>I've crafted a thoughtful, empathetic response that I'm really proud of!</p></div>
+
+        <div class="yes"><div class="label">● Yes</div><p>Vendor MSA reviewed. 2 flags worth your read. Want the 60-second summary or the full markup?</p></div>
+        <div class="no"><div class="label">✕ Not Trent</div><p>I've completed a thorough legal analysis. Please review the attached 14-page document at your convenience.</p></div>
+
+        <div class="yes"><div class="label">● Yes</div><p>You: "fix the signup bug." Trent: <em>"Got it. PR opened in 6 minutes — ready for your approval."</em></p></div>
+        <div class="no"><div class="label">✕ Not Trent</div><p>Sure! I'll get right on that and let you know how it goes!</p></div>
+
+        <div class="yes"><div class="label">● Yes</div><p>Needs doing? Trent's got it.</p></div>
+        <div class="no"><div class="label">✕ Not Trent</div><p>Empowering founders with next-generation autonomous intelligence.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ VISUAL IDENTITY ═══ -->
+<section id="identity">
+  <div class="wrap">
+    <div class="eyebrow">06 — Visual identity</div>
+    <h2 class="h2">A console you'd<br/>actually trust.</h2>
+    <p class="body" style="margin-bottom:48px">The identity reads first as instrument — disciplined grid, monospace data, ink and bone — and then warms in moments that matter: a mint pulse for agent activity, copper for human judgment. Nothing on screen exists without a reason.</p>
+
+    <!-- Logo system -->
+    <h3 class="h3" style="margin-top:32px">Logo system.</h3>
+    <p class="body" style="margin-bottom:32px">The wordmark is the brand at default. The mark — a console frame with a live signal — appears where the wordmark won't fit. The signal dot is always mint; on light backgrounds it flips to copper. The mark is never used without its frame.</p>
+
+    <div class="row cols-3" style="gap:18px">
+      <div class="logo-canvas">
+        <div class="grid-bg"></div>
+        <div class="logo-wordmark">trent<span class="dot"></span></div>
+        <div class="logo-caption"><span>Primary wordmark</span><span>On obsidian</span></div>
+      </div>
+      <div class="logo-canvas light">
+        <div class="logo-wordmark">trent<span class="dot"></span></div>
+        <div class="logo-caption"><span>Inverse wordmark</span><span>On bone</span></div>
+      </div>
+      <div class="logo-canvas signal">
+        <div class="grid-bg"></div>
+        <svg class="logo-mark" viewBox="0 0 80 80" fill="none">
+          <rect x="6" y="6" width="68" height="68" rx="8" stroke="#F1ECE2" stroke-width="2"/>
+          <line x1="16" y1="26" x2="44" y2="26" stroke="#F1ECE2" stroke-width="2" stroke-linecap="round"/>
+          <line x1="16" y1="40" x2="60" y2="40" stroke="#F1ECE2" stroke-width="2" stroke-linecap="round"/>
+          <line x1="16" y1="54" x2="36" y2="54" stroke="#F1ECE2" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="60" cy="20" r="5" fill="#6EE7B7"/>
+        </svg>
+        <div class="logo-caption"><span>Mark · the console</span><span>Frame + signal</span></div>
+      </div>
+    </div>
+
+    <div class="row cols-4" style="gap:14px;margin-top:14px">
+      <div class="logo-canvas" style="aspect-ratio:1.4">
+        <div class="grid-bg"></div>
+        <div style="display:flex;align-items:center;gap:14px;z-index:2">
+          <svg width="36" height="36" viewBox="0 0 80 80" fill="none"><rect x="6" y="6" width="68" height="68" rx="8" stroke="#F1ECE2" stroke-width="2.5"/><line x1="16" y1="26" x2="44" y2="26" stroke="#F1ECE2" stroke-width="2.5" stroke-linecap="round"/><line x1="16" y1="40" x2="60" y2="40" stroke="#F1ECE2" stroke-width="2.5" stroke-linecap="round"/><line x1="16" y1="54" x2="36" y2="54" stroke="#F1ECE2" stroke-width="2.5" stroke-linecap="round"/><circle cx="60" cy="20" r="6" fill="#6EE7B7"/></svg>
+          <div style="font-family:var(--display);font-weight:800;font-size:32px;letter-spacing:-.05em;line-height:.85">trent<span style="display:inline-block;width:.18em;height:.18em;border-radius:50%;background:var(--pulse);transform:translateY(.6em)"></span></div>
+        </div>
+        <div class="logo-caption"><span>Horizontal lockup</span><span>Default</span></div>
+      </div>
+      <div class="logo-canvas" style="aspect-ratio:1.4">
+        <div class="grid-bg"></div>
+        <div style="font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;display:flex;align-items:center;gap:10px;z-index:2;color:var(--bone)">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--pulse);box-shadow:0 0 0 4px rgba(110,231,183,.18)"></span>
+          trent · operating
+        </div>
+        <div class="logo-caption"><span>Status lockup</span><span>For runtime UI</span></div>
+      </div>
+      <div class="logo-canvas" style="aspect-ratio:1.4">
+        <div class="grid-bg"></div>
+        <div style="font-family:var(--display);font-weight:900;font-size:48px;letter-spacing:-.06em;line-height:.8;z-index:2">T<span style="display:inline-block;width:.2em;height:.2em;border-radius:50%;background:var(--pulse);transform:translateY(.45em)"></span></div>
+        <div class="logo-caption"><span>Monogram</span><span>Favicon / avatar</span></div>
+      </div>
+      <div class="logo-canvas light" style="aspect-ratio:1.4">
+        <svg width="40" height="40" viewBox="0 0 80 80" fill="none" style="z-index:2"><rect x="6" y="6" width="68" height="68" rx="8" stroke="#0A0A0F" stroke-width="3"/><line x1="16" y1="26" x2="44" y2="26" stroke="#0A0A0F" stroke-width="3" stroke-linecap="round"/><line x1="16" y1="40" x2="60" y2="40" stroke="#0A0A0F" stroke-width="3" stroke-linecap="round"/><line x1="16" y1="54" x2="36" y2="54" stroke="#0A0A0F" stroke-width="3" stroke-linecap="round"/><circle cx="60" cy="20" r="6" fill="#EA580C"/></svg>
+        <div class="logo-caption"><span>Mark · inverse</span><span>Copper signal</span></div>
+      </div>
+    </div>
+
+    <!-- Color -->
+    <h3 class="h3" style="margin-top:96px">Colour system.</h3>
+    <p class="body" style="margin-bottom:32px">Ink and bone carry 90% of the surface. Mint signals AI activity — agents, cycles, success states. Copper signals a human moment — an approval needed, a budget warning, a decision waiting. Click a swatch to copy the hex.</p>
+
+    <div class="palette">
+      <div class="swatch dark" style="background:#0A0A0F" data-hex="#0A0A0F">
+        <div><div class="role">Primary surface</div><div class="name">Obsidian</div></div>
+        <div class="hex"><span>#0A0A0F</span><span class="copy">Click to copy</span></div>
+      </div>
+      <div class="swatch light" style="background:#F1ECE2" data-hex="#F1ECE2">
+        <div><div class="role">Inverse surface</div><div class="name">Bone</div></div>
+        <div class="hex"><span>#F1ECE2</span><span class="copy">Click to copy</span></div>
+      </div>
+      <div class="swatch dark" style="background:#6EE7B7;color:#0A0A0F" data-hex="#6EE7B7">
+        <div><div class="role">Signal · AI</div><div class="name">Pulse</div></div>
+        <div class="hex" style="color:#0A0A0F"><span>#6EE7B7</span><span class="copy">Click to copy</span></div>
+      </div>
+      <div class="swatch dark" style="background:#FB923C;color:#1A0A05" data-hex="#FB923C">
+        <div><div class="role">Signal · Human</div><div class="name">Ember</div></div>
+        <div class="hex" style="color:#1A0A05"><span>#FB923C</span><span class="copy">Click to copy</span></div>
+      </div>
+
+      <div class="swatch dark" style="background:#11111A" data-hex="#11111A">
+        <div><div class="role">Surface · elevated</div><div class="name">Ink</div></div>
+        <div class="hex"><span>#11111A</span><span class="copy">Click to copy</span></div>
+      </div>
+      <div class="swatch dark" style="background:#1B1B26" data-hex="#1B1B26">
+        <div><div class="role">Surface · higher</div><div class="name">Steel</div></div>
+        <div class="hex"><span>#1B1B26</span><span class="copy">Click to copy</span></div>
+      </div>
+      <div class="swatch dark" style="background:#94A3B8;color:#11111A" data-hex="#94A3B8">
+        <div><div class="role">Utility text</div><div class="name">Mist</div></div>
+        <div class="hex" style="color:#11111A"><span>#94A3B8</span><span class="copy">Click to copy</span></div>
+      </div>
+      <div class="swatch dark" style="background:#F87171;color:#1A0505" data-hex="#F87171">
+        <div><div class="role">Critical</div><div class="name">Flare</div></div>
+        <div class="hex" style="color:#1A0505"><span>#F87171</span><span class="copy">Click to copy</span></div>
+      </div>
+    </div>
+
+    <!-- Typography -->
+    <h3 class="h3" style="margin-top:96px">Typography.</h3>
+    <p class="body" style="margin-bottom:32px">Three families. Inter does the work. Instrument Serif appears only when the brand wants to mean something — manifestos, the rare promise. JetBrains Mono carries data, status, agent names, and anything Trent would type.</p>
+
+    <div class="stack">
+      <div class="type-card">
+        <div class="meta">
+          <div class="pill"><span class="d"></span> Display + UI</div>
+          <div style="font-family:var(--mono);font-size:12px;color:var(--mist);margin-top:8px">Inter · 300 → 900</div>
+        </div>
+        <div>
+          <div class="specimen">A cofounder<br/>who finishes.</div>
+          <div class="specimen-meta"><span>aA Bb Cc 0123456789</span><span>tracking −4%</span><span>variable</span></div>
+        </div>
+      </div>
+      <div class="type-card serif">
+        <div class="meta">
+          <div class="pill"><span class="d" style="background:var(--ember)"></span> Editorial moment</div>
+          <div style="font-family:var(--mono);font-size:12px;color:var(--mist);margin-top:8px">Instrument Serif · Italic</div>
+        </div>
+        <div>
+          <div class="specimen">your other founder.</div>
+          <div class="specimen-meta"><span>used sparingly</span><span>for promise, soul, signature</span></div>
+        </div>
+      </div>
+      <div class="type-card mono">
+        <div class="meta">
+          <div class="pill"><span class="d"></span> Data + status</div>
+          <div style="font-family:var(--mono);font-size:12px;color:var(--mist);margin-top:8px">JetBrains Mono · 400/500</div>
+        </div>
+        <div>
+          <div class="specimen">cycle.run() → 06:42</div>
+          <div class="specimen-meta"><span>agent IDs</span><span>cycle times</span><span>cost ledgers</span><span>code</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Iconography -->
+    <h3 class="h3" style="margin-top:96px">Iconography.</h3>
+    <p class="body" style="margin-bottom:32px">A single stroke language — 1.6 px, rounded caps, 24 grid. Icons are silent until they signal: a state colour layered in only when something has changed.</p>
+
+    <div class="glyph-grid">
+      <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#F1ECE2" stroke-width="1.6"/><path d="M12 7v5l3 2" stroke="#F1ECE2" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+      <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="2" stroke="#F1ECE2" stroke-width="1.6"/><line x1="3" y1="10" x2="21" y2="10" stroke="#F1ECE2" stroke-width="1.6"/></svg></div>
+      <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M4 12h6l2-5 4 10 2-5h2" stroke="#6EE7B7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="#F1ECE2" stroke-width="1.6"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" stroke="#F1ECE2" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+      <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M3 6l9-3 9 3v6c0 5-4 8-9 9-5-1-9-4-9-9V6z" stroke="#FB923C" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+      <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="3" stroke="#F1ECE2" stroke-width="1.6"/><path d="M5 20c0-4 3-6 7-6s7 2 7 6" stroke="#F1ECE2" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+      <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M5 7h14M5 12h14M5 17h8" stroke="#F1ECE2" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+      <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M4 19V8l8-5 8 5v11" stroke="#F1ECE2" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 19v-6h6v6" stroke="#F1ECE2" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+      <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="#F1ECE2" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+      <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="#6EE7B7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#FB923C" stroke-width="1.6"/><path d="M12 8v4M12 16h.01" stroke="#FB923C" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+      <div class="glyph"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M3 12c4-9 14-9 18 0-4 9-14 9-18 0z" stroke="#F1ECE2" stroke-width="1.6"/><circle cx="12" cy="12" r="3" stroke="#F1ECE2" stroke-width="1.6"/></svg></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ MOODBOARD ═══ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">07 — Moodboard</div>
+    <h2 class="h2">The feeling.</h2>
+    <p class="body" style="margin-bottom:48px">Operator-grade tooling meets editorial restraint. The quiet of a Bloomberg terminal at 5 a.m. The discipline of a Braun catalogue. The warmth of a single candle in a server room.</p>
+
+    <div class="mood">
+      <div class="m1">01 / pulse · operating</div>
+      <div class="m2">02 / ember · human moment</div>
+      <div class="m3">03 / discipline · grid</div>
+      <div class="m4">04 / bone · paper</div>
+      <div class="m5">05 / depth · signal</div>
+      <div class="m6">06 / surface · console</div>
+      <div class="m7">07 / horizon · transition</div>
+      <div class="m8">"runs while you sleep."</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ GUIDELINES ═══ -->
+<section id="guidelines">
+  <div class="wrap">
+    <div class="eyebrow">08 — Brand guidelines</div>
+    <h2 class="h2">Discipline as<br/>brand asset.</h2>
+    <p class="body" style="margin-bottom:48px">Trent earns trust by behaving the same way every time. These are the rules that keep the brand looking — and sounding — like the same partner across every surface.</p>
+
+    <h3 class="h3" style="margin-top:32px">Logo · do &amp; don't.</h3>
+    <div class="row cols-4" style="gap:14px">
+      <div class="lg-card"><div class="lg-canvas good-clear"><div class="mini">trent<span class="dot"></span></div></div><div class="lg-tag yes">● Use on obsidian or steel</div><div class="lg-cap">Default surface. Maintain a clear-space of one cap-height on every side.</div></div>
+      <div class="lg-card"><div class="lg-canvas good-mono"><div class="mini">trent<span class="dot"></span></div></div><div class="lg-tag yes">● Inverse on bone</div><div class="lg-cap">The dot flips to copper on light surfaces. Never mint on bone.</div></div>
+      <div class="lg-card"><div class="lg-canvas bad-stretch"><div class="mini">trent<span class="dot"></span></div></div><div class="lg-tag no">✕ Never stretch</div><div class="lg-cap">Letterforms are fixed. Scale uniformly only.</div></div>
+      <div class="lg-card"><div class="lg-canvas bad-rotate"><div class="mini">trent<span class="dot"></span></div></div><div class="lg-tag no">✕ Never tilt</div><div class="lg-cap">Trent is calm. Rotation reads as showy. Keep it level.</div></div>
+      <div class="lg-card"><div class="lg-canvas bad-color"><div class="mini">trent<span class="dot"></span></div></div><div class="lg-tag no">✕ No off-system colour</div><div class="lg-cap">Backgrounds live in the system: obsidian, ink, steel, bone. Nothing else.</div></div>
+      <div class="lg-card"><div class="lg-canvas bad-shadow"><div class="mini">trent<span class="dot"></span></div></div><div class="lg-tag no">✕ No shadows or outlines</div><div class="lg-cap">Trent is flat. Depth is implied through colour value, not effects.</div></div>
+      <div class="lg-card"><div class="lg-canvas good-clear"><div class="mini" style="filter:grayscale(1) opacity(.6)">trent<span class="dot"></span></div></div><div class="lg-tag yes">● Monochrome lockup</div><div class="lg-cap">Approved for embossing, single-colour print, watermarks.</div></div>
+      <div class="lg-card"><div class="lg-canvas good-clear"><div class="mini" style="font-size:24px">trent<span class="dot"></span></div></div><div class="lg-tag yes">● Minimum size: 24 px / 8 mm</div><div class="lg-cap">Below this size, use the monogram instead.</div></div>
+    </div>
+
+    <h3 class="h3" style="margin-top:80px">Colour rules.</h3>
+    <div class="row cols-2">
+      <div class="card"><div class="num">R / 01</div><h3 class="title">90 / 8 / 2.</h3><p class="desc">~90% of any surface is ink, bone, and neutrals. ~8% is the active signal (pulse OR ember, never both at once for the same element). ~2% is critical alerts. Pulse and ember never share a button.</p></div>
+      <div class="card"><div class="num">R / 02</div><h3 class="title">Pulse = AI moved. Ember = you decide.</h3><p class="desc">Mint indicates an action Trent took on its own. Copper indicates an action that is waiting on a human. This colour grammar is sacred — never swap them.</p></div>
+      <div class="card ember"><div class="num">R / 03</div><h3 class="title">Contrast: AA minimum, AAA on body.</h3><p class="desc">Body text on obsidian is bone @ 90% opacity (≥ 12:1). Mist for meta only. Pulse text never used below 14 px.</p></div>
+      <div class="card"><div class="num">R / 04</div><h3 class="title">No gradients on type.</h3><p class="desc">Gradients live in atmosphere — hero glows, surface depth. Never in type, icons, or logos. Type is solid colour, always.</p></div>
+    </div>
+
+    <h3 class="h3" style="margin-top:80px">Writing rules.</h3>
+    <div class="row cols-3">
+      <div class="card"><div class="num">W / 01</div><h3 class="title">Lowercase the brand.</h3><p class="desc"><span style="font-family:var(--mono);color:var(--pulse)">trent</span> in product UI, system messages, and Trent's own voice. <span style="font-family:var(--mono);color:var(--bone)">Trent</span> capitalised in editorial copy, headlines, third-person mentions.</p></div>
+      <div class="card"><div class="num">W / 02</div><h3 class="title">Numbers as numerals.</h3><p class="desc">9 agents, 3 PRs, 06:42. Trent is an operating system; spelled-out numbers feel like marketing copy.</p></div>
+      <div class="card"><div class="num">W / 03</div><h3 class="title">Oxford comma. Sentence case.</h3><p class="desc">Titles, buttons, navigation — all sentence case. Title case feels corporate. Trent is closer to a journal than a brochure.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ PRODUCT / APP ═══ -->
+<section id="product">
+  <div class="wrap">
+    <div class="eyebrow">09 — Product &amp; app vision</div>
+    <h2 class="h2">An operating system,<br/>not an interface.</h2>
+    <p class="body" style="margin-bottom:48px">The Trent app is a console. The default view answers three questions in three seconds: what is happening, what needs me, what's next. Everything else is a drawer pulled out from there.</p>
+
+    <!-- Live console mockup -->
+    <div class="console">
+      <div class="console-bar">
+        <div class="dots"><span></span><span></span><span></span></div>
+        <div class="url">trent.app / company / lumen-labs · console</div>
+        <div class="live">Live · cycle 142 running</div>
+      </div>
+      <div class="console-body">
+        <aside class="side">
+          <div class="group">Portfolio</div>
+          <a class="active">Lumen Labs <span class="badge">●</span></a>
+          <a>Ferncast <span class="badge">3</span></a>
+          <a>Quietboard <span class="badge"></span></a>
+          <div class="group">Workspace</div>
+          <a>Console</a>
+          <a>Queue <span class="badge">12</span></a>
+          <a>Approvals <span class="badge" style="background:rgba(251,146,60,.15);color:var(--ember)">2</span></a>
+          <a>Reports</a>
+          <a>Memory</a>
+          <a>Public page</a>
+          <div class="group">Operate</div>
+          <a>Cycles</a>
+          <a>Budgets</a>
+          <a>Audit log</a>
+          <a>Integrations</a>
+        </aside>
+
+        <div class="main">
+          <h4>Lumen Labs · operating console</h4>
+          <div class="sub">
+            <span>cycle <b>#142</b></span>
+            <span>autonomy <b>auto + approval</b></span>
+            <span>budget <b>$84 / $200 wk</b></span>
+            <span>last sync <b>02m ago</b></span>
+          </div>
+
+          <div class="meta" style="margin-bottom:8px">● Live agent activity</div>
+
+          <div class="agent-row">
+            <div class="ar-icon">PM</div>
+            <div class="ar-task">Re-prioritised weekly backlog after landing-page conversion drop.<small>product · 4 tasks updated · 1 hypothesis added</small></div>
+            <div class="ar-stat">Shipped</div>
+            <div class="ar-time">06:14</div>
+          </div>
+          <div class="agent-row">
+            <div class="ar-icon">EG</div>
+            <div class="ar-task">Opened PR #88: fix Stripe webhook idempotency on signup.<small>github · 2 files · +124 / −31 · tests passing</small></div>
+            <div class="ar-stat approval">Awaits you</div>
+            <div class="ar-time">06:32</div>
+          </div>
+          <div class="agent-row">
+            <div class="ar-icon">MK</div>
+            <div class="ar-task">Drafted 3 LinkedIn posts on the "one-employee" thesis.<small>marketing · 220 / 180 / 240 words · tone matched</small></div>
+            <div class="ar-stat approval">Awaits you</div>
+            <div class="ar-time">06:38</div>
+          </div>
+          <div class="agent-row">
+            <div class="ar-icon">CS</div>
+            <div class="ar-task">Replied to 4 support tickets. 1 escalated: refund request, &gt;$200.<small>customer · escalation queued for finance review</small></div>
+            <div class="ar-stat">Shipped</div>
+            <div class="ar-time">06:41</div>
+          </div>
+          <div class="agent-row">
+            <div class="ar-icon">LG</div>
+            <div class="ar-task">Reviewed inbound vendor MSA. 2 flags: indemnity scope, auto-renew.<small>legal · 14 pages · risk: medium · drafted reply</small></div>
+            <div class="ar-stat approval">Awaits you</div>
+            <div class="ar-time">06:42</div>
+          </div>
+          <div class="agent-row">
+            <div class="ar-icon">FN</div>
+            <div class="ar-task">Weekly cost report ready. Spend trending 8% under cap.<small>finance · OpenAI $42 · GitHub $0 · Postmark $4</small></div>
+            <div class="ar-stat done">Done</div>
+            <div class="ar-time">06:43</div>
+          </div>
+        </div>
+
+        <aside class="right">
+          <h5>Today's cycle</h5>
+          <div class="cycle">PM replanned the week<span class="time">06:14</span></div>
+          <div class="cycle ember">EG awaiting approval<span class="time">06:32</span></div>
+          <div class="cycle ember">MK awaiting approval<span class="time">06:38</span></div>
+          <div class="cycle">CS cleared the inbox<span class="time">06:41</span></div>
+          <div class="cycle ember">LG flagged contract risk<span class="time">06:42</span></div>
+          <div class="cycle">FN closed weekly ledger<span class="time">06:43</span></div>
+
+          <div class="approval-card">
+            <div class="ac-title">◆ One decision today</div>
+            <div class="ac-body">Approve PR #88 (Stripe webhook idempotency). Tests passing. Reviewed by ENG. Estimated impact: prevents duplicate $/signup events.</div>
+            <div class="ac-actions">
+              <button class="approve">Approve &amp; ship</button>
+              <button class="reject">Send back</button>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- Agent roster -->
+    <h3 class="h3" style="margin-top:96px">The team. In one hire.</h3>
+    <p class="body" style="margin-bottom:32px">Nine specialists. Each one is a role, not a model. Trent assigns the right agent to the right loop, runs them on a 24/7 cycle, and remembers what worked. Every job covered — nothing falls between people, because there is one of them.</p>
+
+    <div class="agents">
+      <div class="agent"><div class="role">PM · Product Manager</div><h4 class="name">Prioritises &amp; ships specs.</h4><p class="desc">Owns the backlog, writes the specs, closes the loops. Knows which task moves the needle this week. Allergic to busywork.</p></div>
+      <div class="agent"><div class="role">EG · Engineer</div><h4 class="name">Writes, reviews, merges.</h4><p class="desc">Reads the repo, drafts the patch, opens the PR, runs the tests, waits for your nod. Production-quality code, every cycle.</p></div>
+      <div class="agent"><div class="role">GR · Growth</div><h4 class="name">Experiments &amp; doubles down.</h4><p class="desc">Runs the funnel — landing pages, ads, channel tests, attribution. Stops at every spend gate. Reports what actually worked.</p></div>
+      <div class="agent ember"><div class="role">FN · Finance</div><h4 class="name">Burn, runway, anomalies.</h4><p class="desc">Tracks every dollar — token cost, ad spend, infra burn. Forecasts runway. Triggers caps. Flags anything that looks off.</p></div>
+      <div class="agent"><div class="role">MK · Marketing</div><h4 class="name">Drafts, schedules, monitors.</h4><p class="desc">Writes the copy, schedules the posts, watches the brand mentions. Tone-matched. Send-on-approve. Never auto-publishes.</p></div>
+      <div class="agent"><div class="role">OT · Ops</div><h4 class="name">Tooling &amp; vendor health.</h4><p class="desc">Keeps the stack running. Watches integrations. Manages vendor relationships. The agent that fixes things before you notice.</p></div>
+      <div class="agent ember"><div class="role">CS · Customer Success</div><h4 class="name">Reads, replies, escalates.</h4><p class="desc">Reads every ticket. Drafts the warm, factual reply. Escalates anything with feeling, money, or risk straight to you.</p></div>
+      <div class="agent ember"><div class="role">LG · Legal</div><h4 class="name">Reviews &amp; flags risk.</h4><p class="desc">Reads contracts, terms, vendor agreements. Flags risk in plain English. Keeps you compliant without keeping you waiting.</p></div>
+      <div class="agent"><div class="role">ST · Strategy</div><h4 class="name">The Sunday letter.</h4><p class="desc">Weekly synthesis. Pattern recognition across every other agent's cycle. Writes you a letter, in prose, every Sunday.</p></div>
+    </div>
+
+    <!-- Signature moments -->
+    <h3 class="h3" style="margin-top:96px">Signature product moments.</h3>
+    <div class="row cols-3">
+      <div class="card"><div class="num">M / 01</div><h3 class="title">One decision today.</h3><p class="desc">Every morning, Trent surfaces the single highest-leverage decision waiting on you. Nothing else competes for that slot. It's the front page of the company.</p></div>
+      <div class="card"><div class="num">M / 02</div><h3 class="title">Cycle replay.</h3><p class="desc">Scrub through any past 24-hour cycle like a timeline. See exactly which agent did what, which file changed, which email almost got sent. The audit log made beautiful.</p></div>
+      <div class="card"><div class="num">M / 03</div><h3 class="title">The Sunday letter.</h3><p class="desc">Each Sunday Trent writes you a short letter: what shipped, what's stuck, what it learned about your company. Not a dashboard — prose. From your other founder.</p></div>
+      <div class="card ember"><div class="num">M / 04</div><h3 class="title">Kill switch as a feature.</h3><p class="desc">A single keystroke pauses every agent on every company. The opposite of friction. Trent's trustworthiness is measured by how visible this control is.</p></div>
+      <div class="card"><div class="num">M / 05</div><h3 class="title">Public company page.</h3><p class="desc">Every Trent company gets a public dashboard at <span style="font-family:var(--mono);color:var(--pulse)">[company].trent.app</span> — what's been built, shipped, learned. Optional. Defaults to off.</p></div>
+      <div class="card"><div class="num">M / 06</div><h3 class="title">Memory search.</h3><p class="desc">One bar searches every doc, decision, customer conversation, agent transcript, and metric your company has ever made. Trent is your company's other brain.</p></div>
+    </div>
+
+    <!-- Feature roadmap -->
+    <h3 class="h3" style="margin-top:96px">Feature roadmap — the next four.</h3>
+    <div class="row cols-2">
+      <div class="card"><div class="num">F / Q3 2026</div><h3 class="title">Durable runtime.</h3><p class="desc">Postgres + Prisma persistence. Redis/BullMQ scheduled cycles. Live execution streaming. Real GitHub writes, gated by approvals. Encrypted secrets per company.</p></div>
+      <div class="card ember"><div class="num">F / Q4 2026</div><h3 class="title">Money &amp; sending.</h3><p class="desc">Stripe billing &amp; metered credits. Postmark / Gmail send-on-approve. Late.dev-style social scheduling. Budget caps enforced before any external action.</p></div>
+      <div class="card"><div class="num">F / Q1 2027</div><h3 class="title">Deploy &amp; distribute.</h3><p class="desc">Render / Vercel deploy adapters. Custom domains. Meta Ads campaign create-and-report. Browserbase worker pool. ScreenshotOne for proof of ship.</p></div>
+      <div class="card ember"><div class="num">F / Q2 2027</div><h3 class="title">Agent lab.</h3><p class="desc">Eval harness, canary cycles, model routing, quality labels, self-healing. Pick the best model for the role, not the buzz.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ LANDING PAGE REDESIGN (v2) ═══ -->
+<section id="landing">
+  <div class="wrap">
+    <div class="eyebrow">10 — Landing page · proposed redesign</div>
+    <h2 class="h2">From "AI cofounder"<br/>to "the one hire."</h2>
+    <p class="body" style="margin-bottom:32px">The current landing leads with <span class="meta">"Your AI cofounder. Runs the company."</span> — accurate, but abstract. Most visitors don't know what an AI cofounder <em>is</em>. Everyone knows what an employee is, and everyone knows what it costs to hire one. Reframe the value through what the visitor already understands.</p>
+
+    <p class="body" style="margin-bottom:48px"><span class="meta">Strategy →</span> Keep the operator-console aesthetic. Replace the abstract positioning band by band with the concrete one-employee frame. The agents and console mockup already do the work — the copy just needs to catch up.</p>
+
+    <h3 class="h3" style="margin-top:48px">The hero — rewrite.</h3>
+    <div class="copy-cmp">
+      <div class="col-old">
+        <div class="stamp">Current · ed.01</div>
+        <div class="copy serif">"Your AI cofounder.<br/>Runs the company.<br/>You make one decision a day."</div>
+        <div class="note">Accurate, but two leaps away from the value. The reader has to translate "AI cofounder" → "what does that do" → "what would I pay for that."</div>
+      </div>
+      <div class="col-new">
+        <div class="stamp">Proposed · ed.02</div>
+        <div class="copy">The one hire who does it all.</div>
+        <div class="copy serif" style="font-size:18px">Nine specialists. One subscription. Always on the queue.</div>
+        <div class="note">Leads with a category the reader knows (an employee, a hire) and a benefit (everything covered). Keeps "you make one decision a day" as the sub-paragraph below.</div>
+      </div>
+    </div>
+
+    <h3 class="h3" style="margin-top:64px">The manifesto quote — rewrite.</h3>
+    <div class="copy-cmp">
+      <div class="col-old">
+        <div class="stamp">Current</div>
+        <div class="copy serif">"The best founders don't do everything. They decide what matters, then let their company run."</div>
+        <div class="note">Aspirational, but doesn't differentiate from any productivity tool.</div>
+      </div>
+      <div class="col-new">
+        <div class="stamp">Proposed</div>
+        <div class="copy serif">"You used to need nine people to run a company. Now you need one."</div>
+        <div class="note">Specific. Quantified. Anchors the new positioning before the reader scrolls into the agent roster.</div>
+      </div>
+    </div>
+
+    <h3 class="h3" style="margin-top:64px">Agents section header — rewrite.</h3>
+    <div class="copy-cmp">
+      <div class="col-old">
+        <div class="stamp">Current</div>
+        <div class="copy">9 agents.<br/>Every function covered.</div>
+        <div class="note">Good. Just needs a sharper claim above it.</div>
+      </div>
+      <div class="col-new">
+        <div class="stamp">Proposed</div>
+        <div class="copy">9 specialists.<br/>1 subscription.<br/>0 hiring loops.</div>
+        <div class="note">Same idea, harder edge. The three-line cadence reads like a contract.</div>
+      </div>
+    </div>
+
+    <h3 class="h3" style="margin-top:64px">CTA section — rewrite.</h3>
+    <div class="copy-cmp">
+      <div class="col-old">
+        <div class="stamp">Current</div>
+        <div class="copy">Your company. Running.</div>
+        <div class="note small">Headline of the closing card. CTA: "launch your console."</div>
+      </div>
+      <div class="col-new">
+        <div class="stamp">Proposed</div>
+        <div class="copy">Needs doing?<br/>Trent's got it.</div>
+        <div class="note small">Closes the page on the brand's heartbeat phrase. Same CTA button beneath: <span style="font-family:var(--mono);color:var(--pulse)">launch your console →</span></div>
+      </div>
+    </div>
+
+    <h3 class="h3" style="margin-top:96px">New sections to add.</h3>
+
+    <div class="rec">
+      <div class="ix">R / 01</div>
+      <div>
+        <h4>Insert "The Hire" band — right after the hero.</h4>
+        <p>Add a full-width band <em>between</em> the marquee ticker and the manifesto. This is the new positioning's home. Two halves: on the left, the line <span style="font-family:var(--serif);font-style:italic;color:var(--bone)">"Hire a team. Or hire trent."</span> On the right, the salary-comparison table (PM $160k · EG $190k · GR $140k · … · Total $1M+/yr → "one subscription"). This is the page's most quotable moment — it's the section that will get screenshot and shared.</p>
+        <ul>
+          <li>Use the existing <code>--ink</code> card + <code>--pulse</code> accent system.</li>
+          <li>Animate the "$1M+" → "one subscription" transition on scroll.</li>
+          <li>Add a tag strip: <code>one subscription · nine roles · zero onboarding · zero days off</code>.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rec">
+      <div class="ix">R / 02</div>
+      <div>
+        <h4>Insert "Needs doing?" interactive band — replacing the FeaturesSection grid.</h4>
+        <p>The current six-card features grid (continuous cycles, approval queue, persistent memory, budget controls, weekly letters, integrations) describes <em>mechanism</em>. Replace it with a needs-grid that describes <em>outcomes</em> — nine real-sounding asks paired with the agent who handles them ("Need a contract reviewed?" → LG, "Need this PR shipped?" → EG, "Need our runway?" → FN). The mechanism cards can move below as a smaller secondary band.</p>
+        <ul>
+          <li>Use serif italic for the "asks" — it gives the reader an inner voice asking the question.</li>
+          <li>Each card ends with the agent chip + a one-sentence answer.</li>
+          <li>Add a closing line in big serif: <span style="font-style:italic;color:var(--bone)">"Whatever it is — <span style="color:var(--pulse)">Trent's got it.</span>"</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rec">
+      <div class="ix">R / 03</div>
+      <div>
+        <h4>Reframe the marquee ticker.</h4>
+        <p>The current ticker reads like technical claims (<code>autonomous execution · approval-first · budget-aware · 9 agents · zero ops tax · …</code>). Mix in <em>verbs the user owns</em> — the things Trent is doing while they read:</p>
+        <ul>
+          <li><code>shipping your PR · drafting your reply · reading your contracts · watching your burn · planning your week · catching your bugs · scheduling your posts · briefing your Sunday letter · staffing your team</code></li>
+          <li>Stays under the hero. Same visual treatment. Just more vivid copy.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rec">
+      <div class="ix">R / 04</div>
+      <div>
+        <h4>Add a "Sunday letter" preview band.</h4>
+        <p>Above the CTA, add a stylised mockup of an actual Sunday letter — the brand's most distinctive deliverable. Three short paragraphs in <code>--serif</code> on bone-coloured paper texture inside the dark page. Signed <em>"— trent · ST agent · sunday"</em>. This single section pivots the brand from "tool" to "partner who writes you letters" — exactly the cofounder moment we want to land before the CTA.</p>
+      </div>
+    </div>
+
+    <div class="rec">
+      <div class="ix">R / 05</div>
+      <div>
+        <h4>Replace the stats row.</h4>
+        <p>The current stats (9 agents · 24h · 1 decision · 142 cycles) are fine but inward-facing. Trade them for stats that frame Trent against the alternative the visitor would otherwise choose:</p>
+        <ul>
+          <li><code>$1M+</code> · cost of the team trent replaces</li>
+          <li><code>0</code> · employees you onboard</li>
+          <li><code>9</code> · roles staffed in one subscription</li>
+          <li><code>24/7</code> · always on the queue</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rec">
+      <div class="ix">R / 06</div>
+      <div>
+        <h4>Nav copy &amp; CTA buttons.</h4>
+        <p>Small but high-touch surfaces. Tighten the language to the new voice:</p>
+        <ul>
+          <li>Top-nav: <code>agents · the hire · needs · letters · pricing</code> (the new "the hire" link anchors R/01).</li>
+          <li>Primary CTA: <code>hire trent →</code> (consider testing alongside the existing <code>launch your console →</code> — "hire trent" pulls the new positioning all the way through the funnel).</li>
+          <li>Footer line: <span style="font-family:var(--mono);color:var(--pulse)">trent · the one hire</span> (replaces <code>trent · cofounder OS</code>).</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rec">
+      <div class="ix">R / 07</div>
+      <div>
+        <h4>The micro-moments.</h4>
+        <p>Three tiny surface changes that compound the new brand voice across the product:</p>
+        <ul>
+          <li>Every empty state in the console ends with <span style="font-family:var(--mono);color:var(--pulse)">"Trent's got it."</span> as a quiet reassurance.</li>
+          <li>The "one decision today" approval card uses the line <em>"Trent ran the rest."</em> as its footer caption.</li>
+          <li>The signed-in dashboard header reads <code>"good morning, [name] — trent's been working."</code> with a count of cycles run while they slept.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="demo-band">
+      <div class="left">Want a working <b>HTML mockup</b> of the new landing? I can build it next — same operator aesthetic, just with the v2 positioning wired through every band.</div>
+      <div class="right">→ next session</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ COLOPHON ═══ -->
+<footer>
+  <div class="wrap">
+    <div class="row cols-2" style="align-items:end">
+      <div>
+        <div class="eyebrow">Colophon</div>
+        <div class="signoff">Built while<br/>you slept. <span class="pulse">●</span></div>
+      </div>
+      <div class="colophon">
+        Trent — Brand &amp; Product Bible · Edition 02<br/>
+        Issued May 2026 · supersedes ed.01<br/>
+        New in 02 · The Hire · Needs doing · Landing page redesign<br/>
+        Typography · Inter, Instrument Serif, JetBrains Mono<br/>
+        Colour · Obsidian, Bone, Pulse, Ember<br/>
+        Heartbeat phrase · "Trent's got it."
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="toast" id="toast">Copied</div>
+
+<script>
+  // scroll progress
+  const prog = document.getElementById('prog');
+  document.addEventListener('scroll', () => {
+    const h = document.documentElement;
+    const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+    prog.style.width = pct + '%';
+  }, {passive:true});
+
+  // copy color hex
+  const toast = document.getElementById('toast');
+  document.querySelectorAll('.swatch[data-hex]').forEach(el => {
+    el.addEventListener('click', async () => {
+      const hex = el.dataset.hex;
+      try { await navigator.clipboard.writeText(hex); } catch(e){}
+      toast.textContent = 'Copied ' + hex;
+      toast.classList.add('show');
+      clearTimeout(window._tt);
+      window._tt = setTimeout(() => toast.classList.remove('show'), 1400);
+    });
+  });
+
+  // smooth scroll for nav
+  document.querySelectorAll('.topbar nav a').forEach(a => {
+    a.addEventListener('click', e => {
+      const href = a.getAttribute('href');
+      if (href && href.startsWith('#')) {
+        e.preventDefault();
+        const t = document.querySelector(href);
+        if (t) t.scrollIntoView({behavior:'smooth', block:'start'});
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

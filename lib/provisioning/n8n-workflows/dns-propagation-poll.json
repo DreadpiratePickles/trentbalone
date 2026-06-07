@@ -1,0 +1,142 @@
+{
+  "name": "trent-dns-propagation-poll",
+  "description": "Polls Cloudflare DNS propagation status after dns-provisioner fires. When propagation confirms (certStatus=active), triggers the live preview URL to be surfaced in the approval card.",
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "DNS Provision Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "path": "trent/dns-provisioned",
+        "httpMethod": "POST",
+        "responseMode": "onReceived"
+      }
+    },
+    {
+      "id": "set-vars",
+      "name": "Extract Variables",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [450, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "name": "companyId", "value": "={{ $json.body.companyId }}", "type": "string" },
+            { "name": "fqdn", "value": "={{ $json.body.fqdn }}", "type": "string" },
+            { "name": "dnsRecordId", "value": "={{ $json.body.dnsRecordId }}", "type": "string" },
+            { "name": "maxAttempts", "value": "=30", "type": "number" },
+            { "name": "attempt", "value": "=0", "type": "number" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "wait-2min",
+      "name": "Wait 2 Minutes",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "parameters": { "amount": 2, "unit": "minutes" }
+    },
+    {
+      "id": "check-cert",
+      "name": "Check Cloudflare SSL Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.cloudflare.com/client/v4/zones/{{$env.CLOUDFLARE_ZONE_ID}}/ssl/verification",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "cloudflareApi",
+        "options": {}
+      }
+    },
+    {
+      "id": "cert-active",
+      "name": "Is Cert Active?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1050, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.result[0].cert_pack_uuid }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "isNotEmpty" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "notify-trent",
+      "name": "Notify Trent — DNS Active",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1250, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.TRENT_WEBHOOK_BASE_URL}}/api/webhooks/n8n/dns-active",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ companyId: $('set-vars').item.json.companyId, fqdn: $('set-vars').item.json.fqdn, certStatus: 'active' }) }}"
+      }
+    },
+    {
+      "id": "check-max",
+      "name": "Max Attempts Reached?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1250, 400],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $('set-vars').item.json.attempt }}",
+              "rightValue": 30,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "dns-timeout-alert",
+      "name": "Alert — DNS Propagation Timeout",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1450, 500],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.TRENT_WEBHOOK_BASE_URL}}/api/webhooks/n8n/dns-timeout",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ companyId: $('set-vars').item.json.companyId, fqdn: $('set-vars').item.json.fqdn }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "DNS Provision Webhook": { "main": [[{ "node": "Extract Variables", "type": "main", "index": 0 }]] },
+    "Extract Variables": { "main": [[{ "node": "Wait 2 Minutes", "type": "main", "index": 0 }]] },
+    "Wait 2 Minutes": { "main": [[{ "node": "Check Cloudflare SSL Status", "type": "main", "index": 0 }]] },
+    "Check Cloudflare SSL Status": { "main": [[{ "node": "Is Cert Active?", "type": "main", "index": 0 }]] },
+    "Is Cert Active?": {
+      "main": [
+        [{ "node": "Notify Trent — DNS Active", "type": "main", "index": 0 }],
+        [{ "node": "Check Max Attempts Reached?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Max Attempts Reached?": {
+      "main": [
+        [{ "node": "Alert — DNS Propagation Timeout", "type": "main", "index": 0 }],
+        [{ "node": "Wait 2 Minutes", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

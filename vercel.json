@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "app/api/companies/[id]/orchestrate/stream/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/heartbeat/sweep/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/companies/[id]/orchestrate/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

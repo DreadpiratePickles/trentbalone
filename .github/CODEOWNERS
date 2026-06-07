@@ -1,0 +1,29 @@
+# CODEOWNERS
+# Each line is a pattern followed by one or more owners.
+# The last matching pattern takes precedence.
+# Owners are automatically requested for review on PRs.
+
+# Global fallback — catch everything not covered below
+*                           @DreadpiratePickles
+
+# Core runtime & orchestration
+/lib/cycles.ts              @DreadpiratePickles
+/lib/agents.ts              @DreadpiratePickles
+/lib/scheduler.ts           @DreadpiratePickles
+/lib/spend.ts               @DreadpiratePickles
+
+# Security-sensitive paths
+/lib/github.ts              @DreadpiratePickles
+/lib/encrypt*.ts            @DreadpiratePickles
+/app/api/integrations/**    @DreadpiratePickles
+/app/api/auth/**            @DreadpiratePickles
+SECURITY.md                 @DreadpiratePickles
+
+# Database schema & migrations
+/prisma/**                  @DreadpiratePickles
+
+# Architecture decisions
+/docs/adr/**                @DreadpiratePickles
+
+# CI/CD & deployment
+/.github/**                 @DreadpiratePickles

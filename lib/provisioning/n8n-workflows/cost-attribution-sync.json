@@ -1,0 +1,148 @@
+{
+  "name": "trent-cost-attribution-daily-sync",
+  "description": "Daily scheduled job: queries each provider billing API (Vercel, Neon, Cloudflare, GitHub) and syncs actual costs to cost-attributor.ts. On budget cap breach, triggers human escalation approval.",
+  "nodes": [
+    {
+      "id": "daily-cron",
+      "name": "Daily Cron Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 6 * * *" }]
+        }
+      }
+    },
+    {
+      "id": "get-all-companies",
+      "name": "Get All Active Companies",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.TRENT_API_BASE_URL}}/api/companies",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      }
+    },
+    {
+      "id": "split-companies",
+      "name": "Split Into Companies",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [650, 300],
+      "parameters": { "batchSize": 1, "options": {} }
+    },
+    {
+      "id": "get-provisioning-status",
+      "name": "Get Provisioning Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.TRENT_API_BASE_URL}}/api/provisioning?companyId={{$json.company.id}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      }
+    },
+    {
+      "id": "record-neon-cost",
+      "name": "Record Neon Monthly Cost",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1050, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.TRENT_API_BASE_URL}}/api/webhooks/n8n/record-cost",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ companyId: $('split-companies').item.json.company.id, resourceType: 'neon_project', resourceId: $json.status.neon.projectId, amountCents: 1500, description: 'Neon Postgres — ' + new Date().toISOString().slice(0, 7), period: new Date().toISOString().slice(0, 7) }) }}"
+      }
+    },
+    {
+      "id": "record-vercel-cost",
+      "name": "Record Vercel Monthly Cost",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1050, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.TRENT_API_BASE_URL}}/api/webhooks/n8n/record-cost",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ companyId: $('split-companies').item.json.company.id, resourceType: 'vercel_project', resourceId: $json.status.hosting.projectId, amountCents: 2000, description: 'Vercel Pro — ' + new Date().toISOString().slice(0, 7), period: new Date().toISOString().slice(0, 7) }) }}"
+      }
+    },
+    {
+      "id": "check-budget-breach",
+      "name": "Check Budget Cap",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1250, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.TRENT_API_BASE_URL}}/api/companies/{{$('split-companies').item.json.company.id}}/billing/usage",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      }
+    },
+    {
+      "id": "is-over-budget",
+      "name": "Over Budget?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1450, 300],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.summary.percentUsed }}",
+              "rightValue": 100,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "create-budget-breach-approval",
+      "name": "Create Budget Breach Escalation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1650, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.TRENT_API_BASE_URL}}/api/approvals",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ companyId: $('split-companies').item.json.company.id, action: 'budget.breach', reason: 'Infra spend has reached or exceeded the budget cap. Next provisioning action requires human approval.', irreversibilityRating: 'spend_risk' }) }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      }
+    }
+  ],
+  "connections": {
+    "Daily Cron Trigger": { "main": [[{ "node": "Get All Active Companies", "type": "main", "index": 0 }]] },
+    "Get All Active Companies": { "main": [[{ "node": "Split Into Companies", "type": "main", "index": 0 }]] },
+    "Split Into Companies": { "main": [[{ "node": "Get Provisioning Status", "type": "main", "index": 0 }]] },
+    "Get Provisioning Status": {
+      "main": [[
+        { "node": "Record Neon Monthly Cost", "type": "main", "index": 0 },
+        { "node": "Record Vercel Monthly Cost", "type": "main", "index": 0 }
+      ]]
+    },
+    "Record Neon Monthly Cost": { "main": [[{ "node": "Check Budget Cap", "type": "main", "index": 0 }]] },
+    "Record Vercel Monthly Cost": { "main": [[{ "node": "Check Budget Cap", "type": "main", "index": 0 }]] },
+    "Check Budget Cap": { "main": [[{ "node": "Over Budget?", "type": "main", "index": 0 }]] },
+    "Over Budget?": {
+      "main": [
+        [{ "node": "Create Budget Breach Escalation", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

@@ -1,0 +1,32 @@
+.worktrees/
+.trent/
+node_modules/
+.next/
+.DS_Store
+.env
+.env.*
+!.env.example
+.env.local
+.env*.local
+.empty-types/
+tsconfig.tsbuildinfo
+prisma/generated/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+.vercel
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
+
+# uploaded secrets - never commit
+trent-api.md
+vendor/self-improvement/*/node_modules/
+
+# local env files with any naming pattern
+trent.env.local
+*.env.local
+dump.rdb
