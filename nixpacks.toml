@@ -1,0 +1,41 @@
+# Railway nixpacks configuration for trent-ai-cofounder.
+#
+# aptPkgs installs Chromium's system dependencies at build time so that
+# `npx playwright install chromium` in railway.json succeeds without
+# needing --with-deps (which requires sudo and fails in Railway's builder).
+#
+# Playwright detects these libs automatically and downloads only the
+# Chromium browser binary into the build layer cache.
+
+[phases.setup]
+aptPkgs = [
+  "libnss3",
+  "libatk1.0-0",
+  "libatk-bridge2.0-0",
+  "libcups2",
+  "libdrm2",
+  "libdbus-1-3",
+  "libexpat1",
+  "libgbm1",
+  "libglib2.0-0",
+  "libxcb1",
+  "libxcomposite1",
+  "libxdamage1",
+  "libxext6",
+  "libxfixes3",
+  "libxkbcommon0",
+  "libxrandr2",
+  "libxss1",
+  "libxtst6",
+  "libasound2",
+  "libpango-1.0-0",
+  "libcairo2",
+  "libfontconfig1",
+  "libx11-6",
+  "libx11-xcb1",
+  "libnspr4",
+  "libxi6",
+  "libxrender1",
+  "ca-certificates",
+  "fonts-liberation"
+]

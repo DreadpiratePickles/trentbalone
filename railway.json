@@ -1,7 +1,7 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
-    "buildCommand": "npx playwright install --with-deps chromium && npm run build"
+    "buildCommand": "npm run build && npx playwright install chromium"
   },
   "deploy": {
     "preDeployCommand": "npx prisma migrate deploy",

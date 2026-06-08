@@ -8,6 +8,7 @@ afterEach(() => {
   process.env.WORKBENCH_DEFAULT_PROVIDER = originalEnv.WORKBENCH_DEFAULT_PROVIDER;
   process.env.DAYTONA_API_KEY = originalEnv.DAYTONA_API_KEY;
   process.env.E2B_API_KEY = originalEnv.E2B_API_KEY;
+  process.env.RAILWAY_ENVIRONMENT = originalEnv.RAILWAY_ENVIRONMENT;
   setNodeEnv(originalEnv.NODE_ENV);
 });
 
@@ -49,17 +50,39 @@ describe("getDefaultWorkbenchProvider", () => {
     delete process.env.WORKBENCH_DEFAULT_PROVIDER;
     delete process.env.DAYTONA_API_KEY;
     delete process.env.E2B_API_KEY;
+    delete process.env.RAILWAY_ENVIRONMENT;
     setNodeEnv("production");
 
-    expect(() => getDefaultWorkbenchProvider()).toThrow(/WORKBENCH_DEFAULT_PROVIDER|DAYTONA_API_KEY|E2B_API_KEY/);
+    expect(() => getDefaultWorkbenchProvider()).toThrow(/WORKBENCH_DEFAULT_PROVIDER|RAILWAY_ENVIRONMENT/);
   });
 
   it("does not allow explicit mock_local in production", () => {
     process.env.WORKBENCH_DEFAULT_PROVIDER = "mock_local";
     delete process.env.DAYTONA_API_KEY;
     delete process.env.E2B_API_KEY;
+    delete process.env.RAILWAY_ENVIRONMENT;
     setNodeEnv("production");
 
     expect(() => getDefaultWorkbenchProvider()).toThrow(/mock_local.*dev\/test/i);
+  });
+
+  it("auto-selects railway provider when RAILWAY_ENVIRONMENT is set", () => {
+    delete process.env.WORKBENCH_DEFAULT_PROVIDER;
+    delete process.env.DAYTONA_API_KEY;
+    delete process.env.E2B_API_KEY;
+    process.env.RAILWAY_ENVIRONMENT = "production";
+    setNodeEnv("production");
+
+    expect(getDefaultWorkbenchProvider()).toBe("railway");
+  });
+
+  it("explicit WORKBENCH_DEFAULT_PROVIDER=railway works in production", () => {
+    process.env.WORKBENCH_DEFAULT_PROVIDER = "railway";
+    delete process.env.DAYTONA_API_KEY;
+    delete process.env.E2B_API_KEY;
+    delete process.env.RAILWAY_ENVIRONMENT;
+    setNodeEnv("production");
+
+    expect(getDefaultWorkbenchProvider()).toBe("railway");
   });
 });
