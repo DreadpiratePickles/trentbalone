@@ -1,7 +1,7 @@
 import { AgentRole } from "./types";
 
 export type WorkbenchSessionStatus = "queued" | "starting" | "running" | "paused" | "completed" | "failed" | "cancelled";
-export type WorkbenchProvider = "mock_local" | "e2b" | "daytona" | "fly_machines" | "modal" | "self_hosted";
+export type WorkbenchProvider = "mock_local" | "e2b" | "daytona" | "railway" | "fly_machines" | "modal" | "self_hosted";
 export type WorkbenchEventType = "plan" | "shell" | "browser" | "file" | "test" | "screenshot" | "artifact" | "deploy" | "approval" | "system";
 export type WorkbenchEventStatus = "pending" | "running" | "completed" | "failed" | "needs_approval";
 export type WorkbenchArtifactKind = "file" | "screenshot" | "terminal_log" | "test_result" | "preview" | "export" | "har" | "perf_trace";
