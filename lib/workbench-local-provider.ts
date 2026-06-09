@@ -985,12 +985,61 @@ function hashFileTree(files: WorkbenchFileEntry[]): string {
   return hash.digest("hex");
 }
 
-async function probePreviewDom(url: string): Promise<{
+type PreviewDomProbe = {
   httpStatus?: number;
   domText: string;
   visibleElements: number;
   error?: string;
-}> {
+};
+
+/**
+ * Probe the preview DOM with a real browser when Playwright + chromium are
+ * installed (production containers). The raw-HTML fetch fallback below sees
+ * only the server payload — for client-rendered SPAs (the Vite starter) that
+ * is an empty `#root` shell, which reports "0 visible elements, 3 text chars"
+ * for perfectly working apps and poisons the critic with false blank-UI
+ * evidence.
+ */
+async function probePreviewDomWithBrowser(url: string): Promise<PreviewDomProbe | null> {
+  let browser: import("playwright").Browser | undefined;
+  try {
+    const { isPlaywrightAvailable } = await import("@/lib/workbench-screenshot");
+    if (!(await isPlaywrightAvailable())) return null;
+    const { chromium } = await import("playwright");
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    });
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
+    await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => undefined);
+    await page.waitForTimeout(300);
+    const dom = await page.evaluate(() => {
+      const bodyText = document.body?.innerText?.replace(/\s+/g, " ").trim() ?? "";
+      const visibleElements = Array.from(document.body?.querySelectorAll("button,a,input,textarea,select,main,section,article,h1,h2,h3,p,li") ?? [])
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+        }).length;
+      return { bodyText, visibleElements };
+    });
+    return {
+      httpStatus: response?.status(),
+      domText: dom.bodyText.slice(0, 4000),
+      visibleElements: dom.visibleElements,
+    };
+  } catch {
+    // Browser probe is best-effort: fall back to the raw fetch probe.
+    return null;
+  } finally {
+    await browser?.close().catch(() => undefined);
+  }
+}
+
+async function probePreviewDom(url: string): Promise<PreviewDomProbe> {
+  const viaBrowser = await probePreviewDomWithBrowser(url);
+  if (viaBrowser) return viaBrowser;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5_000);
   try {

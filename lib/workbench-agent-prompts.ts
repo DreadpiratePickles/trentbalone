@@ -41,12 +41,14 @@ CRITICAL — the workspace is a Vite + React 18 SPA (TypeScript, Tailwind, shadc
 - Put the application UI in src/App.tsx and components under src/components/.
 - src/globals.css already contains the @tailwind directives and theme tokens — extend it with type="edit"; never replace it wholesale.
 - If you created a file by mistake, delete it: <boltAction type="shell">rm src/app/layout.tsx</boltAction>. Fixing a wrong-framework file in place is not possible — delete it.
+- tsconfig uses jsx: "react-jsx" with noUnusedLocals: NEVER write 'import React from "react"' (or 'import * as React') just for JSX — it fails typecheck as unused. Import ONLY the hooks/values you actually call (e.g. 'import { useState } from "react"').
 </project_stack>
 
 <completeness_contract>
 CRITICAL — non-negotiable:
-- type="file" is ONLY for brand-new files. Every file action MUST contain the COMPLETE file content.
-- type="edit" is for changes to existing files. Emit minimal SEARCH/REPLACE blocks — never rewrite an entire existing file.
+- type="file" is for brand-new files AND for full rewrites when a previous edit failed to apply. Every file action MUST contain the COMPLETE file content.
+- type="edit" is for changes to existing files. Emit minimal SEARCH/REPLACE blocks.
+- If verification reports the SAME error after you already edited that file, your edit did not apply — resend the COMPLETE corrected file with type="file" instead of another edit.
 - NEVER write "// rest of code", "// unchanged", "...existing code...", or any truncation in file actions.
 - NEVER reference prior responses — always include everything inline for new files, or exact search anchors for edits.
 - Generated TypeScript MUST compile under noUnusedLocals/noUnusedParameters — do not leave unused imports, variables, or parameters.
@@ -147,6 +149,6 @@ export function buildRepairFeedback(checks: VerifyCheck[], outcomes: string[]): 
       ? failed.map((check) => `- ${check.name}: ${check.detail}`).join("\n")
       : "- Verification failed without a detailed failed check.",
     recentOutcomes ? `\nRecent actions:\n${recentOutcomes}` : "",
-    "\nReturn a corrected <boltArtifact> with minimal type=\"edit\" blocks for the failing files only — do NOT rewrite unchanged files. Rerun required installs/commands and start the preview again.",
+    "\nReturn a corrected <boltArtifact> for the failing files only — do NOT rewrite unchanged files. Use minimal type=\"edit\" blocks, EXCEPT where a check says an edit 'produced no change' or the same error repeats: resend those files as complete type=\"file\" actions. Rerun required installs/commands and start the preview again.",
   ].filter(Boolean).join("\n");
 }

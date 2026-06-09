@@ -336,11 +336,38 @@ async function* executeAction(
         original = "";
       }
       const blocks = parseEditBlocks(action.content);
-      const applied = applyEditBlocks(original, blocks);
-      if (applied.ok) {
-        content = applied.content;
-      } else {
-        content = await fastApply(original, action.content);
+      try {
+        if (blocks.length === 0) {
+          // No SEARCH/REPLACE fences at all — the model sent a full file or a
+          // lazy partial. applyEditBlocks([]) would "succeed" by returning the
+          // original untouched (a silent no-op), so merge via fastApply instead.
+          content = await fastApply(original, action.content);
+        } else {
+          const applied = applyEditBlocks(original, blocks);
+          content = applied.ok ? applied.content : await fastApply(original, action.content);
+        }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        actionFailures.push({
+          name: "files",
+          status: "fail",
+          detail: `${filePath}: edit could not be applied (${reason}). Resend this file as a complete <boltAction type="file"> with the full corrected content.`,
+        });
+        outcomes.push(`Edit failed for \`${filePath}\`: ${reason}`);
+        return;
+      }
+      if (content === original) {
+        // The edit was a no-op: SEARCH text didn't match, or replace == search.
+        // Writing the identical bytes back would silently burn a repair cycle —
+        // surface it so the repair feedback demands a full-file rewrite.
+        actionFailures.push({
+          name: "files",
+          status: "fail",
+          detail: `${filePath}: edit produced no change — the SEARCH text did not match the on-disk file (or the edit was a no-op). Resend this file as a complete <boltAction type="file"> with the full corrected content.`,
+        });
+        outcomes.push(`Edit was a no-op for \`${filePath}\` (file unchanged)`);
+        yield { type: "status", phase: "editing", detail: `${filePath} — edit did not apply` };
+        return;
       }
     }
 
