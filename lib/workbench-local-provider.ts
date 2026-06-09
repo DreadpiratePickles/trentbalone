@@ -884,7 +884,7 @@ const localProvider: WorkbenchProviderAdapter = {
       screenshot,
       domText: domProbe.domText,
       visibleElements: domProbe.visibleElements,
-      consoleErrors: [],
+      consoleErrors: domProbe.browserErrors ?? [],
       pageErrors: domProbe.error ? [domProbe.error] : [],
     };
   },
@@ -990,6 +990,8 @@ type PreviewDomProbe = {
   domText: string;
   visibleElements: number;
   error?: string;
+  /** Runtime console.error + uncaught page errors captured by the browser probe. */
+  browserErrors?: string[];
 };
 
 /**
@@ -1011,6 +1013,11 @@ async function probePreviewDomWithBrowser(url: string): Promise<PreviewDomProbe 
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     });
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    const browserErrors: string[] = [];
+    page.on("pageerror", (error) => browserErrors.push(error.stack?.split("\n").slice(0, 4).join(" | ") ?? error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") browserErrors.push(message.text());
+    });
     const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
     await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => undefined);
     await page.waitForTimeout(300);
@@ -1028,6 +1035,7 @@ async function probePreviewDomWithBrowser(url: string): Promise<PreviewDomProbe 
       httpStatus: response?.status(),
       domText: dom.bodyText.slice(0, 4000),
       visibleElements: dom.visibleElements,
+      browserErrors: browserErrors.slice(0, 10),
     };
   } catch {
     // Browser probe is best-effort: fall back to the raw fetch probe.
