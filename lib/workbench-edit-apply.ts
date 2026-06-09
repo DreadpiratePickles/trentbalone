@@ -133,15 +133,15 @@ function fuzzyLineMatch(actual: string, expected: string): boolean {
 export async function fastApply(original: string, lazyEdit: string): Promise<string> {
   if (fastApplyImpl) return fastApplyImpl(original, lazyEdit);
 
-  const enabled =
-    process.env.WORKBENCH_FAST_APPLY_ENABLED === "1"
-    || process.env.WORKBENCH_FAST_APPLY_ENABLED === "true"
-    || Boolean(process.env.OPENAI_MODEL_APPLY)
-    || Boolean(process.env.WORKBENCH_APPLY_MODEL);
+  // fastApply is enabled by default when OPENAI_API_KEY is present.
+  // Explicitly disable it with WORKBENCH_FAST_APPLY_ENABLED=false or =0.
+  const disabled =
+    process.env.WORKBENCH_FAST_APPLY_ENABLED === "false"
+    || process.env.WORKBENCH_FAST_APPLY_ENABLED === "0";
 
-  if (!enabled) {
+  if (disabled) {
     throw new Error(
-      "fastApply is not configured. Set WORKBENCH_FAST_APPLY_ENABLED or OPENAI_MODEL_APPLY.",
+      "fastApply is disabled via WORKBENCH_FAST_APPLY_ENABLED=false.",
     );
   }
 
