@@ -34,6 +34,15 @@ Rules:
 10. The dev server MUST stay on port 3000 bound to 0.0.0.0 — the starter's "dev" script is "vite --host 0.0.0.0 --port 3000". NEVER change the port, remove --host, or rewrite vite.config.ts's server block. The cloud sandbox only exposes port 3000; any other port makes the preview unreachable. Your start action must be exactly: <boltAction type="start">npm run dev</boltAction>
 </artifact_format>
 
+<project_stack>
+CRITICAL — the workspace is a Vite + React 18 SPA (TypeScript, Tailwind, shadcn/ui). It is NOT Next.js:
+- NEVER import from "next/..." (next/font, next/image, next/link, next/navigation, next/router). The next package is not installed; any such import breaks typecheck and build.
+- NEVER create src/app/layout.tsx, src/app/page.tsx, an app/ router directory, or pages/. Render everything through the existing entry chain: index.html → src/main.tsx → src/App.tsx.
+- Put the application UI in src/App.tsx and components under src/components/.
+- src/globals.css already contains the @tailwind directives and theme tokens — extend it with type="edit"; never replace it wholesale.
+- If you created a file by mistake, delete it: <boltAction type="shell">rm src/app/layout.tsx</boltAction>. Fixing a wrong-framework file in place is not possible — delete it.
+</project_stack>
+
 <completeness_contract>
 CRITICAL — non-negotiable:
 - type="file" is ONLY for brand-new files. Every file action MUST contain the COMPLETE file content.
@@ -116,10 +125,24 @@ export function buildUserPrompt(
   ].filter(Boolean).join("\n\n");
 }
 
+/** Detects Next.js-style files/imports leaking into the Vite starter. */
+function hasNextJsContamination(failed: VerifyCheck[]): boolean {
+  return failed.some((check) =>
+    /(cannot find module 'next\/)|(from ["']next\/)|src\/app\/(layout|page)\.tsx/i.test(check.detail));
+}
+
 export function buildRepairFeedback(checks: VerifyCheck[], outcomes: string[]): string {
   const failed = checks.filter((check) => check.status === "fail");
   const recentOutcomes = outcomes.slice(-12).join("\n");
   return [
+    hasNextJsContamination(failed)
+      ? [
+          "ROOT CAUSE: Next.js-style files were written into this Vite SPA. They can never compile here.",
+          "DELETE them now with shell actions, e.g. <boltAction type=\"shell\">rm src/app/layout.tsx</boltAction>",
+          "(one rm per file under src/app/ or importing next/*), move any needed markup into src/App.tsx,",
+          "and never import from next/*. Do NOT keep editing those files in place.",
+        ].join(" ")
+      : "",
     failed.length
       ? failed.map((check) => `- ${check.name}: ${check.detail}`).join("\n")
       : "- Verification failed without a detailed failed check.",

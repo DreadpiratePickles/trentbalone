@@ -8,6 +8,7 @@ import * as path from "path";
  */
 const BLOCKED_PATTERNS: RegExp[] = [
   /rm\s+-[a-z]*r[a-z]*f/i,          // rm -rf / rm -fr
+  /\brm\b[^|;&]*(\s(\/|~|\$)|\.\.)/, // rm outside the workspace (absolute, home, env or parent-traversal paths)
   /\bsudo\b/,
   /\bsu\b\s/,
   /chmod\s+[0-7]{3,4}\s+[/~]/,      // chmod on broad paths
@@ -71,6 +72,12 @@ const ALLOWED_EXECUTABLES = new Set([
   "touch",
   "cp",
   "mv",
+  // rm is allowed only for relative workspace paths: BLOCKED_PATTERNS rejects
+  // recursive-force flags and any absolute/home/parent-traversal target, and
+  // exec() runs without a shell so globs never expand. Agents need this to
+  // remove wrong-framework files (e.g. a stray src/app/layout.tsx) that
+  // otherwise poison `tsc` forever.
+  "rm",
   "head",
   "tail",
   "grep",

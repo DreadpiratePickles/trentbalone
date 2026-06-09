@@ -44,6 +44,34 @@ describe("workbench-safety — checkCommand", () => {
   });
 });
 
+describe("workbench-safety — scoped rm", () => {
+  it("allows rm of a relative workspace file", () => {
+    expect(checkCommand("rm src/app/layout.tsx").blocked).toBe(false);
+  });
+
+  it("allows rm -f of a relative workspace file", () => {
+    expect(checkCommand("rm -f src/components/Old.tsx").blocked).toBe(false);
+  });
+
+  it("still blocks rm -rf", () => {
+    expect(checkCommand("rm -rf src").blocked).toBe(true);
+  });
+
+  it("blocks rm of absolute paths", () => {
+    expect(checkCommand("rm /etc/passwd").blocked).toBe(true);
+  });
+
+  it("blocks rm of home and env-var paths", () => {
+    expect(checkCommand("rm ~/secrets.txt").blocked).toBe(true);
+    expect(checkCommand("rm $HOME/.ssh/id_rsa").blocked).toBe(true);
+  });
+
+  it("blocks rm with parent traversal anywhere in the path", () => {
+    expect(checkCommand("rm ../other-session/file.ts").blocked).toBe(true);
+    expect(checkCommand("rm src/../../escape.ts").blocked).toBe(true);
+  });
+});
+
 describe("workbench-safety — requiresApproval", () => {
   it("requires approval for git push", () => {
     expect(requiresApproval("git push origin main")).toBe(true);

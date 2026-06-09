@@ -116,7 +116,7 @@ export async function verifyBuild(input: {
   const renders = await verifyRenderedPreview({
     provider,
     session,
-    renderInspector: input.renderInspector ?? providerRenderInspector(provider) ?? inspectRenderedPreview,
+    renderInspector: input.renderInspector ?? await defaultRenderInspector(provider),
   });
   checks.push(...renders.checks);
   const interaction = await interactionCheck({
@@ -137,6 +137,26 @@ export async function verifyBuild(input: {
   }));
 
   return buildVerdict(checks, renders, interaction);
+}
+
+/**
+ * Prefer real browser DOM inspection (Playwright) over the provider's raw-HTML
+ * fetch probe. For client-rendered SPAs (the Vite starter) the raw HTML is just
+ * an empty `#root` shell, so the fetch probe reports "0 visible elements,
+ * 3 text chars" even for a perfectly working app — which poisons the critic
+ * with false "blank UI" evidence. Falls back to the provider inspector when
+ * Playwright is unavailable (e.g. dev machines without chromium installed).
+ */
+async function defaultRenderInspector(provider: WorkbenchProviderAdapter): Promise<RenderInspector> {
+  try {
+    const { isPlaywrightAvailable } = await import("@/lib/workbench-screenshot");
+    if (await isPlaywrightAvailable()) {
+      return (previewUrl) => inspectRenderedPreview(previewUrl);
+    }
+  } catch {
+    // Fall through to the provider's HTTP probe.
+  }
+  return providerRenderInspector(provider) ?? inspectRenderedPreview;
 }
 
 async function hasTypeScriptSignal(
