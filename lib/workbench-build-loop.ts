@@ -14,6 +14,7 @@ import {
 } from "@/lib/workbench-verification-artifacts";
 import { nowIso } from "@/lib/utils";
 import { WorkbenchApprovalRequiredError } from "@/lib/workbench-approval-gate";
+import { PREVIEW_PID_FILENAME } from "@/lib/workbench-preview-reaper";
 import {
   type AgentDeps,
   AGENT_PERSONAS,
@@ -47,6 +48,26 @@ import {
   truncate,
 } from "@/lib/workbench-build-helpers";
 
+/**
+ * Session bookkeeping files written by providers before the first build
+ * (mock_local/railway `start()` writes a session README; the preview reaper
+ * writes a PID sidecar). They must NOT count as project files, otherwise a
+ * brand-new workspace looks non-empty and starter scaffolding is skipped —
+ * leaving the agent with no package.json/tsconfig.json/index.html.
+ */
+const SCAFFOLD_BOOKKEEPING_FILES = new Set<string>([
+  "README.md",
+  PREVIEW_PID_FILENAME,
+  ".DS_Store",
+]);
+
+/** True when the workspace contains nothing but provider bookkeeping files. */
+export function isWorkspaceUnscaffolded(
+  files: ReadonlyArray<{ name: string; isDir: boolean }>,
+): boolean {
+  return files.every((file) => !file.isDir && SCAFFOLD_BOOKKEEPING_FILES.has(file.name));
+}
+
 export async function* runBuildLoop(
   session:     WorkbenchSession,
   userMessage: string,
@@ -63,7 +84,7 @@ export async function* runBuildLoop(
   const existing = await safeListFiles(deps.provider, session);
   const actionFailures: VerifyCheck[] = [];
   const workspaceState: BuildAttemptState = { packageChanged: false, executedCommands: [] };
-  if (existing.length === 0) {
+  if (isWorkspaceUnscaffolded(existing)) {
     yield { type: "status", phase: "scaffolding", detail: "Initialising project from starter template" };
     for (const [path, content] of Object.entries(STARTER_TEMPLATE)) {
       const write = await safeWrite(deps.provider, session, path, content);
