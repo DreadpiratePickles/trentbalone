@@ -15,6 +15,7 @@ import {
 import { nowIso } from "@/lib/utils";
 import { WorkbenchApprovalRequiredError } from "@/lib/workbench-approval-gate";
 import { PREVIEW_PID_FILENAME } from "@/lib/workbench-preview-reaper";
+import { syntaxErrorSummary } from "@/lib/workbench-syntax-gate";
 import {
   type AgentDeps,
   AGENT_PERSONAS,
@@ -356,6 +357,22 @@ async function* executeAction(
         outcomes.push(`Edit failed for \`${filePath}\`: ${reason}`);
         return;
       }
+      if (content !== original) {
+        // Never write a file that doesn't parse: a broken module 500s in the
+        // Vite dev server, blanks the preview, and wastes the whole repair
+        // cycle. Keep the last working version and return the exact error.
+        const syntaxError = await syntaxErrorSummary(filePath, content).catch(() => undefined);
+        if (syntaxError) {
+          actionFailures.push({
+            name: "files",
+            status: "fail",
+            detail: `${filePath}: edit rejected — the merged result has a syntax error: ${syntaxError}. The previous file version was kept. Resend this file as a complete <boltAction type="file"> with the full corrected content.`,
+          });
+          outcomes.push(`Rejected edit to \`${filePath}\` (syntax error: ${truncate(syntaxError, 160)})`);
+          yield { type: "status", phase: "editing", detail: `${filePath} — edit rejected (syntax error)` };
+          return;
+        }
+      }
       if (content === original) {
         // The edit was a no-op: SEARCH text didn't match, or replace == search.
         // Writing the identical bytes back would silently burn a repair cycle —
@@ -367,6 +384,20 @@ async function* executeAction(
         });
         outcomes.push(`Edit was a no-op for \`${filePath}\` (file unchanged)`);
         yield { type: "status", phase: "editing", detail: `${filePath} — edit did not apply` };
+        return;
+      }
+    }
+
+    if (action.type === "file") {
+      const syntaxError = await syntaxErrorSummary(filePath, content).catch(() => undefined);
+      if (syntaxError) {
+        actionFailures.push({
+          name: "files",
+          status: "fail",
+          detail: `${filePath}: write rejected — the file has a syntax error: ${syntaxError}. Nothing was written. Resend the COMPLETE corrected file.`,
+        });
+        outcomes.push(`Rejected \`${filePath}\` (syntax error: ${truncate(syntaxError, 160)})`);
+        yield { type: "status", phase: "writing", detail: `${filePath} — write rejected (syntax error)` };
         return;
       }
     }
