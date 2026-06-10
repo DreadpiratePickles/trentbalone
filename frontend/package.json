@@ -1,0 +1,8 @@
+{
+  "name": "trent-frontend-launcher",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "cd /app && exec node_modules/.bin/next dev --port 3000 --hostname 0.0.0.0"
+  }
+}

@@ -320,6 +320,7 @@ export type Cycle = {
   status: "running" | "completed" | "failed";
   phases: string[];
   summary: string;
+  degraded?: boolean;
   startedAt: string;
   completedAt?: string;
 };

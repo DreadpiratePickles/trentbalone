@@ -831,6 +831,7 @@ export const prismaStoreBase = {
     if (patch.status !== undefined) data.status = patch.status;
     if (patch.phases !== undefined) data.phases = patch.phases;
     if (patch.summary !== undefined) data.summary = patch.summary;
+    if (patch.degraded !== undefined) data.degraded = patch.degraded;
     if (patch.completedAt !== undefined) data.completedAt = patch.completedAt ? new Date(patch.completedAt) : null;
 
     await db.cycle.update({

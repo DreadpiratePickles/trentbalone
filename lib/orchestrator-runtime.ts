@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolAdapter } from "@/lib/tools";
+import { adapters as defaultAdapters, type ToolAdapter } from "@/lib/tools";
 import { getAgentRuntime } from "@/lib/agent-runtime";
 import { assertAgentTokenBudget, assertSpendAvailable } from "@/lib/spend";
 import { store } from "@/lib/store";
@@ -27,7 +27,8 @@ import { routeToolsForStep } from "@/lib/semantic-router";
 import { getDegradedTools } from "@/lib/tool-health-cache";
 import { getRuntimeEvalOverrides } from "@/lib/runtime-eval-overrides";
 import { emitJobEvent } from "@/lib/job-events";
-import { buildCompanySkillPrelude } from "@/lib/agent-skill-instructions";
+import { buildCompanySkillPrelude, buildCustomSkillPrelude } from "@/lib/agent-skill-instructions";
+import { getMcpAdaptersForCompany } from "@/lib/mcp-tool-adapter";
 import { InMemorySkillDraftStore, type SkillDraftStore } from "@/lib/skill-foundry";
 import { PrismaSkillDraftStore } from "@/lib/self-improvement/skill-draft-store.prisma";
 
@@ -98,11 +99,76 @@ export type OrchestrationPlan = Omit<RawOrchestrationPlan, "steps" | "blockers">
 
 export type OrchestrationCritique = z.infer<typeof critiqueSchema>;
 
+/**
+ * §1 P1-3 — structured handoffs. `previousOutputs[stepId] = raw string` is the
+ * textbook MAST inter-agent misalignment vector. A completed step publishes a
+ * VALIDATED handoff contract (typed summary + key points + artifact refs) and
+ * dependent steps consume that, not prose.
+ */
+export const stepHandoffSchema = z.object({
+  stepId: z.string(),
+  seat: z.string(),
+  summary: z.string(),
+  keyPoints: z.array(z.string()).default([]),
+  artifactRefs: z.array(z.string()).default([]),
+  contractVersion: z.literal("v1").default("v1"),
+});
+
+export type StepHandoff = z.infer<typeof stepHandoffSchema>;
+
+function toStringItems(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(stringifyItem).filter(Boolean);
+}
+
+export function buildStepHandoff(
+  step: Pick<OrchestrationStep, "id" | "agentRole">,
+  rawOutput: Record<string, unknown> | null,
+  fallbackText: string,
+): StepHandoff {
+  const summary = typeof rawOutput?.summary === "string" && rawOutput.summary.trim()
+    ? rawOutput.summary
+    : fallbackText;
+  const keyPoints = [
+    ...toStringItems(rawOutput?.findings),
+    ...toStringItems(rawOutput?.recommendations),
+  ].slice(0, 6).map((point) => point.slice(0, 240));
+  const artifactRefs = Array.isArray(rawOutput?.artifactRefs)
+    ? rawOutput.artifactRefs.filter((ref): ref is string => typeof ref === "string").slice(0, 8)
+    : [];
+  return stepHandoffSchema.parse({
+    stepId: step.id,
+    seat: step.agentRole,
+    summary: summary.slice(0, 700),
+    keyPoints,
+    artifactRefs,
+  });
+}
+
+/** Render one dependency for a downstream seat — validated contract when available, prose fallback otherwise. */
+export function renderDependencyHandoff(
+  depId: string,
+  handoff: StepHandoff | undefined,
+  prose: string | undefined,
+): string {
+  if (handoff) {
+    return [
+      `[${depId} · ${handoff.seat} · validated handoff ${handoff.contractVersion}]`,
+      `SUMMARY: ${handoff.summary}`,
+      handoff.keyPoints.length ? `KEY POINTS:\n${handoff.keyPoints.map((point) => `- ${point}`).join("\n")}` : "",
+      handoff.artifactRefs.length ? `ARTIFACTS: ${handoff.artifactRefs.join(", ")}` : "",
+    ].filter(Boolean).join("\n");
+  }
+  return `[${depId}]: ${prose?.slice(0, 1000) ?? "(missing)"}`;
+}
+
 export type SeatLoopResumeState = SeatLoopResumeSeed;
 
 export type StepRecord = OrchestrationStep & {
   status: "pending" | "running" | "completed" | "failed" | "blocked" | "awaiting_approval";
   output?: string;
+  /** Validated handoff contract dependents consume instead of prose (§1 P1-3). */
+  handoff?: StepHandoff;
   critique?: OrchestrationCritique;
   startedAt?: string;
   completedAt?: string;
@@ -330,10 +396,13 @@ export async function generateOrchestrationPlan(
   company: Company,
   objective: string,
   memory: string,
-  options?: { fullTeam?: boolean; runId?: string },
+  options?: { fullTeam?: boolean; runId?: string; operatingState?: string },
 ): Promise<OrchestrationPlan> {
   const fullTeam = options?.fullTeam ?? false;
-  const prompts = buildOrchestrationPlanningPrompts(company, objective, memory, { fullTeam });
+  const prompts = buildOrchestrationPlanningPrompts(company, objective, memory, {
+    fullTeam,
+    operatingState: options?.operatingState,
+  });
   const route = recommendSeatForObjective(objective);
   const fallbackNeedsApproval = /\b(publish|send|merge|deploy|spend|charge|refund|withdraw|delete)\b/i.test(objective);
   const fallbackPrimaryRole = route.role === "ceo" ? "engineer" : route.role;
@@ -460,7 +529,7 @@ export function buildOrchestrationPlanningPrompts(
   company: Company,
   objective: string,
   memory: string,
-  options?: { fullTeam?: boolean },
+  options?: { fullTeam?: boolean; operatingState?: string },
 ): { system: string; user: string } {
   const fullTeam = options?.fullTeam ?? false;
   const route = recommendSeatForObjective(objective);
@@ -491,6 +560,9 @@ export function buildOrchestrationPlanningPrompts(
     "",
     `Past company memory (relevance-ranked):\n${memory || "(no prior memory)"}`,
     "",
+    // §1 P0-2 — the planner sees the REAL operating state (open/stale tasks,
+    // pending approvals, budget vs burn, last cycle), never plans from amnesia.
+    ...(options?.operatingState ? ["CURRENT OPERATING STATE:", options.operatingState, ""] : []),
     `Objective: ${objective}`,
     "",
     "Respond as JSON: { objective, reasoning, steps:[{id,title,rationale,agentRole,dependsOn,expectedOutput,riskLevel,needsApproval}], successCriteria:[], blockers:[] }",
@@ -571,12 +643,13 @@ export async function saveCycleForRun(
   runId: string,
   objective: string,
   trigger: "manual" | "scheduled" = "manual",
+  kind: Cycle["kind"] = "ad_hoc_dag",
 ): Promise<string> {
   const cycle: Cycle = {
     id: runId,
     companyId,
     trigger,
-    kind: "ad_hoc_dag",
+    kind,
     status: "running",
     phases: ["plan", "execute", "consolidate"],
     summary: objective.slice(0, 200),
@@ -670,6 +743,8 @@ export type StepExecutionInput = {
   step: RuntimeStep;
   company: Company;
   previousOutputs: Record<string, string>;
+  /** Validated upstream handoff contracts keyed by step id (§1 P1-3). */
+  previousHandoffs?: Record<string, StepHandoff>;
   cycleId?: string;
   approvalGranted?: boolean;
   /** Prior mid-loop tool history when resuming after durable tool approval. */
@@ -680,6 +755,8 @@ export type StepExecutionInput = {
 
 export type StepExecutionResult = {
   output: string;
+  /** Validated handoff contract published for dependent steps (§1 P1-3). */
+  handoff: StepHandoff;
   model: string;
   tokens: number;
   costCents: number;
@@ -881,9 +958,32 @@ export async function executeStepWithRuntime(input: StepExecutionInput): Promise
   }
   void skillApplied; // recorded on the trace once live trace derivation (Slice 2) lands
 
+  // §3.2 — client-authored skills (Settings → Custom Skills): always-on prelude
+  // through the same injection path. Best-effort; failures leave the prompt unchanged.
+  const customSkills = await buildCustomSkillPrelude(company.id, stepText)
+    .catch(() => ({ prelude: "", applied: false }));
+  if (customSkills.prelude) {
+    systemPrompt = `${customSkills.prelude}\n\n${systemPrompt}`;
+  }
+
+  // §3.3 — client-configured MCP servers as additional ToolAdapters.
+  // Each enabled MCP server becomes `mcp_<server>` in the seat tool registry;
+  // every MCP tool defaults to requires-approval (lib/mcp-tool-adapter.ts).
+  const mcpAdapters = await getMcpAdaptersForCompany(company.id).catch(() => []);
+  const environment = mcpAdapters.length
+    ? {
+        ...runtime.environment,
+        tools: [
+          ...runtime.environment.tools,
+          ...mcpAdapters.map((adapter) => adapter.name),
+        ],
+      }
+    : runtime.environment;
+
   const agentResult = await runSeatAgent({
     companyId: company.id,
-    runtime,
+    runtime: mcpAdapters.length ? { ...runtime, environment } : runtime,
+    adapters: mcpAdapters.length ? [...defaultAdapters, ...mcpAdapters] : undefined,
     subtask,
     systemPrompt,
     dynamicPrompt: dependencyContext
@@ -949,6 +1049,9 @@ export async function executeStepWithRuntime(input: StepExecutionInput): Promise
   const output = [summary, findings, recommendations].filter(Boolean).join("\n\n")
     || (seatResult.error ?? "(no output)");
 
+  // §1 P1-3 — publish the validated handoff contract for dependent steps.
+  const handoff = buildStepHandoff(step, rawOutput, output);
+
   // Extract work requests the agent wants routed to other agents.
   const rawWorkRequests = Array.isArray(rawOutput?.workRequests) ? rawOutput.workRequests : [];
   const workRequests: WorkRequest[] = rawWorkRequests
@@ -986,7 +1089,7 @@ export async function executeStepWithRuntime(input: StepExecutionInput): Promise
     createdAt:  nowIso(),
   };
 
-  return { output, model: seatResult.model, tokens: seatResult.tokens, costCents: seatResult.costCents, toolCalls, workRequests, execution: execRecord };
+  return { output, handoff, model: seatResult.model, tokens: seatResult.tokens, costCents: seatResult.costCents, toolCalls, workRequests, execution: execRecord };
 }
 
 export type OrchestrationTransition =

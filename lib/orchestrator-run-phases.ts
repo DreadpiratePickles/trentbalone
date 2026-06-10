@@ -25,9 +25,12 @@ import {
 import { reviseOrchestrationPlanTail } from "@/lib/orchestrator-replan";
 import { buildDelegatedStepsForWorkRequests } from "@/lib/orchestrator-delegation";
 import { recallRelevantMemory } from "@/lib/semantic-router";
+import { buildOperatingStateBundle } from "@/lib/operating-state";
+import { recordHandoff } from "@/lib/planner";
 import { handleStepCritique, type OrchestrationRun } from "@/lib/orchestrator";
 import { cacheOrchestrationRun } from "@/lib/orchestrator-cache";
 import {
+  buildCompletedHandoffs,
   buildCompletedOutputs,
   emitPersistedOrcEvent,
   persistStep,
@@ -39,7 +42,14 @@ export async function processPlanPhase(run: OrchestrationRun, company: Company):
   await emitPersistedOrcEvent(run, { kind: "plan_start", runId: run.id, at: nowIso() });
   const recalled = await recallRelevantMemory(company.id, run.objective, { k: 5, tokenBudget: 1200 });
   const memory = recalled.text;
-  const plan = await generateOrchestrationPlan(company, run.objective, memory, { fullTeam: run.fullTeam, runId: run.id });
+  // §1 P0-2 — plan from the REAL operating state (open/stale tasks, pending
+  // approvals, budget vs burn, last cycle), not from amnesia.
+  const stateBundle = await buildOperatingStateBundle(company, run.objective).catch(() => null);
+  const plan = await generateOrchestrationPlan(company, run.objective, memory, {
+    fullTeam: run.fullTeam,
+    runId: run.id,
+    operatingState: stateBundle?.text,
+  });
   run.plan = plan;
   run.steps = plan.steps.map((step) => ({ ...step, status: "pending" }));
   run.status = "running";
@@ -68,6 +78,7 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
   }
 
   const outputs = buildCompletedOutputs(run.steps);
+  const handoffs = buildCompletedHandoffs(run.steps);
   const unmet = step.dependsOn.find((dep) => !(dep in outputs));
   if (unmet) {
     const depStep = run.steps.find((item) => item.id === unmet);
@@ -130,6 +141,24 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
   await auditTransition(run.companyId, "step_start", run.id, `${step.agentRole}: ${step.title}`);
   await emitPersistedOrcEvent(run, { kind: "step_start", runId: run.id, at: nowIso(), step });
 
+  // §1 P1-3 — audit every structured-handoff edge this step consumes.
+  await Promise.all(
+    step.dependsOn
+      .filter((dep) => dep in handoffs)
+      .map((dep) => {
+        const depStep = run.steps.find((item) => item.id === dep);
+        return recordHandoff(run.companyId, {
+          cycleId: run.cycleId ?? run.id,
+          from: depStep?.agentRole ?? "ceo",
+          to: step.agentRole,
+          reason: `structured handoff ${dep} → ${step.id}`,
+          payloadRef: handoffs[dep].artifactRefs[0] ?? `step:${dep}`,
+          contractVersion: handoffs[dep].contractVersion,
+          timestamp: nowIso(),
+        }).catch(() => undefined);
+      }),
+  );
+
   emitJobEvent({
     jobRunId: run.id,
     companyId: run.companyId,
@@ -145,12 +174,14 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
       step,
       company,
       previousOutputs: outputs,
+      previousHandoffs: handoffs,
       cycleId: run.cycleId,
       approvalGranted,
       resumeSeed: step.seatLoopState,
       objective: run.objective,
     });
     step.output = exec.output;
+    step.handoff = exec.handoff;
     step.model = exec.model;
     step.tokens = exec.tokens;
     step.costCents = exec.costCents;
@@ -167,6 +198,7 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
         step: { ...step, expectedOutput: `${step.expectedOutput}\nImprovement: ${critiqueResult.improvement ?? "tighten the result"}` },
         company,
         previousOutputs: outputs,
+        previousHandoffs: handoffs,
         cycleId: run.cycleId,
         approvalGranted,
         objective: run.objective,
@@ -174,6 +206,7 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
       await store.saveExecution(exec2.execution);
       step.model = exec2.model;
       step.output = exec2.output;
+      step.handoff = exec2.handoff;
       step.tokens = (step.tokens ?? 0) + exec2.tokens;
       step.costCents = (step.costCents ?? 0) + exec2.costCents;
       step.toolCalls = [...(step.toolCalls ?? []), ...exec2.toolCalls];
@@ -426,6 +459,29 @@ export async function processConsolidatePhase(run: OrchestrationRun, company: Co
     completedAt: run.completedAt,
   }).catch(() => {});
 
+  // §1 P0-1 — Engine A's report/cadence tail is now the consolidation phase:
+  // scheduled operating cycles routed through the durable orchestrator still
+  // produce a cycle report and advance the company's cycle cadence.
+  const cycles = await store.listCycles(run.companyId).catch(() => []);
+  const cycleRecord = cycles.find((item) => item.id === (run.cycleId ?? run.id));
+  if (cycleRecord?.kind === "scheduled") {
+    const completedSteps = run.steps.filter((item) => item.status === "completed");
+    await store.createReport({
+      companyId: run.companyId,
+      type: "cycle",
+      title: "Operating Cycle Report",
+      findings: completedSteps.slice(0, 8).map(
+        (item) => `${item.agentRole}: ${(item.handoff?.summary ?? item.output ?? item.title).slice(0, 200)}`,
+      ),
+      recommendations: suggestions.slice(0, 5).map((item) => item.title),
+    }).catch(() => {});
+    const completedAt = run.completedAt ?? nowIso();
+    await store.updateCompany(run.companyId, {
+      lastCycleAt: completedAt,
+      nextCycleAt: nextCycleAtFromCompleted(company.cycleFrequency, completedAt),
+    }).catch(() => {});
+  }
+
   await auditTransition(
     run.companyId,
     run.status === "completed" ? "run_done" : "run_failed",
@@ -446,4 +502,18 @@ export async function processConsolidatePhase(run: OrchestrationRun, company: Co
     at: nowIso(),
     run: { id: run.id, status: run.status, summary: run.summary, completedAt: run.completedAt },
   });
+}
+
+/**
+ * §1 P0-1 — when the durable orchestrator finishes a scheduled cycle, advance
+ * the company's `nextCycleAt` cadence. Mirrors `nextCycleAt` in lib/cycles.ts.
+ */
+function nextCycleAtFromCompleted(
+  frequency: Company["cycleFrequency"],
+  fromIso: string,
+): string | undefined {
+  if (frequency === "manual") return undefined;
+  const date = new Date(fromIso);
+  date.setDate(date.getDate() + (frequency === "daily" ? 1 : 7));
+  return date.toISOString();
 }

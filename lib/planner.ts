@@ -20,6 +20,7 @@ import { appendAuditLog } from "@/lib/audit-log";
 import { assertSpendAvailable } from "@/lib/spend";
 import { logger } from "@/lib/logger";
 import { buildOrchestratorSeatDossier, buildSeatContextBundle, getSeatManifest } from "@/lib/seat-manifest";
+import { isPlannerModelEnabled, modelDecompose } from "@/lib/planner-model";
 
 // ---------------------------------------------------------------------------
 // Tuning constants
@@ -168,6 +169,31 @@ export async function classifyTask(prompt: string): Promise<TaskClassification> 
 /** Decompose a request into typed subtasks with output contracts. */
 export async function plan(request: CycleRequest, cycleId: string): Promise<Subtask[]> {
   const classification = await classifyTask(request.prompt);
+
+  // §1 P1-1 — model-based decomposition (flag-gated via PLANNER_MODEL_ENABLED,
+  // default off). Emits the same typed Subtask contracts as the deterministic
+  // path; any miss (flag off, no key, invalid output) falls through unchanged.
+  if (isPlannerModelEnabled()) {
+    const specs = await modelDecompose({ prompt: request.prompt, classification }).catch(() => null);
+    if (specs && specs.length > 0) {
+      logger.info({ cycleId, classification, count: specs.length }, "[planner] planned model-based subtasks");
+      return specs.map((spec) =>
+        subtaskSchema.parse({
+          id: makeId("subtask"),
+          seat: spec.seat,
+          objective: spec.objective,
+          outputContractId: `${spec.seat}.v1`,
+          toolGuidance: spec.toolGuidance,
+          boundaries: spec.boundaries,
+          input: { prompt: request.prompt, seat: spec.seat },
+          contextBundle: buildSeatContextBundle(spec.seat, request.context ?? {}),
+          classification,
+          budgetCents: spec.budgetCents,
+        }),
+      );
+    }
+  }
+
   const seats = selectPlannerSeats(request.prompt, classification);
   logger.info({ cycleId, classification, seats }, "[planner] planned deterministic subtasks");
   return seats.map((seat) =>

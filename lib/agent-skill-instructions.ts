@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { assertSkillsInstalled } from "@/lib/agent-skills";
 import type { SkillDraftStore } from "@/lib/skill-foundry";
+import { listCustomSkills } from "@/lib/custom-skill-store";
 
 function uniqueStable(values: string[]): string[] {
   return Array.from(new Set(values));
@@ -121,6 +122,40 @@ export async function buildCompanySkillPrelude(
   return {
     prelude: [
       "# Reusable skills for this task — follow these proven procedures instead of re-deriving:",
+      ...blocks,
+    ].join("\n\n"),
+    applied: true,
+  };
+}
+
+/**
+ * §3.2 — client-authored skills (Settings → Custom Skills). Always-on prelude
+ * built from `CompanyCustomSkill` rows: enabled skills are filtered by an
+ * optional `trigger` (substring match against the step text); skills with no
+ * trigger always apply. Best-effort: a DB error or empty list returns the
+ * neutral `{ prelude: "", applied: false }` so callers can prepend it
+ * unconditionally with no effect.
+ */
+export async function buildCustomSkillPrelude(
+  companyId: string,
+  stepText: string,
+): Promise<{ prelude: string; applied: boolean }> {
+  if (!process.env.DATABASE_URL) return { prelude: "", applied: false };
+  const skills = await listCustomSkills(companyId).catch(() => []);
+  const stepLower = (stepText ?? "").toLowerCase();
+  const matched = skills.filter((skill) => {
+    if (!skill.enabled) return false;
+    const trigger = skill.trigger?.trim();
+    if (!trigger) return true;
+    return stepLower.includes(trigger.toLowerCase());
+  });
+  if (matched.length === 0) return { prelude: "", applied: false };
+  const blocks = matched.map((skill) =>
+    [`Custom skill: ${skill.name}`, skill.instructions.trim()].join("\n"),
+  );
+  return {
+    prelude: [
+      "# Client-authored skills for this task — follow these procedures exactly:",
       ...blocks,
     ].join("\n\n"),
     applied: true,

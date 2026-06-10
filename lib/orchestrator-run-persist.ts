@@ -1,7 +1,7 @@
 import { store } from "@/lib/store";
 import type { OrchestratorEventKind, OrchestratorStep } from "@/lib/types";
 import { emitOrcEvent, type OrcEvent } from "@/lib/orchestrator-events";
-import type { OrchestrationCritique, OrchestrationPlan, SeatLoopResumeState, StepRecord } from "@/lib/orchestrator-runtime";
+import type { OrchestrationCritique, OrchestrationPlan, SeatLoopResumeState, StepHandoff, StepRecord } from "@/lib/orchestrator-runtime";
 import type { OrchestrationRun } from "@/lib/orchestrator";
 import { cacheOrchestrationRun } from "@/lib/orchestrator-cache";
 
@@ -40,6 +40,15 @@ export function buildCompletedOutputs(steps: StepRecord[]): Record<string, strin
   );
 }
 
+/** §1 P1-3 — validated handoff contracts of completed steps, keyed by step id. */
+export function buildCompletedHandoffs(steps: StepRecord[]): Record<string, StepHandoff> {
+  return Object.fromEntries(
+    steps
+      .filter((step) => step.status === "completed" && step.handoff)
+      .map((step) => [step.id, step.handoff as StepHandoff]),
+  );
+}
+
 export async function persistSteps(run: OrchestrationRun): Promise<void> {
   await Promise.all(run.steps.map((step) => persistStep(run, step)));
 }
@@ -70,28 +79,33 @@ async function readPersistedPlan(runId: string): Promise<OrchestrationPlan | und
 }
 
 const SEAT_LOOP_RESUME_KEY = "seatLoopResume";
+const STEP_HANDOFF_KEY = "stepHandoff";
 
 function encodeCritique(
   critique: OrchestrationCritique | undefined,
   seatLoopState: SeatLoopResumeState | undefined,
+  handoff: StepHandoff | undefined,
 ): Record<string, unknown> | undefined {
-  if (!critique && !seatLoopState) return undefined;
+  if (!critique && !seatLoopState && !handoff) return undefined;
   return {
     ...(critique ?? {}),
     ...(seatLoopState ? { [SEAT_LOOP_RESUME_KEY]: seatLoopState } : {}),
+    ...(handoff ? { [STEP_HANDOFF_KEY]: handoff } : {}),
   };
 }
 
 function decodeCritique(critique: Record<string, unknown> | undefined): {
   critique?: OrchestrationCritique;
   seatLoopState?: SeatLoopResumeState;
+  handoff?: StepHandoff;
 } {
   if (!critique) return {};
-  const { [SEAT_LOOP_RESUME_KEY]: seatLoopResume, ...rest } = critique;
+  const { [SEAT_LOOP_RESUME_KEY]: seatLoopResume, [STEP_HANDOFF_KEY]: stepHandoff, ...rest } = critique;
   const hasCritique = typeof rest.verdict === "string";
   return {
     critique: hasCritique ? (rest as OrchestrationCritique) : undefined,
     seatLoopState: seatLoopResume as SeatLoopResumeState | undefined,
+    handoff: stepHandoff as StepHandoff | undefined,
   };
 }
 
@@ -111,7 +125,7 @@ function toPersistedStep(run: OrchestrationRun, step: StepRecord): OrchestratorS
     needsApproval: step.needsApproval,
     status: step.status,
     output: step.output,
-    critique: encodeCritique(step.critique, step.seatLoopState),
+    critique: encodeCritique(step.critique, step.seatLoopState, step.handoff),
     model: step.model,
     tokens: step.tokens,
     costCents: step.costCents,
@@ -137,6 +151,7 @@ function fromPersistedStep(step: OrchestratorStep): StepRecord {
     output: step.output,
     critique: decoded.critique,
     seatLoopState: decoded.seatLoopState,
+    handoff: decoded.handoff,
     startedAt: step.startedAt,
     completedAt: step.completedAt,
     model: step.model,

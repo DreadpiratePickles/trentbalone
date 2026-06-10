@@ -44,6 +44,9 @@ model Company {
   tasks            Task[]
   recurringTasks   RecurringTaskTemplate[]
   cycles           Cycle[]
+  goals            Goal[]
+  customSkills     CompanyCustomSkill[]
+  mcpServers       McpServer[]
   executions       AgentExecution[]
   connections      ToolConnection[]
   approvals        Approval[]
@@ -202,10 +205,82 @@ model Cycle {
   status      CycleStatus @default(running)
   phases      Json
   summary     String
+  degraded    Boolean     @default(false)
   startedAt   DateTime    @default(now())
   completedAt DateTime?
   company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   executions  AgentExecution[]
+}
+
+/// §2 Goal Loop — a persistent goal with measurable success criteria. The Goal
+/// IS the external memory: every round reads it, nothing lives only in a
+/// context window. `successCriteria`, `constraints`, `rounds` and `progressLog`
+/// are JSON-typed (see lib/goal-types.ts for the Zod contracts).
+model Goal {
+  id              String     @id @default(cuid())
+  companyId       String
+  objective       String
+  status          GoalStatus @default(intake)
+  successCriteria Json       @default("[]")
+  constraints     Json       @default("{}")
+  rounds          Json       @default("[]")
+  progressLog     Json       @default("[]")
+  costCents       Int        @default(0)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  company         Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([companyId, status])
+}
+
+enum GoalStatus {
+  intake
+  active
+  round_running
+  awaiting_review
+  completed
+  stopped
+}
+
+/// §3.2 Client-added skills — instruction-style procedures a client authors in
+/// Settings. Flows through the same buildCompanySkillPrelude injection path as
+/// granted/distilled skills. Instruction-only (no client code → nothing to sandbox).
+model CompanyCustomSkill {
+  id          String   @id @default(cuid())
+  companyId   String
+  name        String
+  trigger     String   @default("")
+  instructions String
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+}
+
+/// §3.3 Client-added MCP servers — a remote MCP endpoint a client connects so
+/// Trent's seats can act in the client's own tools. Credentials are encrypted
+/// via the existing secret boundary. Every tool defaults to requires-approval.
+model McpServer {
+  id            String   @id @default(cuid())
+  companyId     String
+  name          String
+  url           String
+  transport     String   @default("http")
+  credentialRef String?
+  toolAllowlist Json     @default("[]")
+  reversibleTools Json   @default("[]")
+  status        String   @default("connected")
+  lastError     String?
+  discoveredTools Json   @default("[]")
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
 }
 
 model AgentExecution {
