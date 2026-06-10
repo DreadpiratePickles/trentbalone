@@ -108,7 +108,13 @@ function isLongRunningPreviewCommand(command: string): boolean {
 type BackgroundProcess = {
   child: ChildProcess;
   port: number;
+  /** URL path prefix the dev server serves under (vite --base), if any. */
+  basePath?: string;
 };
+
+function trackedPreviewUrl(port: number, basePath?: string): string {
+  return `http://localhost:${port}${basePath ?? ""}`;
+}
 
 function previewPidFile(sessionDir: string): string {
   return path.join(sessionDir, PREVIEW_PID_FILENAME);
@@ -186,25 +192,37 @@ async function previewCommandArgs(
   args: string[],
   cwd: string,
   port: number,
-): Promise<string[]> {
+  previewBase?: string,
+): Promise<{ spawnArgs: string[]; basePath?: string }> {
   const normalized = command.trim().replace(/\s+/g, " ");
   const scriptName = args[0] === "start" ? "start" : args[1] ?? "dev";
   const script = await readPackageScript(cwd, scriptName);
   const commandText = `${normalized} ${script ?? ""}`.toLowerCase();
 
   if (commandText.includes("vite")) {
-    return appendNpmRunArgs(executable, args, ["--host", "127.0.0.1", "--port", String(port)]);
+    // --base makes every URL vite emits (HTML assets AND absolute imports
+    // inside served JS modules like "/src/globals.css" or
+    // "/node_modules/.vite/deps/react.js") proxy-shaped. Without it, the
+    // host-app preview proxy at /api/workbench/{id}/preview/ can only rewrite
+    // the HTML — nested module imports resolve against the host domain root,
+    // 404 on the Next.js app, and the user sees a white screen even though
+    // in-container verification (direct localhost) passes.
+    const baseArgs = previewBase ? ["--base", previewBase] : [];
+    return {
+      spawnArgs: appendNpmRunArgs(executable, args, ["--host", "127.0.0.1", "--port", String(port), ...baseArgs]),
+      basePath: previewBase,
+    };
   }
   if (commandText.includes("next")) {
-    return appendNpmRunArgs(executable, args, ["--hostname", "127.0.0.1", "--port", String(port)]);
+    return { spawnArgs: appendNpmRunArgs(executable, args, ["--hostname", "127.0.0.1", "--port", String(port)]) };
   }
   if (commandText.includes("astro")) {
-    return appendNpmRunArgs(executable, args, ["--host", "127.0.0.1", "--port", String(port)]);
+    return { spawnArgs: appendNpmRunArgs(executable, args, ["--host", "127.0.0.1", "--port", String(port)]) };
   }
   if (commandText.includes("webpack-dev-server")) {
-    return appendNpmRunArgs(executable, args, ["--host", "127.0.0.1", "--port", String(port)]);
+    return { spawnArgs: appendNpmRunArgs(executable, args, ["--host", "127.0.0.1", "--port", String(port)]) };
   }
-  return args;
+  return { spawnArgs: args };
 }
 
 function appendNpmRunArgs(executable: string, args: string[], previewArgs: string[]): string[] {
@@ -237,7 +255,8 @@ async function startBackgroundCommand(
   // Kill any leaked preview still recorded from a previous run (prevents EADDRINUSE).
   await reapStalePreview(sidecarDir);
   const previewPort = await findPreviewPort();
-  const spawnArgs = await previewCommandArgs(command, executable, args, cwd, previewPort);
+  const previewBase = `/api/workbench/${session.id}/preview/`;
+  const { spawnArgs, basePath } = await previewCommandArgs(command, executable, args, cwd, previewPort, previewBase);
 
   const child = spawn(executable, spawnArgs, {
     cwd,
@@ -250,7 +269,7 @@ async function startBackgroundCommand(
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  backgroundProcesses.set(session.id, { child, port: previewPort });
+  backgroundProcesses.set(session.id, { child, port: previewPort, basePath });
   backgroundPreviewPorts.set(session.id, previewPort);
   await writePreviewSidecar(sidecarDir, child.pid, previewPort);
 
@@ -295,7 +314,7 @@ async function startBackgroundCommand(
   let previewUrl: string | undefined;
   for (let i = 0; i < 20; i++) {
     if (await probePort(previewPort, 250)) {
-      previewUrl = `http://localhost:${previewPort}`;
+      previewUrl = trackedPreviewUrl(previewPort, basePath);
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -764,9 +783,9 @@ const localProvider: WorkbenchProviderAdapter = {
     options?: { url?: string; width?: number; height?: number }
   ): Promise<WorkbenchScreenshotResult> {
     const workdir = await sessionWorkdir(session);
-    const previewPort = backgroundPreviewPorts.get(session.id);
-    const trackedUrl = previewPort && await probePort(previewPort, 250)
-      ? `http://localhost:${previewPort}`
+    const tracked = backgroundProcesses.get(session.id);
+    const trackedUrl = tracked && await probePort(tracked.port, 250)
+      ? trackedPreviewUrl(tracked.port, tracked.basePath)
       : undefined;
     const localUrl = trackedUrl ?? await getLocalPreviewUrl(workdir);
     const sessionUrl = session.previewUrl && !isHostAppPreviewUrl(session.previewUrl) ? session.previewUrl : undefined;
@@ -809,9 +828,9 @@ const localProvider: WorkbenchProviderAdapter = {
 
   async getPreviewUrl(session: WorkbenchSession): Promise<string | undefined> {
     const workdir = await sessionWorkdir(session);
-    const previewPort = backgroundPreviewPorts.get(session.id);
-    if (previewPort && await probePort(previewPort, 250)) {
-      return `http://localhost:${previewPort}`;
+    const tracked = backgroundProcesses.get(session.id);
+    if (tracked && await probePort(tracked.port, 250)) {
+      return trackedPreviewUrl(tracked.port, tracked.basePath);
     }
     const localUrl = await getLocalPreviewUrl(workdir);
     if (localUrl) return localUrl;
@@ -1014,9 +1033,21 @@ async function probePreviewDomWithBrowser(url: string): Promise<PreviewDomProbe 
     });
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     const browserErrors: string[] = [];
-    page.on("pageerror", (error) => browserErrors.push(error.stack?.split("\n").slice(0, 4).join(" | ") ?? error.message));
+    page.on("pageerror", (error) => {
+      const headline = [error.name, error.message].filter(Boolean).join(": ");
+      const stackTop = error.stack?.split("\n").slice(0, 4).join(" | ");
+      browserErrors.push(stackTop || headline || String(error));
+    });
     page.on("console", (message) => {
-      if (message.type() === "error") browserErrors.push(message.text());
+      if (message.type() !== "error") return;
+      const text = message.text().trim();
+      if (text) browserErrors.push(text);
+    });
+    page.on("requestfailed", (req) => {
+      browserErrors.push(`Request failed: ${req.url()} (${req.failure()?.errorText ?? "unknown"})`);
+    });
+    page.on("response", (res) => {
+      if (res.status() >= 400) browserErrors.push(`HTTP ${res.status()} ${res.url()}`);
     });
     const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
     await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => undefined);
@@ -1035,7 +1066,7 @@ async function probePreviewDomWithBrowser(url: string): Promise<PreviewDomProbe 
       httpStatus: response?.status(),
       domText: dom.bodyText.slice(0, 4000),
       visibleElements: dom.visibleElements,
-      browserErrors: browserErrors.slice(0, 10),
+      browserErrors: browserErrors.map((e) => e.trim()).filter(Boolean).slice(0, 10),
     };
   } catch {
     // Browser probe is best-effort: fall back to the raw fetch probe.
