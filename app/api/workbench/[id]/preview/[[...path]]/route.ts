@@ -86,7 +86,16 @@ function buildPreviewTarget(previewUrl: string, pathSegments: string[], search: 
     const target = new URL(previewUrl);
     if (target.protocol !== "http:" && target.protocol !== "https:") return undefined;
     const basePath = target.pathname.endsWith("/") ? target.pathname : `${target.pathname}/`;
-    const relativePath = pathSegments.map(encodeURIComponent).join("/");
+    const relativePath = pathSegments
+      // Never let a crafted path walk above the preview root on the upstream.
+      .filter((segment) => segment !== ".." && segment !== ".")
+      // encodeURIComponent would turn Vite's internal "@vite/client" and
+      // "@react-refresh" into "%40vite/…", which Vite's middleware does NOT
+      // match — it falls through to the index.html fallback and the browser
+      // rejects the module ("MIME type text/html"), white-screening the
+      // preview while every request reads 200. Keep "@" literal.
+      .map((segment) => encodeURIComponent(segment).replace(/%40/gi, "@"))
+      .join("/");
     target.pathname = relativePath ? `${basePath}${relativePath}`.replace(/\/{2,}/g, "/") : basePath;
     target.search = search;
     return target.toString();
