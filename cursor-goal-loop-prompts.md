@@ -1,4 +1,9 @@
-# Cursor Prompt Pack — Goal Loop, Client Skills, Client MCP, Self-Improvement
+# Cursor Prompt Pack — Goal Loop, Client Skills, Client MCP, Self-Improvement, RUN CYCLE Fixes
+
+> Coverage map vs cursor-trent-next-level-master-plan.md:
+> §1 orchestration fixes → Prompts 12–16 · §2 goal loop → Prompts 1–7 + 11 ·
+> §3 skills/MCP/self-improvement → Prompts 8–10.
+> Suggested global order: 1–7 → 12–13 → 8 → 9 → 14–16 → 11 → 10.
 
 > Feed these to Cursor **one at a time, in order, each in a FRESH chat**. Do not paste two
 > at once. After each prompt: review the diff, confirm the verification commands are green,
@@ -174,6 +179,117 @@ setting.
 Verify: `npx vitest run lib/self-improvement lib/skill-foundry.test.ts` (create as needed)
 + tsc.
 Commit: `feat(self-improvement): trace reflection, eval-gated skill promotion, auto-demotion`
+
+---
+
+## Prompt 11 — Goal governance + metrics (Goal Loop Slice 6)
+
+Read docs/goal-loop-design.md §3 Slice 6. (1) Per-goal budget governor: before each round,
+check cumulative round costCents against goal.constraints.budgetCentsCap via a new
+assertGoalBudget in lib/goal-rounds.ts; breach → goal status "awaiting_review" with a
+budget-breach progressLog entry, never silent overrun. (2) Auto-continue: when goal
+constraints.approvalsPolicy === "auto_low_risk" AND every proposed next-round task is
+reversible (no irreversible classification) AND budget unbreached, launch the next round
+without the human gate; log the auto-continue decision to the audit log. (3) Metrics:
+record per-goal rounds-to-complete, cost-per-criterion, critic pass rate, and % criteria
+met with evidence into the orchestration eval surface (lib/orchestration-eval.ts patterns).
+Tests first for all three. Touch ONLY: lib/goal-rounds.ts, lib/goal-review.ts,
+lib/orchestration-eval.ts (additive), tests.
+Verify: `npx vitest run lib/goal-rounds.test.ts lib/goal-review.test.ts
+lib/orchestration-eval.test.ts` + tsc.
+Commit: `feat(goals): budget governor, auto-continue policy, goal metrics`
+
+---
+
+# Section B — RUN CYCLE orchestration fixes (master plan §1)
+
+> These fix the engine behind the console RUN CYCLE button. Independent of Prompts 1–11;
+> can be interleaved, but keep the one-prompt-per-chat rule. Reference:
+> docs/orchestration-improvement-plan.md (P0–P3).
+
+## Prompt 12 — OperatingStateBundle + no silent plan fallback (P0-2, P0-3)
+
+Read docs/orchestration-improvement-plan.md P0-2/P0-3. Create lib/operating-state.ts:
+`buildOperatingStateBundle(companyId)` returns a compact, token-capped bundle — open +
+stale tasks with age (cap 20), last cycle summary + per-seat outcomes, pending approvals
+(cap 10), budget remaining vs recent burn, and recallRelevantMemory results (cap 5).
+Each section individually length-capped; total target <2k tokens. In lib/ai.ts
+generateOperatingPlan: include the bundle in the planning prompt instead of only
+JSON.stringify(company); on schema parse failure retry ONCE with the Zod error appended;
+if the retry fails, return the deterministic fallback BUT mark the plan degraded and write
+a visible warning into the Cycle summary + audit log (no more silent fallback). Tests
+first: bundle caps respected; retry-on-parse; degraded flag surfaces.
+Touch ONLY: lib/operating-state.ts + test, lib/ai.ts, lib/cycles.ts (degraded warning),
+their tests.
+Verify: `npx vitest run lib/operating-state.test.ts lib/cycles.test.ts` + tsc.
+Commit: `feat(cycles): operating-state bundle for planning + no silent plan fallback`
+
+## Prompt 13 — Cycle plans emit dependsOn; cycles run on the durable orchestrator (P1-2, P0-1)
+
+Read docs/orchestration-improvement-plan.md P0-1/P1-2 and lib/orchestrator.ts
+launchOrchestration / lib/orchestrator-runtime.ts saveCycleForRun. Extend the plan schema
+in lib/ai.ts so each task may declare dependsOn (ids of other tasks in the same plan;
+validate references). Rework runCompanyCycle in lib/cycles.ts: instead of the sequential
+executeStepWithRuntime loop, convert plan tasks into an orchestration plan and submit
+through launchOrchestration (threading cycleId); let the DAG pool execute with
+concurrency; keep the existing tail (report, episodic memory, CEO briefing) by moving it
+into / after the consolidation of that run. Preserve the existing API response shape of
+POST /api/companies/[id]/cycles. Existing orchestrator + cycles tests MUST stay green;
+update cycles.test.ts to the new flow. Touch ONLY: lib/ai.ts (schema), lib/cycles.ts,
+minimal additive changes in lib/orchestrator.ts, tests.
+Verify: `npx vitest run lib/cycles.test.ts lib/orchestrator-dag-concurrency.test.ts
+lib/orchestrator-durable-run.test.ts` + tsc.
+Commit: `feat(cycles): cycles execute as durable DAG runs with task dependencies`
+
+## Prompt 14 — Typed decomposition + structured handoffs (P1-1, P1-3)
+
+Read docs/orchestration-improvement-plan.md P1-1/P1-3 and lib/planner.ts Subtask schema.
+(1) Replace the keyword planning in generateOperatingPlan's prompt with instructions to
+emit, per task: a specific measurable objective (never "contribution for: X"), seat,
+outputContractId from lib/seat-output-schemas.ts, toolGuidance, boundaries, budgetCents,
+dependsOn — plus effort-scaling rules in the prompt (trivial → 1 task, standard → 2–4,
+complex only when work parallelizes; never a seat without a concrete deliverable). Keep
+lib/planner.ts selectPlannerSeats as the zero-key fallback only. (2) Structured handoffs:
+in the DAG execution path, dependent steps receive the upstream step's contract-validated
+output object (artifact ref + typed summary) instead of the raw output string — replace
+the raw-string map from buildCompletedStepOutputs usage in step prompt assembly. Tests
+first: plan tasks carry contracts/deps; dependent step prompts contain typed upstream
+summaries, not raw prose.
+Touch ONLY: lib/ai.ts, lib/orchestrator-runtime.ts (handoff assembly), tests.
+Verify: `npx vitest run lib/cycles.test.ts lib/orchestrator-runtime.test.ts
+lib/planner.test.ts` + tsc.
+Commit: `feat(orchestrator): effort-scaled typed decomposition + contract handoffs`
+
+## Prompt 15 — decideEffort verification in cycle steps (P2-1)
+
+Read docs/orchestration-improvement-plan.md P2-1, lib/planner.ts decideEffort, and
+lib/seat-worker.ts SEAT_POLICY. In the step execution path used by cycle runs: classify
+each task (complexity/reversibility), apply decideEffort — critic pass for standard+
+(reuse critiqueStepOutput), verifier + human approval for irreversible (create the
+Approval with preview, pause the step via the existing mid-loop approval machinery).
+Engineer tasks with build intent route through the workbench delegation added in Prompt 5
+(if Prompt 5 not yet done, implement the delegation here instead and skip it there).
+Tests first: standard task gets critic; irreversible task pauses for approval; build task
+delegates.
+Touch ONLY: lib/orchestrator-runtime.ts, lib/cycles.ts glue, tests.
+Verify: `npx vitest run lib/orchestrator-runtime.test.ts
+lib/orchestrator-mid-loop-approval.test.ts lib/cycles.test.ts` + tsc.
+Commit: `feat(cycles): effort-scaled critic/verifier/approval gates on cycle steps`
+
+## Prompt 16 — Accountability surface + task hygiene (P3-1, P3-2)
+
+Read docs/orchestration-improvement-plan.md P3-1/P3-2. (1) Task hygiene: in cycle
+planning, pass open tasks (from the Prompt 12 bundle) and instruct the planner to ADOPT or
+CLOSE existing tasks before creating new ones; dedupe created tasks against open ones by
+title similarity; age out tasks queued >14 days to an "stale" status with an audit entry.
+(2) Accountability UI: per-cycle view in the console rendering the routing decisions and
+handoff audit entries (recordRouting/recordHandoff write them already) — why each seat was
+chosen, model tier, budget, confidence — plus a simple handoff list. Follow the existing
+cycle detail component patterns. Tests: dedupe/adopt logic; stale aging; route test for
+the audit feed endpoint if one is added.
+Touch ONLY: lib/cycles.ts (hygiene), one console component + its data route, tests.
+Verify: targeted vitest + tsc + `npm run build`.
+Commit: `feat(console): routing accountability surface + cycle task hygiene`
 
 ---
 
