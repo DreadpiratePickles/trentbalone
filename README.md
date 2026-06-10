@@ -40,7 +40,7 @@ These exist in code or docs but are **not** claimed as shipped until they pass r
 - Real social/ad publish (`PLATFORM_ACTION_MODE=live` + OAuth)
 - Production cron heartbeat sweep on a live deploy
 - a competing product-style overnight autonomy without manual triggers
-- `backend/server.py` the AI platform OpenAI bridge (optional legacy; **not** the default LLM path — see `lib/ai-client.ts` + `OPENAI_API_KEY`)
+- `backend/server.py` legacy split-port FastAPI ingress proxy (optional; **not** the default LLM path — see `lib/ai-client.ts` + `OPENAI_API_KEY`)
 
 ---
 
@@ -159,7 +159,7 @@ See [docs/RUN.md](docs/RUN.md) for Supabase option, E2B workbench, agent mission
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-LLM calls go through `lib/ai-client.ts` with `OPENAI_API_KEY`. An optional legacy FastAPI bridge lives under `backend/` but is **not** required for the documented happy path.
+LLM calls go through `lib/ai-client.ts` with `OPENAI_API_KEY`. An optional legacy FastAPI ingress proxy lives under `backend/` for split-port preview setups, but it is **not** required for the documented happy path.
 
 ### Multi-agent orchestrator
 

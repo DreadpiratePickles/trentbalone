@@ -44,27 +44,20 @@ def auth_session():
 
 # ─────────────────── Health / Backend bridge ────────────────────
 class TestBridge:
-    def test_health_endpoint(self):
-        r = requests.get("http://localhost:8001/health", timeout=30)
+    def test_proxy_healthz(self):
+        r = requests.get("http://localhost:8001/healthz", timeout=30)
         assert r.status_code == 200
         data = r.json()
-        assert data["status"] == "ok"
-        assert "claude-sonnet-4-5" in data["models"]
+        assert data["ok"] is True
+        assert data["proxy_to"].startswith("http://")
 
-    def test_chat_completions(self):
-        r = requests.post(
-            "http://localhost:8001/v1/chat/completions",
-            headers={"Authorization": "Bearer sk-platform-5333dE952Bb27A5B4E"},
-            json={
-                "model": "claude-sonnet-4-5",
-                "messages": [{"role": "user", "content": "Say PING-OK only."}],
-                "max_tokens": 20,
-            },
-            timeout=45,
-        )
-        assert r.status_code == 200, r.text[:300]
+    def test_proxy_forwards_api_health(self):
+        r = requests.get("http://localhost:8001/api/health", timeout=45)
+        assert r.status_code in (200, 503), r.text[:300]
         body = r.json()
-        assert "choices" in body and len(body["choices"]) > 0
+        assert body["status"] in ("ok", "degraded")
+        assert "readiness" in body
+        assert "checks" in body
 
 
 # ─────────────────── Orchestrator endpoints ─────────────────────

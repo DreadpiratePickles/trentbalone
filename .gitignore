@@ -1,5 +1,8 @@
 .worktrees/
 .trent/
+.platform/
+.runtime/
+.gitconfig
 node_modules/
 .next/
 .DS_Store
