@@ -1,0 +1,155 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkbenchArtifact, WorkbenchEvent, WorkbenchSession } from "@/lib/types";
+import type { McpAuthContext } from "./types";
+
+const { mockStore, mockGetOrchestrationRunSnapshot } = vi.hoisted(() => ({
+  mockStore: {
+    getWorkbenchSession: vi.fn(),
+    listWorkbenchEvents: vi.fn(),
+    listWorkbenchArtifacts: vi.fn(),
+  },
+  mockGetOrchestrationRunSnapshot: vi.fn(),
+}));
+
+vi.mock("@/lib/store", () => ({ store: mockStore }));
+vi.mock("@/lib/orchestrator", () => ({ getOrchestrationRunSnapshot: mockGetOrchestrationRunSnapshot }));
+
+import { getRunHandler } from "./tools-read";
+
+const ctx: McpAuthContext = {
+  companyId: "company_trent_demo",
+  keyId: "proxy_key_test",
+  maskedKey: "sk-t...test",
+  scopes: ["mcp"],
+  tier: "api_only",
+};
+
+describe("trent_get_run — workbench App-Solo polling", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetOrchestrationRunSnapshot.mockResolvedValue(undefined);
+  });
+
+  it("returns a derived evidence summary for MCP-launched App-Solo workbench runs", async () => {
+    mockStore.getWorkbenchSession.mockResolvedValue(session({
+      id: "ws_app_solo",
+      status: "completed",
+      previewUrl: "https://preview.example.test",
+    }));
+    mockStore.listWorkbenchEvents.mockResolvedValue([
+      event({ id: "evt_cmd_1", type: "shell", status: "completed", title: "npm test", command: "npm test" }),
+      event({
+        id: "evt_verify",
+        type: "test",
+        status: "failed",
+        title: "Verification failed",
+        metadata: {
+          checks: [
+            { name: "dom", status: "pass", detail: "Rendered" },
+            { name: "tests", status: "fail", detail: "1 failed" },
+            { name: "critic", status: "skip", detail: "No critic configured" },
+          ],
+        },
+      }),
+    ]);
+    mockStore.listWorkbenchArtifacts.mockResolvedValue([
+      artifact({ id: "art_file", kind: "file", title: "src/App.tsx", path: "src/App.tsx" }),
+      artifact({ id: "art_shot", kind: "screenshot", title: "Preview screenshot" }),
+      artifact({ id: "art_preview", kind: "preview", title: "Preview URL", previewUrl: "https://preview.example.test" }),
+    ]);
+
+    const result = await getRunHandler(ctx, { runId: "ws_app_solo" });
+
+    expect(result).toMatchObject({
+      kind: "workbench",
+      run: {
+        id: "ws_app_solo",
+        appSolo: {
+          agentRole: "growth",
+          appName: "HyperFrames",
+        },
+      },
+      evidenceSummary: {
+        status: "failing",
+        passCount: 1,
+        failCount: 1,
+        skipCount: 1,
+        failedChecks: ["tests"],
+        fileCount: 1,
+        screenshotCount: 1,
+        artifactCount: 3,
+        commandCount: 1,
+        failedCommandCount: 0,
+        previewCaptured: true,
+        previewUrl: "https://preview.example.test",
+      },
+    });
+  });
+});
+
+function session(overrides: Partial<WorkbenchSession>): WorkbenchSession {
+  return {
+    id: overrides.id ?? "ws_1",
+    companyId: "company_trent_demo",
+    agentRole: "growth",
+    agentMode: "design",
+    messageCount: 0,
+    status: overrides.status ?? "running",
+    provider: "mock_local",
+    objective: "[app-solo] Growth / Marketing / HyperFrames",
+    previewUrl: overrides.previewUrl,
+    costCents: 0,
+    createdAt: "2026-06-11T00:00:00.000Z",
+    updatedAt: "2026-06-11T00:00:00.000Z",
+    metadata: {
+      networkPolicy: "allowlist",
+      allowedHosts: [],
+      maxRuntimeSeconds: 1800,
+      maxCostCents: 250,
+      approvalRequiredFor: ["deploy"],
+      rollbackAvailable: true,
+      appSolo: {
+        agentRole: "growth",
+        agentLabel: "Growth / Marketing",
+        appId: "hyperframes",
+        appName: "HyperFrames",
+        appScopes: ["hyperframes:render"],
+        deliverables: ["campaign draft"],
+        approvalGates: ["hyperframes.publish"],
+        mode: "design",
+      },
+    },
+    ...overrides,
+  };
+}
+
+function event(overrides: Partial<WorkbenchEvent>): WorkbenchEvent {
+  return {
+    id: overrides.id ?? "evt_1",
+    companyId: "company_trent_demo",
+    sessionId: "ws_app_solo",
+    type: overrides.type ?? "system",
+    status: overrides.status ?? "completed",
+    title: overrides.title ?? "event",
+    content: overrides.content ?? "",
+    command: overrides.command,
+    metadata: overrides.metadata,
+    createdAt: "2026-06-11T00:00:00.000Z",
+  };
+}
+
+function artifact(overrides: Partial<WorkbenchArtifact>): WorkbenchArtifact {
+  return {
+    id: overrides.id ?? "art_1",
+    companyId: "company_trent_demo",
+    sessionId: "ws_app_solo",
+    kind: overrides.kind ?? "file",
+    title: overrides.title ?? "artifact",
+    storageKey: "workbench/ws_app_solo/artifact",
+    mimeType: "text/plain",
+    sizeBytes: 100,
+    path: overrides.path,
+    previewUrl: overrides.previewUrl,
+    createdAt: "2026-06-11T00:00:00.000Z",
+  };
+}

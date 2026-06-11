@@ -50,6 +50,9 @@ export async function runAgentHandler(
   const requestedMode = MCP_AGENT_MODES.includes(args.mode as WorkbenchAgentMode)
     ? args.mode as WorkbenchAgentMode
     : undefined;
+  const requestedAppId = typeof args.appId === "string" && args.appId.trim()
+    ? args.appId.trim()
+    : undefined;
 
   if (activeRunCountForKey(ctx.keyId) >= MAX_CONCURRENT_RUNS_PER_KEY) {
     throw new Error(`concurrent run limit reached (${MAX_CONCURRENT_RUNS_PER_KEY} per key)`);
@@ -80,7 +83,7 @@ export async function runAgentHandler(
   }
 
   const agent = resolveAppSoloAgent(role ?? "engineer", resolvedDeps);
-  const app = resolveApp(agent);
+  const app = resolveApp(agent, requestedAppId);
   const mode = requestedMode ?? agent.mode;
   const appObjective = resolvedDeps.buildObjective?.(agent, app, objective) ?? objective;
   const session = await resolvedDeps.createSession({
@@ -120,6 +123,7 @@ export async function runAgentHandler(
     status: session.status,
     agentRole: agent.role,
     mode,
+    appId: app.id,
     app: app.name,
     poll: "trent_get_run",
     note: "Run executes asynchronously. Approval gates pause it in Trent when required.",
@@ -135,6 +139,7 @@ export const RUN_AGENT_TOOL: McpToolDefinition = {
     properties: {
       objective: { type: "string", description: "What the agent should accomplish." },
       role: { type: "string", enum: MCP_AGENT_ROLES, description: "Solo seat. Defaults to engineer." },
+      appId: { type: "string", description: "Optional App-Solo app id for the selected solo seat, such as steel-browser, hyperframes, open-generative-ai, fincept-terminal, or ghostfolio." },
       mode: { type: "string", enum: MCP_AGENT_MODES, description: "Solo Workbench mode. Defaults to the role's App Solo mode." },
       engine: { type: "string", enum: ["solo", "team"], description: "solo or team. Defaults to solo." },
     },
@@ -208,7 +213,16 @@ function resolveAppSoloAgent(role: AgentRole, deps: RunAgentDeps): AppSoloAgent 
   return agent;
 }
 
-function resolveApp(agent: AppSoloAgent): AppSoloApp {
+function resolveApp(agent: AppSoloAgent, appId?: string): AppSoloApp {
+  if (appId) {
+    const requested = agent.apps.find((app) => app.id === appId);
+    if (!requested) {
+      throw new Error(
+        `unsupported appId "${appId}" for role "${agent.role}". Available apps: ${agent.apps.map((app) => app.id).join(", ") || "none"}`
+      );
+    }
+    return requested;
+  }
   return agent.apps[0] ?? {
     id: "trent-mcp",
     name: "Trent MCP",

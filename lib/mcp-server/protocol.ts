@@ -47,7 +47,7 @@ export async function handleMcpMessage(
         capabilities: { tools: { listChanged: false } },
         serverInfo: MCP_SERVER_INFO,
         instructions:
-          "Trent runs governed AI-company operations. trent_run_agent returns a runId; poll trent_get_run. Approval gates, spend limits, RLS, and audit logging remain enforced inside Trent.",
+          "Trent runs governed AI-company operations. Use trent_run_agent with engine=solo for App-Solo work; optionally pass appId to choose the seat-specific app. trent_run_agent returns a runId; poll trent_get_run and inspect evidenceSummary for verification, artifacts, commands, and preview proof. Approval gates, spend limits, RLS, and audit logging remain enforced inside Trent.",
       });
     }
     case "notifications/initialized":

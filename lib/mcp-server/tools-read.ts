@@ -1,6 +1,7 @@
 import { store } from "@/lib/store";
 import { getOrchestrationRunSnapshot } from "@/lib/orchestrator";
 import type { OrchestratorRunStatus, Task, WorkbenchSessionStatus } from "@/lib/types";
+import { buildWorkbenchIdeView } from "@/lib/workbench-ide-view";
 import { MCP_AGENT_ROLES } from "./constants";
 import { releaseMcpRun } from "./run-tracking";
 import type { McpAuthContext, McpToolDefinition } from "./types";
@@ -51,7 +52,7 @@ export const READ_TOOLS: McpToolDefinition[] = [
   },
   {
     name: "trent_get_run",
-    description: "Poll an MCP-launched run by runId. Supports orchestrator run ids and workbench session ids.",
+    description: "Poll an MCP-launched run by runId. Supports orchestrator run ids and workbench session ids, including App-Solo evidence summaries.",
     inputSchema: {
       type: "object",
       properties: {
@@ -172,6 +173,7 @@ export async function getRunHandler(ctx: McpAuthContext, args: Record<string, un
     store.listWorkbenchArtifacts(session.id),
   ]);
   const needsApproval = events.filter((event) => event.status === "needs_approval" || event.type === "approval");
+  const evidenceSummary = summarizeWorkbenchEvidence({ events, artifacts, previewUrl: session.previewUrl });
 
   return {
     kind: "workbench",
@@ -187,6 +189,7 @@ export async function getRunHandler(ctx: McpAuthContext, args: Record<string, un
       updatedAt: session.updatedAt,
       appSolo: session.metadata.appSolo,
     },
+    evidenceSummary,
     awaitingApproval: session.status === "paused" || needsApproval.length > 0,
     eventsTail: events.slice(-10).map((event) => ({
       id: event.id,
@@ -206,6 +209,30 @@ export async function getRunHandler(ctx: McpAuthContext, args: Record<string, un
     })),
     runUrl: `/companies/${ctx.companyId}/workbench/${encodeURIComponent(session.id)}`,
   };
+}
+
+function summarizeWorkbenchEvidence(input: {
+  events: Awaited<ReturnType<typeof store.listWorkbenchEvents>>;
+  artifacts: Awaited<ReturnType<typeof store.listWorkbenchArtifacts>>;
+  previewUrl?: string;
+}) {
+  const view = buildWorkbenchIdeView({ events: input.events, artifacts: input.artifacts });
+  const commands = input.events.filter((event) => event.type === "shell");
+  const previewUrl = input.previewUrl ?? latestArtifactPreviewUrl(input.artifacts);
+  return {
+    ...view.evidenceSummary,
+    commandCount: commands.length,
+    failedCommandCount: commands.filter((event) => event.status === "failed").length,
+    previewCaptured: Boolean(previewUrl),
+    previewUrl,
+  };
+}
+
+function latestArtifactPreviewUrl(artifacts: Awaited<ReturnType<typeof store.listWorkbenchArtifacts>>): string | undefined {
+  for (const artifact of [...artifacts].reverse()) {
+    if (artifact.kind === "preview" && artifact.previewUrl) return artifact.previewUrl;
+  }
+  return undefined;
 }
 
 function textArg(value: unknown, name: string): string {

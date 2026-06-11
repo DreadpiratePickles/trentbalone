@@ -31,6 +31,12 @@ describe("MCP JSON-RPC protocol", () => {
         },
       },
     });
+    if (outcome.kind !== "response" || !outcome.body.result || typeof outcome.body.result !== "object") {
+      throw new Error("expected initialize response");
+    }
+    const instructions = (outcome.body.result as { instructions?: string }).instructions ?? "";
+    expect(instructions).toContain("appId");
+    expect(instructions).toContain("evidenceSummary");
   });
 
   it("accepts notifications without a JSON-RPC response body", async () => {
