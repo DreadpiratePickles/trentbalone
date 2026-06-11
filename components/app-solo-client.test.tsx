@@ -47,4 +47,30 @@ describe("AppSoloClient", () => {
     expect(html).toContain("1 pass / 1 failed / 1 skipped");
     expect(html).toContain("failed: tests");
   });
+
+  it("renders product readiness guidance for incomplete solo output", () => {
+    const html = renderToStaticMarkup(
+      <AppSoloRunSummaryPanel
+        summary={{
+          status: "failed",
+          fileCount: 0,
+          commandCount: 2,
+          verification: {
+            passed: false,
+            passCount: 0,
+            failCount: 1,
+            skipCount: 0,
+            failedChecks: ["tests"],
+          },
+        }}
+      />,
+    );
+
+    expect(html).toContain("product readiness");
+    expect(html).toContain("needs_attention");
+    expect(html).toContain("verification failing");
+    expect(html).toContain("preview missing");
+    expect(html).toContain("artifacts missing");
+    expect(html).toContain("guidance: failed_verification tests, missing_preview, missing_artifacts");
+  });
 });

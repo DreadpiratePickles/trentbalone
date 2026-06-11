@@ -5,9 +5,12 @@ import { AgentActivityFeed, mapWorkbenchChunk, type ActivityStep } from "@/compo
 import { getAppSoloAgents, type AppSoloAgent, type AppSoloApp, type AppSoloRunSummary } from "@/lib/app-solo";
 import type { WorkbenchAgentChunk } from "@/lib/workbench-agent-types";
 import { launchAppSoloRun } from "@/lib/app-solo-run";
+import { AppSoloRunSummaryPanel } from "@/components/app-solo-run-summary-panel";
 import { workbenchPreviewFrameSrc } from "@/lib/workbench-preview-url";
 import { Eyebrow, I, Pill, PulseDot } from "@/components/ui";
 import type { WorkbenchProvider, WorkbenchSession } from "@/lib/types";
+
+export { AppSoloRunSummaryPanel } from "@/components/app-solo-run-summary-panel";
 
 type AppSoloProviderChoice = "auto" | Extract<WorkbenchProvider, "daytona" | "e2b" | "mock_local">;
 
@@ -322,33 +325,6 @@ function formatContractList(items: string[], maxItems: number): string {
   return items.length > maxItems ? `${visible}, +${items.length - maxItems} more` : visible;
 }
 
-export function AppSoloRunSummaryPanel({ summary }: { summary: AppSoloRunSummary }) {
-  return (
-    <div style={styles.runSummaryPanel} aria-label="App Solo run summary">
-      <div style={styles.contractTitle}>run summary</div>
-      <div style={styles.summaryGrid}>
-        <span style={styles.summaryMetric}>{summary.status}</span>
-        <span style={styles.summaryMetric}>{formatCount(summary.fileCount, "file")}</span>
-        <span style={styles.summaryMetric}>{formatCount(summary.commandCount, "command")}</span>
-        <span style={styles.summaryMetric}>{summary.previewUrl ? "preview captured" : "no preview"}</span>
-      </div>
-      {summary.verification && (
-        <div style={styles.summaryLine}>
-          {summary.verification.passCount} pass / {summary.verification.failCount} failed / {summary.verification.skipCount} skipped
-        </div>
-      )}
-      {summary.verification?.failedChecks.length ? (
-        <div style={styles.summaryLine}>failed: {summary.verification.failedChecks.join(", ")}</div>
-      ) : null}
-      {summary.error ? <div style={styles.errorText}>{summary.error}</div> : null}
-    </div>
-  );
-}
-
-function formatCount(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 const styles: Record<string, CSSProperties> = {
   shell: {
     minHeight: "calc(100vh - 150px)",
@@ -402,10 +378,6 @@ const styles: Record<string, CSSProperties> = {
   contractRow: { display: "grid", gridTemplateColumns: "92px minmax(0, 1fr)", gap: 8, alignItems: "start", fontSize: 12, lineHeight: 1.35 },
   contractLabel: { fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--haze)" },
   contractValue: { color: "var(--bone)", overflowWrap: "anywhere" },
-  runSummaryPanel: { display: "grid", gap: 7, marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,.06)" },
-  summaryGrid: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6 },
-  summaryMetric: { minHeight: 24, display: "flex", alignItems: "center", padding: "0 7px", background: "rgba(255,255,255,.035)", color: "var(--bone)", fontFamily: "var(--mono)", fontSize: 10, textTransform: "uppercase", overflowWrap: "anywhere" },
-  summaryLine: { color: "var(--mist)", fontSize: 12, lineHeight: 1.4, overflowWrap: "anywhere" },
   traceLine: { display: "flex", alignItems: "center", gap: 9, minHeight: 26, fontSize: 13 },
   traceDot: { width: 6, height: 6, borderRadius: 999, boxShadow: "0 0 18px rgba(110,231,183,.3)" },
   errorText: { marginTop: 10, color: "#FCA5A5", fontSize: 12, lineHeight: 1.45 },
