@@ -130,6 +130,7 @@ export class SeatWorker implements SeatRunner {
       costCents: execution.costCents || estimateSeatCostCents(policy.modelTier),
       error: execution.error,
       workRequests: [], // populated when this seat needs another seat (§3.15).
+      whatIDidNotDo: extractWhatIDidNotDo(execution.output),
     };
   }
 
@@ -240,7 +241,12 @@ export function buildHandoff(args: {
   from: AgentRole;
   to: AgentRole;
   reason: string;
+  severity?: "green" | "amber" | "red";
+  summary?: string;
+  nextActions?: string[];
+  risks?: string[];
   payloadRef: string;
+  whatIDidNotDo?: string[];
   contractVersion: string;
 }): HandoffEvent {
   return {
@@ -248,7 +254,12 @@ export function buildHandoff(args: {
     from: args.from,
     to: args.to,
     reason: args.reason,
+    severity: args.severity ?? "green",
+    summary: args.summary ?? args.reason,
+    nextActions: args.nextActions ?? [],
+    risks: args.risks ?? [],
     payloadRef: args.payloadRef,
+    whatIDidNotDo: args.whatIDidNotDo ?? [],
     contractVersion: args.contractVersion,
     timestamp: nowIso(),
   };
@@ -296,6 +307,13 @@ function summarizeOutput(output: unknown) {
     if (typeof summary === "string" && summary.trim()) return summary.slice(0, 240);
   }
   return stringifyOutput(output).slice(0, 240);
+}
+
+function extractWhatIDidNotDo(output: unknown): string[] {
+  if (!output || typeof output !== "object") return [];
+  const value = (output as { whatIDidNotDo?: unknown }).whatIDidNotDo;
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
 function isWorkbenchSelfHealInput(input: unknown): input is {

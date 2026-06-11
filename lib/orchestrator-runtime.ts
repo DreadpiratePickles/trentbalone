@@ -30,6 +30,9 @@ import { emitJobEvent } from "@/lib/job-events";
 import { buildCompanySkillPrelude } from "@/lib/agent-skill-instructions";
 import { InMemorySkillDraftStore, type SkillDraftStore } from "@/lib/skill-foundry";
 import { PrismaSkillDraftStore } from "@/lib/self-improvement/skill-draft-store.prisma";
+import { formatPlanValidationErrors, validateOrchestrationPlan } from "@/lib/plan-validator";
+import { seatOutputSchemas } from "@/lib/seat-output-schemas";
+import { logger } from "@/lib/logger";
 
 /**
  * Skill reuse (OpenSpace): inject a company's live distilled skills into the seat
@@ -68,6 +71,10 @@ const stepSchema = z.object({
   expectedOutput: z.string(),
   riskLevel: z.enum(["low", "medium", "high"]),
   needsApproval: z.boolean().default(false),
+  spec: z.object({
+    acceptance: z.array(z.string().min(1)).min(1),
+    inputsFrom: z.array(z.string()).default([]),
+  }).optional(),
 });
 
 const planSchema = z.object({
@@ -184,7 +191,15 @@ export function normalizePlan(plan: RawOrchestrationPlan): OrchestrationPlan {
       ...step,
       dependsOn: step.dependsOn ?? [],
       needsApproval: step.needsApproval ?? false,
+      spec: step.spec ?? buildStepSpec(step),
     })),
+  };
+}
+
+function buildStepSpec(step: Pick<OrchestrationStep, "title" | "expectedOutput" | "dependsOn">) {
+  return {
+    acceptance: [`Expected output satisfied: ${step.expectedOutput || step.title}`],
+    inputsFrom: step.dependsOn ?? [],
   };
 }
 
@@ -215,6 +230,10 @@ export function repairOrchestrationPlanRoutes(plan: OrchestrationPlan): Orchestr
     expectedOutput: `Produce the requested deliverable using ${route.tool} when available, with concrete output and verification notes.`,
     riskLevel: "medium",
     needsApproval: /\b(publish|send|merge|deploy|spend|charge|refund|withdraw|delete)\b/i.test(plan.objective),
+    spec: {
+      acceptance: [`Produce the requested deliverable using ${route.tool} with verification notes.`],
+      inputsFrom: prerequisite ? [prerequisite.id] : [],
+    },
   };
 
   steps.splice(insertIndex, 0, specialist);
@@ -343,44 +362,7 @@ export async function generateOrchestrationPlan(
     ? buildContentMissionFallbackPlan(objective)
     : fullTeam
     ? buildFullTeamFallbackPlan(objective)
-    : {
-        objective,
-        reasoning: "LLM unavailable — using deterministic fallback plan.",
-        steps: [
-          {
-            id: "s1",
-            title: "Scope objective and identify the leverage points",
-            rationale: "Establish what done looks like.",
-            agentRole: "ceo",
-            dependsOn: [],
-            expectedOutput: "Crisp 2-line success definition + 1 risk.",
-            riskLevel: "low",
-            needsApproval: false,
-          },
-          {
-            id: "s2",
-            title: `Execute primary workstream with ${route.tool}`,
-            rationale: "Ship the actual deliverable with the smallest capable specialist.",
-            agentRole: fallbackPrimaryRole,
-            dependsOn: ["s1"],
-            expectedOutput: `First-pass deliverable using ${route.tool} when available, with notes and approval needs.`,
-            riskLevel: "medium",
-            needsApproval: fallbackNeedsApproval,
-          },
-          {
-            id: "s3",
-            title: "Consolidate and surface the final artifact",
-            rationale: "Wrap up with a tight summary the founder can act on.",
-            agentRole: "ceo",
-            dependsOn: ["s2"],
-            expectedOutput: "Single-screen summary + next-action.",
-            riskLevel: "low",
-            needsApproval: false,
-          },
-        ],
-        successCriteria: ["Deliverable produced", "No unapproved external sends"],
-        blockers: [],
-      };
+    : buildStandardFallbackPlan(objective, route.tool, fallbackPrimaryRole, fallbackNeedsApproval);
 
   const rawPlan = await callJsonWithFallback<RawOrchestrationPlan>(
     PLANNER_MODEL,
@@ -390,7 +372,99 @@ export async function generateOrchestrationPlan(
     fallback,
     { stage: "planner", companyId: company.id, jobRunId: options?.runId },
   );
-  return repairOrchestrationPlanRoutes(normalizePlan(rawPlan));
+  const candidate = repairOrchestrationPlanRoutes(normalizePlan(rawPlan));
+  if (!orchestrationPlanValidatorEnabled()) return candidate;
+
+  const validation = validateOrchestrationPlan(candidate, {
+    seatRoster: Object.keys(seatOutputSchemas) as AgentRole[],
+    budgetCapCents: getCompanyBudgetCapCents(company),
+  });
+  if (validation.ok) return candidate;
+
+  logger.warn(
+    { objective, errors: validation.errors },
+    "[orchestrator] generated plan failed semantic validation; using deterministic fallback"
+  );
+  const fallbackPlan = repairOrchestrationPlanRoutes(normalizePlan(fallback));
+  const fallbackValidation = validateOrchestrationPlan(fallbackPlan, {
+    seatRoster: Object.keys(seatOutputSchemas) as AgentRole[],
+    budgetCapCents: getCompanyBudgetCapCents(company),
+  });
+  if (fallbackValidation.ok) return fallbackPlan;
+  throw new Error(`Invalid deterministic fallback plan: ${formatPlanValidationErrors(fallbackValidation.errors)}`);
+}
+
+function orchestrationPlanValidatorEnabled(): boolean {
+  return process.env.ORCHESTRATION_PLAN_VALIDATOR_ENABLED === "1";
+}
+
+function getCompanyBudgetCapCents(company: Company): number {
+  const budget = (company as { budgetCents?: unknown }).budgetCents;
+  return typeof budget === "number" && Number.isFinite(budget) && budget > 0
+    ? budget
+    : Number.MAX_SAFE_INTEGER;
+}
+
+function buildStandardFallbackPlan(
+  objective: string,
+  tool: string,
+  fallbackPrimaryRole: AgentRole,
+  fallbackNeedsApproval: boolean,
+): OrchestrationPlan {
+  const steps: OrchestrationPlan["steps"] = [
+    {
+      id: "s1",
+      title: "Scope objective and identify the leverage points",
+      rationale: "Establish what done looks like.",
+      agentRole: "ceo",
+      dependsOn: [],
+      expectedOutput: "Crisp 2-line success definition + 1 risk.",
+      riskLevel: "low",
+      needsApproval: false,
+    },
+    {
+      id: "s2",
+      title: `Execute primary workstream with ${tool}`,
+      rationale: "Ship the actual deliverable with the smallest capable specialist.",
+      agentRole: fallbackPrimaryRole,
+      dependsOn: ["s1"],
+      expectedOutput: `First-pass deliverable using ${tool} when available, with notes and approval needs.`,
+      riskLevel: "medium",
+      needsApproval: fallbackNeedsApproval,
+    },
+  ];
+
+  if (fallbackNeedsApproval) {
+    steps.push({
+      id: "s3",
+      title: "Prepare approval gate for irreversible work",
+      rationale: "External sends, spend, deploys, and destructive actions need founder review before execution.",
+      agentRole: "escalation",
+      dependsOn: ["s2"],
+      expectedOutput: "Approval card with risk, reversibility, preview, and recommended decision.",
+      riskLevel: "high",
+      needsApproval: false,
+    });
+  }
+
+  steps.push({
+    id: fallbackNeedsApproval ? "s4" : "s3",
+    title: "Consolidate and surface the final artifact",
+    rationale: "Wrap up with a tight summary the founder can act on.",
+    agentRole: "ceo",
+    dependsOn: [fallbackNeedsApproval ? "s3" : "s2"],
+    expectedOutput: "Single-screen summary + next-action.",
+    riskLevel: "low",
+    needsApproval: false,
+  });
+
+  return {
+    objective,
+    reasoning: "LLM unavailable — using deterministic fallback plan.",
+    steps,
+    successCriteria: ["Deliverable produced", "No unapproved external sends"],
+    blockers: [],
+  };
 }
 
 /**
@@ -478,7 +552,8 @@ export function buildOrchestrationPlanningPrompts(
     "  2. Always include a final ceo step that consolidates the output.",
     "  3. Mark needsApproval=true for any external sends, public posts, paid actions, code merges.",
     teamRule,
-    "  5. successCriteria must be measurable.",
+    "  5. Each step must include spec: { acceptance: string[], inputsFrom: string[] }. acceptance must contain at least one concrete completion criterion; inputsFrom lists upstream dependsOn ids that feed the step.",
+    "  6. successCriteria must be measurable.",
     contentMissionBrief,
     "Output strict JSON matching the schema.",
   ].filter(Boolean).join("\n");
@@ -493,7 +568,7 @@ export function buildOrchestrationPlanningPrompts(
     "",
     `Objective: ${objective}`,
     "",
-    "Respond as JSON: { objective, reasoning, steps:[{id,title,rationale,agentRole,dependsOn,expectedOutput,riskLevel,needsApproval}], successCriteria:[], blockers:[] }",
+    "Respond as JSON: { objective, reasoning, steps:[{id,title,rationale,agentRole,dependsOn,expectedOutput,riskLevel,needsApproval,spec:{acceptance:[],inputsFrom:[]}}], successCriteria:[], blockers:[] }",
   ].join("\n");
   return { system, user };
 }
@@ -663,6 +738,7 @@ export type RuntimeStep = {
   expectedOutput: string;
   riskLevel: string;
   dependsOn: string[];
+  spec?: OrchestrationStep["spec"];
   needsApproval?: boolean;
 };
 
@@ -842,6 +918,8 @@ export async function executeStepWithRuntime(input: StepExecutionInput): Promise
     id: step.id,
     seat: step.agentRole,
     objective: seatObjective,
+    dependsOn: step.dependsOn,
+    spec: step.spec ?? buildStepSpec(step),
     outputContractId: `orchestration:${step.id}`,
     toolGuidance,
     boundaries: runtime.environment.approvalRequiredFor,

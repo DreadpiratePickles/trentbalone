@@ -4,6 +4,7 @@ import type { AgentRole } from "@/lib/types";
 const base = z.object({
   summary: z.string(),
   artifactRefs: z.array(z.string()),
+  whatIDidNotDo: z.array(z.string()).default([]),
   assumptions: z.array(z.string()).default([]),
   approvalRequests: z.array(z.string()).default([]),
 });

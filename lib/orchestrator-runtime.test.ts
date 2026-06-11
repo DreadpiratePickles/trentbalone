@@ -120,6 +120,17 @@ describe("buildOrchestrationPlanningPrompts", () => {
     expect(prompts.system).toContain("engineer, growth, content, support, analyst, finance, sales");
   });
 
+  it("asks model plans to emit per-step acceptance criteria", () => {
+    const prompts = buildOrchestrationPlanningPrompts(
+      { id: "co_1", name: "Co", brief: { vision: "v", goals: "g", icp: "i" } } as any,
+      "Research competitors and draft a launch plan.",
+      "",
+    );
+
+    expect(prompts.system).toContain("acceptance");
+    expect(prompts.user).toContain("spec");
+  });
+
   it("injects the content publishing mission protocol for social/ads objectives", () => {
     const prompts = buildOrchestrationPlanningPrompts(
       { id: "co_1", name: "Co", brief: { vision: "v", goals: "g", icp: "i" } } as any,
@@ -134,6 +145,11 @@ describe("buildOrchestrationPlanningPrompts", () => {
 });
 
 describe("generateOrchestrationPlan — autonomous full-team fallback", () => {
+  afterEach(() => {
+    clearRuntimeEvalOverrides();
+    vi.unstubAllEnvs();
+  });
+
   it("engages every specialist seat when the LLM is unavailable", async () => {
     // No OPENAI_API_KEY in test env → deterministic fallback path.
     const plan = await generateOrchestrationPlan(
@@ -151,6 +167,54 @@ describe("generateOrchestrationPlan — autonomous full-team fallback", () => {
     expect(plan.steps[plan.steps.length - 1].agentRole).toBe("ceo");
     // Final consolidation depends on all specialist steps.
     expect(plan.steps[plan.steps.length - 1].dependsOn.length).toBe(7);
+  });
+
+  it("adds acceptance specs to fallback orchestration steps", async () => {
+    const plan = await generateOrchestrationPlan(
+      { id: "co_1", name: "Co", brief: { vision: "v", goals: "g", icp: "i" } } as any,
+      "Ship the landing page.",
+      "",
+    );
+
+    expect(plan.steps.every((step) => (step as any).spec?.acceptance?.length > 0)).toBe(true);
+  });
+
+  it("falls back instead of returning a semantically invalid generated DAG when validation is enabled", async () => {
+    vi.stubEnv("ORCHESTRATION_PLAN_VALIDATOR_ENABLED", "1");
+    setRuntimeEvalOverrides({
+      orchestration: {
+        createCompletion: async () => ({
+          totalTokens: 42,
+          content: JSON.stringify({
+            objective: "Ship the landing page.",
+            reasoning: "invalid model plan",
+            steps: [{
+              id: "bad_1",
+              title: "Bad dependency",
+              rationale: "model hallucinated an edge",
+              agentRole: "engineer",
+              dependsOn: ["missing_step"],
+              expectedOutput: "Landing page shipped",
+              riskLevel: "medium",
+              needsApproval: false,
+              spec: { acceptance: ["Landing page shipped"], inputsFrom: ["missing_step"] },
+            }],
+            successCriteria: ["Landing page shipped"],
+            blockers: [],
+          }),
+        }),
+      },
+    });
+
+    const plan = await generateOrchestrationPlan(
+      { id: "co_1", name: "Co", brief: { vision: "v", goals: "g", icp: "i" } } as any,
+      "Ship the landing page.",
+      "",
+    );
+
+    expect(plan.reasoning).toContain("deterministic fallback");
+    expect(plan.steps.map((step) => step.id)).not.toContain("bad_1");
+    expect(plan.steps.every((step) => (step as any).spec?.acceptance?.length > 0)).toBe(true);
   });
 
   it("anchors every seat's task to the actual objective (not generic boilerplate)", async () => {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockAppendAuditLog, mockAssertSpendAvailable } = vi.hoisted(() => ({
   mockAppendAuditLog: vi.fn(),
@@ -25,6 +25,10 @@ describe("planner orchestrator", () => {
     mockAppendAuditLog.mockReset();
     mockAssertSpendAvailable.mockReset();
     mockAssertSpendAvailable.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("routes irreversible work upward and escalates after worker output", async () => {
@@ -93,6 +97,8 @@ describe("planner orchestrator", () => {
         seat: "analyst",
         objective: `Analyze launch signal ${index}`,
         outputContractId: "analyst.v1",
+        dependsOn: [],
+        spec: { acceptance: [`Analyze launch signal ${index}`], inputsFrom: [] },
         input: {},
         contextBundle: {},
         classification: { type: "general", complexity: "standard", reversibility: "reversible" },
@@ -114,6 +120,8 @@ describe("planner orchestrator", () => {
         seat: "analyst",
         objective: id,
         outputContractId: "analyst.v1",
+        dependsOn: [],
+        spec: { acceptance: [id], inputsFrom: [] },
         input: {},
         contextBundle: {},
         classification: { type: "general", complexity: "standard", reversibility: "reversible" },
@@ -300,6 +308,22 @@ describe("planner orchestrator", () => {
     expect(subtasks.every((subtask) => subtask.outputContractId === `${subtask.seat}.v1`)).toBe(true);
   });
 
+  it("adds default dependency and acceptance spec contracts to deterministic subtasks", async () => {
+    const subtasks = await plan({
+      companyId: "co_1",
+      prompt: "research competitor website and check budget",
+    }, "cycle_1");
+
+    expect(subtasks.length).toBeGreaterThan(0);
+    for (const subtask of subtasks) {
+      expect(subtask.dependsOn).toEqual([]);
+      expect(subtask.spec.inputsFrom).toEqual([]);
+      expect(subtask.spec.acceptance).toEqual([
+        expect.stringContaining(subtask.objective),
+      ]);
+    }
+  });
+
   it.each([
     ["review billing budget and refund risk", "finance"],
     ["research competitor website screenshots", "analyst"],
@@ -332,5 +356,29 @@ describe("planner orchestrator", () => {
       expect.stringContaining("analyst via"),
     ]);
     expect(routeSummaries.join("\n")).not.toContain("browser via");
+  });
+
+  it("does not execute an over-budget subtask plan when semantic validation is enabled", async () => {
+    vi.stubEnv("ORCHESTRATION_PLAN_VALIDATOR_ENABLED", "1");
+    const runner: SeatRunner = {
+      run: vi.fn(async (subtask) => seatResultSchema.parse({
+        seat: subtask.seat,
+        payloadRef: `artifact_${subtask.seat}`,
+        confidence: 0.9,
+        costCents: 10,
+        workRequests: [],
+      })),
+    };
+
+    const result = await runCycle({
+      companyId: "co_1",
+      cycleId: "cycle_1",
+      prompt: "research competitor website and check budget",
+      context: { budgetCapCents: 1 },
+    }, runner);
+
+    expect(result.status).toBe("failed");
+    expect(result.escalationReason).toContain("budget");
+    expect(runner.run).not.toHaveBeenCalled();
   });
 });

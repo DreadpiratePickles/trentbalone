@@ -1,18 +1,3 @@
-/**
- * @file lib/planner.ts
- * CEO-as-orchestrator for the 9-seat operating loop (Phase 10, §3.1/§6 of
- * advisor-pack/sec-09-and-10-research.md).
- *
- * This is the inter-agent communication substrate — Trent's TS-native answer to
- * "make my agents talk to each other" WITHOUT adopting AutoGen / Microsoft Agent
- * Framework (which is .NET/Python only). Seats never call each other directly.
- * A seat emits a typed, Zod-validated WorkRequest; the CEO authorises, budgets,
- * and dispatches it; every hop is logged as a HandoffEvent on the audit chain.
- *
- * This foundation is deterministic: live model planning and queue dispatch can
- * replace the policy functions later without changing the typed handoff contract.
- */
-
 import { z } from "zod";
 import type { AgentRole } from "@/lib/types";
 import { makeId, nowIso } from "@/lib/utils";
@@ -20,10 +5,8 @@ import { appendAuditLog } from "@/lib/audit-log";
 import { assertSpendAvailable } from "@/lib/spend";
 import { logger } from "@/lib/logger";
 import { buildOrchestratorSeatDossier, buildSeatContextBundle, getSeatManifest } from "@/lib/seat-manifest";
-
-// ---------------------------------------------------------------------------
-// Tuning constants
-// ---------------------------------------------------------------------------
+import { formatPlanValidationErrors, validatePlan } from "@/lib/plan-validator";
+import { seatOutputSchemas } from "@/lib/seat-output-schemas";
 
 /** Hard cap on dynamic collaboration depth — prevents runaway agent spawning. */
 export const MAX_FANOUT_DEPTH = 3;
@@ -31,10 +14,6 @@ export const MAX_FANOUT_DEPTH = 3;
 export const MAX_PARALLEL_WORKERS = 5;
 /** Max re-plan iterations before the cycle fails or escalates. */
 export const MAX_REPLAN_ITERATIONS = 3;
-
-// ---------------------------------------------------------------------------
-// Core contracts (Zod = decode-time + runtime validation; §2.1)
-// ---------------------------------------------------------------------------
 
 export type TaskComplexity = "trivial" | "standard" | "complex";
 export type Reversibility = "reversible" | "costly" | "irreversible";
@@ -47,12 +26,23 @@ export const taskClassificationSchema = z.object({
 });
 export type TaskClassification = z.infer<typeof taskClassificationSchema>;
 
+export const subtaskSpecSchema = z.object({
+  acceptance: z.array(z.string().min(1)).min(1),
+  inputsFrom: z.array(z.string()).default([]),
+});
+export type SubtaskSpec = z.infer<typeof subtaskSpecSchema>;
+
 /** A typed subtask the CEO hands to a worker seat. Vague subtasks are the #1
  * documented multi-agent failure, so every field is required. */
 export const subtaskSchema = z.object({
   id: z.string(),
   seat: z.custom<AgentRole>(),
   objective: z.string().min(1),
+  dependsOn: z.array(z.string()).default([]),
+  spec: subtaskSpecSchema.default({
+    acceptance: ["Complete the subtask objective."],
+    inputsFrom: [],
+  }),
   /** ID of the Zod output contract the worker MUST satisfy. */
   outputContractId: z.string().min(1),
   toolGuidance: z.array(z.string()).default([]),
@@ -62,7 +52,11 @@ export const subtaskSchema = z.object({
   classification: taskClassificationSchema,
   budgetCents: z.number().int().nonnegative(),
 });
-export type Subtask = z.infer<typeof subtaskSchema>;
+export type ParsedSubtask = z.infer<typeof subtaskSchema>;
+export type Subtask = Omit<ParsedSubtask, "dependsOn" | "spec"> & {
+  dependsOn?: string[];
+  spec?: SubtaskSpec;
+};
 
 /** Logged for every routing decision — the a competing product-beating accountability surface (§3.5). */
 export const routingDecisionSchema = z.object({
@@ -83,8 +77,13 @@ export const handoffEventSchema = z.object({
   from: z.custom<AgentRole>(),
   to: z.custom<AgentRole>(),
   reason: z.string(),
+  severity: z.enum(["green", "amber", "red"]).default("green"),
+  summary: z.string().default(""),
+  nextActions: z.array(z.string()).default([]),
+  risks: z.array(z.string()).default([]),
   /** Pointer into lib/artifacts.ts — never the full payload (avoids context blowup). */
   payloadRef: z.string(),
+  whatIDidNotDo: z.array(z.string()).default([]),
   contractVersion: z.string(),
   timestamp: z.string(),
 });
@@ -115,6 +114,8 @@ export const seatResultSchema = z.object({
   costCents: z.number().int().nonnegative(),
   /** Optional follow-on work the seat wants done (dynamic collaboration). */
   workRequests: z.array(workRequestSchema).default([]),
+  /** Explicit not-attempted work, so downstream seats do not infer it was done. */
+  whatIDidNotDo: z.array(z.string()).default([]),
   /** Present when a seat failed but sibling work should still be preserved. */
   error: z.string().optional(),
 });
@@ -124,6 +125,7 @@ export interface SeatResult {
   confidence: number;
   costCents: number;
   workRequests?: WorkRequest[];
+  whatIDidNotDo?: string[];
   error?: string;
 }
 
@@ -150,9 +152,16 @@ export interface CycleResult {
   escalationReason?: string;
 }
 
-// ---------------------------------------------------------------------------
-// 1. Classification + planning (CEO)
-// ---------------------------------------------------------------------------
+function planValidatorEnabled(): boolean {
+  return process.env.ORCHESTRATION_PLAN_VALIDATOR_ENABLED === "1";
+}
+
+function buildSubtaskSpec(objective: string, inputsFrom: string[] = []): SubtaskSpec {
+  return {
+    acceptance: [`Complete objective: ${objective}`],
+    inputsFrom,
+  };
+}
 
 /** Cheap intent/complexity classifier. Route UP when ambiguous, never down. */
 export async function classifyTask(prompt: string): Promise<TaskClassification> {
@@ -166,7 +175,7 @@ export async function classifyTask(prompt: string): Promise<TaskClassification> 
 }
 
 /** Decompose a request into typed subtasks with output contracts. */
-export async function plan(request: CycleRequest, cycleId: string): Promise<Subtask[]> {
+export async function plan(request: CycleRequest, cycleId: string): Promise<ParsedSubtask[]> {
   const classification = await classifyTask(request.prompt);
   const seats = selectPlannerSeats(request.prompt, classification);
   logger.info({ cycleId, classification, seats }, "[planner] planned deterministic subtasks");
@@ -175,6 +184,8 @@ export async function plan(request: CycleRequest, cycleId: string): Promise<Subt
       id: makeId("subtask"),
       seat,
       objective: buildSeatObjective(seat, request.prompt),
+      dependsOn: [],
+      spec: buildSubtaskSpec(buildSeatObjective(seat, request.prompt)),
       outputContractId: `${seat}.v1`,
       toolGuidance: buildToolGuidance(seat),
       boundaries: buildSeatBoundaries(seat, classification),
@@ -184,6 +195,23 @@ export async function plan(request: CycleRequest, cycleId: string): Promise<Subt
       budgetCents: budgetForSeat(seat),
     })
   );
+}
+
+function validateSubtasksBeforeExecution(subtasks: ParsedSubtask[], request: CycleRequest): void {
+  if (!planValidatorEnabled()) return;
+  const plannedBudgetCents = subtasks.reduce((sum, subtask) => sum + subtask.budgetCents, 0);
+  const validation = validatePlan(subtasks, {
+    seatRoster: Object.keys(seatOutputSchemas) as AgentRole[],
+    budgetCapCents: budgetCapCentsFor(request, plannedBudgetCents),
+  });
+  if (!validation.ok) {
+    throw new Error(`Invalid subtask plan: ${formatPlanValidationErrors(validation.errors)}`);
+  }
+}
+
+function budgetCapCentsFor(request: CycleRequest, fallback: number): number {
+  const cap = request.context?.budgetCapCents;
+  return typeof cap === "number" && Number.isFinite(cap) && cap >= 0 ? cap : fallback;
 }
 
 function selectPlannerSeats(prompt: string, classification: TaskClassification): AgentRole[] {
@@ -240,10 +268,6 @@ function classifierConfidenceFor(classification: TaskClassification) {
   if (classification.complexity === "trivial") return 0.9;
   return 0.84;
 }
-
-// ---------------------------------------------------------------------------
-// 2. Routing + authorisation (the supervision gate)
-// ---------------------------------------------------------------------------
 
 /** Map complexity/reversibility → effort tier. Logged via recordRouting. */
 export function decideEffort(c: TaskClassification): {
@@ -335,7 +359,7 @@ async function runDynamicWorkRequests(input: {
 }): Promise<SeatResult[]> {
   if (input.requests.length === 0) return [];
 
-  const subtasks: Subtask[] = [];
+  const subtasks: ParsedSubtask[] = [];
   for (const request of input.requests) {
     const req = workRequestSchema.parse({
       ...request,
@@ -354,6 +378,8 @@ async function runDynamicWorkRequests(input: {
       id: makeId("subtask"),
       seat,
       objective: req.capability,
+      dependsOn: [],
+      spec: buildSubtaskSpec(req.capability, [req.id]),
       outputContractId: `${seat}.v1`,
       input: req.input,
       contextBundle: buildSeatContextBundle(seat, input.baseContext),
@@ -365,7 +391,12 @@ async function runDynamicWorkRequests(input: {
       from: req.requester,
       to: seat,
       reason: req.capability,
+      severity: "green",
+      summary: req.capability,
+      nextActions: [req.capability],
+      risks: [],
       payloadRef: req.id,
+      whatIDidNotDo: [],
       contractVersion: "v1",
       timestamp: nowIso(),
     });
@@ -397,6 +428,7 @@ export async function runCycle(request: CycleRequest, runner: SeatRunner): Promi
 
   try {
     const subtasks = await plan(request, cycleId);
+    validateSubtasksBeforeExecution(subtasks, request);
     const seatUniverse = buildOrchestratorSeatDossier().seats.map((seat) => seat.role);
 
     // Route + log every subtask before doing any work.

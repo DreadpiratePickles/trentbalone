@@ -141,7 +141,21 @@ describe("seat worker", () => {
       reason: "need metrics",
       payloadRef: "artifact_1",
       contractVersion: "v1",
-    })).toMatchObject({ from: "engineer", to: "analyst", payloadRef: "artifact_1" });
+      severity: "amber",
+      summary: "Engineer produced the scaffold and needs metric validation.",
+      nextActions: ["Validate adoption metrics"],
+      risks: ["Metric source may be stale"],
+      whatIDidNotDo: ["Did not publish"],
+    } as any)).toMatchObject({
+      from: "engineer",
+      to: "analyst",
+      payloadRef: "artifact_1",
+      severity: "amber",
+      summary: "Engineer produced the scaffold and needs metric validation.",
+      nextActions: ["Validate adoption metrics"],
+      risks: ["Metric source may be stale"],
+      whatIDidNotDo: ["Did not publish"],
+    });
 
     await expect(processSubtaskJob({
       companyId: "co_1",
@@ -158,6 +172,35 @@ describe("seat worker", () => {
         budgetCents: 10,
       },
     })).resolves.toMatchObject({ seat: "support" });
+  });
+
+  it("returns model-declared not-attempted work on the seat result", async () => {
+    mockExecuteSeatModel.mockResolvedValueOnce({
+      output: {
+        summary: "Model completed the work",
+        whatIDidNotDo: ["Did not deploy"],
+      },
+      model: "gpt-4.1-mini",
+      tokens: 100,
+      costCents: 1,
+      fallback: false,
+    });
+    const worker = new SeatWorker("co_1");
+
+    const result = await worker.run({
+      id: "sub_non_work",
+      seat: "analyst",
+      objective: "Summarize churn risk",
+      outputContractId: "analyst.v1",
+      toolGuidance: [],
+      boundaries: ["read-only"],
+      input: {},
+      contextBundle: {},
+      classification: { type: "analysis", complexity: "standard", reversibility: "reversible" },
+      budgetCents: 25,
+    });
+
+    expect(result).toMatchObject({ whatIDidNotDo: ["Did not deploy"] });
   });
 
   it("routes engineer self-healing subtasks through the workbench repair loop", async () => {
