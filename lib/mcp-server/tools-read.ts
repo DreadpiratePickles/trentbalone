@@ -2,6 +2,7 @@ import { store } from "@/lib/store";
 import { getOrchestrationRunSnapshot } from "@/lib/orchestrator";
 import type { OrchestratorRunStatus, Task, WorkbenchSessionStatus } from "@/lib/types";
 import { buildWorkbenchIdeView } from "@/lib/workbench-ide-view";
+import { getAppSoloAgents } from "@/lib/app-solo";
 import { MCP_AGENT_ROLES } from "./constants";
 import { releaseMcpRun } from "./run-tracking";
 import type { McpAuthContext, McpToolDefinition } from "./types";
@@ -19,6 +20,17 @@ export const READ_TOOLS: McpToolDefinition[] = [
     },
     requiredScope: "mcp",
     handler: companyContextHandler,
+  },
+  {
+    name: "trent_list_app_solo_options",
+    description: "List App-Solo seats, valid appId values, scopes, deliverables, approval gates, and default modes for trent_run_agent.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    requiredScope: "mcp",
+    handler: listAppSoloOptionsHandler,
   },
   {
     name: "trent_list_pending_approvals",
@@ -87,6 +99,31 @@ export async function companyContextHandler(ctx: McpAuthContext): Promise<unknow
       metrics: company.metrics,
     },
     pendingApprovals: pending.length,
+  };
+}
+
+export async function listAppSoloOptionsHandler(): Promise<unknown> {
+  return {
+    defaultEngine: "solo",
+    usage: "Call trent_run_agent with engine='solo', role, and optional appId from this list; then poll trent_get_run for evidenceSummary.",
+    agents: getAppSoloAgents().map((agent) => ({
+      role: agent.role,
+      label: agent.label,
+      defaultName: agent.defaultName,
+      mission: agent.mission,
+      mode: agent.mode,
+      defaultAppId: agent.apps[0]?.id,
+      skills: agent.skills,
+      deliverables: agent.deliverables,
+      approvalGates: agent.approvalGates,
+      apps: agent.apps.map((app) => ({
+        id: app.id,
+        name: app.name,
+        label: app.label,
+        description: app.description,
+        scopes: app.scopes,
+      })),
+    })),
   };
 }
 

@@ -52,6 +52,7 @@ describe("MCP tool registry", () => {
 
     expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
       "trent_company_context",
+      "trent_list_app_solo_options",
       "trent_run_agent",
       "trent_get_run",
       "trent_list_pending_approvals",

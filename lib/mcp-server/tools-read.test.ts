@@ -14,7 +14,7 @@ const { mockStore, mockGetOrchestrationRunSnapshot } = vi.hoisted(() => ({
 vi.mock("@/lib/store", () => ({ store: mockStore }));
 vi.mock("@/lib/orchestrator", () => ({ getOrchestrationRunSnapshot: mockGetOrchestrationRunSnapshot }));
 
-import { getRunHandler } from "./tools-read";
+import { getRunHandler, listAppSoloOptionsHandler } from "./tools-read";
 
 const ctx: McpAuthContext = {
   companyId: "company_trent_demo",
@@ -83,6 +83,41 @@ describe("trent_get_run — workbench App-Solo polling", () => {
         previewCaptured: true,
         previewUrl: "https://preview.example.test",
       },
+    });
+  });
+});
+
+describe("trent_list_app_solo_options", () => {
+  it("returns role-scoped App-Solo app ids and launch metadata for MCP clients", async () => {
+    const result = await listAppSoloOptionsHandler();
+
+    expect(result).toMatchObject({
+      defaultEngine: "solo",
+      usage: expect.stringContaining("trent_run_agent"),
+      agents: expect.arrayContaining([
+        expect.objectContaining({
+          role: "growth",
+          mode: "design",
+          defaultAppId: "steel-browser",
+          apps: expect.arrayContaining([
+            expect.objectContaining({
+              id: "hyperframes",
+              name: "HyperFrames",
+              scopes: expect.arrayContaining(["hyperframes:render"]),
+            }),
+          ]),
+        }),
+        expect.objectContaining({
+          role: "finance",
+          apps: expect.arrayContaining([
+            expect.objectContaining({
+              id: "ghostfolio",
+              name: "Ghostfolio",
+              scopes: expect.arrayContaining(["ghostfolio:portfolio_overview"]),
+            }),
+          ]),
+        }),
+      ]),
     });
   });
 });
