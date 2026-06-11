@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { AgentActivityFeed } from "@/components/agent-activity/agent-activity-feed";
 import { AgentStep } from "@/components/agent-activity/agent-step";
 import { CodeBlock } from "@/components/agent-activity/code-block";
+import { mapWorkbenchChunk } from "@/components/agent-activity/mappers/workbench-chunk";
 import { NarrationText } from "@/components/agent-activity/narration-text";
 import type { ActivityStep } from "@/components/agent-activity/types";
 
@@ -63,5 +64,47 @@ describe("Agent activity system", () => {
       <AgentStep step={{ ...completedStep, status: "running", verb: "Reading" }} index={0} reducedMotion />,
     );
     expect(html).toContain("agent-step--no-motion");
+  });
+
+  it("maps failed Workbench verification chunks to trace rows that name failed checks", () => {
+    const step = mapWorkbenchChunk(
+      {
+        type: "verify",
+        passed: false,
+        checks: [
+          { name: "tests", status: "fail", detail: "1 regression failed" },
+          { name: "preview", status: "pass", detail: "Rendered preview" },
+        ],
+      },
+      0,
+    );
+
+    expect(step).toMatchObject({
+      icon: "verify",
+      verb: "Verify",
+      target: "tests failed",
+      chip: "1 failed",
+      status: "failed",
+    });
+    expect(step?.narration).toContain("tests: fail — 1 regression failed");
+  });
+
+  it("maps passing Workbench verification chunks to a readable success target", () => {
+    const step = mapWorkbenchChunk(
+      {
+        type: "verify",
+        passed: true,
+        checks: [{ name: "preview", status: "pass", detail: "Rendered preview" }],
+      },
+      0,
+    );
+
+    expect(step).toMatchObject({
+      icon: "verify",
+      verb: "Verify",
+      target: "all checks passed",
+      chip: "passed",
+      status: "completed",
+    });
   });
 });

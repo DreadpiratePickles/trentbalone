@@ -13,6 +13,8 @@ export type WorkbenchChunkInput =
   | { type: "error"; message: string }
   | { type: "done"; messageId: string };
 
+type WorkbenchVerifyChunk = Extract<WorkbenchChunkInput, { type: "verify" }>;
+
 export function mapWorkbenchChunk(chunk: WorkbenchChunkInput, index: number): ActivityStep | null {
   const id = makeStepId("wb", index, chunk.type);
 
@@ -68,6 +70,7 @@ export function mapWorkbenchChunk(chunk: WorkbenchChunkInput, index: number): Ac
         id,
         icon: "verify",
         verb: "Verify",
+        target: verificationTarget(chunk),
         chip: chunk.passed ? "passed" : `${chunk.checks.filter((c) => c.status === "fail").length} failed`,
         status: chunk.passed ? "completed" : "failed",
         narration: chunk.checks.length
@@ -103,6 +106,17 @@ export function mapWorkbenchChunk(chunk: WorkbenchChunkInput, index: number): Ac
     default:
       return null;
   }
+}
+
+function verificationTarget(chunk: WorkbenchVerifyChunk): string | undefined {
+  const failedChecks = chunk.checks.filter((check) => check.status === "fail").map((check) => check.name);
+  if (failedChecks.length) {
+    const visibleChecks = failedChecks.slice(0, 3).join(", ");
+    const overflow = failedChecks.length > 3 ? ` +${failedChecks.length - 3} more` : "";
+    return `${visibleChecks}${overflow} failed`;
+  }
+  if (chunk.passed) return "all checks passed";
+  return undefined;
 }
 
 export function mapWorkbenchEventsToSteps(
