@@ -1,5 +1,5 @@
 import { store } from "@/lib/store";
-import type { Company } from "@/lib/types";
+import type { AgentRole, Company } from "@/lib/types";
 import { ceoChatResponse } from "@/lib/ai";
 import { makeId, nowIso } from "@/lib/utils";
 import { emitJobEvent } from "@/lib/job-events";
@@ -21,13 +21,14 @@ import {
   executeStepWithRuntime,
   generateOrchestrationPlan,
   SeatLoopAwaitingApprovalError,
+  type StepHandoff,
   type StepRecord,
 } from "@/lib/orchestrator-runtime";
 import { reviseOrchestrationPlanTail } from "@/lib/orchestrator-replan";
 import { buildDelegatedStepsForWorkRequests } from "@/lib/orchestrator-delegation";
 import { recallRelevantMemory } from "@/lib/semantic-router";
 import { buildOperatingStateBundle } from "@/lib/operating-state";
-import { recordHandoff } from "@/lib/planner";
+import { recordHandoff, type HandoffEvent } from "@/lib/planner";
 import { handleStepCritique, type OrchestrationRun } from "@/lib/orchestrator";
 import { cacheOrchestrationRun } from "@/lib/orchestrator-cache";
 import {
@@ -38,6 +39,32 @@ import {
   persistSteps,
 } from "@/lib/orchestrator-run-persist";
 import { enqueueReadyOrchestrationSteps } from "@/lib/orchestrator-run-queue";
+
+export function buildRecordedHandoffEvent(input: {
+  cycleId: string;
+  depId: string;
+  stepId: string;
+  from: AgentRole;
+  to: AgentRole;
+  toStepTitle: string;
+  handoff: StepHandoff;
+  timestamp: string;
+}): HandoffEvent {
+  return {
+    cycleId: input.cycleId,
+    from: input.from,
+    to: input.to,
+    reason: `structured handoff ${input.depId} → ${input.stepId}`,
+    severity: "green",
+    summary: input.handoff.summary,
+    nextActions: input.handoff.nextActions.length ? input.handoff.nextActions : [input.toStepTitle],
+    risks: input.handoff.risks,
+    payloadRef: input.handoff.artifactRefs[0] ?? `step:${input.depId}`,
+    whatIDidNotDo: input.handoff.whatIDidNotDo,
+    contractVersion: input.handoff.contractVersion,
+    timestamp: input.timestamp,
+  };
+}
 
 export async function processPlanPhase(run: OrchestrationRun, company: Company): Promise<void> {
   await emitPersistedOrcEvent(run, { kind: "plan_start", runId: run.id, at: nowIso() });
@@ -148,20 +175,16 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
       .filter((dep) => dep in handoffs)
       .map((dep) => {
         const depStep = run.steps.find((item) => item.id === dep);
-        return recordHandoff(run.companyId, {
+        return recordHandoff(run.companyId, buildRecordedHandoffEvent({
           cycleId: run.cycleId ?? run.id,
+          depId: dep,
+          stepId: step.id,
           from: depStep?.agentRole ?? "ceo",
           to: step.agentRole,
-          reason: `structured handoff ${dep} → ${step.id}`,
-          severity: "green",
-          summary: handoffs[dep].summary,
-          nextActions: [step.title],
-          risks: [],
-          payloadRef: handoffs[dep].artifactRefs[0] ?? `step:${dep}`,
-          whatIDidNotDo: [],
-          contractVersion: handoffs[dep].contractVersion,
+          toStepTitle: step.title,
+          handoff: handoffs[dep],
           timestamp: nowIso(),
-        }).catch(() => undefined);
+        })).catch(() => undefined);
       }),
   );
 

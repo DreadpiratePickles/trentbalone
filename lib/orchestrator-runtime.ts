@@ -117,6 +117,9 @@ export const stepHandoffSchema = z.object({
   seat: z.string(),
   summary: z.string(),
   keyPoints: z.array(z.string()).default([]),
+  nextActions: z.array(z.string()).default([]),
+  risks: z.array(z.string()).default([]),
+  whatIDidNotDo: z.array(z.string()).default([]),
   artifactRefs: z.array(z.string()).default([]),
   contractVersion: z.literal("v1").default("v1"),
 });
@@ -124,8 +127,21 @@ export const stepHandoffSchema = z.object({
 export type StepHandoff = z.infer<typeof stepHandoffSchema>;
 
 function toStringItems(value: unknown): string[] {
+  if (typeof value === "string") return value.trim() ? [value] : [];
   if (!Array.isArray(value)) return [];
   return value.map(stringifyItem).filter(Boolean);
+}
+
+function trimHandoffItems(items: string[], limit = 6): string[] {
+  return items
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, limit)
+    .map((item) => item.slice(0, 240));
+}
+
+function prefixedHandoffItems(prefix: string, value: unknown): string[] {
+  return toStringItems(value).map((item) => `${prefix}${item}`);
 }
 
 export function buildStepHandoff(
@@ -136,18 +152,32 @@ export function buildStepHandoff(
   const summary = typeof rawOutput?.summary === "string" && rawOutput.summary.trim()
     ? rawOutput.summary
     : fallbackText;
-  const keyPoints = [
-    ...toStringItems(rawOutput?.findings),
+  const keyPoints = trimHandoffItems(toStringItems(rawOutput?.findings));
+  const nextActions = trimHandoffItems([
     ...toStringItems(rawOutput?.recommendations),
-  ].slice(0, 6).map((point) => point.slice(0, 240));
+    ...toStringItems(rawOutput?.recommendation),
+  ]);
+  const risks = trimHandoffItems([
+    ...toStringItems(rawOutput?.riskNotes),
+    ...toStringItems(rawOutput?.dataCaveats),
+    ...prefixedHandoffItems("Assumption: ", rawOutput?.assumptions),
+    ...prefixedHandoffItems("Approval needed: ", rawOutput?.approvalRequests),
+  ]);
+  const whatIDidNotDo = trimHandoffItems(toStringItems(rawOutput?.whatIDidNotDo));
   const artifactRefs = Array.isArray(rawOutput?.artifactRefs)
-    ? rawOutput.artifactRefs.filter((ref): ref is string => typeof ref === "string").slice(0, 8)
+    ? rawOutput.artifactRefs
+        .filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0)
+        .map((ref) => ref.trim())
+        .slice(0, 8)
     : [];
   return stepHandoffSchema.parse({
     stepId: step.id,
     seat: step.agentRole,
     summary: summary.slice(0, 700),
     keyPoints,
+    nextActions,
+    risks,
+    whatIDidNotDo,
     artifactRefs,
   });
 }
@@ -163,6 +193,9 @@ export function renderDependencyHandoff(
       `[${depId} · ${handoff.seat} · validated handoff ${handoff.contractVersion}]`,
       `SUMMARY: ${handoff.summary}`,
       handoff.keyPoints.length ? `KEY POINTS:\n${handoff.keyPoints.map((point) => `- ${point}`).join("\n")}` : "",
+      handoff.nextActions.length ? `NEXT ACTIONS:\n${handoff.nextActions.map((action) => `- ${action}`).join("\n")}` : "",
+      handoff.risks.length ? `RISKS:\n${handoff.risks.map((risk) => `- ${risk}`).join("\n")}` : "",
+      handoff.whatIDidNotDo.length ? `NOT DONE:\n${handoff.whatIDidNotDo.map((item) => `- ${item}`).join("\n")}` : "",
       handoff.artifactRefs.length ? `ARTIFACTS: ${handoff.artifactRefs.join(", ")}` : "",
     ].filter(Boolean).join("\n");
   }

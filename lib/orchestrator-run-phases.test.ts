@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasFatalOrchestrationOutcome } from "@/lib/orchestrator-run-phases";
+import { buildRecordedHandoffEvent, hasFatalOrchestrationOutcome } from "@/lib/orchestrator-run-phases";
 import type { StepRecord } from "@/lib/orchestrator-runtime";
 
 describe("hasFatalOrchestrationOutcome", () => {
@@ -15,6 +15,40 @@ describe("hasFatalOrchestrationOutcome", () => {
 
   it("does not fail runs whose steps completed cleanly", () => {
     expect(hasFatalOrchestrationOutcome([step("completed")])).toBe(false);
+  });
+});
+
+describe("buildRecordedHandoffEvent", () => {
+  it("preserves upstream next actions, risks, and explicit non-work in handoff audit events", () => {
+    const event = buildRecordedHandoffEvent({
+      cycleId: "run_1",
+      depId: "s1",
+      stepId: "s2",
+      from: "analyst",
+      to: "growth",
+      toStepTitle: "Draft growth experiment",
+      timestamp: "2026-06-11T00:00:00.000Z",
+      handoff: {
+        stepId: "s1",
+        seat: "analyst",
+        summary: "Research complete.",
+        keyPoints: ["Enterprise teams have the strongest pain."],
+        nextActions: ["Test founder-led LinkedIn copy."],
+        risks: ["Survey sample is small."],
+        whatIDidNotDo: ["Did not contact prospects."],
+        artifactRefs: ["artifact_research"],
+        contractVersion: "v1",
+      },
+    });
+
+    expect(event).toMatchObject({
+      reason: "structured handoff s1 → s2",
+      summary: "Research complete.",
+      nextActions: ["Test founder-led LinkedIn copy."],
+      risks: ["Survey sample is small."],
+      whatIDidNotDo: ["Did not contact prospects."],
+      payloadRef: "artifact_research",
+    });
   });
 });
 

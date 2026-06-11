@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { store } from "@/lib/store";
 import {
   auditTransition,
+  buildStepHandoff,
   buildOrchestrationPlanningPrompts,
   consolidateRun,
   critiqueStepOutput,
   executeStepWithRuntime,
   generateOrchestrationPlan,
+  renderDependencyHandoff,
   repairOrchestrationPlanRoutes,
   toolForStep,
 } from "@/lib/orchestrator-runtime";
@@ -490,6 +492,36 @@ describe("executeStepWithRuntime", () => {
     expect(mission.stages.map((stage: any) => stage.id)).toContain("ceo_approval_packet");
     expect(mission.seatResponsibilities.content).toContain("scripts");
     expect(mission.approvalGates).toEqual(expect.arrayContaining(["public_publish", "comment_or_dm_reply", "paid_spend_or_boost"]));
+  });
+});
+
+describe("structured runtime handoffs", () => {
+  it("carries next actions, risks, and explicit non-work into downstream dependency context", () => {
+    const handoff = buildStepHandoff(
+      { id: "s1", agentRole: "analyst" },
+      {
+        summary: "ICP research completed.",
+        findings: ["Enterprise teams have the strongest pain."],
+        recommendations: ["Growth should test LinkedIn founder-led copy."],
+        riskNotes: ["Survey sample is small."],
+        dataCaveats: ["Only public data was reviewed."],
+        whatIDidNotDo: ["Did not contact prospects."],
+        artifactRefs: ["artifact_research"],
+      },
+      "Fallback output",
+    );
+
+    expect((handoff as any).keyPoints).toEqual(["Enterprise teams have the strongest pain."]);
+    expect((handoff as any).nextActions).toEqual(["Growth should test LinkedIn founder-led copy."]);
+    expect((handoff as any).risks).toEqual(["Survey sample is small.", "Only public data was reviewed."]);
+    expect((handoff as any).whatIDidNotDo).toEqual(["Did not contact prospects."]);
+
+    const rendered = renderDependencyHandoff("s1", handoff, undefined);
+    expect(rendered).toContain("NEXT ACTIONS");
+    expect(rendered).toContain("RISKS");
+    expect(rendered).toContain("NOT DONE");
+    expect(rendered).toContain("Growth should test LinkedIn founder-led copy.");
+    expect(rendered).toContain("Did not contact prospects.");
   });
 });
 
