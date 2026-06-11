@@ -1,9 +1,10 @@
 "use client";
 
+import React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgentActivityFeed, CodeBlock, inferCodeBlock, mapWorkbenchEventsToSteps, type ActivityStep } from "@/components/agent-activity";
 import { Spinner } from "@/components/ui";
-import { buildWorkbenchIdeView } from "@/lib/workbench-ide-view";
+import { buildWorkbenchIdeView, type WorkbenchIdeEvidenceSummary } from "@/lib/workbench-ide-view";
 import { workbenchPreviewFrameSrc } from "@/lib/workbench-preview-url";
 import { readApiError } from "@/lib/read-api-error";
 
@@ -283,6 +284,7 @@ export function WorkbenchEvidenceRail({
           </button>
         ))}
       </div>
+      <EvidenceSummaryStrip summary={ideView.evidenceSummary} />
       {railError && <div style={R.railError}>{railError}</div>}
 
       {railTab === "preview" && (
@@ -473,6 +475,25 @@ function ArtifactRow({ artifact }: { artifact: WbArtifact }) {
   );
 }
 
+function EvidenceSummaryStrip({ summary }: { summary: WorkbenchIdeEvidenceSummary }) {
+  const label = summary.status === "missing" ? "unverified" : summary.status;
+  const failed = summary.failedChecks.slice(0, 3).join(", ");
+  return (
+    <div style={R.summaryStrip}>
+      <div style={R.summaryTop}>
+        <span style={R.summaryPill(summary.status)}>{label}</span>
+        <span style={R.summaryMeta}>
+          {summary.passCount} pass / {summary.failCount} failed / {summary.skipCount} skipped
+        </span>
+      </div>
+      <div style={R.summaryMeta}>
+        {summary.screenshotCount} shot{summary.screenshotCount === 1 ? "" : "s"} / {summary.fileCount} file{summary.fileCount === 1 ? "" : "s"} / {summary.artifactCount} artifact{summary.artifactCount === 1 ? "" : "s"}
+      </div>
+      {failed ? <div style={R.summaryFailures}>failed: {failed}</div> : null}
+    </div>
+  );
+}
+
 const border = "1px solid rgba(255,255,255,.07)";
 const surface = "rgba(255,255,255,.02)";
 
@@ -485,6 +506,21 @@ const R = {
     fontSize: 10, fontWeight: 700, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
   }) as React.CSSProperties,
   railError: { margin: "10px 12px 0", padding: "8px 10px", borderRadius: 7, background: "rgba(251,146,60,.1)", border: "1px solid rgba(251,146,60,.24)", color: "var(--ember)", fontSize: 12 } as React.CSSProperties,
+  summaryStrip: { padding: "10px 12px", borderBottom: border, display: "flex", flexDirection: "column", gap: 5, background: "rgba(255,255,255,.018)" } as React.CSSProperties,
+  summaryTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, minWidth: 0 } as React.CSSProperties,
+  summaryPill: (status: WorkbenchIdeEvidenceSummary["status"]) => ({
+    borderRadius: 999,
+    padding: "3px 8px",
+    border,
+    background: status === "failing" ? "rgba(251,146,60,.1)" : status === "passing" ? "rgba(110,231,183,.08)" : "rgba(255,255,255,.03)",
+    color: status === "failing" ? "var(--ember)" : status === "passing" ? "var(--pulse)" : "var(--haze)",
+    fontSize: 10,
+    fontWeight: 800,
+    textTransform: "uppercase",
+    whiteSpace: "nowrap",
+  }) as React.CSSProperties,
+  summaryMeta: { color: "var(--haze)", fontSize: 10, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
+  summaryFailures: { color: "var(--ember)", fontSize: 10, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
   railSection: { padding: "14px 16px", borderBottom: border, display: "flex", flexDirection: "column", gap: 10, minHeight: 0 } as React.CSSProperties,
   sectionHead: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } as React.CSSProperties,
   kicker: { fontSize: 10, letterSpacing: ".18em", color: "var(--haze)" } as React.CSSProperties,

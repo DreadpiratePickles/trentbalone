@@ -21,9 +21,21 @@ export type WorkbenchIdeVerifyCheck = {
 export type WorkbenchIdeView = {
   terminalLines: WorkbenchIdeTerminalLine[];
   verifyChecks: WorkbenchIdeVerifyCheck[];
+  evidenceSummary: WorkbenchIdeEvidenceSummary;
   files: WorkbenchArtifact[];
   screenshots: WorkbenchArtifact[];
   artifacts: WorkbenchArtifact[];
+};
+
+export type WorkbenchIdeEvidenceSummary = {
+  status: "passing" | "failing" | "missing";
+  passCount: number;
+  failCount: number;
+  skipCount: number;
+  failedChecks: string[];
+  fileCount: number;
+  screenshotCount: number;
+  artifactCount: number;
 };
 
 export function buildWorkbenchIdeView(input: {
@@ -44,12 +56,48 @@ export function buildWorkbenchIdeView(input: {
       createdAt: event.createdAt,
     }));
 
+  const verifyChecks = latestVerifyChecks(input.events);
+  const files = input.artifacts.filter((artifact) => artifact.kind === "file" || Boolean(artifact.path));
+  const screenshots = input.artifacts.filter((artifact) => artifact.kind === "screenshot");
+
   return {
     terminalLines,
-    verifyChecks: latestVerifyChecks(input.events),
-    files: input.artifacts.filter((artifact) => artifact.kind === "file" || Boolean(artifact.path)),
-    screenshots: input.artifacts.filter((artifact) => artifact.kind === "screenshot"),
+    verifyChecks,
+    evidenceSummary: buildEvidenceSummary({
+      verifyChecks,
+      files,
+      screenshots,
+      artifacts: input.artifacts,
+    }),
+    files,
+    screenshots,
     artifacts: input.artifacts,
+  };
+}
+
+function buildEvidenceSummary(input: {
+  verifyChecks: WorkbenchIdeVerifyCheck[];
+  files: WorkbenchArtifact[];
+  screenshots: WorkbenchArtifact[];
+  artifacts: WorkbenchArtifact[];
+}): WorkbenchIdeEvidenceSummary {
+  const passCount = input.verifyChecks.filter((check) => check.status === "pass").length;
+  const failCount = input.verifyChecks.filter((check) => check.status === "fail").length;
+  const skipCount = input.verifyChecks.filter((check) => check.status === "skip").length;
+  const status = input.verifyChecks.length === 0
+    ? "missing"
+    : failCount > 0
+      ? "failing"
+      : "passing";
+  return {
+    status,
+    passCount,
+    failCount,
+    skipCount,
+    failedChecks: input.verifyChecks.filter((check) => check.status === "fail").map((check) => check.name),
+    fileCount: input.files.length,
+    screenshotCount: input.screenshots.length,
+    artifactCount: input.artifacts.length,
   };
 }
 

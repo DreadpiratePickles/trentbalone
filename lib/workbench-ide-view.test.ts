@@ -84,8 +84,44 @@ describe("buildWorkbenchIdeView", () => {
       { name: "install", status: "fail", detail: "npm install exit 1" },
       { name: "dom", status: "pass", detail: "Visible body text detected" },
     ]);
+    expect(view.evidenceSummary).toEqual({
+      status: "failing",
+      passCount: 1,
+      failCount: 1,
+      skipCount: 0,
+      failedChecks: ["install"],
+      fileCount: 1,
+      screenshotCount: 1,
+      artifactCount: 2,
+    });
     expect(view.screenshots.map((artifact) => artifact.id)).toEqual(["art_screen"]);
     expect(view.artifacts.map((artifact) => artifact.createdByAgent)).toEqual(["engineer", "engineer"]);
     expect(view.files.map((artifact) => artifact.path)).toEqual(["src/App.tsx"]);
+  });
+
+  it("marks sessions with artifacts but no verification event as missing proof", () => {
+    const view = buildWorkbenchIdeView({
+      events: [] as WorkbenchEvent[],
+      artifacts: [
+        {
+          ...baseArtifact,
+          id: "art_file",
+          kind: "file",
+          title: "src/App.tsx",
+          path: "src/App.tsx",
+        },
+      ] as WorkbenchArtifact[],
+    });
+
+    expect(view.evidenceSummary).toEqual({
+      status: "missing",
+      passCount: 0,
+      failCount: 0,
+      skipCount: 0,
+      failedChecks: [],
+      fileCount: 1,
+      screenshotCount: 0,
+      artifactCount: 1,
+    });
   });
 });
