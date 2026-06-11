@@ -5,6 +5,7 @@ import { AgentActivityFeed } from "@/components/agent-activity/agent-activity-fe
 import { AgentStep } from "@/components/agent-activity/agent-step";
 import { CodeBlock } from "@/components/agent-activity/code-block";
 import { mapWorkbenchChunk } from "@/components/agent-activity/mappers/workbench-chunk";
+import { mapTraceTimelineItem } from "@/components/agent-activity/mappers/trace-timeline";
 import { NarrationText } from "@/components/agent-activity/narration-text";
 import type { ActivityStep } from "@/components/agent-activity/types";
 
@@ -106,5 +107,42 @@ describe("Agent activity system", () => {
       chip: "passed",
       status: "completed",
     });
+  });
+
+  it("maps structured handoff timeline events with next actions, risks, and not-done notes", () => {
+    const step = mapTraceTimelineItem({
+      id: "handoff_1",
+      seq: 3,
+      kind: "handoff_event",
+      status: "completed",
+      payload: {
+        from: "analyst",
+        to: "growth",
+        severity: "amber",
+        summary: "Enterprise segment is highest intent.",
+        nextActions: ["Test founder-led LinkedIn copy."],
+        risks: ["Sample size is small."],
+        whatIDidNotDo: ["Did not contact prospects."],
+        payloadRef: "artifact_1",
+        contractVersion: "handoff.v1",
+      },
+    });
+
+    expect(step).toMatchObject({
+      icon: "narration",
+      verb: "Handoff",
+      target: "analyst -> growth",
+      chip: "amber",
+      status: "completed",
+    });
+    expect(step.narration).toContain("SUMMARY: Enterprise segment is highest intent.");
+    expect(step.narration).toContain("NEXT ACTIONS:");
+    expect(step.narration).toContain("- Test founder-led LinkedIn copy.");
+    expect(step.narration).toContain("RISKS:");
+    expect(step.narration).toContain("- Sample size is small.");
+    expect(step.narration).toContain("NOT DONE:");
+    expect(step.narration).toContain("- Did not contact prospects.");
+    expect(step.narration).toContain("PAYLOAD: artifact_1");
+    expect(step.narration).toContain("CONTRACT: handoff.v1");
   });
 });
