@@ -46,6 +46,14 @@ describe("trent_run_agent", () => {
         tool: "trent_get_run",
         arguments: { runId: "workbench_1" },
       },
+      productReviewPlan: {
+        status: "pending_evidence",
+        reviewTool: "trent_get_run",
+        reviewField: "productReview",
+        requiredEvidence: ["verification", "preview", "artifacts", "commands"],
+        deliverables: expect.any(Array),
+        approvalGates: expect.any(Array),
+      },
     });
     expect(deps.createSession).toHaveBeenCalledWith(expect.objectContaining({
       companyId: ctx.companyId,

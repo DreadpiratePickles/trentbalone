@@ -128,6 +128,7 @@ export async function runAgentHandler(
     app: app.name,
     poll: "trent_get_run",
     nextCall: nextRunPollCall(session.id),
+    productReviewPlan: buildProductReviewPlan(agent, app),
     note: "Run executes asynchronously. Approval gates pause it in Trent when required.",
   };
 }
@@ -135,7 +136,7 @@ export async function runAgentHandler(
 export const RUN_AGENT_TOOL: McpToolDefinition = {
   name: "trent_run_agent",
   description:
-    "Launch a governed Trent run. engine 'solo' runs one App-Solo seat in Workbench; engine 'team' runs the orchestrated multi-seat DAG. Returns runId immediately; poll with trent_get_run.",
+    "Launch a governed Trent run. engine 'solo' runs one App-Solo seat in Workbench; engine 'team' runs the orchestrated multi-seat DAG. Returns runId immediately plus productReviewPlan for solo evidence expectations; poll with trent_get_run.",
   inputSchema: {
     type: "object",
     properties: {
@@ -239,5 +240,17 @@ function nextRunPollCall(runId: string) {
   return {
     tool: "trent_get_run",
     arguments: { runId },
+  };
+}
+
+function buildProductReviewPlan(agent: AppSoloAgent, app: AppSoloApp) {
+  return {
+    status: "pending_evidence",
+    deliverables: agent.deliverables,
+    approvalGates: agent.approvalGates,
+    appScopes: app.scopes,
+    requiredEvidence: ["verification", "preview", "artifacts", "commands"],
+    reviewTool: "trent_get_run",
+    reviewField: "productReview",
   };
 }
