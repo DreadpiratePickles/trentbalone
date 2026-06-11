@@ -552,65 +552,22 @@ interface PageHeaderProps {
 
 export function PageHeader({ eyebrow, title, lead, meta, actions, tone = "pulse" }: PageHeaderProps) {
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "flex-end",
-        justifyContent: "space-between",
-        gap: 24,
-        marginBottom: 40,
-        paddingBottom: 24,
-        borderBottom: "1px solid rgba(255,255,255,.06)",
-      }}
-    >
-      <div>
+    <div className="pagehead">
+      <div className="pagehead-copy">
         {eyebrow && (
-          <Eyebrow tone={tone} style={{ marginBottom: 12 }}>
+          <Eyebrow tone={tone} style={{ marginBottom: 9 }}>
             {eyebrow}
           </Eyebrow>
         )}
-        <h1
-          style={{
-            fontFamily: "var(--display)",
-            fontWeight: 700,
-            fontSize: 40,
-            letterSpacing: "-.025em",
-            lineHeight: 1.05,
-            color: "var(--bone)",
-            margin: 0,
-          }}
-        >
-          {title}
-        </h1>
-        {lead && (
-          <p style={{ marginTop: 12, fontSize: 15, color: "#B8B2A4", lineHeight: 1.6, maxWidth: "60ch" }}>
-            {lead}
-          </p>
-        )}
+        <h1 className="pagehead-title">{title}</h1>
+        {lead && <p className="pagehead-lead">{lead}</p>}
         {meta && (
-          <div
-            className="mono"
-            style={{
-              fontSize: 11,
-              letterSpacing: ".14em",
-              textTransform: "uppercase",
-              color: "var(--haze)",
-              marginTop: 14,
-              display: "flex",
-              gap: 16,
-              alignItems: "center",
-              flexWrap: "wrap",
-            }}
-          >
+          <div className="mono pagehead-meta">
             {meta}
           </div>
         )}
       </div>
-      {actions && (
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexShrink: 0 }}>
-          {actions}
-        </div>
-      )}
+      {actions && <div className="pagehead-actions">{actions}</div>}
     </div>
   );
 }
