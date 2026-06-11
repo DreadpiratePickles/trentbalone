@@ -1,3 +1,5 @@
+export const APP_SOLO_REVIEW_EVIDENCE = ["verification", "preview", "artifacts", "commands"] as const;
+
 export type AppSoloProductEvidenceSummary = {
   status: "passing" | "failing" | "missing";
   passCount: number;

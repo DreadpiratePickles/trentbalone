@@ -18,6 +18,8 @@ describe("AppSoloClient", () => {
     expect(html).toContain("experiment backlog");
     expect(html).toContain("approval gates");
     expect(html).toContain("gmail.send");
+    expect(html).toContain("evidence");
+    expect(html).toContain("verification, preview, artifacts, commands");
   });
 
   it("renders the final solo run summary with evidence counts and failed checks", () => {

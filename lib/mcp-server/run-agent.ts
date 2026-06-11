@@ -1,5 +1,6 @@
 import type { AgentRole, WorkbenchAgentMode, WorkbenchSession } from "@/lib/types";
 import type { AppSoloAgent, AppSoloApp } from "@/lib/app-solo";
+import { APP_SOLO_REVIEW_EVIDENCE } from "@/lib/app-solo-product-review";
 import type { WorkbenchCreateInput } from "@/lib/workbench";
 import type { WorkbenchAgentChunk } from "@/lib/workbench-agent-types";
 import { MCP_AGENT_MODES, MCP_AGENT_ROLES } from "./constants";
@@ -249,7 +250,7 @@ function buildProductReviewPlan(agent: AppSoloAgent, app: AppSoloApp) {
     deliverables: agent.deliverables,
     approvalGates: agent.approvalGates,
     appScopes: app.scopes,
-    requiredEvidence: ["verification", "preview", "artifacts", "commands"],
+    requiredEvidence: APP_SOLO_REVIEW_EVIDENCE,
     reviewTool: "trent_get_run",
     reviewField: "productReview",
   };

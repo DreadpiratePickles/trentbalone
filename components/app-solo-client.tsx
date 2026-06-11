@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { AgentActivityFeed, mapWorkbenchChunk, type ActivityStep } from "@/components/agent-activity";
 import { getAppSoloAgents, type AppSoloAgent, type AppSoloApp, type AppSoloRunSummary } from "@/lib/app-solo";
+import { APP_SOLO_REVIEW_EVIDENCE } from "@/lib/app-solo-product-review";
 import type { WorkbenchAgentChunk } from "@/lib/workbench-agent-types";
 import { launchAppSoloRun } from "@/lib/app-solo-run";
 import { AppSoloRunSummaryPanel } from "@/components/app-solo-run-summary-panel";
@@ -306,6 +307,7 @@ function AgentContractSummary({ agent, app }: { agent: AppSoloAgent; app?: AppSo
       <ContractRow label="scopes" value={formatContractList(app?.scopes ?? [], 4)} />
       <ContractRow label="deliverables" value={formatContractList(agent.deliverables, 4)} />
       <ContractRow label="approval gates" value={formatContractList(agent.approvalGates, 5)} />
+      <ContractRow label="evidence" value={formatContractList(APP_SOLO_REVIEW_EVIDENCE, 4)} />
     </div>
   );
 }
@@ -319,7 +321,7 @@ function ContractRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatContractList(items: string[], maxItems: number): string {
+function formatContractList(items: readonly string[], maxItems: number): string {
   if (items.length === 0) return "none";
   const visible = items.slice(0, maxItems).join(", ");
   return items.length > maxItems ? `${visible}, +${items.length - maxItems} more` : visible;
