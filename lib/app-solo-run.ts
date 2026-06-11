@@ -1,4 +1,5 @@
 import { buildAppSoloObjective, summarizeAppSoloChunks, type AppSoloAgent, type AppSoloApp, type AppSoloRunSummary } from "@/lib/app-solo";
+import { APP_SOLO_REVIEW_EVIDENCE } from "@/lib/app-solo-product-review";
 import { buildWorkbenchCreateRequestBody } from "@/lib/workbench-session-request";
 import type { WorkbenchProvider, WorkbenchSession } from "@/lib/types";
 import type { WorkbenchAgentChunk } from "@/lib/workbench-agent";
@@ -68,6 +69,7 @@ export async function launchAppSoloRun(input: {
         `- Deliverables: ${input.agent.deliverables.join(", ")}`,
         `- Approval gates: ${input.agent.approvalGates.join(", ") || "none"}`,
         `- Mode: ${input.agent.mode}`,
+        `Required evidence: ${APP_SOLO_REVIEW_EVIDENCE.join(", ")}`,
         "Verification required: show concrete evidence, artifact refs, preview/test status where applicable, and what remains undone.",
         "",
         "Run this app-solo objective now. Stream every file, command, preview URL, verification result, and final error detail.",

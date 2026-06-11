@@ -77,6 +77,7 @@ describe("launchAppSoloRun", () => {
     expect(runBody.content).toContain("Sandbox app: HyperFrames");
     expect(runBody.content).toContain("Create a launch video frame set.");
     expect(runBody.content).toContain("Agent communication contract:");
+    expect(runBody.content).toContain("Required evidence: verification, preview, artifacts, commands");
     expect(runBody.content).toContain("Verification required:");
   });
 

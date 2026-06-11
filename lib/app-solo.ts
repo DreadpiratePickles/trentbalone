@@ -1,4 +1,5 @@
 import { AGENT_SLOTS, SLOT_CONTRACTS, SLOT_ENVIRONMENTS } from "@/lib/agent-catalog";
+import { APP_SOLO_REVIEW_EVIDENCE } from "@/lib/app-solo-product-review";
 import type { AgentRole, WorkbenchAgentMode } from "@/lib/types";
 import type { WorkbenchAgentChunk } from "@/lib/workbench-agent";
 
@@ -127,6 +128,7 @@ export function buildAppSoloObjective(agent: AppSoloAgent, app: AppSoloApp, obje
     `App scopes: ${app.scopes.join(", ") || "none declared"}`,
     `Deliverables: ${agent.deliverables.join(", ")}`,
     `Approval gates: ${agent.approvalGates.join(", ") || "none"}`,
+    `Required evidence: ${APP_SOLO_REVIEW_EVIDENCE.join(", ")}`,
     "Verification required: include concrete evidence, artifact references, preview/test status where applicable, and next actions.",
     "Call out not-done work, assumptions, data caveats, and approval requests explicitly.",
   ].join("\n");
