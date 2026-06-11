@@ -24,6 +24,21 @@ export type AppSoloAgent = {
   mode: WorkbenchAgentMode;
 };
 
+export type AppSoloRunSummary = {
+  status: "running" | "completed" | "failed" | "error";
+  fileCount: number;
+  commandCount: number;
+  previewUrl?: string;
+  verification?: {
+    passed: boolean;
+    passCount: number;
+    failCount: number;
+    skipCount: number;
+    failedChecks: string[];
+  };
+  error?: string;
+};
+
 const APP_DEFINITIONS: Record<string, Omit<AppSoloApp, "scopes">> = {
   "Steel Browser": {
     id: "steel-browser",
@@ -136,6 +151,33 @@ export function describeChunk(chunk: WorkbenchAgentChunk): string | null {
     case "content": return null; // streamed prose — shown elsewhere, not in the trace
     default:        return null;
   }
+}
+
+export function summarizeAppSoloChunks(chunks: WorkbenchAgentChunk[]): AppSoloRunSummary {
+  const files = chunks.filter((chunk) => chunk.type === "file");
+  const commands = chunks.filter((chunk) => chunk.type === "command");
+  const preview = [...chunks].reverse().find((chunk): chunk is Extract<WorkbenchAgentChunk, { type: "preview" }> => chunk.type === "preview");
+  const error = chunks.find((chunk): chunk is Extract<WorkbenchAgentChunk, { type: "error" }> => chunk.type === "error");
+  const verify = [...chunks].reverse().find((chunk): chunk is Extract<WorkbenchAgentChunk, { type: "verify" }> => chunk.type === "verify");
+  const done = chunks.some((chunk) => chunk.type === "done");
+
+  const summary: AppSoloRunSummary = {
+    status: error ? "error" : verify ? (verify.passed ? "completed" : "failed") : done ? "completed" : "running",
+    fileCount: files.length,
+    commandCount: commands.length,
+  };
+  if (preview) summary.previewUrl = preview.url;
+  if (error) summary.error = error.message;
+  if (verify) {
+    summary.verification = {
+      passed: verify.passed,
+      passCount: verify.checks.filter((check) => check.status === "pass").length,
+      failCount: verify.checks.filter((check) => check.status === "fail").length,
+      skipCount: verify.checks.filter((check) => check.status === "skip").length,
+      failedChecks: verify.checks.filter((check) => check.status === "fail").map((check) => check.name),
+    };
+  }
+  return summary;
 }
 
 function appsFromTools(tools: string[]): AppSoloApp[] {

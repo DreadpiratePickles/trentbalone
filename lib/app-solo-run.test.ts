@@ -40,6 +40,12 @@ describe("launchAppSoloRun", () => {
     });
 
     expect(result.session).toEqual(finalSession);
+    expect(result.summary).toMatchObject({
+      status: "completed",
+      fileCount: 1,
+      commandCount: 0,
+      previewUrl: "http://localhost:4100",
+    });
     expect(chunks.map((chunk) => chunk.type)).toEqual(["status", "file", "preview", "done"]);
     expect(calls.map((call) => call.url)).toEqual([
       "/api/workbench",

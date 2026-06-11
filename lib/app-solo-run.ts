@@ -1,4 +1,4 @@
-import { buildAppSoloObjective, type AppSoloAgent, type AppSoloApp } from "@/lib/app-solo";
+import { buildAppSoloObjective, summarizeAppSoloChunks, type AppSoloAgent, type AppSoloApp, type AppSoloRunSummary } from "@/lib/app-solo";
 import { buildWorkbenchCreateRequestBody } from "@/lib/workbench-session-request";
 import type { WorkbenchProvider, WorkbenchSession } from "@/lib/types";
 import type { WorkbenchAgentChunk } from "@/lib/workbench-agent";
@@ -8,6 +8,7 @@ type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 export type AppSoloRunResult = {
   session: WorkbenchSession;
   chunks: WorkbenchAgentChunk[];
+  summary: AppSoloRunSummary;
 };
 
 export async function launchAppSoloRun(input: {
@@ -83,9 +84,10 @@ export async function launchAppSoloRun(input: {
   if (streamedError) throw new Error(streamedError.message);
 
   const refreshed = await fetcher(`/api/workbench/${session.id}`);
-  if (!refreshed.ok) return { session, chunks };
+  const summary = summarizeAppSoloChunks(chunks);
+  if (!refreshed.ok) return { session, chunks, summary };
   const refreshData = await readJson(refreshed);
-  return { session: asSession(refreshData?.session) ?? session, chunks };
+  return { session: asSession(refreshData?.session) ?? session, chunks, summary };
 }
 
 async function consumeWorkbenchStream(

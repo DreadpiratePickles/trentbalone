@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAppSoloObjective, describeChunk, getAppSoloAgents } from "@/lib/app-solo";
+import { buildAppSoloObjective, describeChunk, getAppSoloAgents, summarizeAppSoloChunks } from "@/lib/app-solo";
 
 describe("describeChunk — App Solo run trace", () => {
   it("summarises each agent chunk type into a trace line", () => {
@@ -23,6 +23,49 @@ describe("describeChunk — App Solo run trace", () => {
 
   it("omits raw prose tokens from the trace", () => {
     expect(describeChunk({ type: "content", content: "thinking..." })).toBeNull();
+  });
+});
+
+describe("summarizeAppSoloChunks", () => {
+  it("summarizes files, commands, preview, and verification failures", () => {
+    const summary = summarizeAppSoloChunks([
+      { type: "file", path: "src/App.tsx", action: "create", bytes: 420 },
+      { type: "command", command: "npm run build", exitCode: 0, output: "ok" },
+      { type: "preview", url: "http://localhost:4100" },
+      {
+        type: "verify",
+        passed: false,
+        checks: [
+          { name: "tests", status: "fail", detail: "1 failed" },
+          { name: "dom", status: "pass", detail: "Rendered" },
+          { name: "critic", status: "skip", detail: "No critic" },
+        ],
+      },
+      { type: "done", messageId: "msg_1" },
+    ]);
+
+    expect(summary).toEqual({
+      status: "failed",
+      fileCount: 1,
+      commandCount: 1,
+      previewUrl: "http://localhost:4100",
+      verification: {
+        passed: false,
+        passCount: 1,
+        failCount: 1,
+        skipCount: 1,
+        failedChecks: ["tests"],
+      },
+    });
+  });
+
+  it("surfaces streamed errors as the run status", () => {
+    expect(summarizeAppSoloChunks([{ type: "error", message: "worker crashed" }])).toEqual({
+      status: "error",
+      fileCount: 0,
+      commandCount: 0,
+      error: "worker crashed",
+    });
   });
 });
 
