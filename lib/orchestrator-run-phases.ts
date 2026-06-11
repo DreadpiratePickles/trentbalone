@@ -21,6 +21,7 @@ import {
   executeStepWithRuntime,
   generateOrchestrationPlan,
   SeatLoopAwaitingApprovalError,
+  type StepRecord,
 } from "@/lib/orchestrator-runtime";
 import { reviseOrchestrationPlanTail } from "@/lib/orchestrator-replan";
 import { buildDelegatedStepsForWorkRequests } from "@/lib/orchestrator-delegation";
@@ -325,10 +326,7 @@ export async function processConsolidatePhase(run: OrchestrationRun, company: Co
   if (!run.plan) return;
   await emitPersistedOrcEvent(run, { kind: "consolidate_start", runId: run.id, at: nowIso() });
   run.summary = await consolidateRun(run.plan, run.steps, { companyId: run.companyId, runId: run.id });
-  const hasFatalFailure = run.steps.some(
-    (step) => step.status === "failed" && step.critique?.verdict !== "replan",
-  );
-  run.status = hasFatalFailure ? "failed" : "completed";
+  run.status = hasFatalOrchestrationOutcome(run.steps) ? "failed" : "completed";
   run.completedAt = nowIso();
   await store.updateOrchestratorRun(run.id, {
     status: run.status,
@@ -506,6 +504,16 @@ export async function processConsolidatePhase(run: OrchestrationRun, company: Co
     runId: run.id,
     at: nowIso(),
     run: { id: run.id, status: run.status, summary: run.summary, completedAt: run.completedAt },
+  });
+}
+
+export function hasFatalOrchestrationOutcome(
+  steps: Pick<StepRecord, "status" | "critique">[],
+): boolean {
+  return steps.some((step) => {
+    if (step.status === "blocked" || step.status === "awaiting_approval") return true;
+    if (step.status === "failed") return step.critique?.verdict !== "replan";
+    return false;
   });
 }
 

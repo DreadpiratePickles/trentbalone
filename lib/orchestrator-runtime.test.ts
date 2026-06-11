@@ -641,7 +641,7 @@ describe("operator visibility on genuine LLM failures", () => {
     expect(errorSpy).not.toHaveBeenCalledWith("orchestrator.llm_failure", expect.anything());
   });
 
-  it("critic: a real failure emits a ⚠ warning event but still auto-passes", async () => {
+  it("critic: a real failure emits a ⚠ warning event and escalates instead of auto-passing", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     setRuntimeEvalOverrides({
       orchestration: {
@@ -656,13 +656,36 @@ describe("operator visibility on genuine LLM failures", () => {
       runId: "orc_critic",
     });
 
-    // Verdict UNCHANGED — still silent auto-pass on failure.
-    expect(verdict.verdict).toBe("pass");
+    expect(verdict.verdict).toBe("escalate");
+    expect(verdict.reason).toContain("critic LLM call failed");
+    expect(verdict.improvement).toContain("human review");
 
     const warnCall = mockJobEvents.emitJobEvent.mock.calls.find(([event]) =>
       typeof event?.summary === "string" && event.summary.includes("⚠") && event.summary.includes("critic"),
     );
     expect(warnCall).toBeDefined();
     expect(warnCall![0]).toMatchObject({ jobRunId: "orc_critic", companyId: "co_critic", status: "step" });
+    expect(warnCall![0].summary).toContain("escalating");
+    expect(warnCall![0].summary).not.toContain("using fallback");
+  });
+
+  it("critic: the no-API-key offline case still auto-passes silently", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    setRuntimeEvalOverrides({
+      orchestration: {
+        createCompletion: async () => {
+          throw new Error("OPENAI_API_KEY is not configured");
+        },
+      },
+    });
+
+    const verdict = await critiqueStepOutput(critiqueStep, "some output", {
+      companyId: "co_critic_offline",
+      runId: "orc_critic_offline",
+    });
+
+    expect(verdict).toEqual({ verdict: "pass", reason: "supervisor offline — auto-pass." });
+    expect(mockJobEvents.emitJobEvent).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalledWith("orchestrator.llm_failure", expect.anything());
   });
 });

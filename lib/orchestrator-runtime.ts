@@ -335,6 +335,7 @@ type LlmVisibility = {
   stage: LlmFailureStage;
   companyId?: string;
   jobRunId?: string;
+  recovery?: "fallback" | "escalate";
 };
 
 /**
@@ -360,13 +361,16 @@ function reportLlmFailure(err: unknown, model: string, visibility?: LlmVisibilit
   const message = err instanceof Error ? err.message : String(err);
   console.error("orchestrator.llm_failure", { stage, model, error: message });
   if (visibility?.jobRunId) {
+    const recovery = visibility.recovery === "escalate"
+      ? "escalating for human review"
+      : "using fallback";
     emitJobEvent({
       jobRunId: visibility.jobRunId,
       companyId: visibility.companyId,
       status: "step",
-      summary: `⚠ ${stage} LLM call failed (${model}): ${message} — using fallback`,
+      summary: `⚠ ${stage} LLM call failed (${model}): ${message} — ${recovery}`,
       at: nowIso(),
-      step: { phase: "agent_retry", label: `${stage} LLM failure — using fallback` },
+      step: { phase: "agent_retry", label: `${stage} LLM failure — ${recovery}` },
     });
   }
 }
@@ -663,14 +667,33 @@ export async function critiqueStepOutput(
     `Output:\n${output.slice(0, 2400)}`,
   ].join("\n");
 
-  return callJsonWithFallback(
-    CRITIC_MODEL,
-    system,
-    user,
-    critiqueSchema,
-    { verdict: "pass", reason: "supervisor offline — auto-pass." },
-    { stage: "critic", companyId: visibility?.companyId, jobRunId: visibility?.runId },
-  );
+  try {
+    const result = await callJson<OrchestrationCritique>(
+      CRITIC_MODEL,
+      system,
+      user,
+      critiqueSchema,
+      MAX_TOKENS.PLANNING,
+      { createCompletion: getRuntimeEvalOverrides()?.orchestration?.createCompletion },
+    );
+    return result.data;
+  } catch (err) {
+    if (isNotConfiguredError(err)) {
+      return { verdict: "pass", reason: "supervisor offline — auto-pass." };
+    }
+    reportLlmFailure(err, CRITIC_MODEL, {
+      stage: "critic",
+      companyId: visibility?.companyId,
+      jobRunId: visibility?.runId,
+      recovery: "escalate",
+    });
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      verdict: "escalate",
+      reason: `critic LLM call failed: ${message}`,
+      improvement: "Require human review before considering this step complete.",
+    };
+  }
 }
 
 export async function consolidateRun(

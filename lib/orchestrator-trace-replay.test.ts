@@ -11,9 +11,23 @@ describe("buildOrchestratorTraceReplay", () => {
     ];
     const events: OrchestratorEvent[] = [
       makeEvent({ seq: 1, kind: "snapshot", payload: { run: { status: "running" } } }),
-      makeEvent({ seq: 2, kind: "step_start", stepId: "step_1", payload: { step: steps[0] } }),
-      makeEvent({ seq: 3, kind: "step_output", stepId: "step_1", payload: { step: steps[0] } }),
-      makeEvent({ seq: 4, kind: "run_done", payload: { run: { summary: run.summary } } }),
+      makeEvent({
+        seq: 2,
+        kind: "plan_end",
+        payload: {
+          run: {
+            plan: {
+              steps: [
+                { id: "step_1", spec: { acceptance: ["Trend brief includes source links"] } },
+                { id: "step_2", spec: { acceptance: ["Campaign brief names target channel"] } },
+              ],
+            },
+          },
+        },
+      }),
+      makeEvent({ seq: 3, kind: "step_start", stepId: "step_1", payload: { step: steps[0] } }),
+      makeEvent({ seq: 4, kind: "step_output", stepId: "step_1", payload: { step: steps[0] } }),
+      makeEvent({ seq: 5, kind: "run_done", payload: { run: { summary: run.summary } } }),
     ];
 
     const replay = buildOrchestratorTraceReplay({ run, steps, events });
@@ -22,16 +36,27 @@ describe("buildOrchestratorTraceReplay", () => {
     expect(replay.status).toBe("completed");
     expect(replay.timeline.map((item) => `${item.seq}:${item.kind}`)).toEqual([
       "1:snapshot",
-      "2:step_start",
-      "3:step_output",
-      "4:run_done",
+      "2:plan_end",
+      "3:step_start",
+      "4:step_output",
+      "5:run_done",
     ]);
     expect(replay.seatReports).toEqual([
-      expect.objectContaining({ seat: "analyst", title: "Research market", output: "Trend brief ready" }),
-      expect.objectContaining({ seat: "growth", title: "Draft campaign", output: "Campaign brief ready" }),
+      expect.objectContaining({
+        seat: "analyst",
+        title: "Research market",
+        output: "Trend brief ready",
+        acceptanceCriteria: ["Trend brief includes source links"],
+      }),
+      expect.objectContaining({
+        seat: "growth",
+        title: "Draft campaign",
+        output: "Campaign brief ready",
+        acceptanceCriteria: ["Campaign brief names target channel"],
+      }),
     ]);
     expect(replay.costCents).toBe(30);
-    expect(replay.reconnectCursor).toBe("4");
+    expect(replay.reconnectCursor).toBe("5");
     expect(replay.ceoSummary).toBe("CEO: launch plan ready.");
   });
 

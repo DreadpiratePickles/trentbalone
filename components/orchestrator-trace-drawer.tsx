@@ -86,11 +86,13 @@ export function OrchestratorTraceReplayView({ trace }: { trace: OrchestratorTrac
           <article key={report.stepId} style={S.card}>
             <div style={S.cardMeta}>{report.seq}. {report.seat} / {report.status} / {report.costCents}c</div>
             <strong style={S.cardTitle}>{report.title}</strong>
+            {report.acceptanceCriteria.length ? <AcceptancePanel items={report.acceptanceCriteria} /> : null}
             {report.output ? (
               <CodeBlock block={{ content: report.output, language: "markdown", filename: `${report.seat}-report.md` }} />
             ) : (
               <p style={S.cardText}>No output recorded.</p>
             )}
+            {report.critique ? <CritiquePanel critique={report.critique} /> : null}
             {report.toolCalls.length ? <div style={S.tools}>{report.toolCalls.join(", ")}</div> : null}
           </article>
         )) : <div style={S.empty}>No seat reports recorded.</div>}
@@ -124,6 +126,31 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
+function AcceptancePanel({ items }: { items: string[] }) {
+  return (
+    <div style={S.acceptance}>
+      <div style={S.cardMeta}>acceptance</div>
+      {items.map((item) => (
+        <div key={item} style={S.acceptanceItem}>{item}</div>
+      ))}
+    </div>
+  );
+}
+
+function CritiquePanel({ critique }: { critique: Record<string, unknown> }) {
+  const verdict = readCritiqueField(critique, "verdict") ?? "unknown";
+  const reason = readCritiqueField(critique, "reason");
+  const improvement = readCritiqueField(critique, "improvement");
+
+  return (
+    <div style={S.critique}>
+      <div style={S.cardMeta}>critic / {verdict}</div>
+      {reason ? <p style={S.cardText}>{reason}</p> : null}
+      {improvement ? <p style={S.cardText}>Improve: {improvement}</p> : null}
+    </div>
+  );
+}
+
 function EvidenceList({ title, items, empty }: { title: string; items: string[]; empty: string }) {
   return (
     <div style={S.evidenceCard}>
@@ -133,6 +160,11 @@ function EvidenceList({ title, items, empty }: { title: string; items: string[];
       )) : <div style={S.cardText}>{empty}</div>}
     </div>
   );
+}
+
+function readCritiqueField(critique: Record<string, unknown>, key: string): string | undefined {
+  const value = critique[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 const border = "1px solid rgba(255,255,255,.08)";
@@ -169,6 +201,9 @@ const S: Record<string, CSSProperties> = {
   cardMeta: { color: "var(--haze)", fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase" },
   cardTitle: { color: "var(--bone)", fontSize: 13 },
   cardText: { color: "var(--mist)", lineHeight: 1.5, fontSize: 12, margin: "8px 0 0" },
+  acceptance: { border, borderRadius: 7, padding: 10, marginTop: 10, marginBottom: 10, background: "rgba(110,231,183,.05)" },
+  acceptanceItem: { color: "var(--mist)", fontSize: 12, lineHeight: 1.45, marginTop: 6 },
+  critique: { border, borderRadius: 7, padding: 10, marginTop: 10, background: "rgba(251,146,60,.06)" },
   tools: { color: "var(--pulse)", fontFamily: "var(--mono)", fontSize: 10, marginTop: 8 },
   timelineRow: { display: "grid", gridTemplateColumns: "32px 1fr", gap: 10, borderTop: border, paddingTop: 10, marginTop: 10 },
   seq: { color: "var(--pulse)", fontFamily: "var(--mono)", fontSize: 10 },

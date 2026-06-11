@@ -24,7 +24,18 @@ describe("OrchestratorTraceReplayView", () => {
             { id: "evt_2", seq: 2, kind: "step_blocked", title: "Publish", seat: "growth", status: "blocked", detail: "Approval required", createdAt: "2026-06-04T00:00:02.000Z", payload: {} },
           ],
           seatReports: [
-            { stepId: "s1", seq: 1, seat: "analyst", title: "Research", status: "completed", output: "Trend brief ready", costCents: 12, toolCalls: ["steel.search"] },
+            {
+              stepId: "s1",
+              seq: 1,
+              seat: "analyst",
+              title: "Research",
+              status: "completed",
+              output: "Trend brief ready",
+              critique: { verdict: "retry", reason: "Missing citations", improvement: "Add source links." },
+              acceptanceCriteria: ["Trend brief includes source links", "Brief names the relevant audience"],
+              costCents: 12,
+              toolCalls: ["steel.search"],
+            },
           ],
           blockers: [
             { id: "evt_2", seq: 2, kind: "step_blocked", title: "Publish", seat: "growth", status: "blocked", detail: "Approval required", createdAt: "2026-06-04T00:00:02.000Z", payload: {} },
@@ -42,6 +53,12 @@ describe("OrchestratorTraceReplayView", () => {
     expect(html).toContain("Run content mission");
     expect(html).toContain("CEO reviewed all seat reports.");
     expect(html).toContain("Trend brief ready");
+    expect(html).toContain("acceptance");
+    expect(html).toContain("Trend brief includes source links");
+    expect(html).toContain("Brief names the relevant audience");
+    expect(html).toContain("critic / retry");
+    expect(html).toContain("Missing citations");
+    expect(html).toContain("Add source links.");
     expect(html).toContain("Approval required");
     expect(html).toContain("steel.search x1");
     expect(html).toContain("artifact_1");

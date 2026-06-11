@@ -21,6 +21,7 @@ export type OrchestratorReplaySeatReport = {
   status: OrchestratorStep["status"];
   output?: string;
   critique?: Record<string, unknown>;
+  acceptanceCriteria: string[];
   costCents: number;
   toolCalls: string[];
 };
@@ -54,10 +55,11 @@ export function buildOrchestratorTraceReplay(input: {
 }): OrchestratorTraceReplay {
   const stepsById = new Map(input.steps.map((step) => [step.id, step]));
   const sortedEvents = [...input.events].sort((a, b) => a.seq - b.seq || a.createdAt.localeCompare(b.createdAt));
+  const acceptanceByStep = buildAcceptanceMap(sortedEvents);
   const timeline = sortedEvents.map((event) => eventToTimelineItem(event, stepsById.get(event.stepId ?? "")));
   const seatReports = [...input.steps]
     .sort((a, b) => a.seq - b.seq)
-    .map(stepToSeatReport);
+    .map((step) => stepToSeatReport(step, acceptanceByStep.get(step.id) ?? []));
   const stepCost = seatReports.reduce((sum, report) => sum + report.costCents, 0);
   const approvalRefs = uniq(timeline.flatMap((item) => extractRefs(item.payload, ["approvalId", "approvalIds"])));
   const artifactRefs = uniq(timeline.flatMap((item) => extractRefs(item.payload, ["artifactId", "artifactIds", "artifacts"])));
@@ -107,7 +109,10 @@ function eventToTimelineItem(event: OrchestratorEvent, step?: OrchestratorStep):
   };
 }
 
-function stepToSeatReport(step: OrchestratorStep): OrchestratorReplaySeatReport {
+function stepToSeatReport(
+  step: OrchestratorStep,
+  acceptanceCriteria: string[],
+): OrchestratorReplaySeatReport {
   return {
     stepId: step.id,
     seq: step.seq,
@@ -116,14 +121,37 @@ function stepToSeatReport(step: OrchestratorStep): OrchestratorReplaySeatReport 
     status: step.status,
     output: step.output,
     critique: step.critique,
+    acceptanceCriteria,
     costCents: step.costCents ?? 0,
     toolCalls: (step.toolCalls ?? []).map((call) => `${call.adapter}.${call.action}`),
   };
 }
 
+function buildAcceptanceMap(events: OrchestratorEvent[]): Map<string, string[]> {
+  const byStep = new Map<string, string[]>();
+  for (const event of events) {
+    const run = event.payload.run;
+    if (!isRecord(run)) continue;
+    const plan = run.plan;
+    if (!isRecord(plan) || !Array.isArray(plan.steps)) continue;
+    for (const step of plan.steps) {
+      if (!isRecord(step) || typeof step.id !== "string") continue;
+      const spec = step.spec;
+      if (!isRecord(spec) || !Array.isArray(spec.acceptance)) continue;
+      const acceptance = spec.acceptance.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+      byStep.set(step.id, acceptance);
+    }
+  }
+  return byStep;
+}
+
 function readPayloadStep(payload: Record<string, unknown>): Partial<OrchestratorStep> | undefined {
   const step = payload.step;
   return step && typeof step === "object" ? step as Partial<OrchestratorStep> : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
 }
 
 function readString(value: unknown): string | undefined {
