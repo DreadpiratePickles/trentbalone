@@ -48,6 +48,8 @@ describe("summarizeAppSoloChunks", () => {
       status: "failed",
       fileCount: 1,
       commandCount: 1,
+      files: [{ path: "src/App.tsx", action: "create", bytes: 420 }],
+      commands: [{ command: "npm run build", exitCode: 0 }],
       previewUrl: "http://localhost:4100",
       verification: {
         passed: false,

@@ -29,6 +29,8 @@ export type AppSoloRunSummary = {
   status: "running" | "completed" | "failed" | "error";
   fileCount: number;
   commandCount: number;
+  files?: Array<{ path: string; action: string; bytes: number }>;
+  commands?: Array<{ command: string; exitCode: number }>;
   previewUrl?: string;
   verification?: {
     passed: boolean;
@@ -168,6 +170,19 @@ export function summarizeAppSoloChunks(chunks: WorkbenchAgentChunk[]): AppSoloRu
     fileCount: files.length,
     commandCount: commands.length,
   };
+  if (files.length) {
+    summary.files = files.slice(-10).map((file) => ({
+      path: file.path,
+      action: file.action,
+      bytes: file.bytes,
+    }));
+  }
+  if (commands.length) {
+    summary.commands = commands.slice(-10).map((command) => ({
+      command: command.command,
+      exitCode: command.exitCode,
+    }));
+  }
   if (preview) summary.previewUrl = preview.url;
   if (error) summary.error = error.message;
   if (verify) {

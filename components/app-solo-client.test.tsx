@@ -29,6 +29,8 @@ describe("AppSoloClient", () => {
           status: "failed",
           fileCount: 2,
           commandCount: 3,
+          files: [{ path: "src/App.tsx", action: "create", bytes: 420 }],
+          commands: [{ command: "npm test", exitCode: 1 }],
           previewUrl: "http://localhost:4100",
           verification: {
             passed: false,
@@ -48,6 +50,8 @@ describe("AppSoloClient", () => {
     expect(html).toContain("preview captured");
     expect(html).toContain("1 pass / 1 failed / 1 skipped");
     expect(html).toContain("failed: tests");
+    expect(html).toContain("artifacts: src/App.tsx");
+    expect(html).toContain("commands: npm test exit 1");
   });
 
   it("renders product readiness guidance for incomplete solo output", () => {

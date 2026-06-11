@@ -39,6 +39,12 @@ export function AppSoloRunSummaryPanel({ summary }: { summary: AppSoloRunSummary
       {summary.verification?.failedChecks.length ? (
         <div style={styles.summaryLine}>failed: {summary.verification.failedChecks.join(", ")}</div>
       ) : null}
+      {summary.files?.length ? (
+        <div style={styles.summaryLine}>artifacts: {formatFiles(summary.files)}</div>
+      ) : null}
+      {summary.commands?.length ? (
+        <div style={styles.summaryLine}>commands: {formatCommands(summary.commands)}</div>
+      ) : null}
       <div style={styles.readinessPanel}>
         <div style={styles.contractTitle}>product readiness</div>
         <div style={styles.summaryGrid}>
@@ -68,6 +74,14 @@ function formatGuidance(guidance: Array<Record<string, unknown>>): string {
     const count = typeof item.count === "number" ? ` ${item.count}` : "";
     return `${type}${checks}${count}`;
   }).join(", ");
+}
+
+function formatFiles(files: NonNullable<AppSoloRunSummary["files"]>): string {
+  return files.map((file) => file.path).join(", ");
+}
+
+function formatCommands(commands: NonNullable<AppSoloRunSummary["commands"]>): string {
+  return commands.map((command) => `${command.command} exit ${command.exitCode}`).join(", ");
 }
 
 function formatCount(count: number, noun: string): string {
