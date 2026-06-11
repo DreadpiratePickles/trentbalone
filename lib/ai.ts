@@ -9,6 +9,8 @@ import {
 import { inferArtifactRequest } from "@/lib/artifacts";
 import type { AgentRole, CeoArtifactRequest, CeoMessage, CeoSuggestion, Company, Cycle, Document, Report, Task } from "@/lib/types";
 import { MODELS, MAX_TOKENS, createAIClient } from "@/lib/ai-client";
+import { callJsonWithRepair } from "@/lib/llm-json";
+import { buildOperatingStateBundle } from "@/lib/operating-state";
 
 const planSchema = z.object({
   summary: z.string(),
@@ -51,46 +53,47 @@ async function withRetries<T>(fn: () => Promise<T>, retries = 2, delayMs = 1000)
   throw lastError;
 }
 
-export async function generateOperatingPlan(company: Company): Promise<{ plan: GeneratedPlan; model: string; tokens: number; costCents: number }> {
-  const model = MODELS.DEFAULT;
+export async function generateOperatingPlan(company: Company): Promise<{ plan: GeneratedPlan; model: string; tokens: number; costCents: number; degraded: boolean }> {
+  const model = MODELS.STRONG;
   const fallback = deterministicPlan(company);
 
   if (!process.env.OPENAI_API_KEY) {
-    return { plan: fallback, model: "local-fallback", tokens: 0, costCents: 0 };
+    return { plan: fallback, model: "local-fallback", tokens: 0, costCents: 0, degraded: true };
   }
+
+  // §1 P0-2 — real state inspection: plan from a compact operating-state bundle
+  // (open/stale tasks, last cycle, pending approvals, budget, recalled memory)
+  // instead of the context-starved JSON.stringify(company).
+  const objective = company.brief?.goals || `Operate ${company.name} toward its vision`;
+  const bundle = await buildOperatingStateBundle(company, objective).catch(() => null);
 
   try {
     const ceoRuntime = await getAgentRuntime(company.id, "ceo");
-    const completion = await withRetries(() =>
-      createAIClient().chat.completions.create({
-        model,
-        temperature: 0.2,
-        max_tokens: MAX_TOKENS.PLANNING,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: ceoRuntime.systemPrompt },
-          {
-            role: "user",
-            content: `Create one operating-cycle plan as JSON matching this shape: summary, tasks[], approvals[], reportFindings[], reportRecommendations[]. Each approval may include optional previewContent (the actual draft text being approved) and previewKind ("email"|"post"|"diff"|"contract"|"generic") — include these whenever the approval involves an email body, social post, code diff, or contract clause. Company: ${JSON.stringify(company)}`
-          }
-        ]
-      })
-    );
-    const text = completion.choices[0]?.message.content ?? "{}";
-    const parsed = planSchema.safeParse(JSON.parse(text));
-    if (!parsed.success) {
-      console.error("generateOperatingPlan: schema parse failed", parsed.error.issues);
-      return { plan: fallback, model, tokens: completion.usage?.total_tokens ?? 0, costCents: 0 };
-    }
-    return {
-      plan: parsed.data,
+    const system = ceoRuntime.systemPrompt;
+    const user = [
+      "Create one operating-cycle plan as JSON matching this shape: summary, tasks[], approvals[], reportFindings[], reportRecommendations[].",
+      "Each approval may include optional previewContent (the actual draft text being approved) and previewKind (\"email\"|\"post\"|\"diff\"|\"contract\"|\"generic\").",
+      "Plan against the CURRENT operating state below — adopt or progress open tasks before minting new ones, respect pending approvals, and stay within remaining budget.",
+      "",
+      "COMPANY BRIEF:",
+      JSON.stringify(company.brief ?? {}),
+      "",
+      "OPERATING STATE:",
+      bundle?.text ?? "(state unavailable)",
+    ].join("\n");
+
+    // §1 P0-3 — no silent fallback: repair-retry, then surface a degraded plan.
+    const { data, tokens, repaired } = await callJsonWithRepair<GeneratedPlan>({
       model,
-      tokens: completion.usage?.total_tokens ?? 0,
-      costCents: estimateCostCents(completion.usage?.total_tokens ?? 0)
-    };
+      system,
+      user,
+      schema: planSchema,
+      maxTokens: MAX_TOKENS.PLANNING,
+    });
+    return { plan: data, model, tokens, costCents: estimateCostCents(tokens), degraded: repaired };
   } catch (err) {
-    console.error("generateOperatingPlan: LLM call failed", err instanceof Error ? err.message : err);
-    return { plan: fallback, model: "local-fallback-after-error", tokens: 0, costCents: 0 };
+    console.error("generateOperatingPlan: planner failed after repair retry", err instanceof Error ? err.message : err);
+    return { plan: fallback, model: "local-fallback-after-error", tokens: 0, costCents: 0, degraded: true };
   }
 }
 

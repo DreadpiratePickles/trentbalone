@@ -187,6 +187,7 @@ function Sidebar({
   const workspaceItems = [
     { icon: I.bolt, label: "console", href: `/companies/${cid}` },
     { icon: I.sparkle, label: "command", href: `/companies/${cid}/command` },
+    { icon: I.check, label: "goals", href: `/companies/${cid}/goals` },
     { icon: I.inbox, label: "queue", href: `/companies/${cid}/queue` },
     { icon: I.building, label: "workbench", href: `/companies/${cid}/workbench` },
     { icon: I.play, label: "app solo", href: `/companies/${cid}/app-solo` },

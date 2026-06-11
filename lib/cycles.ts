@@ -60,9 +60,12 @@ export async function runCompanyCycle(companyId: string, trigger: "manual" | "sc
       step: { phase: "plan_start", label: "generating operating plan" }
     });
 
-    const { plan, model, tokens, costCents } = await generateOperatingPlan(company);
+    const { plan, model, tokens, costCents, degraded } = await generateOperatingPlan(company);
     await assertSpendAvailable(company.id, costCents, "Operating cycle model usage");
-    cycleLog.info({ model, tokens, costCents, taskCount: plan.tasks.length }, "cycle.plan_ready");
+    cycleLog.info({ model, tokens, costCents, taskCount: plan.tasks.length, degraded }, "cycle.plan_ready");
+    if (degraded) {
+      await store.updateCycle(cycle.id, { degraded: true } as Partial<Cycle>).catch(() => {});
+    }
 
     emitJobEvent({
       jobRunId: cycle.id,

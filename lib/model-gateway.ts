@@ -6,6 +6,7 @@ import {
   createProviderChatCompletion,
   isProviderConfigured,
   resolveModelName,
+  stripJsonFences,
 } from "@/lib/ai-client";
 import {
   buildModelPolicySnapshot,
@@ -338,7 +339,7 @@ function buildSeatUserPrompt(input: SeatModelExecutionInput) {
 
 function parseModelContent(content: string) {
   try {
-    return JSON.parse(content) as unknown;
+    return JSON.parse(stripJsonFences(content)) as unknown;
   } catch {
     return { text: content };
   }

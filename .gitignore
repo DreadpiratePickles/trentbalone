@@ -33,3 +33,6 @@ vendor/self-improvement/*/node_modules/
 trent.env.local
 *.env.local
 dump.rdb
+
+# build/download artifacts
+public/downloads/*.zip

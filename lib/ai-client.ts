@@ -205,6 +205,62 @@ async function anthropicChatCompletion(input: ProviderChatInput): Promise<Provid
   };
 }
 
+/**
+ * Strip Markdown code fences / preamble from an LLM JSON response.
+ * Anthropic models (Claude) routed through OpenAI-compatible bridges frequently
+ * wrap `response_format: json_object` output in ```json … ``` fences and may add
+ * a short preamble before it. This returns the inner JSON payload by, in order:
+ *   1. returning the string as-is if it already parses,
+ *   2. extracting the contents of the first ``` fenced block,
+ *   3. extracting the first balanced `{ … }` / `[ … ]` block.
+ * OpenAI native responses pass through untouched.
+ */
+export function stripJsonFences(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return trimmed;
+
+  // 1. Already valid JSON?
+  try {
+    JSON.parse(trimmed);
+    return trimmed;
+  } catch {
+    /* continue */
+  }
+
+  // 2. A ``` fenced block anywhere in the content.
+  const fence = trimmed.match(/```(?:json|JSON)?\s*\n?([\s\S]*?)```/);
+  if (fence?.[1]) {
+    const inner = fence[1].trim();
+    try {
+      JSON.parse(inner);
+      return inner;
+    } catch {
+      /* continue */
+    }
+  }
+
+  // 3. First balanced object/array substring (handles a prose preamble).
+  const firstObj = trimmed.indexOf("{");
+  const firstArr = trimmed.indexOf("[");
+  const start = firstArr === -1 ? firstObj : firstObj === -1 ? firstArr : Math.min(firstObj, firstArr);
+  if (start !== -1) {
+    const open = trimmed[start];
+    const close = open === "{" ? "}" : "]";
+    const end = trimmed.lastIndexOf(close);
+    if (end > start) {
+      const candidate = trimmed.slice(start, end + 1);
+      try {
+        JSON.parse(candidate);
+        return candidate;
+      } catch {
+        /* continue */
+      }
+    }
+  }
+
+  return trimmed;
+}
+
 // ── callJson — structured JSON completion with Zod validation ─────────────────
 
 export type CallJsonOptions = {
@@ -226,7 +282,7 @@ export async function callJson<T>(
   system: string,
   user: string,
   schema: z.ZodTypeAny,
-  maxTokens = MAX_TOKENS.JSON,
+  maxTokens: number = MAX_TOKENS.JSON,
   opts?: CallJsonOptions,
 ): Promise<{ data: T; tokens: number }> {
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
@@ -258,7 +314,7 @@ export async function callJson<T>(
 
   let raw: unknown;
   try {
-    raw = JSON.parse(content);
+    raw = JSON.parse(stripJsonFences(content));
   } catch {
     throw new Error(`${model} returned non-JSON: ${content.slice(0, 200)}`);
   }

@@ -244,13 +244,15 @@ export async function launchOrchestration(opts: {
   objective: string;
   trigger?: OrchestrationRun["trigger"];
   fullTeam?: boolean;
+  /** "scheduled" when RUN CYCLE routes through the durable engine (§1 P0-1). */
+  cycleKind?: "scheduled" | "ad_hoc_dag";
 }): Promise<OrchestrationRun> {
   const company = await store.getCompany(opts.companyId);
   if (!company) throw new Error("Company not found");
 
   const runId = makeId("orc");
   const cycleTrigger = opts.trigger === "scheduled" ? "scheduled" : "manual";
-  const cycleId = await saveCycleForRun(company.id, runId, opts.objective, cycleTrigger);
+  const cycleId = await saveCycleForRun(company.id, runId, opts.objective, cycleTrigger, opts.cycleKind ?? "ad_hoc_dag");
   const run: OrchestrationRun = {
     id: runId,
     companyId: opts.companyId,
