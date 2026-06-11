@@ -19,6 +19,7 @@ export type WorkbenchEvalInput = {
 
 export type WorkbenchEvalResult = WorkbenchEvalInput & {
   passed: boolean;
+  qualityScore: number;
   failureTags: string[];
 };
 
@@ -29,8 +30,16 @@ export type WorkbenchEvalScorecard = {
   medianAttempts: number;
   medianCostCents: number;
   medianWallClockMs: number;
+  averageQualityScore: number;
   objectives: WorkbenchEvalResult[];
 };
+
+const QUALITY_WEIGHTS = {
+  buildClean: 0.35,
+  interactionsPass: 0.25,
+  criticPass: 0.25,
+  screenshotNonBlank: 0.15,
+} as const;
 
 const GOLDEN_OBJECTIVES: WorkbenchGoldenObjective[] = [
   { id: "wb_countdown", objective: "Build a countdown timer with start, pause, and reset controls.", difficulty: "easy" },
@@ -63,6 +72,7 @@ export function scoreWorkbenchObjective(input: WorkbenchEvalInput): WorkbenchEva
   return {
     ...input,
     passed: failureTags.length === 0,
+    qualityScore: scoreWorkbenchQuality(input),
     failureTags,
   };
 }
@@ -89,10 +99,23 @@ export function buildWorkbenchEvalScorecard(results: WorkbenchEvalResult[]): Wor
     medianAttempts: roundMetric(median(results.map((item) => item.attempts)), 2),
     medianCostCents: roundMetric(median(results.map((item) => item.costCents)), 2),
     medianWallClockMs: roundMetric(median(results.map((item) => item.wallClockMs)), 0),
+    averageQualityScore: roundMetric(
+      results.reduce((sum, item) => sum + item.qualityScore, 0) / Math.max(1, results.length),
+      4,
+    ),
     objectives: results,
   };
 }
 
 export function meetsWorkbenchPassRateThreshold(scorecard: WorkbenchEvalScorecard, threshold: number): boolean {
   return scorecard.passRate >= threshold;
+}
+
+function scoreWorkbenchQuality(input: WorkbenchEvalInput): number {
+  const score =
+    (input.buildClean ? QUALITY_WEIGHTS.buildClean : 0)
+    + (input.interactionsPass ? QUALITY_WEIGHTS.interactionsPass : 0)
+    + (input.criticPass ? QUALITY_WEIGHTS.criticPass : 0)
+    + (input.screenshotNonBlank ? QUALITY_WEIGHTS.screenshotNonBlank : 0);
+  return roundMetric(score, 4);
 }

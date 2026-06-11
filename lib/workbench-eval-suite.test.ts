@@ -30,6 +30,7 @@ describe("workbench eval suite", () => {
       wallClockMs: 120_000,
     });
     expect(passed.passed).toBe(true);
+    expect(passed.qualityScore).toBe(1);
 
     const potemkin = scoreWorkbenchObjective({
       objectiveId: "wb_todo",
@@ -43,6 +44,7 @@ describe("workbench eval suite", () => {
     });
     expect(potemkin.passed).toBe(false);
     expect(potemkin.failureTags).toContain("interactions_failed");
+    expect(potemkin.qualityScore).toBe(0.75);
   });
 
   it("builds a scorecard with pass-rate and medians", () => {
@@ -55,6 +57,8 @@ describe("workbench eval suite", () => {
     expect(typeof scorecard.medianAttempts).toBe("number");
     expect(typeof scorecard.medianCostCents).toBe("number");
     expect(typeof scorecard.medianWallClockMs).toBe("number");
+    expect(scorecard.averageQualityScore).toBeGreaterThanOrEqual(0);
+    expect(scorecard.averageQualityScore).toBeLessThanOrEqual(1);
     expect(Array.isArray(scorecard.objectives)).toBe(true);
   });
 
@@ -63,5 +67,6 @@ describe("workbench eval suite", () => {
     expect(results.every((item) => item.passed)).toBe(true);
     const scorecard = buildWorkbenchEvalScorecard(results);
     expect(scorecard.passRate).toBe(1);
+    expect(scorecard.averageQualityScore).toBe(1);
   });
 });
