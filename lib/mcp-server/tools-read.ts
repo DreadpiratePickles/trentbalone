@@ -176,6 +176,7 @@ export async function getRunHandler(ctx: McpAuthContext, args: Record<string, un
     if (orc.companyId !== ctx.companyId) throw new Error("run not found");
     if (isTerminalOrchestrationStatus(orc.status)) releaseMcpRun(ctx.keyId, runId);
     const awaiting = orc.steps.filter((step) => step.status === "awaiting_approval");
+    const awaitingApproval = awaiting.length > 0;
     return {
       kind: "orchestration",
       run: {
@@ -189,7 +190,7 @@ export async function getRunHandler(ctx: McpAuthContext, args: Record<string, un
         stepCount: orc.steps.length,
         costCents: orc.steps.reduce((sum, step) => sum + (step.costCents ?? 0), 0),
       },
-      awaitingApproval: awaiting.length > 0,
+      awaitingApproval,
       approvals: awaiting.map((step) => ({
         stepId: step.id,
         stepTitle: step.title,
@@ -198,6 +199,7 @@ export async function getRunHandler(ctx: McpAuthContext, args: Record<string, un
           ? `/companies/${ctx.companyId}/approvals?approvalId=${encodeURIComponent(step.approvalId)}`
           : undefined,
       })),
+      nextAction: nextActionForOrchestration(orc.id, orc.status, awaitingApproval),
       runUrl: `/companies/${ctx.companyId}/orchestrate?runId=${encodeURIComponent(orc.id)}`,
     };
   }
@@ -211,6 +213,7 @@ export async function getRunHandler(ctx: McpAuthContext, args: Record<string, un
   ]);
   const needsApproval = events.filter((event) => event.status === "needs_approval" || event.type === "approval");
   const evidenceSummary = summarizeWorkbenchEvidence({ events, artifacts, previewUrl: session.previewUrl });
+  const awaitingApproval = session.status === "paused" || needsApproval.length > 0;
 
   return {
     kind: "workbench",
@@ -227,7 +230,8 @@ export async function getRunHandler(ctx: McpAuthContext, args: Record<string, un
       appSolo: session.metadata.appSolo,
     },
     evidenceSummary,
-    awaitingApproval: session.status === "paused" || needsApproval.length > 0,
+    awaitingApproval,
+    nextAction: nextActionForWorkbench(session.id, session.status, awaitingApproval, evidenceSummary),
     eventsTail: events.slice(-10).map((event) => ({
       id: event.id,
       type: event.type,
@@ -315,4 +319,51 @@ function isTerminalOrchestrationStatus(status: OrchestratorRunStatus | string): 
 
 function isTerminalWorkbenchStatus(status: WorkbenchSessionStatus | string): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function nextActionForOrchestration(runId: string, status: OrchestratorRunStatus, awaitingApproval: boolean) {
+  if (awaitingApproval) return approvalNextAction();
+  if (isTerminalOrchestrationStatus(status)) {
+    return {
+      type: status === "completed" ? "review_summary" : "inspect_failure",
+      terminal: true,
+    };
+  }
+  return pollNextAction(runId);
+}
+
+function nextActionForWorkbench(
+  runId: string,
+  status: WorkbenchSessionStatus,
+  awaitingApproval: boolean,
+  evidenceSummary: ReturnType<typeof summarizeWorkbenchEvidence>
+) {
+  if (awaitingApproval) return approvalNextAction();
+  if (isTerminalWorkbenchStatus(status)) {
+    return {
+      type: status === "completed" ? "review_evidence" : "inspect_failure",
+      terminal: true,
+      evidenceSummaryStatus: evidenceSummary.status,
+    };
+  }
+  return pollNextAction(runId);
+}
+
+function pollNextAction(runId: string) {
+  return {
+    type: "poll",
+    terminal: false,
+    tool: "trent_get_run",
+    arguments: { runId },
+    suggestedDelaySeconds: 5,
+  };
+}
+
+function approvalNextAction() {
+  return {
+    type: "approval_required",
+    terminal: false,
+    tool: "trent_list_pending_approvals",
+    arguments: {},
+  };
 }

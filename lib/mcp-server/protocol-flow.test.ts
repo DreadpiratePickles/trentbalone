@@ -144,6 +144,11 @@ describe("MCP App-Solo protocol flow", () => {
         previewCaptured: true,
         previewUrl: "https://preview.example.test",
       },
+      nextAction: {
+        type: "review_evidence",
+        terminal: true,
+        evidenceSummaryStatus: "passing",
+      },
     });
     expect(mockCreateWorkbenchSession).toHaveBeenCalledWith(expect.objectContaining({
       metadata: {

@@ -83,6 +83,34 @@ describe("trent_get_run — workbench App-Solo polling", () => {
         previewCaptured: true,
         previewUrl: "https://preview.example.test",
       },
+      nextAction: {
+        type: "review_evidence",
+        terminal: true,
+        evidenceSummaryStatus: "failing",
+      },
+    });
+  });
+
+  it("returns approval guidance for paused App-Solo workbench runs", async () => {
+    mockStore.getWorkbenchSession.mockResolvedValue(session({
+      id: "ws_app_solo",
+      status: "paused",
+    }));
+    mockStore.listWorkbenchEvents.mockResolvedValue([
+      event({ id: "evt_approval", type: "approval", status: "needs_approval", title: "Publish approval" }),
+    ]);
+    mockStore.listWorkbenchArtifacts.mockResolvedValue([]);
+
+    const result = await getRunHandler(ctx, { runId: "ws_app_solo" });
+
+    expect(result).toMatchObject({
+      kind: "workbench",
+      awaitingApproval: true,
+      nextAction: {
+        type: "approval_required",
+        tool: "trent_list_pending_approvals",
+        terminal: false,
+      },
     });
   });
 });
