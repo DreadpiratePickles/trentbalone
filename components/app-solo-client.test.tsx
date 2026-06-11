@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { AppSoloClient } from "@/components/app-solo-client";
+import { AppSoloClient, AppSoloRunSummaryPanel } from "@/components/app-solo-client";
 
 describe("AppSoloClient", () => {
   it("renders the selected agent contract in the live trace panel", () => {
@@ -18,5 +18,33 @@ describe("AppSoloClient", () => {
     expect(html).toContain("experiment backlog");
     expect(html).toContain("approval gates");
     expect(html).toContain("gmail.send");
+  });
+
+  it("renders the final solo run summary with evidence counts and failed checks", () => {
+    const html = renderToStaticMarkup(
+      <AppSoloRunSummaryPanel
+        summary={{
+          status: "failed",
+          fileCount: 2,
+          commandCount: 3,
+          previewUrl: "http://localhost:4100",
+          verification: {
+            passed: false,
+            passCount: 1,
+            failCount: 1,
+            skipCount: 1,
+            failedChecks: ["tests"],
+          },
+        }}
+      />,
+    );
+
+    expect(html).toContain("run summary");
+    expect(html).toContain("failed");
+    expect(html).toContain("2 files");
+    expect(html).toContain("3 commands");
+    expect(html).toContain("preview captured");
+    expect(html).toContain("1 pass / 1 failed / 1 skipped");
+    expect(html).toContain("failed: tests");
   });
 });
