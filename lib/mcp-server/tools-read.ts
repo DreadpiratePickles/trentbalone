@@ -66,7 +66,7 @@ export const READ_TOOLS: McpToolDefinition[] = [
   },
   {
     name: "trent_get_run",
-    description: "Poll an MCP-launched run by runId. Supports orchestrator run ids and workbench session ids, including App-Solo evidence summaries.",
+    description: "Poll an MCP-launched run by runId. Supports orchestrator run ids and workbench session ids, including App-Solo evidence summaries, product review, and artifact index.",
     inputSchema: {
       type: "object",
       properties: {
@@ -241,6 +241,7 @@ export async function getRunHandler(ctx: McpAuthContext, args: Record<string, un
     awaitingApproval,
     nextAction: nextActionForWorkbench(session.id, session.status, awaitingApproval, evidenceSummary),
     productReview: buildMcpWorkbenchProductReview({ metadata: session.metadata, evidenceSummary }),
+    productArtifactIndex: buildProductArtifactIndex({ events, artifacts, previewUrl: session.previewUrl }),
     eventsTail: events.slice(-10).map((event) => ({
       id: event.id,
       type: event.type,
@@ -249,14 +250,7 @@ export async function getRunHandler(ctx: McpAuthContext, args: Record<string, un
       content: event.content,
       createdAt: event.createdAt,
     })),
-    artifacts: artifacts.slice(0, 10).map((artifact) => ({
-      id: artifact.id,
-      kind: artifact.kind,
-      title: artifact.title,
-      path: artifact.path,
-      previewUrl: artifact.previewUrl,
-      createdAt: artifact.createdAt,
-    })),
+    artifacts: artifacts.slice(0, 10).map(summarizeWorkbenchArtifact),
     runUrl: `/companies/${ctx.companyId}/workbench/${encodeURIComponent(session.id)}`,
   };
 }
@@ -275,6 +269,44 @@ function summarizeWorkbenchEvidence(input: {
     failedCommandCount: commands.filter((event) => event.status === "failed").length,
     previewCaptured: Boolean(previewUrl),
     previewUrl,
+  };
+}
+
+function buildProductArtifactIndex(input: {
+  events: Awaited<ReturnType<typeof store.listWorkbenchEvents>>;
+  artifacts: Awaited<ReturnType<typeof store.listWorkbenchArtifacts>>;
+  previewUrl?: string;
+}) {
+  const view = buildWorkbenchIdeView({ events: input.events, artifacts: input.artifacts });
+  const previewUrl = input.previewUrl ?? latestArtifactPreviewUrl(input.artifacts);
+  return {
+    preview: {
+      captured: Boolean(previewUrl),
+      url: previewUrl,
+    },
+    artifacts: input.artifacts.slice(0, 20).map(summarizeWorkbenchArtifact),
+    verification: {
+      checks: view.verifyChecks,
+    },
+    commands: view.terminalLines.slice(-20).map((line) => ({
+      id: line.id,
+      title: line.title,
+      command: line.command,
+      status: line.status,
+      exitCode: line.exitCode,
+      durationMs: line.durationMs,
+    })),
+  };
+}
+
+function summarizeWorkbenchArtifact(artifact: Awaited<ReturnType<typeof store.listWorkbenchArtifacts>>[number]) {
+  return {
+    id: artifact.id,
+    kind: artifact.kind,
+    title: artifact.title,
+    path: artifact.path,
+    previewUrl: artifact.previewUrl,
+    createdAt: artifact.createdAt,
   };
 }
 

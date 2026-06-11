@@ -106,6 +106,46 @@ describe("trent_get_run — workbench App-Solo polling", () => {
           },
         ],
       },
+      productArtifactIndex: {
+        preview: {
+          captured: true,
+          url: "https://preview.example.test",
+        },
+        artifacts: [
+          {
+            id: "art_file",
+            kind: "file",
+            title: "src/App.tsx",
+            path: "src/App.tsx",
+          },
+          {
+            id: "art_shot",
+            kind: "screenshot",
+            title: "Preview screenshot",
+          },
+          {
+            id: "art_preview",
+            kind: "preview",
+            title: "Preview URL",
+            previewUrl: "https://preview.example.test",
+          },
+        ],
+        verification: {
+          checks: [
+            { name: "dom", status: "pass", detail: "Rendered" },
+            { name: "tests", status: "fail", detail: "1 failed" },
+            { name: "critic", status: "skip", detail: "No critic configured" },
+          ],
+        },
+        commands: [
+          {
+            id: "evt_cmd_1",
+            title: "npm test",
+            command: "npm test",
+            status: "completed",
+          },
+        ],
+      },
     });
   });
 

@@ -41,6 +41,7 @@ describe("MCP JSON-RPC protocol", () => {
     expect(instructions).toContain("nextAction");
     expect(instructions).toContain("evidenceSummary");
     expect(instructions).toContain("productReviewPlan");
+    expect(instructions).toContain("productArtifactIndex");
     expect(instructions).toContain("productReview");
   });
 
