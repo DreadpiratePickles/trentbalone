@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, CSSProperties, ReactNode, SVGProps } from "react";
+import React, { useState, useEffect, useRef, useMemo, CSSProperties, ReactNode, SVGProps } from "react";
 
 // ── Types ──────────────────────────────────────────────────────────────
 

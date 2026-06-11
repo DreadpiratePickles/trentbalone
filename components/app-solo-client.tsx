@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import React, { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { AgentActivityFeed, mapWorkbenchChunk, type ActivityStep } from "@/components/agent-activity";
 import { getAppSoloAgents, type AppSoloAgent, type AppSoloApp } from "@/lib/app-solo";
 import type { WorkbenchAgentChunk } from "@/lib/workbench-agent-types";
@@ -126,6 +126,7 @@ export function AppSoloClient({ companyId }: { companyId: string }) {
 
         <div style={styles.activityPanel}>
           <div style={styles.panelTitle}>live trace</div>
+          <AgentContractSummary agent={selectedAgent} app={selectedApp} />
           <TraceLine active label={`${selectedAgent.label} selected`} />
           <TraceLine active={!!selectedApp} label={`${selectedApp?.name ?? "Sandbox"} armed`} />
           <TraceLine active label={`${selectedProvider === "auto" ? "auto" : selectedProvider} sandbox provider`} />
@@ -282,6 +283,35 @@ function TraceLine({ active, label }: { active: boolean; label: string }) {
   );
 }
 
+function AgentContractSummary({ agent, app }: { agent: AppSoloAgent; app?: AppSoloApp }) {
+  return (
+    <div style={styles.contractPanel} aria-label="App Solo agent contract">
+      <div style={styles.contractTitle}>agent contract</div>
+      <ContractRow label="seat" value={agent.label} />
+      <ContractRow label="app" value={app?.name ?? "Sandbox"} />
+      <ContractRow label="mode" value={agent.mode} />
+      <ContractRow label="scopes" value={formatContractList(app?.scopes ?? [], 4)} />
+      <ContractRow label="deliverables" value={formatContractList(agent.deliverables, 4)} />
+      <ContractRow label="approval gates" value={formatContractList(agent.approvalGates, 5)} />
+    </div>
+  );
+}
+
+function ContractRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={styles.contractRow}>
+      <span style={styles.contractLabel}>{label}</span>
+      <span style={styles.contractValue}>{value}</span>
+    </div>
+  );
+}
+
+function formatContractList(items: string[], maxItems: number): string {
+  if (items.length === 0) return "none";
+  const visible = items.slice(0, maxItems).join(", ");
+  return items.length > maxItems ? `${visible}, +${items.length - maxItems} more` : visible;
+}
+
 const styles: Record<string, CSSProperties> = {
   shell: {
     minHeight: "calc(100vh - 150px)",
@@ -330,6 +360,11 @@ const styles: Record<string, CSSProperties> = {
   agentMeta: { display: "block", marginTop: 3, color: "var(--haze)", fontFamily: "var(--mono)", fontSize: 9, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   activityPanel: { padding: 14, border: "1px solid rgba(255,255,255,.07)", borderRadius: 8, background: "rgba(10,10,15,.42)" },
   panelTitle: { fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".18em", textTransform: "uppercase", color: "var(--haze)", marginBottom: 12 },
+  contractPanel: { display: "grid", gap: 7, padding: "0 0 12px", marginBottom: 10, borderBottom: "1px solid rgba(255,255,255,.06)" },
+  contractTitle: { fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".16em", textTransform: "uppercase", color: "var(--pulse)" },
+  contractRow: { display: "grid", gridTemplateColumns: "92px minmax(0, 1fr)", gap: 8, alignItems: "start", fontSize: 12, lineHeight: 1.35 },
+  contractLabel: { fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--haze)" },
+  contractValue: { color: "var(--bone)", overflowWrap: "anywhere" },
   traceLine: { display: "flex", alignItems: "center", gap: 9, minHeight: 26, fontSize: 13 },
   traceDot: { width: 6, height: 6, borderRadius: 999, boxShadow: "0 0 18px rgba(110,231,183,.3)" },
   errorText: { marginTop: 10, color: "#FCA5A5", fontSize: 12, lineHeight: 1.45 },
