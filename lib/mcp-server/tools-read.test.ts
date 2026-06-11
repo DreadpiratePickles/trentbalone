@@ -176,6 +176,17 @@ describe("trent_list_pending_approvals", () => {
             tool: "trent_get_run",
             arguments: { runId: "ws_app_solo" },
           },
+          decisionCalls: {
+            requiredScope: "mcp:approve",
+            approve: {
+              tool: "trent_resolve_approval",
+              arguments: { approvalId: "approval_workbench", decision: "approved" },
+            },
+            reject: {
+              tool: "trent_resolve_approval",
+              arguments: { approvalId: "approval_workbench", decision: "rejected" },
+            },
+          },
         },
       ],
     });

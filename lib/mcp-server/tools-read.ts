@@ -148,6 +148,7 @@ export async function listPendingApprovalsHandler(ctx: McpAuthContext): Promise<
           approvalUrl: `/companies/${ctx.companyId}/approvals?approvalId=${encodeURIComponent(approval.id)}`,
           relatedRun: link.relatedRun,
           nextCall: link.nextCall,
+          decisionCalls: approvalDecisionCalls(approval.id),
         };
       }),
   };
@@ -371,5 +372,19 @@ function approvalNextAction() {
     terminal: false,
     tool: "trent_list_pending_approvals",
     arguments: {},
+  };
+}
+
+function approvalDecisionCalls(approvalId: string) {
+  return {
+    requiredScope: "mcp:approve",
+    approve: {
+      tool: "trent_resolve_approval",
+      arguments: { approvalId, decision: "approved" },
+    },
+    reject: {
+      tool: "trent_resolve_approval",
+      arguments: { approvalId, decision: "rejected" },
+    },
   };
 }
