@@ -108,8 +108,12 @@ export function buildAppSoloObjective(agent: AppSoloAgent, app: AppSoloApp, obje
     `Mission: ${agent.mission}`,
     `Sandbox app: ${app.name}`,
     `Objective: ${cleanObjective}`,
+    `Agent communication contract: stay in the ${agent.label} seat, use only the ${app.name} sandbox context unless explicitly routed, and report blockers as handoff-ready notes.`,
+    `App scopes: ${app.scopes.join(", ") || "none declared"}`,
     `Deliverables: ${agent.deliverables.join(", ")}`,
     `Approval gates: ${agent.approvalGates.join(", ") || "none"}`,
+    "Verification required: include concrete evidence, artifact references, preview/test status where applicable, and next actions.",
+    "Call out not-done work, assumptions, data caveats, and approval requests explicitly.",
   ].join("\n");
 }
 

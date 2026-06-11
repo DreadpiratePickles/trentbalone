@@ -75,6 +75,9 @@ describe("app-solo registry", () => {
     expect(objective).toContain("[app-solo] Finance / Fincept Terminal");
     expect(objective).toContain("Review NVDA concentration risk.");
     expect(objective).toContain("fincept.live_trade");
+    expect(objective).toContain("App scopes: fincept:");
+    expect(objective).toContain("Verification required:");
+    expect(objective).toContain("Call out not-done work");
     expect(ghostfolio?.scopes).toEqual(expect.arrayContaining(["ghostfolio:portfolio_overview"]));
   });
 });

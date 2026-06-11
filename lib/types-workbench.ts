@@ -42,6 +42,10 @@ export type WorkbenchSessionMetadata = {
     agentLabel: string;
     appId: string;
     appName: string;
+    appScopes?: string[];
+    deliverables?: string[];
+    approvalGates?: string[];
+    mode?: WorkbenchAgentMode;
   };
 };
 

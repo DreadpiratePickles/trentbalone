@@ -57,6 +57,10 @@ describe("launchAppSoloRun", () => {
           agentLabel: growth.label,
           appId: hyperframes.id,
           appName: hyperframes.name,
+          appScopes: hyperframes.scopes,
+          deliverables: growth.deliverables,
+          approvalGates: growth.approvalGates,
+          mode: growth.mode,
         },
       },
     });
@@ -66,6 +70,8 @@ describe("launchAppSoloRun", () => {
     expect(runBody.content).toContain("[app-solo] Growth / Marketing / HyperFrames");
     expect(runBody.content).toContain("Sandbox app: HyperFrames");
     expect(runBody.content).toContain("Create a launch video frame set.");
+    expect(runBody.content).toContain("Agent communication contract:");
+    expect(runBody.content).toContain("Verification required:");
   });
 
   it("can request a cloud Workbench provider for app-solo runs", async () => {

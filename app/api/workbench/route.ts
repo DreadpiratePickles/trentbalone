@@ -13,6 +13,10 @@ function isAgentRole(value: string): value is AgentRole {
   return agentRoles.includes(value as AgentRole);
 }
 
+function isAgentMode(value: string): value is WorkbenchAgentMode {
+  return agentModes.includes(value as WorkbenchAgentMode);
+}
+
 export async function GET(request: Request) {
   const user = await getAuthUser();
   if (!user) return unauthorized();
@@ -106,6 +110,19 @@ function parseWorkbenchMetadata(value: unknown): Partial<WorkbenchSessionMetadat
       agentLabel: candidate.agentLabel,
       appId: candidate.appId,
       appName: candidate.appName,
+      appScopes: stringList(candidate.appScopes),
+      deliverables: stringList(candidate.deliverables),
+      approvalGates: stringList(candidate.approvalGates),
+      ...(typeof candidate.mode === "string" && isAgentMode(candidate.mode) ? { mode: candidate.mode } : {}),
     },
   };
+}
+
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim())
+    .slice(0, 40);
+  return items.length ? items : undefined;
 }
