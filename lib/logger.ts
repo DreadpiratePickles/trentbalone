@@ -37,6 +37,7 @@ const REDACT_PATHS = [
 
 const isDev = process.env.NODE_ENV === "development";
 const isTest = process.env.NODE_ENV === "test";
+const usePrettyLogs = isDev && process.env.TRENT_PRETTY_LOGS === "1";
 
 export const logger = pino({
   level: isTest ? "silent" : (process.env.LOG_LEVEL ?? (isDev ? "debug" : "info")),
@@ -44,7 +45,7 @@ export const logger = pino({
     paths: REDACT_PATHS,
     censor: "[Redacted]",
   },
-  transport: isDev
+  transport: usePrettyLogs
     ? { target: "pino-pretty", options: { colorize: true, translateTime: "SYS:HH:MM:ss", ignore: "pid,hostname" } }
     : undefined,
   base: {

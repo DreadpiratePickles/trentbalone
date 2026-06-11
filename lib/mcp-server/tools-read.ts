@@ -1,0 +1,254 @@
+import { store } from "@/lib/store";
+import { getOrchestrationRunSnapshot } from "@/lib/orchestrator";
+import type { OrchestratorRunStatus, Task, WorkbenchSessionStatus } from "@/lib/types";
+import { MCP_AGENT_ROLES } from "./constants";
+import { releaseMcpRun } from "./run-tracking";
+import type { McpAuthContext, McpToolDefinition } from "./types";
+
+const TASK_PRIORITIES = ["low", "medium", "high", "urgent"] as const;
+
+export const READ_TOOLS: McpToolDefinition[] = [
+  {
+    name: "trent_company_context",
+    description: "Return the API key's Trent company context, operating settings, current metrics, and pending approval count.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    requiredScope: "mcp",
+    handler: companyContextHandler,
+  },
+  {
+    name: "trent_list_pending_approvals",
+    description: "List pending approvals for the API key's company. This is read-only; resolution requires a separate mcp:approve key scope.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    requiredScope: "mcp",
+    handler: listPendingApprovalsHandler,
+  },
+  {
+    name: "trent_create_task",
+    description: "Create a queued Trent task for the API key's company, tagged as mcp-originated.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Short task title." },
+        prompt: { type: "string", description: "Detailed instruction for the assigned Trent agent." },
+        role: { type: "string", enum: MCP_AGENT_ROLES, description: "Agent seat to assign. Defaults to engineer." },
+        priority: { type: "string", enum: TASK_PRIORITIES, description: "Task priority. Defaults to medium." },
+        tags: { type: "array", items: { type: "string" }, description: "Optional extra tags. The mcp tag is always added." },
+        dueDate: { type: "string", description: "Optional ISO due date." },
+      },
+      required: ["title", "prompt"],
+      additionalProperties: false,
+    },
+    requiredScope: "mcp",
+    handler: createTaskHandler,
+  },
+  {
+    name: "trent_get_run",
+    description: "Poll an MCP-launched run by runId. Supports orchestrator run ids and workbench session ids.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        runId: { type: "string", description: "Run id returned by trent_run_agent." },
+      },
+      required: ["runId"],
+      additionalProperties: false,
+    },
+    requiredScope: "mcp",
+    handler: getRunHandler,
+  },
+];
+
+export async function companyContextHandler(ctx: McpAuthContext): Promise<unknown> {
+  const company = await store.getCompany(ctx.companyId);
+  if (!company) throw new Error("company not found");
+  const approvals = await store.listApprovals(ctx.companyId);
+  const pending = approvals.filter((approval) => approval.status === "pending");
+  return {
+    company: {
+      id: company.id,
+      name: company.name,
+      slug: company.slug,
+      status: company.status,
+      autonomyLevel: company.autonomyLevel,
+      timezone: company.timezone,
+      budgetCents: company.budgetCents,
+      weeklyBudgetCents: company.weeklyBudgetCents,
+      cycleFrequency: company.cycleFrequency,
+      nextCycleAt: company.nextCycleAt,
+      brief: company.brief,
+      metrics: company.metrics,
+    },
+    pendingApprovals: pending.length,
+  };
+}
+
+export async function listPendingApprovalsHandler(ctx: McpAuthContext): Promise<unknown> {
+  const approvals = await store.listApprovals(ctx.companyId);
+  return {
+    approvals: approvals
+      .filter((approval) => approval.status === "pending")
+      .map((approval) => ({
+        id: approval.id,
+        taskId: approval.taskId,
+        action: approval.action,
+        reason: approval.reason,
+        toolName: approval.toolName,
+        previewKind: approval.previewKind,
+        previewSummary: summarizePreview(approval.previewContent),
+        createdAt: approval.createdAt,
+        expiresAt: approval.expiresAt,
+        approvalUrl: `/companies/${ctx.companyId}/approvals?approvalId=${encodeURIComponent(approval.id)}`,
+      })),
+  };
+}
+
+export async function createTaskHandler(ctx: McpAuthContext, args: Record<string, unknown>): Promise<unknown> {
+  const title = textArg(args.title, "title");
+  const prompt = textArg(args.prompt, "prompt");
+  const role = enumArg(args.role, MCP_AGENT_ROLES, "role") ?? "engineer";
+  const priority = enumArg(args.priority, TASK_PRIORITIES, "priority") ?? "medium";
+  const tags = arrayArg(args.tags).filter(Boolean);
+  const dueDate = typeof args.dueDate === "string" && args.dueDate.trim() ? args.dueDate.trim() : undefined;
+
+  const task = await store.createTask({
+    companyId: ctx.companyId,
+    title,
+    prompt,
+    status: "queued",
+    priority,
+    agentRole: role,
+    tags: Array.from(new Set(["mcp", ...tags])),
+    dueDate,
+  });
+
+  return { task: summarizeTask(task) };
+}
+
+export async function getRunHandler(ctx: McpAuthContext, args: Record<string, unknown>): Promise<unknown> {
+  const runId = textArg(args.runId, "runId");
+  const orc = await getOrchestrationRunSnapshot(runId).catch(() => undefined);
+  if (orc) {
+    if (orc.companyId !== ctx.companyId) throw new Error("run not found");
+    if (isTerminalOrchestrationStatus(orc.status)) releaseMcpRun(ctx.keyId, runId);
+    const awaiting = orc.steps.filter((step) => step.status === "awaiting_approval");
+    return {
+      kind: "orchestration",
+      run: {
+        id: orc.id,
+        objective: orc.objective,
+        status: orc.status,
+        trigger: orc.trigger,
+        startedAt: orc.startedAt,
+        completedAt: orc.completedAt,
+        summary: orc.summary,
+        stepCount: orc.steps.length,
+        costCents: orc.steps.reduce((sum, step) => sum + (step.costCents ?? 0), 0),
+      },
+      awaitingApproval: awaiting.length > 0,
+      approvals: awaiting.map((step) => ({
+        stepId: step.id,
+        stepTitle: step.title,
+        approvalId: step.approvalId,
+        approvalUrl: step.approvalId
+          ? `/companies/${ctx.companyId}/approvals?approvalId=${encodeURIComponent(step.approvalId)}`
+          : undefined,
+      })),
+      runUrl: `/companies/${ctx.companyId}/orchestrate?runId=${encodeURIComponent(orc.id)}`,
+    };
+  }
+
+  const session = await store.getWorkbenchSession(runId);
+  if (!session || session.companyId !== ctx.companyId) throw new Error("run not found");
+  if (isTerminalWorkbenchStatus(session.status)) releaseMcpRun(ctx.keyId, runId);
+  const [events, artifacts] = await Promise.all([
+    store.listWorkbenchEvents(session.id),
+    store.listWorkbenchArtifacts(session.id),
+  ]);
+  const needsApproval = events.filter((event) => event.status === "needs_approval" || event.type === "approval");
+
+  return {
+    kind: "workbench",
+    run: {
+      id: session.id,
+      objective: session.objective,
+      status: session.status,
+      agentRole: session.agentRole,
+      agentMode: session.agentMode,
+      previewUrl: session.previewUrl,
+      costCents: session.costCents,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      appSolo: session.metadata.appSolo,
+    },
+    awaitingApproval: session.status === "paused" || needsApproval.length > 0,
+    eventsTail: events.slice(-10).map((event) => ({
+      id: event.id,
+      type: event.type,
+      status: event.status,
+      title: event.title,
+      content: event.content,
+      createdAt: event.createdAt,
+    })),
+    artifacts: artifacts.slice(0, 10).map((artifact) => ({
+      id: artifact.id,
+      kind: artifact.kind,
+      title: artifact.title,
+      path: artifact.path,
+      previewUrl: artifact.previewUrl,
+      createdAt: artifact.createdAt,
+    })),
+    runUrl: `/companies/${ctx.companyId}/workbench/${encodeURIComponent(session.id)}`,
+  };
+}
+
+function textArg(value: unknown, name: string): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) throw new Error(`${name} is required`);
+  return text;
+}
+
+function enumArg<T extends string>(value: unknown, allowed: readonly T[], name: string): T | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string" || !allowed.includes(value as T)) {
+    throw new Error(`unsupported ${name} "${String(value)}"`);
+  }
+  return value as T;
+}
+
+function arrayArg(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
+    : [];
+}
+
+function summarizePreview(value?: string): string | undefined {
+  if (!value) return undefined;
+  return value.replace(/\s+/g, " ").trim().slice(0, 220);
+}
+
+function summarizeTask(task: Task): Pick<Task, "id" | "title" | "status" | "priority" | "agentRole" | "tags" | "createdAt"> {
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    priority: task.priority,
+    agentRole: task.agentRole,
+    tags: task.tags,
+    createdAt: task.createdAt,
+  };
+}
+
+function isTerminalOrchestrationStatus(status: OrchestratorRunStatus | string): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function isTerminalWorkbenchStatus(status: WorkbenchSessionStatus | string): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}

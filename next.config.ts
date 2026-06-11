@@ -5,6 +5,7 @@ const BASE_DOMAIN = process.env.BASE_DOMAIN ?? "trent.app";
 const nextConfig: NextConfig = {
   typedRoutes: true,
   outputFileTracingRoot: process.cwd(),
+  serverExternalPackages: ["e2b", "@daytona/sdk", "pino", "pino-pretty", "thread-stream", "sonic-boom"],
 
   /**
    * Subdomain routing: [slug].trent.app → /public/[slug]
