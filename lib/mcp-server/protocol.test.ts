@@ -37,6 +37,7 @@ describe("MCP JSON-RPC protocol", () => {
     const instructions = (outcome.body.result as { instructions?: string }).instructions ?? "";
     expect(instructions).toContain("trent_list_app_solo_options");
     expect(instructions).toContain("appId");
+    expect(instructions).toContain("nextCall");
     expect(instructions).toContain("evidenceSummary");
   });
 

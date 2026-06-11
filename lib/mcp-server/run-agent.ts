@@ -78,6 +78,7 @@ export async function runAgentHandler(
       runId: run.id,
       status: run.status,
       poll: "trent_get_run",
+      nextCall: nextRunPollCall(run.id),
       note: "Run executes asynchronously. Approval gates pause it in Trent when required.",
     };
   }
@@ -126,6 +127,7 @@ export async function runAgentHandler(
     appId: app.id,
     app: app.name,
     poll: "trent_get_run",
+    nextCall: nextRunPollCall(session.id),
     note: "Run executes asynchronously. Approval gates pause it in Trent when required.",
   };
 }
@@ -230,5 +232,12 @@ function resolveApp(agent: AppSoloAgent, appId?: string): AppSoloApp {
     description: "Governed Trent command-center session.",
     scopes: ["mcp"],
     accent: "pulse",
+  };
+}
+
+function nextRunPollCall(runId: string) {
+  return {
+    tool: "trent_get_run",
+    arguments: { runId },
   };
 }

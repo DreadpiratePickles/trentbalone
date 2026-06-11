@@ -37,7 +37,16 @@ describe("trent_run_agent", () => {
       engine: "solo",
     }, deps);
 
-    expect(result).toMatchObject({ engine: "solo", runId: "workbench_1", status: "queued", agentRole: "growth" });
+    expect(result).toMatchObject({
+      engine: "solo",
+      runId: "workbench_1",
+      status: "queued",
+      agentRole: "growth",
+      nextCall: {
+        tool: "trent_get_run",
+        arguments: { runId: "workbench_1" },
+      },
+    });
     expect(deps.createSession).toHaveBeenCalledWith(expect.objectContaining({
       companyId: ctx.companyId,
       agentRole: "growth",
