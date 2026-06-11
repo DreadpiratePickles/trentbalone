@@ -7,6 +7,7 @@ import { Spinner } from "@/components/ui";
 import { buildWorkbenchIdeView, type WorkbenchIdeEvidenceSummary } from "@/lib/workbench-ide-view";
 import { workbenchPreviewFrameSrc } from "@/lib/workbench-preview-url";
 import { readApiError } from "@/lib/read-api-error";
+import type { WorkbenchSessionMetadata } from "@/lib/types";
 
 type SessionStatus = "queued" | "starting" | "running" | "paused" | "completed" | "failed" | "cancelled";
 
@@ -14,6 +15,9 @@ type Session = {
   id: string;
   status?: SessionStatus;
   previewUrl?: string;
+  metadata?: {
+    appSolo?: WorkbenchSessionMetadata["appSolo"];
+  };
 };
 
 type TestRunResult = {
@@ -285,6 +289,7 @@ export function WorkbenchEvidenceRail({
         ))}
       </div>
       <EvidenceSummaryStrip summary={ideView.evidenceSummary} />
+      <AppSoloMetadataStrip appSolo={active?.metadata?.appSolo} />
       {railError && <div style={R.railError}>{railError}</div>}
 
       {railTab === "preview" && (
@@ -494,6 +499,29 @@ function EvidenceSummaryStrip({ summary }: { summary: WorkbenchIdeEvidenceSummar
   );
 }
 
+function AppSoloMetadataStrip({ appSolo }: { appSolo?: WorkbenchSessionMetadata["appSolo"] }) {
+  if (!appSolo) return null;
+  return (
+    <div style={R.appSoloStrip} aria-label="App Solo session contract">
+      <div style={R.appSoloTitle}>app solo contract</div>
+      <div style={R.appSoloLine}>
+        <strong>{appSolo.agentLabel}</strong>
+        <span>{appSolo.appName}</span>
+        <span>{appSolo.mode ?? "mode unset"}</span>
+      </div>
+      <div style={R.appSoloMeta}>scopes: {compactList(appSolo.appScopes)}</div>
+      <div style={R.appSoloMeta}>deliverables: {compactList(appSolo.deliverables)}</div>
+      <div style={R.appSoloMeta}>approval gates: {compactList(appSolo.approvalGates)}</div>
+    </div>
+  );
+}
+
+function compactList(items?: string[], maxItems = 4): string {
+  if (!items?.length) return "none";
+  const visible = items.slice(0, maxItems).join(", ");
+  return items.length > maxItems ? `${visible}, +${items.length - maxItems} more` : visible;
+}
+
 const border = "1px solid rgba(255,255,255,.07)";
 const surface = "rgba(255,255,255,.02)";
 
@@ -521,6 +549,10 @@ const R = {
   }) as React.CSSProperties,
   summaryMeta: { color: "var(--haze)", fontSize: 10, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
   summaryFailures: { color: "var(--ember)", fontSize: 10, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
+  appSoloStrip: { padding: "10px 12px", borderBottom: border, display: "grid", gap: 5, background: "rgba(110,231,183,.026)" } as React.CSSProperties,
+  appSoloTitle: { color: "var(--pulse)", fontSize: 10, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase" } as React.CSSProperties,
+  appSoloLine: { display: "flex", gap: 8, flexWrap: "wrap", color: "var(--bone)", fontSize: 11, lineHeight: 1.35 } as React.CSSProperties,
+  appSoloMeta: { color: "var(--haze)", fontSize: 10, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
   railSection: { padding: "14px 16px", borderBottom: border, display: "flex", flexDirection: "column", gap: 10, minHeight: 0 } as React.CSSProperties,
   sectionHead: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } as React.CSSProperties,
   kicker: { fontSize: 10, letterSpacing: ".18em", color: "var(--haze)" } as React.CSSProperties,

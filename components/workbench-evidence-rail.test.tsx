@@ -57,4 +57,42 @@ describe("WorkbenchEvidenceRail", () => {
     expect(html).toContain("1 shot / 1 file / 2 artifacts");
     expect(html).toContain("failed: tests");
   });
+
+  it("renders App Solo contract metadata for solo sessions", () => {
+    const html = renderToStaticMarkup(
+      <WorkbenchEvidenceRail
+        active={{
+          id: "ws_app_solo",
+          status: "completed",
+          previewUrl: "http://localhost:3000",
+          metadata: {
+            appSolo: {
+              agentRole: "growth",
+              agentLabel: "Growth / Marketing",
+              appId: "hyperframes",
+              appName: "HyperFrames",
+              appScopes: ["hyperframes:render"],
+              deliverables: ["campaign draft"],
+              approvalGates: ["hyperframes.publish"],
+              mode: "design",
+            },
+          },
+        }}
+        events={[]}
+        artifacts={[]}
+        activity={[]}
+        streaming={false}
+        onRefreshSession={async () => undefined}
+        onOpenSandbox={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("app solo contract");
+    expect(html).toContain("Growth / Marketing");
+    expect(html).toContain("HyperFrames");
+    expect(html).toContain("design");
+    expect(html).toContain("hyperframes:render");
+    expect(html).toContain("campaign draft");
+    expect(html).toContain("hyperframes.publish");
+  });
 });
