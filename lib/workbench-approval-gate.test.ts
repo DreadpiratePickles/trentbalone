@@ -48,6 +48,7 @@ describe("workbench-approval-gate", () => {
     expect(refreshed?.status).toBe("paused");
     expect(approvalId).toBeTruthy();
     expect(approvals.some((a) => a.id === approvalId && a.status === "pending")).toBe(true);
+    expect(approvals.find((a) => a.id === approvalId)?.toolName).toBe(`workbench:${session.id}:git_push`);
 
     const events = await store.listWorkbenchEvents(session.id);
     expect(events.some((e) => e.type === "approval" && e.status === "needs_approval")).toBe(true);

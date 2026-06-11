@@ -3,6 +3,7 @@ import { resolveSupervisionApprovalExecution } from "@/lib/supervision/approval-
 import { syncContentMissionForApproval } from "@/lib/content-mission-approval-hook";
 import { syncAgentMissionForApproval } from "@/lib/agent-mission-approval-hook";
 import type { McpAuthContext, McpToolDefinition } from "./types";
+import { approvalRunLink } from "./approval-links";
 
 export const APPROVAL_TOOLS: McpToolDefinition[] = [
   {
@@ -43,6 +44,7 @@ export async function resolveApprovalHandler(ctx: McpAuthContext, args: Record<s
   await resolveSupervisionApprovalExecution({ approval, status: decision });
   await syncContentMissionForApproval(approval).catch(() => undefined);
   await syncAgentMissionForApproval(approval).catch(() => undefined);
+  const link = approvalRunLink(approval);
 
   return {
     approval: {
@@ -52,5 +54,7 @@ export async function resolveApprovalHandler(ctx: McpAuthContext, args: Record<s
       action: approval.action,
       resolvedAt: approval.resolvedAt,
     },
+    relatedRun: link.relatedRun,
+    nextCall: link.nextCall,
   };
 }

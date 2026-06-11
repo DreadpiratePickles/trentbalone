@@ -46,7 +46,7 @@ export async function pauseWorkbenchForCommandApproval(
     reason: `Workbench session requires approval before running: ${command}`,
     previewContent: command,
     previewKind: "generic",
-    toolName: "workbench",
+    toolName: `workbench:${session.id}:${action}`,
   });
 
   await store.updateWorkbenchSession(session.id, { status: "paused" });

@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkbenchArtifact, WorkbenchEvent, WorkbenchSession } from "@/lib/types";
+import type { Approval, WorkbenchArtifact, WorkbenchEvent, WorkbenchSession } from "@/lib/types";
 import type { McpAuthContext } from "./types";
 
 const { mockStore, mockGetOrchestrationRunSnapshot } = vi.hoisted(() => ({
   mockStore: {
     getWorkbenchSession: vi.fn(),
+    listApprovals: vi.fn(),
     listWorkbenchEvents: vi.fn(),
     listWorkbenchArtifacts: vi.fn(),
   },
@@ -14,7 +15,7 @@ const { mockStore, mockGetOrchestrationRunSnapshot } = vi.hoisted(() => ({
 vi.mock("@/lib/store", () => ({ store: mockStore }));
 vi.mock("@/lib/orchestrator", () => ({ getOrchestrationRunSnapshot: mockGetOrchestrationRunSnapshot }));
 
-import { getRunHandler, listAppSoloOptionsHandler } from "./tools-read";
+import { getRunHandler, listAppSoloOptionsHandler, listPendingApprovalsHandler } from "./tools-read";
 
 const ctx: McpAuthContext = {
   companyId: "company_trent_demo",
@@ -150,6 +151,37 @@ describe("trent_list_app_solo_options", () => {
   });
 });
 
+describe("trent_list_pending_approvals", () => {
+  it("links Workbench approvals back to the run MCP clients should poll", async () => {
+    mockStore.listApprovals.mockResolvedValue([
+      approval({
+        id: "approval_workbench",
+        toolName: "workbench:ws_app_solo:deploy",
+      }),
+    ]);
+
+    const result = await listPendingApprovalsHandler(ctx);
+
+    expect(result).toMatchObject({
+      approvals: [
+        {
+          id: "approval_workbench",
+          toolName: "workbench:ws_app_solo:deploy",
+          relatedRun: {
+            kind: "workbench",
+            runId: "ws_app_solo",
+            gate: "deploy",
+          },
+          nextCall: {
+            tool: "trent_get_run",
+            arguments: { runId: "ws_app_solo" },
+          },
+        },
+      ],
+    });
+  });
+});
+
 function session(overrides: Partial<WorkbenchSession>): WorkbenchSession {
   return {
     id: overrides.id ?? "ws_1",
@@ -214,5 +246,20 @@ function artifact(overrides: Partial<WorkbenchArtifact>): WorkbenchArtifact {
     path: overrides.path,
     previewUrl: overrides.previewUrl,
     createdAt: "2026-06-11T00:00:00.000Z",
+  };
+}
+
+function approval(overrides: Partial<Approval>): Approval {
+  return {
+    id: overrides.id ?? "approval_1",
+    companyId: "company_trent_demo",
+    action: overrides.action ?? "workbench.deploy",
+    reason: overrides.reason ?? "Deploy approval",
+    status: overrides.status ?? "pending",
+    createdAt: "2026-06-11T00:00:00.000Z",
+    toolName: overrides.toolName,
+    previewKind: "generic",
+    previewContent: "deploy",
+    ...overrides,
   };
 }

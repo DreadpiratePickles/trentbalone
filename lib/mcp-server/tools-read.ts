@@ -6,6 +6,7 @@ import { getAppSoloAgents } from "@/lib/app-solo";
 import { MCP_AGENT_ROLES } from "./constants";
 import { releaseMcpRun } from "./run-tracking";
 import type { McpAuthContext, McpToolDefinition } from "./types";
+import { approvalRunLink } from "./approval-links";
 
 const TASK_PRIORITIES = ["low", "medium", "high", "urgent"] as const;
 
@@ -132,18 +133,23 @@ export async function listPendingApprovalsHandler(ctx: McpAuthContext): Promise<
   return {
     approvals: approvals
       .filter((approval) => approval.status === "pending")
-      .map((approval) => ({
-        id: approval.id,
-        taskId: approval.taskId,
-        action: approval.action,
-        reason: approval.reason,
-        toolName: approval.toolName,
-        previewKind: approval.previewKind,
-        previewSummary: summarizePreview(approval.previewContent),
-        createdAt: approval.createdAt,
-        expiresAt: approval.expiresAt,
-        approvalUrl: `/companies/${ctx.companyId}/approvals?approvalId=${encodeURIComponent(approval.id)}`,
-      })),
+      .map((approval) => {
+        const link = approvalRunLink(approval);
+        return {
+          id: approval.id,
+          taskId: approval.taskId,
+          action: approval.action,
+          reason: approval.reason,
+          toolName: approval.toolName,
+          previewKind: approval.previewKind,
+          previewSummary: summarizePreview(approval.previewContent),
+          createdAt: approval.createdAt,
+          expiresAt: approval.expiresAt,
+          approvalUrl: `/companies/${ctx.companyId}/approvals?approvalId=${encodeURIComponent(approval.id)}`,
+          relatedRun: link.relatedRun,
+          nextCall: link.nextCall,
+        };
+      }),
   };
 }
 
