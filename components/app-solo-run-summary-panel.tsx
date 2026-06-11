@@ -2,11 +2,10 @@
 
 import React, { type CSSProperties } from "react";
 import type { AppSoloRunSummary } from "@/lib/app-solo";
-import { buildMcpWorkbenchProductReview } from "@/lib/mcp-server/product-review";
+import { buildAppSoloProductReview } from "@/lib/app-solo-product-review";
 
 export function AppSoloRunSummaryPanel({ summary }: { summary: AppSoloRunSummary }) {
-  const productReview = buildMcpWorkbenchProductReview({
-    metadata: {},
+  const productReview = buildAppSoloProductReview({
     evidenceSummary: {
       status: verificationStatus(summary),
       passCount: summary.verification?.passCount ?? 0,
