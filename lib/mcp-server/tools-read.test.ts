@@ -99,6 +99,12 @@ describe("trent_get_run — workbench App-Solo polling", () => {
           artifacts: "present",
           commands: "completed",
         },
+        guidance: [
+          {
+            type: "failed_verification",
+            checks: ["tests"],
+          },
+        ],
       },
     });
   });

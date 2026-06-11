@@ -291,6 +291,7 @@ function buildWorkbenchProductReview(
       artifacts: evidenceSummary.artifactCount > 0 ? "present" : "missing",
       commands: commandSignal(evidenceSummary),
     },
+    guidance: productReviewGuidance(evidenceSummary),
   };
 }
 
@@ -306,6 +307,26 @@ function commandSignal(evidenceSummary: ReturnType<typeof summarizeWorkbenchEvid
   if (evidenceSummary.failedCommandCount > 0) return "failing";
   if (evidenceSummary.commandCount > 0) return "completed";
   return "not_recorded";
+}
+
+function productReviewGuidance(evidenceSummary: ReturnType<typeof summarizeWorkbenchEvidence>) {
+  const guidance: Array<Record<string, unknown>> = [];
+  if (evidenceSummary.failedChecks.length > 0) {
+    guidance.push({ type: "failed_verification", checks: evidenceSummary.failedChecks });
+  }
+  if (evidenceSummary.failedCommandCount > 0) {
+    guidance.push({ type: "failed_commands", count: evidenceSummary.failedCommandCount });
+  }
+  if (evidenceSummary.status === "missing") {
+    guidance.push({ type: "missing_verification" });
+  }
+  if (!evidenceSummary.previewCaptured) {
+    guidance.push({ type: "missing_preview" });
+  }
+  if (evidenceSummary.artifactCount === 0) {
+    guidance.push({ type: "missing_artifacts" });
+  }
+  return guidance;
 }
 
 function latestArtifactPreviewUrl(artifacts: Awaited<ReturnType<typeof store.listWorkbenchArtifacts>>): string | undefined {

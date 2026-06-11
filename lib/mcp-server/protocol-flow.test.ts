@@ -184,6 +184,7 @@ describe("MCP App-Solo protocol flow", () => {
           artifacts: "present",
           commands: "completed",
         },
+        guidance: [],
       },
     });
     expect(mockCreateWorkbenchSession).toHaveBeenCalledWith(expect.objectContaining({
