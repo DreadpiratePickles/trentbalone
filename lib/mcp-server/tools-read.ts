@@ -1,6 +1,6 @@
 import { store } from "@/lib/store";
 import { getOrchestrationRunSnapshot } from "@/lib/orchestrator";
-import type { OrchestratorRunStatus, Task, WorkbenchSessionStatus } from "@/lib/types";
+import type { OrchestratorRunStatus, Task, WorkbenchSession, WorkbenchSessionStatus } from "@/lib/types";
 import { buildWorkbenchIdeView } from "@/lib/workbench-ide-view";
 import { getAppSoloAgents } from "@/lib/app-solo";
 import { MCP_AGENT_ROLES } from "./constants";
@@ -239,6 +239,7 @@ export async function getRunHandler(ctx: McpAuthContext, args: Record<string, un
     evidenceSummary,
     awaitingApproval,
     nextAction: nextActionForWorkbench(session.id, session.status, awaitingApproval, evidenceSummary),
+    productReview: buildWorkbenchProductReview(session, evidenceSummary),
     eventsTail: events.slice(-10).map((event) => ({
       id: event.id,
       type: event.type,
@@ -274,6 +275,37 @@ function summarizeWorkbenchEvidence(input: {
     previewCaptured: Boolean(previewUrl),
     previewUrl,
   };
+}
+
+function buildWorkbenchProductReview(
+  session: Pick<WorkbenchSession, "metadata">,
+  evidenceSummary: ReturnType<typeof summarizeWorkbenchEvidence>
+) {
+  return {
+    status: productReviewStatus(evidenceSummary),
+    deliverables: session.metadata.appSolo?.deliverables ?? [],
+    approvalGates: session.metadata.appSolo?.approvalGates ?? [],
+    reviewSignals: {
+      verification: evidenceSummary.status,
+      preview: evidenceSummary.previewCaptured ? "captured" : "missing",
+      artifacts: evidenceSummary.artifactCount > 0 ? "present" : "missing",
+      commands: commandSignal(evidenceSummary),
+    },
+  };
+}
+
+function productReviewStatus(evidenceSummary: ReturnType<typeof summarizeWorkbenchEvidence>) {
+  if (evidenceSummary.failCount > 0 || evidenceSummary.failedCommandCount > 0) return "needs_attention";
+  if (evidenceSummary.status === "missing" || !evidenceSummary.previewCaptured || evidenceSummary.artifactCount === 0) {
+    return "incomplete";
+  }
+  return "ready_for_review";
+}
+
+function commandSignal(evidenceSummary: ReturnType<typeof summarizeWorkbenchEvidence>) {
+  if (evidenceSummary.failedCommandCount > 0) return "failing";
+  if (evidenceSummary.commandCount > 0) return "completed";
+  return "not_recorded";
 }
 
 function latestArtifactPreviewUrl(artifacts: Awaited<ReturnType<typeof store.listWorkbenchArtifacts>>): string | undefined {

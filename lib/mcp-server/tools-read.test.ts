@@ -89,6 +89,17 @@ describe("trent_get_run — workbench App-Solo polling", () => {
         terminal: true,
         evidenceSummaryStatus: "failing",
       },
+      productReview: {
+        status: "needs_attention",
+        deliverables: ["campaign draft"],
+        approvalGates: ["hyperframes.publish"],
+        reviewSignals: {
+          verification: "failing",
+          preview: "captured",
+          artifacts: "present",
+          commands: "completed",
+        },
+      },
     });
   });
 

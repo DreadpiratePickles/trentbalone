@@ -40,6 +40,7 @@ describe("MCP JSON-RPC protocol", () => {
     expect(instructions).toContain("nextCall");
     expect(instructions).toContain("nextAction");
     expect(instructions).toContain("evidenceSummary");
+    expect(instructions).toContain("productReview");
   });
 
   it("accepts notifications without a JSON-RPC response body", async () => {
