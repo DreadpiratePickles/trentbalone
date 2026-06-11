@@ -10,6 +10,7 @@ import { store } from "./store";
 import type { WorkbenchProviderAdapter, WorkbenchExecResult, WorkbenchTestResult } from "./workbench-provider";
 import type { WorkbenchSession } from "./types";
 import { setFastApplyImpl } from "./workbench-edit-apply";
+import { passingInteractionDriver } from "./workbench-interaction-verify";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,6 +61,7 @@ const DEFAULT_STREAM = makeStreamArtifact([
   `<boltAction type="shell">npm install</boltAction>`,
   `<boltAction type="start">npm run dev</boltAction>`,
 ]);
+const TEST_INTERACTION_DRIVER = passingInteractionDriver();
 
 async function collect(gen: AsyncGenerator<WorkbenchAgentChunk>): Promise<WorkbenchAgentChunk[]> {
   const out: WorkbenchAgentChunk[] = [];
@@ -97,7 +99,7 @@ describe("runWorkbenchAgent — build mode (XML artifact loop)", () => {
     const company = await store.createCompany({ name: `Workbench Agent ${Date.now()}`, brief: { vision: "test" } });
     session  = await createSession("build", company.id);
     provider = makeProvider();
-    deps     = { provider, streamArtifact: DEFAULT_STREAM };
+    deps     = { provider, streamArtifact: DEFAULT_STREAM, interactionDriver: TEST_INTERACTION_DRIVER };
   });
 
   afterEach(() => {
@@ -142,7 +144,11 @@ describe("runWorkbenchAgent — build mode (XML artifact loop)", () => {
       `<boltAction type="start">npm run dev</boltAction>`,
     ]);
 
-    const chunks = await collect(runWorkbenchAgent({ session, userMessage: "build it", deps: { provider, streamArtifact } }));
+    const chunks = await collect(runWorkbenchAgent({
+      session,
+      userMessage: "build it",
+      deps: { provider, streamArtifact, interactionDriver: TEST_INTERACTION_DRIVER },
+    }));
 
     expect(startPreview).toHaveBeenCalledWith(expect.objectContaining({ id: session.id }), "npm run dev");
     expect(chunks).toContainEqual({ type: "preview", url: "http://localhost:4100" });
@@ -217,7 +223,11 @@ describe("runWorkbenchAgent — build mode (XML artifact loop)", () => {
       })),
     });
 
-    await collect(runWorkbenchAgent({ session, userMessage: "build it", deps: { provider, streamArtifact: DEFAULT_STREAM } }));
+    await collect(runWorkbenchAgent({
+      session,
+      userMessage: "build it",
+      deps: { provider, streamArtifact: DEFAULT_STREAM, interactionDriver: TEST_INTERACTION_DRIVER },
+    }));
 
     const attempts = await store.listWorkbenchAttempts(session.id);
     expect(attempts).toHaveLength(1);
@@ -290,7 +300,11 @@ describe("runWorkbenchAgent — build mode (XML artifact loop)", () => {
       yield { type: "finish", reason: "stop" };
     }
     const chunks = await collect(
-      runWorkbenchAgent({ session, userMessage: "build it", deps: { provider, streamArtifact: noArtifact } }),
+      runWorkbenchAgent({
+        session,
+        userMessage: "build it",
+        deps: { provider, streamArtifact: noArtifact, interactionDriver: TEST_INTERACTION_DRIVER },
+      }),
     );
     expect(chunks.some((c) => c.type === "error")).toBe(true);
     expect(chunks.some((c) => c.type === "done")).toBe(true);
@@ -311,7 +325,11 @@ describe("runWorkbenchAgent — build mode (XML artifact loop)", () => {
       }
     }
     const chunks = await collect(
-      runWorkbenchAgent({ session, userMessage: "build it", deps: { provider, streamArtifact: twoSegments } }),
+      runWorkbenchAgent({
+        session,
+        userMessage: "build it",
+        deps: { provider, streamArtifact: twoSegments, interactionDriver: TEST_INTERACTION_DRIVER },
+      }),
     );
     const fileChunks = chunks.filter((c) => c.type === "file");
     expect(fileChunks.length).toBe(2);
@@ -395,7 +413,7 @@ describe("runWorkbenchAgent — build mode (XML artifact loop)", () => {
     await collect(runWorkbenchAgent({
       session,
       userMessage: "fix the bug",
-      deps: { provider, streamArtifact },
+      deps: { provider, streamArtifact, interactionDriver: TEST_INTERACTION_DRIVER },
     }));
 
     expect(streamCalls).toBe(2);
@@ -441,7 +459,7 @@ describe("runWorkbenchAgent — build mode (XML artifact loop)", () => {
     const chunks = await collect(runWorkbenchAgent({
       session,
       userMessage: "build it",
-      deps: { provider, streamArtifact },
+      deps: { provider, streamArtifact, interactionDriver: TEST_INTERACTION_DRIVER },
     }));
 
     expect(streamCalls).toBe(2);
@@ -468,7 +486,7 @@ describe("runWorkbenchAgent — build mode (XML artifact loop)", () => {
     await collect(runWorkbenchAgent({
       session,
       userMessage: "build it",
-      deps: { provider, streamArtifact: DEFAULT_STREAM },
+      deps: { provider, streamArtifact: DEFAULT_STREAM, interactionDriver: TEST_INTERACTION_DRIVER },
     }));
 
     const messages = await store.listWorkbenchChatMessages(session.id);
@@ -502,7 +520,7 @@ describe("runWorkbenchAgent — approval gates", () => {
     const chunks = await collect(runWorkbenchAgent({
       session,
       userMessage: "Ship to main",
-      deps: { provider, streamArtifact: pushStream },
+      deps: { provider, streamArtifact: pushStream, interactionDriver: TEST_INTERACTION_DRIVER },
     }));
 
     const refreshed = await store.getWorkbenchSession(session.id);
@@ -531,7 +549,7 @@ describe("runWorkbenchAgent — model roles", () => {
     await collect(runAgent({
       session,
       userMessage: "build it",
-      deps: { provider, streamArtifact: DEFAULT_STREAM },
+      deps: { provider, streamArtifact: DEFAULT_STREAM, interactionDriver: TEST_INTERACTION_DRIVER },
     }));
 
     const attempts = await store.listWorkbenchAttempts(session.id);

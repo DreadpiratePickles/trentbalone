@@ -113,11 +113,12 @@ export async function verifyBuild(input: {
   if (commands.build) checks.push(await execCheck(provider, session, "build", commands.build));
   checks.push(await testsCheck(provider, session, commands.test, await hasTestFileSignal(provider, session)));
 
-  const renders = await verifyRenderedPreview({
+  let renders = await verifyRenderedPreview({
     provider,
     session,
     renderInspector: input.renderInspector ?? providerRenderInspector(provider) ?? inspectRenderedPreview,
   });
+  renders = enforcePreviewEvidenceRequirement(session, renders);
   checks.push(...renders.checks);
   const interaction = await interactionCheck({
     previewUrl: renders.previewUrl,
@@ -137,6 +138,31 @@ export async function verifyBuild(input: {
   }));
 
   return buildVerdict(checks, renders, interaction);
+}
+
+function enforcePreviewEvidenceRequirement(
+  session: WorkbenchSession,
+  render: RenderVerificationResult,
+): RenderVerificationResult {
+  if (!requiresPreviewEvidence(session) || render.previewUrl) return render;
+  const previewDetail = `Preview URL required for UI objective but provider did not return one: ${session.objective}`;
+  const renderDetail = `Preview evidence required for UI objective before Workbench can mark the product complete: ${session.objective}`;
+  return {
+    ...render,
+    checks: render.checks.map((check) => {
+      if (check.name === "preview") return { ...check, status: "fail", detail: previewDetail };
+      if (check.name === "renders") return { ...check, status: "fail", detail: renderDetail };
+      return check;
+    }),
+  };
+}
+
+function requiresPreviewEvidence(session: WorkbenchSession): boolean {
+  const objective = session.objective.toLowerCase();
+  const uiSignal = /\b(app|application|website|webapp|web\s+app|site|page|landing|dashboard|form|ui|frontend|screen|component|button|modal|editor|calendar|kanban|cart|pricing|notes?|todo|login|signup|onboarding|settings)\b/i;
+  const nonUiSignal = /\b(api|backend|cli|command[-\s]?line|script|library|package|schema|migration|worker|utility)\b/i;
+  if (uiSignal.test(objective)) return true;
+  return !nonUiSignal.test(objective) && /\b(build|create|make)\b/i.test(objective) && session.agentMode === "build";
 }
 
 async function hasTypeScriptSignal(

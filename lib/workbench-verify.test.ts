@@ -155,10 +155,31 @@ describe("verifyBuild", () => {
     expect(provider.exec).not.toHaveBeenCalledWith(expect.anything(), "npx tsc --noEmit");
   });
 
-  it("skips renders when there is no preview URL but can still pass overall", async () => {
-    const verdict = await verifyBuild(baseVerifyInput({ session: session(), provider: fakeProvider({ previewUrl: undefined }) }));
+  it("skips renders when a non-web objective has no preview URL and can still pass overall", async () => {
+    const verdict = await verifyBuild(baseVerifyInput({
+      session: session({ objective: "Write a CLI utility that formats CSV files." }),
+      provider: fakeProvider({ previewUrl: undefined }),
+    }));
     expect(verdict.checks.find((c) => c.name === "renders")?.status).toBe("skip");
     expect(verdict.passed).toBe(true);
+  });
+
+  it("fails UI objectives when no preview URL is available", async () => {
+    const verdict = await verifyBuild(baseVerifyInput({
+      session: session({ objective: "Build a notes app with markdown editor." }),
+      provider: fakeProvider({ previewUrl: undefined }),
+    }));
+
+    expect(verdict.passed).toBe(false);
+    expect(verdict.checks.find((c) => c.name === "preview")).toEqual(expect.objectContaining({
+      status: "fail",
+      detail: expect.stringContaining("Preview URL required"),
+    }));
+    expect(verdict.checks.find((c) => c.name === "renders")).toEqual(expect.objectContaining({
+      status: "fail",
+      detail: expect.stringContaining("Preview evidence required"),
+    }));
+    expect(verdict.repairPrompt).toContain("Preview URL required");
   });
 
   it("fails renders when the screenshot dataUri is empty", async () => {
