@@ -74,6 +74,7 @@ export function OrchestratorTraceReplayView({ trace }: { trace: OrchestratorTrac
         <div style={S.sectionTitle}>evidence</div>
         <div style={S.evidenceGrid}>
           <EvidenceList title="tools" items={trace.toolLedger.map((item) => `${item.name} x${item.count}`)} empty="No tool calls recorded." />
+          <EvidenceList title="handoffs" items={handoffQualityItems(trace.handoffSummary)} empty="No handoffs recorded." />
           <EvidenceList title="artifacts" items={trace.artifactRefs} empty="No artifact references recorded." />
           <EvidenceList title="approvals" items={trace.approvalRefs} empty="No approval references recorded." />
           <EvidenceList title="errors" items={trace.errors.map((item) => item.detail ?? item.kind)} empty="No errors recorded." />
@@ -160,6 +161,22 @@ function EvidenceList({ title, items, empty }: { title: string; items: string[];
       )) : <div style={S.cardText}>{empty}</div>}
     </div>
   );
+}
+
+function handoffQualityItems(summary: OrchestratorTraceReplay["handoffSummary"]): string[] {
+  if (!summary.total) return [];
+  return [
+    formatCount(summary.total, "handoff"),
+    formatCount(summary.nextActionCount, "next action"),
+    formatCount(summary.riskCount, "risk"),
+    formatCount(summary.notDoneCount, "not-done item"),
+    formatCount(summary.missingPayloadRefCount, "missing payload ref"),
+    formatCount(summary.amberOrRedCount, "amber/red handoff"),
+  ];
+}
+
+function formatCount(count: number, label: string): string {
+  return `${count} ${label}${count === 1 ? "" : "s"}`;
 }
 
 function readCritiqueField(critique: Record<string, unknown>, key: string): string | undefined {

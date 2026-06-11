@@ -85,6 +85,53 @@ describe("buildOrchestratorTraceReplay", () => {
     expect(replay.errors.map((item) => item.detail)).toContain("Provider unavailable");
     expect(replay.blockers.map((item) => item.detail)).toContain("Publish requires human approval");
   });
+
+  it("summarizes handoff quality signals from persisted handoff events", () => {
+    const run = makeRun({ status: "completed", summary: "Done." });
+    const events: OrchestratorEvent[] = [
+      makeEvent({
+        seq: 1,
+        kind: "handoff_event",
+        payload: {
+          from: "analyst",
+          to: "growth",
+          severity: "amber",
+          summary: "Segment research complete.",
+          nextActions: ["Draft the campaign."],
+          risks: ["Small sample."],
+          whatIDidNotDo: ["No prospect outreach."],
+          payloadRef: "artifact_1",
+          contractVersion: "handoff.v1",
+        },
+      }),
+      makeEvent({
+        seq: 2,
+        kind: "handoff_event",
+        payload: {
+          from: "growth",
+          to: "ceo",
+          severity: "red",
+          summary: "Blocked on approval.",
+          nextActions: [],
+          risks: ["Launch is blocked."],
+          whatIDidNotDo: [],
+          payloadRef: "",
+          contractVersion: "handoff.v1",
+        },
+      }),
+    ];
+
+    const replay = buildOrchestratorTraceReplay({ run, steps: [], events });
+
+    expect(replay.handoffSummary).toEqual({
+      total: 2,
+      nextActionCount: 1,
+      riskCount: 2,
+      notDoneCount: 1,
+      missingPayloadRefCount: 1,
+      amberOrRedCount: 2,
+    });
+  });
 });
 
 function makeRun(overrides: Partial<OrchestratorRun> = {}): OrchestratorRun {

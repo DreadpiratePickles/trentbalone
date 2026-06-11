@@ -46,6 +46,14 @@ describe("OrchestratorTraceReplayView", () => {
           toolLedger: [{ name: "steel.search", count: 1 }],
           artifactRefs: ["artifact_1"],
           approvalRefs: ["approval_1"],
+          handoffSummary: {
+            total: 2,
+            nextActionCount: 3,
+            riskCount: 1,
+            notDoneCount: 1,
+            missingPayloadRefCount: 0,
+            amberOrRedCount: 1,
+          },
         }}
       />
     );
@@ -64,6 +72,11 @@ describe("OrchestratorTraceReplayView", () => {
     expect(html).toContain("artifact_1");
     expect(html).toContain("approval_1");
     expect(html).toContain("Provider unavailable");
+    expect(html).toContain("handoffs");
+    expect(html).toContain("2 handoffs");
+    expect(html).toContain("3 next actions");
+    expect(html).toContain("1 risk");
+    expect(html).toContain("0 missing payload refs");
     expect(html).toContain("cursor 8");
     expect(html).toContain("42c");
   });

@@ -26,6 +26,15 @@ export type OrchestratorReplaySeatReport = {
   toolCalls: string[];
 };
 
+export type OrchestratorReplayHandoffSummary = {
+  total: number;
+  nextActionCount: number;
+  riskCount: number;
+  notDoneCount: number;
+  missingPayloadRefCount: number;
+  amberOrRedCount: number;
+};
+
 export type OrchestratorTraceReplay = {
   runId: string;
   companyId: string;
@@ -46,6 +55,7 @@ export type OrchestratorTraceReplay = {
   toolLedger: { name: string; count: number }[];
   artifactRefs: string[];
   approvalRefs: string[];
+  handoffSummary: OrchestratorReplayHandoffSummary;
 };
 
 export function buildOrchestratorTraceReplay(input: {
@@ -85,6 +95,7 @@ export function buildOrchestratorTraceReplay(input: {
     toolLedger: summarizeTools(seatReports),
     artifactRefs,
     approvalRefs,
+    handoffSummary: summarizeHandoffs(timeline),
   };
 }
 
@@ -156,6 +167,37 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+function summarizeHandoffs(timeline: OrchestratorReplayTimelineItem[]): OrchestratorReplayHandoffSummary {
+  const handoffs = timeline.filter((item) => item.kind === "handoff_event");
+  return handoffs.reduce<OrchestratorReplayHandoffSummary>(
+    (summary, item) => {
+      const payload = item.payload;
+      const severity = readString(payload.severity);
+      summary.total += 1;
+      summary.nextActionCount += readStringList(payload.nextActions).length;
+      summary.riskCount += readStringList(payload.risks).length;
+      summary.notDoneCount += readStringList(payload.whatIDidNotDo).length;
+      if (!readString(payload.payloadRef)) summary.missingPayloadRefCount += 1;
+      if (severity === "amber" || severity === "red") summary.amberOrRedCount += 1;
+      return summary;
+    },
+    {
+      total: 0,
+      nextActionCount: 0,
+      riskCount: 0,
+      notDoneCount: 0,
+      missingPayloadRefCount: 0,
+      amberOrRedCount: 0,
+    },
+  );
 }
 
 function summarizeTools(reports: OrchestratorReplaySeatReport[]): { name: string; count: number }[] {
