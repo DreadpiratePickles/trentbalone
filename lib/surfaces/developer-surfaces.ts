@@ -1,3 +1,5 @@
+import { getMcpToolDefinitions } from "@/lib/mcp-server/registry";
+
 export function createPublicApiDescriptor() {
   return {
     version: "v1",
@@ -16,14 +18,20 @@ export function createWebhookSurface() {
 }
 
 export function createMcpServerDescriptor() {
+  const tools = getMcpToolDefinitions().map(({ name, description, inputSchema, requiredScope }) => ({
+    name,
+    description,
+    inputSchema,
+    requiredScope,
+  }));
+
   return {
     name: "trent-os",
-    transport: "stdio",
-    tools: [
-      { name: "list_company_context", inputSchema: { companyId: "string" } },
-      { name: "create_approval", inputSchema: { companyId: "string", action: "string", reason: "string" } },
-      { name: "list_pending_actions", inputSchema: { companyId: "string" } },
-      { name: "create_task", inputSchema: { companyId: "string", prompt: "string" } },
-    ],
+    protocolVersion: "2025-06-18",
+    transport: "streamable_http",
+    endpoint: "/api/mcp",
+    auth: "bearer_api_key",
+    scopes: ["mcp", "mcp:approve"],
+    tools,
   };
 }

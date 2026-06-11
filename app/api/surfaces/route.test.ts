@@ -55,6 +55,12 @@ describe("/api/surfaces", () => {
     expect(mockWithRlsContext).toHaveBeenCalledWith("co_1", expect.any(Function));
     expect(body.surfaces).toHaveLength(13);
     expect(body.publicApi.scopes).toContain("companies:read");
-    expect(body.mcp.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: "create_approval" })]));
+    expect(body.mcp).toMatchObject({
+      transport: "streamable_http",
+      endpoint: "/api/mcp",
+      auth: "bearer_api_key",
+    });
+    expect(body.mcp.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: "trent_run_agent" })]));
+    expect(JSON.stringify(body.mcp.tools)).not.toContain("companyId");
   });
 });

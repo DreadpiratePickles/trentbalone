@@ -1,6 +1,14 @@
 import type { ModelProvider } from "@/lib/model-gateway";
 
-export type ProxyScope = "chat" | "embeddings" | "rerank" | "images" | "usage" | "models";
+export type ProxyScope =
+  | "chat"
+  | "embeddings"
+  | "rerank"
+  | "images"
+  | "usage"
+  | "models"
+  | "mcp"
+  | "mcp:approve";
 export type ProxyTier = "internal" | "api_only" | "enterprise";
 export type ProxyKeyStatus = "active" | "inactive" | "revoked";
 

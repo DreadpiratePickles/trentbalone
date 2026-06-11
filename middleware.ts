@@ -17,6 +17,7 @@ export default function middleware(req: NextRequest) {
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/public") ||
     pathname.startsWith("/api/health") ||
+    pathname.startsWith("/api/mcp") ||
     pathname.startsWith("/api/heartbeat/sweep") ||
     pathname.startsWith("/auth") ||
     pathname.startsWith("/public") ||

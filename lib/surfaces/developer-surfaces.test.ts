@@ -14,7 +14,15 @@ describe("developer surfaces", () => {
   it("declares Trent MCP tools for IDE agents", () => {
     const descriptor = createMcpServerDescriptor();
     expect(descriptor.name).toBe("trent-os");
-    expect(descriptor.tools.map((tool) => tool.name)).toContain("create_approval");
-    expect(descriptor.tools.map((tool) => tool.name)).toContain("list_company_context");
+    expect(descriptor.transport).toBe("streamable_http");
+    expect(descriptor.endpoint).toBe("/api/mcp");
+    expect(descriptor.auth).toBe("bearer_api_key");
+    expect(descriptor.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+      "trent_company_context",
+      "trent_run_agent",
+      "trent_get_run",
+      "trent_resolve_approval",
+    ]));
+    expect(JSON.stringify(descriptor.tools)).not.toContain("companyId");
   });
 });

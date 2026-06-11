@@ -288,7 +288,33 @@ For HTTP **200**, configure `BACKUP_DIR` to a directory containing a recent `.du
 
 ---
 
-## 9. Typecheck (before committing)
+## 9. MCP server
+
+Trent exposes a governed, stateless MCP endpoint at `POST /api/mcp`.
+
+- Transport: Streamable HTTP JSON-RPC, one request per POST.
+- Auth: `Authorization: Bearer <sk-trent-...>` with the `mcp` scope.
+- Tenant boundary: the API key is company-scoped; MCP tool arguments never include `companyId`.
+- Long-running work: `trent_run_agent` returns a `runId`; poll `trent_get_run`.
+- Approval safety: approval resolution requires the explicit `mcp:approve` scope. Default MCP keys should not include it.
+
+Connect Claude Code to a running Trent host:
+
+```bash
+claude mcp add --transport http trent http://localhost:3000/api/mcp \
+  --header "Authorization: Bearer <sk-trent-key-with-mcp-scope>"
+```
+
+Smoke test flow:
+
+1. Start `npm run dev` and, for durable orchestration, `npm run worker`.
+2. Connect an MCP client and call `initialize`, then `tools/list`.
+3. Call `trent_run_agent` with an objective, then poll `trent_get_run`.
+4. Resolve any approval gates in the Trent console unless you intentionally minted a separate `mcp:approve` key.
+
+---
+
+## 10. Typecheck (before committing)
 
 ```bash
 npm run typecheck
