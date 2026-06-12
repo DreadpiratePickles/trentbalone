@@ -137,6 +137,37 @@ describe("daytona workbench provider safety", () => {
     }));
   });
 
+  it("does not clone repoUrl during sandbox start because imports need credentials", async () => {
+    const current = { ...session("repo-start"), repoUrl: "https://github.com/private/repo.git" };
+
+    await daytonaProvider.start(current);
+
+    expect(mockExecuteCommand).not.toHaveBeenCalledWith(
+      expect.stringContaining("git clone"),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("uses a clean session subdirectory when Daytona reports the home directory", async () => {
+    const homeSandbox = sandbox("home_dir_sb");
+    homeSandbox.getWorkDir.mockResolvedValueOnce("/home/daytona");
+    mockCreate.mockResolvedValueOnce(homeSandbox);
+
+    const handle = await daytonaProvider.start(session("home-dir"));
+
+    expect(mockExecuteCommand).toHaveBeenCalledWith(
+      "mkdir -p '/home/daytona/trent-workbench-home-dir'",
+      "/home/daytona",
+      undefined,
+      60,
+    );
+    expect(handle).toEqual(expect.objectContaining({
+      workdir: "/home/daytona/trent-workbench-home-dir",
+    }));
+  });
+
   it("restores a persisted Daytona sandbox id instead of creating a new sandbox", async () => {
     const current = session("restore");
 
@@ -155,14 +186,14 @@ describe("daytona workbench provider safety", () => {
     expect(handle).toEqual(expect.objectContaining({
       provider: "daytona",
       providerSessionId: "daytona_restored_1",
-      workdir: "/workspace",
+      workdir: "/persisted/workdir",
       previewMode: "provider_url",
       providerUrl: "https://persisted.preview",
       expiresAt: "2026-06-06T00:00:00.000Z",
     }));
 
     await daytonaProvider.exec(current, "npm test");
-    expect(mockExecuteCommand).toHaveBeenCalledWith("npm test", "/workspace", undefined, 60);
+    expect(mockExecuteCommand).toHaveBeenCalledWith("npm test", "/persisted/workdir", undefined, 60);
   });
 
   it("requires approval before executing external writes", async () => {
@@ -227,6 +258,28 @@ describe("daytona workbench provider safety", () => {
       status: "completed",
       content: "ok",
       command: "npm test",
+    }));
+  });
+
+  it("preserves command stderr in failed Daytona exec results and events", async () => {
+    const current = session("stderr");
+    mockExecuteCommand.mockResolvedValueOnce({
+      result: "",
+      exitCode: 128,
+      artifacts: { stdout: "", stderr: "fatal: could not read Username" },
+    });
+    await daytonaProvider.start(current);
+
+    const result = await daytonaProvider.exec(current, "git clone https://github.com/private/repo.git .");
+
+    expect(result).toEqual(expect.objectContaining({
+      exitCode: 128,
+      stderr: "fatal: could not read Username",
+    }));
+    expect(mockAddWorkbenchEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: "shell",
+      status: "failed",
+      content: expect.stringContaining("[stderr] fatal: could not read Username"),
     }));
   });
 

@@ -120,11 +120,14 @@ describe("git-checkout orchestration", () => {
 
     const envs = await setupSandboxGitAuth(mockSession, mockAdapter);
 
-    expect(writtenFiles["/tmp/git-askpass.sh"]).toBe("#!/bin/sh\necho \"$GIT_TOKEN\"\n");
+    expect(writtenFiles["/tmp/git-askpass.sh"]).toContain("*Username*) echo \"${GIT_USER:-git}\"");
+    expect(writtenFiles["/tmp/git-askpass.sh"]).toContain("*) echo \"$GIT_TOKEN\"");
     expect(executedCommands).toContain("chmod +x /tmp/git-askpass.sh");
     expect(executedCommands).toContain("git config --global credential.username x-access-token");
     expect(envs.GIT_TOKEN).toBe("ghp_mock_token");
     expect(envs.GIT_ASKPASS).toBe("/tmp/git-askpass.sh");
+    expect(envs.GIT_TERMINAL_PROMPT).toBe("0");
+    expect(envs.GIT_USER).toBe("x-access-token");
   });
 
   it("runs git clone with secure askpass environment variables", async () => {
@@ -140,6 +143,27 @@ describe("git-checkout orchestration", () => {
     expect(executedCommands).toContain("git checkout feature-branch");
     expect(injectedEnvs[0]?.GIT_TOKEN).toBe("ghp_mock_token");
     expect(injectedEnvs[0]?.GIT_ASKPASS).toBe("/tmp/git-askpass.sh");
+    expect(injectedEnvs[0]?.GIT_TERMINAL_PROMPT).toBe("0");
+    expect(injectedEnvs[0]?.GIT_USER).toBe("x-access-token");
+  });
+
+  it("fails setup immediately when the askpass helper cannot be made executable", async () => {
+    await saveGitHubConnection(companyId, {
+      token: "ghp_mock_token",
+      owner: "test-owner",
+      repo: "test-repo"
+    });
+    mockAdapter.exec = async (sess, cmd) => {
+      executedCommands.push(cmd);
+      if (cmd === "chmod +x /tmp/git-askpass.sh") {
+        return { stdout: "", stderr: "chmod blocked", exitCode: 126, durationMs: 1 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0, durationMs: 1 };
+    };
+
+    await expect(setupSandboxGitAuth(mockSession, mockAdapter)).rejects.toThrow(
+      "Could not make Git askpass helper executable: chmod blocked"
+    );
   });
 
   it("allows public repository checkout without stored credentials", async () => {
@@ -194,4 +218,3 @@ describe("git-checkout orchestration", () => {
     );
   });
 });
-

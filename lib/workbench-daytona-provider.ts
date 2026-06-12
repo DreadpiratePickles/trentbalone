@@ -93,18 +93,17 @@ const daytonaProvider: WorkbenchProviderAdapter = {
       },
     }, { timeout: DEFAULT_TIMEOUT_SECONDS });
 
-    const workdir = await sandbox.getWorkDir() ?? DEFAULT_WORKDIR;
-    sandboxes.set(session.id, { sandbox, workdir });
-
-    if (session.repoUrl) {
-      const branch = session.branchName ? `--branch ${shellQuote(session.branchName)} ` : "";
+    const baseWorkdir = await sandbox.getWorkDir() ?? DEFAULT_WORKDIR;
+    const workdir = daytonaSessionWorkdir(baseWorkdir, session);
+    if (workdir !== baseWorkdir) {
       await sandbox.process.executeCommand(
-        `git clone --depth=1 ${branch}${shellQuote(session.repoUrl)} ${shellQuote(workdir)}`,
-        undefined,
+        `mkdir -p ${shellQuote(workdir)}`,
+        baseWorkdir,
         undefined,
         DEFAULT_TIMEOUT_SECONDS,
       );
     }
+    sandboxes.set(session.id, { sandbox, workdir });
 
     await store.addWorkbenchEvent({
       companyId: session.companyId,
@@ -146,7 +145,8 @@ const daytonaProvider: WorkbenchProviderAdapter = {
 
     const daytona = createClient(credentials.env);
     const sandbox = await daytona.get(handle.providerSessionId);
-    const workdir = await sandbox.getWorkDir() ?? handle.workdir ?? DEFAULT_WORKDIR;
+    const baseWorkdir = handle.workdir ?? await sandbox.getWorkDir() ?? DEFAULT_WORKDIR;
+    const workdir = daytonaSessionWorkdir(baseWorkdir, session);
     sandboxes.set(session.id, { sandbox, workdir });
 
     await store.addWorkbenchEvent({
@@ -245,7 +245,9 @@ const daytonaProvider: WorkbenchProviderAdapter = {
       sanitizeSandboxEnv(options?.env),
       timeoutSeconds(options?.timeoutMs),
     );
-    const stdout = result.artifacts?.stdout ?? result.result ?? "";
+    const artifacts = result.artifacts as { stdout?: string; stderr?: string } | undefined;
+    const stdout = artifacts?.stdout ?? result.result ?? "";
+    const stderr = artifacts?.stderr ?? "";
     const exitCode = result.exitCode ?? 0;
 
     await store.addWorkbenchEvent({
@@ -254,13 +256,16 @@ const daytonaProvider: WorkbenchProviderAdapter = {
       type: "shell",
       status: exitCode === 0 ? "completed" : "failed",
       title: `$ ${command.slice(0, 80)}`,
-      content: stdout.slice(0, 2500) || "(no output)",
+      content: [
+        stdout.slice(0, 2000),
+        stderr ? `[stderr] ${stderr.slice(0, 500)}` : "",
+      ].filter(Boolean).join("\n") || "(no output)",
       command,
     });
 
     return {
       stdout,
-      stderr: "",
+      stderr,
       exitCode,
       durationMs: Date.now() - start,
     };
@@ -465,6 +470,13 @@ function getSandbox(sessionId: string): DaytonaSandboxEntry {
 
 function sandboxName(session: WorkbenchSession) {
   return `trent-${session.id.replace(/[^a-z0-9-]/gi, "-").slice(0, 40)}`;
+}
+
+function daytonaSessionWorkdir(baseWorkdir: string, session: WorkbenchSession) {
+  const base = baseWorkdir.replace(/\/+$/, "") || DEFAULT_WORKDIR;
+  if (!/\/home\/daytona$/i.test(base)) return base;
+  const suffix = session.id.replace(/[^a-z0-9_-]/gi, "_").slice(0, 48);
+  return `${base}/trent-workbench-${suffix}`;
 }
 
 function shellQuote(value: string) {

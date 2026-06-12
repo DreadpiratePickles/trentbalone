@@ -42,6 +42,11 @@ describe("workbench-safety — checkCommand", () => {
     const res2 = checkCommand("/tmp/git-askpass.sh");
     expect(res2.blocked).toBe(false);
   });
+
+  it("allows the transient git askpass chmod but still blocks broad numeric chmods", () => {
+    expect(checkCommand("chmod +x /tmp/git-askpass.sh").blocked).toBe(false);
+    expect(checkCommand("chmod 777 /etc/passwd").blocked).toBe(true);
+  });
 });
 
 describe("workbench-safety — scoped rm", () => {

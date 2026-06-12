@@ -70,6 +70,7 @@ const ALLOWED_EXECUTABLES = new Set([
   "echo",
   "mkdir",
   "touch",
+  "chmod",
   "cp",
   "mv",
   // rm is allowed only for relative workspace paths: BLOCKED_PATTERNS rejects

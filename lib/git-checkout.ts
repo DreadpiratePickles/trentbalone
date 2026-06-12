@@ -66,11 +66,21 @@ export async function setupSandboxGitAuth(
   const { username, token } = await resolveGitCredentials(session.companyId, provider);
 
   // 1. Write the transient GIT_ASKPASS helper script inside the sandbox guest OS
-  const askpassScript = '#!/bin/sh\necho "$GIT_TOKEN"\n';
+  const askpassScript = [
+    "#!/bin/sh",
+    "case \"$1\" in",
+    "  *Username*) echo \"${GIT_USER:-git}\" ;;",
+    "  *) echo \"$GIT_TOKEN\" ;;",
+    "esac",
+    "",
+  ].join("\n");
   await adapter.writeFile(session, "/tmp/git-askpass.sh", askpassScript);
 
   // 2. Set execute permissions
-  await adapter.exec(session, "chmod +x /tmp/git-askpass.sh");
+  const chmod = await adapter.exec(session, "chmod +x /tmp/git-askpass.sh");
+  if (chmod.exitCode !== 0) {
+    throw new Error(`Could not make Git askpass helper executable: ${chmod.stderr || chmod.stdout || "unknown chmod failure"}`);
+  }
 
   // 3. Configure the git username so it invokes GIT_ASKPASS
   await adapter.exec(session, `git config --global credential.username ${username}`);
@@ -78,6 +88,7 @@ export async function setupSandboxGitAuth(
   return {
     GIT_TOKEN: token,
     GIT_ASKPASS: "/tmp/git-askpass.sh",
+    GIT_TERMINAL_PROMPT: "0",
     GIT_USER: username
   };
 }
