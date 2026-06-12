@@ -14,6 +14,11 @@ import { buildSeatSystemPrompt } from "@/lib/seat-manifest";
 import { SEAT_MANIFESTS } from "@/lib/seat-manifest";
 import { buildOperatingStateBundle } from "@/lib/operating-state";
 import { providerReadinessSnapshot } from "@/lib/provider-readiness";
+import {
+  applySeatCapabilityGate,
+  buildSeatCapabilityGatePrompt,
+  loadLatestSeatCapabilityGateDecision,
+} from "@/lib/seat-capability-gating";
 
 export type AgentRuntime = {
   role: AgentRole;
@@ -60,7 +65,9 @@ export async function getAgentRuntime(companyId: string, role: AgentRole): Promi
   const v3Profile = getCatalogAgentV3(assignment?.profileId);
   const availableV3Profiles = AGENT_CATALOG.map((agent) => getCatalogAgentV3(agent.id))
     .filter((agent): agent is NonNullable<ReturnType<typeof getCatalogAgentV3>> => !!agent);
-  const environment = assignment?.environment ?? buildSlotEnvironment(companyId, role);
+  const baseEnvironment = assignment?.environment ?? buildSlotEnvironment(companyId, role);
+  const capabilityGateDecision = await loadLatestSeatCapabilityGateDecision(companyId, role).catch(() => undefined);
+  const environment = applySeatCapabilityGate(baseEnvironment, capabilityGateDecision);
   const grantedSkills = uniqueStable([
     ...(role === "growth" ? GROWTH_REQUIRED_SKILLS : []),
     ...(environment.skills ?? profile?.skills ?? []),
@@ -101,6 +108,7 @@ export async function getAgentRuntime(companyId: string, role: AgentRole): Promi
 
   const memoryPlanBlock = await buildMemoryPlanBlock(companyId, role, profile);
   const outcomeSnapshotBlock = await buildRuntimeOutcomeSnapshot(companyId, role);
+  const capabilityGateBlock = buildSeatCapabilityGatePrompt(capabilityGateDecision);
 
   const environmentBlock = [
     `Memory namespace: ${environment.memoryNamespace}`,
@@ -120,7 +128,7 @@ export async function getAgentRuntime(companyId: string, role: AgentRole): Promi
   ].join("\n");
 
   const staticPrompt = [...skillInstructionBlocks, basePrompt, buildSeatSystemPrompt(role)].join("\n\n");
-  const dynamicPrompt = [contractBlock, profileBlock, memoryPlanBlock, outcomeSnapshotBlock, environmentBlock].filter(Boolean).join("\n\n");
+  const dynamicPrompt = [contractBlock, profileBlock, memoryPlanBlock, outcomeSnapshotBlock, capabilityGateBlock, environmentBlock].filter(Boolean).join("\n\n");
 
   const runtime = {
     role,
