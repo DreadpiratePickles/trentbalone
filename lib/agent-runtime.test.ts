@@ -65,8 +65,28 @@ describe("Agent Plug runtime", () => {
     }
 
     const environment = buildSlotEnvironment(company.id, "sales");
-    expect(environment.tools).toEqual(expect.arrayContaining(["crm:read_mock", "gmail:draft"]));
+    expect(environment.tools).toEqual(expect.arrayContaining(["crm:read_unavailable", "Email"]));
     expect(environment.tools).not.toContain("browser:mock");
+  });
+
+  it("grants real Phase 1 and sandbox tools to the seats that need them", async () => {
+    const [company] = await store.listCompanies();
+    const engineer = buildSlotEnvironment(company.id, "engineer");
+    const analyst = buildSlotEnvironment(company.id, "analyst");
+    const finance = buildSlotEnvironment(company.id, "finance");
+    const growth = buildSlotEnvironment(company.id, "growth");
+    const support = buildSlotEnvironment(company.id, "support");
+
+    expect(engineer.tools).toEqual(expect.arrayContaining(["GitHub", "Workbench Sandbox", "tests:run", "sandbox:exec"]));
+    expect(analyst.tools).toEqual(expect.arrayContaining(["PostHog", "Sentry", "Stripe", "Workbench Sandbox"]));
+    expect(finance.tools).toEqual(expect.arrayContaining(["Stripe", "billing:read"]));
+    expect(growth.tools).toEqual(expect.arrayContaining(["Email", "X", "PostHog"]));
+    expect(support.tools).toEqual(expect.arrayContaining(["Email", "support:inbound_email"]));
+
+    expect(engineer.tools).not.toContain("tests:mock");
+    expect(analyst.tools).not.toContain("analytics:read_mock");
+    expect(finance.tools).not.toContain("billing:mock");
+    expect(support.tools).not.toContain("support:read_mock");
   });
 
   it("grants HyperFrames video creation only to the growth seat", async () => {
@@ -128,6 +148,42 @@ describe("Agent Plug runtime", () => {
     expect(growth.tools).not.toContain("fincept:launch_sandbox");
     expect(growth.tools).not.toContain("Ghostfolio");
     expect(growth.tools).not.toContain("ghostfolio:launch_sandbox");
+  });
+
+  it("injects an outcome snapshot into CEO and analyst runtime prompts", async () => {
+    clearAgentRuntimeCache();
+    const company = await store.createCompany({
+      name: "Outcome Snapshot Co",
+      brief: { vision: "Use live operating context" },
+      budgetCents: 10000,
+    });
+    await store.createTask({
+      companyId: company.id,
+      title: "Fix activation drop-off",
+      prompt: "Activation fell yesterday.",
+      status: "queued",
+      priority: "high",
+      agentRole: "analyst",
+      tags: [],
+    });
+    await store.addUsage({
+      companyId: company.id,
+      category: "llm",
+      amountCents: 750,
+      description: "Runtime spend",
+      metadata: {},
+    });
+
+    const ceo = await getAgentRuntime(company.id, "ceo");
+    const analyst = await getAgentRuntime(company.id, "analyst");
+    const engineer = await getAgentRuntime(company.id, "engineer");
+
+    expect(ceo.dynamicPrompt).toContain("OUTCOME SNAPSHOT");
+    expect(ceo.dynamicPrompt).toContain("OPEN TASKS");
+    expect(ceo.dynamicPrompt).toContain("Fix activation drop-off");
+    expect(ceo.dynamicPrompt).toContain("PROVIDER READINESS");
+    expect(analyst.dynamicPrompt).toContain("OUTCOME SNAPSHOT");
+    expect(engineer.dynamicPrompt).not.toContain("OUTCOME SNAPSHOT");
   });
 
   it("loads Finance Ledger skill instructions into the default finance runtime", async () => {

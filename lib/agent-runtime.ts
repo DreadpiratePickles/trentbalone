@@ -11,6 +11,8 @@ import { store } from "@/lib/store";
 import type { AgentEnvironmentConfig, AgentRole } from "@/lib/types";
 import { logger } from "@/lib/logger";
 import { buildSeatSystemPrompt } from "@/lib/seat-manifest";
+import { buildOperatingStateBundle } from "@/lib/operating-state";
+import { providerReadinessSnapshot } from "@/lib/provider-readiness";
 
 export type AgentRuntime = {
   role: AgentRole;
@@ -96,6 +98,8 @@ export async function getAgentRuntime(companyId: string, role: AgentRole): Promi
       ].join("\n")
     : "Plugged profile: Trent default slot persona";
 
+  const outcomeSnapshotBlock = await buildRuntimeOutcomeSnapshot(companyId, role);
+
   const environmentBlock = [
     `Memory namespace: ${environment.memoryNamespace}`,
     `Allowed tools: ${environment.tools.join(", ") || "none"}`,
@@ -114,7 +118,7 @@ export async function getAgentRuntime(companyId: string, role: AgentRole): Promi
   ].join("\n");
 
   const staticPrompt = [...skillInstructionBlocks, basePrompt, buildSeatSystemPrompt(role)].join("\n\n");
-  const dynamicPrompt = [contractBlock, profileBlock, environmentBlock].join("\n\n");
+  const dynamicPrompt = [contractBlock, profileBlock, outcomeSnapshotBlock, environmentBlock].filter(Boolean).join("\n\n");
 
   const runtime = {
     role,
@@ -130,4 +134,24 @@ export async function getAgentRuntime(companyId: string, role: AgentRole): Promi
   runtimeCache.set(cacheKey, runtime);
   logger.debug({ agentRole: role, profileId: profile?.id ?? null, toolCount: environment.tools.length }, "agent.runtime_built");
   return runtime;
+}
+
+async function buildRuntimeOutcomeSnapshot(companyId: string, role: AgentRole): Promise<string> {
+  if (role !== "ceo" && role !== "analyst") return "";
+
+  const company = await store.getCompany(companyId).catch(() => null);
+  const state = company
+    ? await buildOperatingStateBundle(company, `Runtime outcome snapshot for ${role}`).catch(() => null)
+    : null;
+  const readiness = providerReadinessSnapshot()
+    .map((item) => `- ${item.label}: ${item.status}${item.recovery ? ` (${item.recovery})` : ""}`)
+    .join("\n");
+
+  return [
+    "OUTCOME SNAPSHOT",
+    "Use this as real operating context. Do not invent missing external metrics; call an available provider tool or state that the provider is not configured.",
+    state?.text ?? "Operating state unavailable.",
+    "PROVIDER READINESS",
+    readiness || "- none",
+  ].join("\n");
 }

@@ -45,12 +45,12 @@ describe("agent routing context", () => {
     {
       objective: "Escalate this angry customer ticket and draft a safe support reply.",
       role: "support",
-      tool: "support:read_mock",
+      tool: "support:inbound_email",
     },
     {
       objective: "Create GitHub issues and a PR test plan for the app-solo bug.",
       role: "engineer",
-      tool: "github:issue",
+      tool: "Workbench Sandbox",
     },
   ] as const)("routes $objective", ({ objective, role, tool }) => {
     expect(recommendSeatForObjective(objective)).toMatchObject({ role, tool });

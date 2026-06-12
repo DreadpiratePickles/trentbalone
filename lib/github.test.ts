@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createGitHubIssue,
   createGitHubIssueForTask,
+  getGitHubCredentials,
   listGitHubRepos,
   publicGitHubConnection,
   saveGitHubConnection,
@@ -13,6 +14,7 @@ import { store } from "@/lib/store";
 describe("GitHub integration", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("stores GitHub credentials encrypted and redacts public output", async () => {
@@ -119,6 +121,47 @@ describe("GitHub integration", () => {
     expect(result.status).toBe("failed");
     expect(result.summary).toMatch(/credentials are not configured/i);
     expect(result.summary).not.toMatch(/mock/i);
+  });
+
+  it("reads GITHUBTOKEN as the env token alias used by trent.env.rtf", async () => {
+    vi.stubEnv("GITHUB_TOKEN", "");
+    vi.stubEnv("GITHUBTOKEN", "ghp_alias_token");
+    vi.stubEnv("GITHUB_OWNER", "trent");
+    vi.stubEnv("GITHUB_REPO", "app");
+
+    await expect(getGitHubCredentials()).resolves.toEqual({
+      token: "ghp_alias_token",
+      owner: "trent",
+      repo: "app",
+    });
+  });
+
+  it("fails closed when env GitHub token contains non-header characters", async () => {
+    const company = await store.createCompany({
+      name: "Malformed GitHub Token Co",
+      brief: { vision: "Do not crash on malformed credentials" }
+    });
+    vi.stubEnv("GITHUB_TOKEN", "");
+    vi.stubEnv("GITHUBTOKEN", "ghp_bad\u0441");
+    vi.stubEnv("GITHUB_OWNER", "trent");
+    vi.stubEnv("GITHUB_REPO", "app");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(validateGitHubConnection()).resolves.toMatchObject({
+      ok: false,
+      status: "failed",
+      error: expect.stringContaining("malformed"),
+    });
+    const result = await createGitHubIssue(company.id, {
+      title: "Create real issue",
+      body: "This should not call GitHub.",
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.status).toBe("failed");
+    expect(result.summary).toContain("malformed");
+    expect(result.summary).not.toContain("ghp_bad");
   });
 
   it("validates configured repo and lists repos", async () => {
@@ -235,7 +278,7 @@ describe("GitHub integration", () => {
       .mockResolvedValueOnce({
         ok: true,
         status: 201,
-        json: async () => ({})
+        json: async () => ({ commit: { sha: "commit123" } })
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -244,6 +287,10 @@ describe("GitHub integration", () => {
           html_url: "https://github.com/trent/app/pull/1",
           number: 1
         })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ state: "success", total_count: 3 })
       });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -252,6 +299,7 @@ describe("GitHub integration", () => {
     if (result.status !== "completed") throw new Error("Expected completed PR scaffold result");
     expect(result.pullRequestNumber).toBe(1);
     expect(result.pullRequestUrl).toBe("https://github.com/trent/app/pull/1");
+    expect(result.ciStatus).toBe("success");
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.github.com/repos/trent/app/git/refs",
       expect.objectContaining({ method: "POST" })
@@ -264,6 +312,72 @@ describe("GitHub integration", () => {
       "https://api.github.com/repos/trent/app/pulls",
       expect.objectContaining({ method: "POST" })
     );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/trent/app/commits/commit123/status",
+      expect.objectContaining({ method: "GET" })
+    );
     expect((await store.getTask(task.id))?.status).toBe("completed");
+  });
+
+  it("fails PR scaffolding if the branch content commit cannot be written", async () => {
+    const [company] = await store.listCompanies();
+    await saveGitHubConnection(company.id, {
+      token: "ghp_1234567890abcdef",
+      owner: "trent",
+      repo: "app"
+    });
+    const task = await store.createTask({
+      companyId: company.id,
+      title: "Build PR scaffold failure",
+      prompt: "Create branch and PR plan.",
+      status: "queued",
+      priority: "high",
+      agentRole: "engineer",
+      tags: ["github"]
+    });
+    const approval = await store.createApproval({
+      companyId: company.id,
+      taskId: task.id,
+      action: "github.scaffold_pr",
+      reason: "Approve PR scaffold."
+    });
+    await store.resolveApproval(approval.id, "approved");
+    await store.updateTask(task.id, { approvalId: approval.id });
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          full_name: "trent/app",
+          default_branch: "main",
+          html_url: "https://github.com/trent/app"
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ object: { sha: "abc123" } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({ ref: "refs/heads/trent/build-pr-scaffold-failure" })
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => "contents permission missing"
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await scaffoldGitHubPullRequestForTask(task);
+
+    expect(result.status).toBe("failed");
+    expect(result.summary).toContain("Could not write PR scaffold commit");
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "https://api.github.com/repos/trent/app/pulls",
+      expect.anything()
+    );
+    expect((await store.getTask(task.id))?.status).toBe("failed");
   });
 });

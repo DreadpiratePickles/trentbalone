@@ -157,4 +157,56 @@ describe("integration health", () => {
     expect(result?.status).toBe("mocked");
     expect(result?.summary).toContain("Open Generative AI sandbox plan");
   });
+
+  it("registers Email as a real Resend-backed adapter instead of a mocked send path", async () => {
+    const email = adapters.find((adapter) => adapter.name === "Email");
+
+    expect(email?.scopes).toContain("resend:email:send");
+    expect(email?.availability).not.toBe("test_only");
+    expect(email?.requiresApproval("send morning founder email")).toBe(true);
+
+    const result = await email?.dryRun?.("send", {
+      to: "founder@example.com",
+      subject: "Morning brief",
+      text: "Here is the update.",
+    });
+    expect(result?.summary).not.toMatch(/mocked/i);
+  });
+
+  it("registers Sentry as a real read-only adapter instead of mocked diagnostics", async () => {
+    const sentry = adapters.find((adapter) => adapter.name === "Sentry");
+
+    expect(sentry?.scopes).toContain("sentry:issues:read");
+    expect(sentry?.availability).not.toBe("test_only");
+    expect(sentry?.requiresApproval("read unresolved issues")).toBe(false);
+    expect(sentry?.requiresApproval("resolve issue")).toBe(true);
+  });
+
+  it("registers PostHog as a real read-only analytics adapter", async () => {
+    const posthog = adapters.find((adapter) => adapter.name === "PostHog");
+
+    expect(posthog?.scopes).toContain("analytics:read");
+    expect(posthog?.availability).not.toBe("test_only");
+    expect(posthog?.requiresApproval("read metrics")).toBe(false);
+    expect(posthog?.requiresApproval("delete event")).toBe(true);
+  });
+
+  it("registers X as the first real social publishing adapter and keeps Late.dev unavailable", async () => {
+    const x = adapters.find((adapter) => adapter.name === "X");
+    const late = adapters.find((adapter) => adapter.name === "Late.dev");
+
+    expect(x?.scopes).toContain("social:publish");
+    expect(x?.availability).not.toBe("test_only");
+    expect(x?.requiresApproval("publish post")).toBe(true);
+    expect(late?.availability).toBe("unavailable");
+  });
+
+  it("does not expose Postmark as a mocked production-capable adapter", async () => {
+    const postmark = adapters.find((adapter) => adapter.name === "Postmark");
+
+    expect(postmark?.availability).toBe("unavailable");
+    const result = await postmark?.execute("send", { to: "founder@example.com" });
+    expect(result?.status).toBe("failed");
+    expect(result?.summary).toContain("not configured");
+  });
 });

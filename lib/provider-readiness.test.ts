@@ -24,6 +24,42 @@ describe("provider readiness", () => {
     expect(snapshot.find((item) => item.key === "sandbox")?.recovery).toContain("E2B_API_KEY");
   });
 
+  it("does not mark email real when only an API key is present", () => {
+    const snapshot = providerReadinessSnapshot({
+      RESEND_API_KEY: "re_test",
+    } as unknown as NodeJS.ProcessEnv);
+
+    expect(snapshot.find((item) => item.key === "email")).toMatchObject({
+      status: "unavailable",
+      recovery: expect.stringContaining("sender"),
+    });
+  });
+
+  it("marks Resend email real when a token and platform domain are present", () => {
+    const snapshot = providerReadinessSnapshot({
+      RESEND_API_KEY: "re_test",
+      RESEND_FROM_DOMAIN: "mail.trent.test",
+    } as unknown as NodeJS.ProcessEnv);
+
+    expect(snapshot.find((item) => item.key === "email")?.status).toBe("real");
+  });
+
+  it("marks malformed GitHub and Stripe credentials as failed readiness", () => {
+    const snapshot = providerReadinessSnapshot({
+      GITHUBTOKEN: "ghp_bad\u0441",
+      STRIPE_SECRET_KEY: "sk_bad\u0441",
+    } as unknown as NodeJS.ProcessEnv);
+
+    expect(snapshot.find((item) => item.key === "github")).toMatchObject({
+      status: "failed",
+      recovery: expect.stringContaining("malformed"),
+    });
+    expect(snapshot.find((item) => item.key === "billing")).toMatchObject({
+      status: "failed",
+      recovery: expect.stringContaining("malformed"),
+    });
+  });
+
   it("returns an actionable failure for production test-only tools", () => {
     (process.env as Record<string, string | undefined>).NODE_ENV = "production";
     const adapter: ToolAdapter = {

@@ -1,5 +1,6 @@
 import type { ToolCallRecord } from "@/lib/types";
 import type { ToolAdapter } from "@/lib/tools";
+import { isHttpHeaderValueSafe, malformedCredentialSummary } from "@/lib/http-credential";
 
 export type ProviderReadinessStatus = "real" | "unavailable" | "approval_required" | "test_only" | "failed";
 
@@ -12,16 +13,16 @@ export type ProviderReadiness = {
 
 export function providerReadinessSnapshot(env: NodeJS.ProcessEnv = process.env): ProviderReadiness[] {
   return [
-    readiness("github", "GitHub", Boolean(env.GITHUB_TOKEN), "Connect a GitHub App/token with repo read/write permissions."),
+    githubReadiness(env),
     readiness("browser", "Browser automation", Boolean(env.STEEL_API_KEY || env.BROWSERBASE_API_KEY || env.CAMOFOX_BASE_URL || env.PLAYWRIGHT_BROWSERS_PATH), "Install Playwright browsers or configure a cloud browser provider."),
     readiness("mcp", "MCP", Boolean(env.DATABASE_URL), "Configure DATABASE_URL, then connect MCP server URL/token in the MCP page."),
     sandboxReadiness(env),
     readiness("database", "Database", Boolean(env.DATABASE_URL), "Configure DATABASE_URL."),
     readiness("deploy", "Deploy", Boolean(env.VERCEL_TOKEN || env.RAILWAY_TOKEN || env.RENDER_API_KEY), "Configure Vercel, Railway, or Render credentials."),
-    readiness("email", "Email", Boolean(env.POSTMARK_TOKEN || env.RESEND_API_KEY), "Configure Postmark or Resend credentials."),
-    readiness("social", "Social", Boolean(env.LATE_API_KEY || env.META_ACCESS_TOKEN), "Configure social publishing credentials."),
-    readiness("billing", "Billing", Boolean(env.STRIPE_SECRET_KEY), "Configure Stripe credentials."),
-    readiness("analytics", "Analytics", Boolean(env.POSTHOG_API_KEY || env.GA_PROPERTY_ID), "Configure analytics provider credentials."),
+    readiness("email", "Email", emailConfigured(env), "Configure Postmark or Resend credentials plus a verified sender/from domain."),
+    readiness("social", "Social", Boolean(env.X_USER_ACCESS_TOKEN || env.TWITTER_USER_ACCESS_TOKEN || env.LATE_API_KEY || env.META_ACCESS_TOKEN), "Configure social publishing credentials."),
+    billingReadiness(env),
+    readiness("analytics", "Analytics", Boolean(((env.POSTHOG_PERSONAL_API_KEY || env.POSTHOG_API_KEY) && (env.POSTHOG_PROJECT_ID || env.POSTHOG_TEAM_ID)) || env.GA_PROPERTY_ID), "Configure analytics provider credentials."),
   ];
 }
 
@@ -65,6 +66,63 @@ function sandboxReadiness(env: NodeJS.ProcessEnv): ProviderReadiness {
   };
 }
 
+function githubReadiness(env: NodeJS.ProcessEnv): ProviderReadiness {
+  const token = env.GITHUB_TOKEN || env.GITHUBTOKEN;
+  if (!token) {
+    return {
+      key: "github",
+      label: "GitHub",
+      status: "unavailable",
+      recovery: "Connect a GitHub App/token with repo read/write permissions.",
+    };
+  }
+  if (!isHttpHeaderValueSafe(token)) {
+    return {
+      key: "github",
+      label: "GitHub",
+      status: "failed",
+      recovery: malformedCredentialSummary("GitHub token"),
+    };
+  }
+  return { key: "github", label: "GitHub", status: "real" };
+}
+
+function billingReadiness(env: NodeJS.ProcessEnv): ProviderReadiness {
+  if (!env.STRIPE_SECRET_KEY) {
+    return {
+      key: "billing",
+      label: "Billing",
+      status: "unavailable",
+      recovery: "Configure Stripe credentials.",
+    };
+  }
+  if (!isHttpHeaderValueSafe(env.STRIPE_SECRET_KEY)) {
+    return {
+      key: "billing",
+      label: "Billing",
+      status: "failed",
+      recovery: malformedCredentialSummary("Stripe secret key"),
+    };
+  }
+  return { key: "billing", label: "Billing", status: "real" };
+}
+
 function readiness(key: string, label: string, configured: boolean, recovery: string): ProviderReadiness {
   return configured ? { key, label, status: "real" } : { key, label, status: "unavailable", recovery };
+}
+
+function emailConfigured(env: NodeJS.ProcessEnv) {
+  const postmarkToken = Boolean(env.POSTMARK_API_KEY || env.POSTMARK_TOKEN || env.POSTMARK_SERVER_TOKEN);
+  const postmarkSender = Boolean(env.POSTMARK_FROM_EMAIL || env.EMAIL_FROM);
+  const resendToken = Boolean(env.RESEND_API_KEY || env.RESEND_AUTH_TOKEN);
+  const resendSender = Boolean(
+    env.RESEND_FROM_EMAIL
+    || env.TRENT_EMAIL_FROM
+    || env.EMAIL_FROM
+    || env.RESEND_FROM_DOMAIN
+    || env.TRENT_EMAIL_DOMAIN
+    || env.TRENT_PLATFORM_DOMAIN
+    || env.BASE_DOMAIN,
+  );
+  return (postmarkToken && postmarkSender) || (resendToken && resendSender);
 }

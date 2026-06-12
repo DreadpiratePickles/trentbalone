@@ -27,12 +27,14 @@ import {
 } from "@/lib/open-generative-ai";
 import { toolUnavailableResult } from "@/lib/provider-readiness";
 import type { ToolAdapter } from "@/lib/tools";
+import { createWorkbenchSandboxToolAdapter } from "@/lib/workbench-sandbox-tool-adapter";
 
 function isHyperFramesAction(action: string): action is HyperFramesAction {
   return ["create", "catalog", "preview", "lint", "inspect", "render"].includes(action);
 }
 
 export const sandboxToolAdapters: ToolAdapter[] = [
+  createWorkbenchSandboxToolAdapter(),
   {
     name: "HyperFrames",
     scopes: buildHyperFramesToolScopes(),

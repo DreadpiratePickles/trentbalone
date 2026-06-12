@@ -2074,7 +2074,7 @@ function withFinanceGhostfolioApprovalGates(gates: string[]) {
 
 export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "memoryNamespace">> = {
   ceo: {
-    tools: withSteelTools(["memory:read", "tasks:create", "reports:create", "approvals:request"]),
+    tools: withSteelTools(["memory:read", "tasks:create", "reports:create", "approvals:request", "Email", "Stripe", "PostHog", "Sentry"]),
     approvalRequiredFor: withSteelApprovalGates(["strategy.pivot", "budget.increase", "public.commitment"]),
     budgetCentsPerRun: 250,
     maxRuntimeSeconds: 600,
@@ -2082,15 +2082,15 @@ export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "
     skills: CEO_OPERATING_STRATEGY_SKILLS
   },
   engineer: {
-    tools: withSteelTools(["github:read", "github:issue", "github:branch_scaffold", "documents:write", "tests:mock"]),
-    approvalRequiredFor: withSteelApprovalGates(["github.issue", "github.branch", "github.pr", "github.merge", "deploy", "delete"]),
+    tools: withSteelTools(["GitHub", "Workbench Sandbox", "github:read", "github:issue", "github:branch_scaffold", "documents:write", "tests:run", "sandbox:exec", "workbench:session"]),
+    approvalRequiredFor: withSteelApprovalGates(["github.issue", "github.branch", "github.pr", "github.merge", "deploy", "delete", "sandbox.side_effect"]),
     budgetCentsPerRun: 350,
     maxRuntimeSeconds: 900,
     outputContract: ["implementation_plan", "test_plan", "risk_notes", "approval_requests"],
     skills: ENGINEER_RUNTIME_SKILLS
   },
   growth: {
-    tools: withGrowthOpenGenerativeAiTools(withGrowthHyperFramesTools(withSteelTools(["documents:write", "gmail:draft", "social:draft", "ads:draft", "analytics:read_mock"]))),
+    tools: withGrowthOpenGenerativeAiTools(withGrowthHyperFramesTools(withSteelTools(["documents:write", "Email", "X", "PostHog", "email:draft", "social:draft", "ads:draft", "analytics:read"]))),
     approvalRequiredFor: withGrowthOpenGenerativeAiApprovalGates(withGrowthHyperFramesApprovalGates(withSteelApprovalGates(["gmail.send", "social.publish", "ads.launch", "ads.spend", "prospect.outbound"]))),
     budgetCentsPerRun: 250,
     maxRuntimeSeconds: 600,
@@ -2098,7 +2098,7 @@ export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "
     skills: GROWTH_RUNTIME_SKILLS
   },
   content: {
-    tools: withSteelTools(["documents:write", "gmail:draft", "social:draft"]),
+    tools: withSteelTools(["documents:write", "Email", "X", "email:draft", "social:draft"]),
     approvalRequiredFor: withSteelApprovalGates(["gmail.send", "social.publish", "brand.claim"]),
     budgetCentsPerRun: 175,
     maxRuntimeSeconds: 600,
@@ -2106,7 +2106,7 @@ export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "
     skills: DESIGN_CONTENT_STUDIO_SKILLS
   },
   support: {
-    tools: withSteelTools(["documents:write", "gmail:draft", "support:read_mock"]),
+    tools: withSteelTools(["documents:write", "Email", "support:inbound_email"]),
     approvalRequiredFor: withSteelApprovalGates(["gmail.send", "refund", "legal.claim", "account.change"]),
     budgetCentsPerRun: 150,
     maxRuntimeSeconds: 420,
@@ -2114,7 +2114,7 @@ export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "
     skills: SUPPORT_OPS_SHIELD_SKILLS
   },
   analyst: {
-    tools: withSteelTools(["analytics:read_mock", "usage:read", "reports:create", "memory:read"]),
+    tools: withSteelTools(["PostHog", "Sentry", "Stripe", "Workbench Sandbox", "analytics:read", "usage:read", "reports:create", "memory:read", "sandbox:exec"]),
     approvalRequiredFor: withSteelApprovalGates(["external.analytics.write", "data.export"]),
     budgetCentsPerRun: 225,
     maxRuntimeSeconds: 600,
@@ -2122,7 +2122,7 @@ export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "
     skills: RESEARCH_ANALYST_LENS_SKILLS
   },
   finance: {
-    tools: withFinanceGhostfolioTools(withFinanceFinceptTools(withSteelTools(["usage:read", "approvals:request", "billing:mock"]))),
+    tools: withFinanceGhostfolioTools(withFinanceFinceptTools(withSteelTools(["Stripe", "usage:read", "approvals:request", "billing:read"]))),
     approvalRequiredFor: withFinanceGhostfolioApprovalGates(withFinanceFinceptApprovalGates(withSteelApprovalGates(["charge", "refund", "subscription.change", "budget.increase", "payout"]))),
     budgetCentsPerRun: 125,
     maxRuntimeSeconds: 420,
@@ -2138,7 +2138,7 @@ export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "
     skills: CRITIC_ESCALATION_AUDITOR_SKILLS
   },
   sales: {
-    tools: withSteelTools(["crm:read_mock", "crm:update_draft", "gmail:draft", "documents:write", "prospects:research"]),
+    tools: withSteelTools(["Email", "crm:read_unavailable", "crm:update_draft", "email:draft", "documents:write", "prospects:research"]),
     approvalRequiredFor: withSteelApprovalGates(["gmail.send", "crm.write", "prospect.outbound", "contract.commitment", "pricing.exception"]),
     budgetCentsPerRun: 225,
     maxRuntimeSeconds: 600,

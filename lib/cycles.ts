@@ -1,7 +1,7 @@
 import { generateOperatingPlan, ceoChatResponse } from "@/lib/ai";
 import { getApprovalExpiryHours } from "@/lib/tools";
-import type { AgentRole, Cycle, CycleFrequency } from "@/lib/types";
-import { executeStepWithRuntime, type RuntimeStep } from "@/lib/orchestrator-runtime";
+import type { AgentRole, Cycle, CycleFrequency, ToolCallRecord } from "@/lib/types";
+import { executeStepWithRuntime, SeatLoopAwaitingApprovalError, type RuntimeStep } from "@/lib/orchestrator-runtime";
 import { store } from "@/lib/store";
 import { assertSpendAvailable, assertAgentTokenBudget } from "@/lib/spend";
 import { makeId, nowIso } from "@/lib/utils";
@@ -141,12 +141,72 @@ export async function runCompanyCycle(companyId: string, trigger: "manual" | "sc
         step: { phase: "agent_start", role: task.agentRole, label: task.title }
       });
 
-      const executionResult = await executeStepWithRuntime({
-        step,
-        company,
-        previousOutputs,
-        cycleId: cycle.id,
-      });
+      let executionResult: Awaited<ReturnType<typeof executeStepWithRuntime>> | undefined;
+      try {
+        executionResult = await executeStepWithRuntime({
+          step,
+          company,
+          previousOutputs,
+          cycleId: cycle.id,
+        });
+      } catch (err) {
+        if (!(err instanceof SeatLoopAwaitingApprovalError)) throw err;
+
+        const pending = seatApprovalRequest(err.toolCalls);
+        const output = pending
+          ? `${task.agentRole} queued approval for ${pending.adapter}: ${pending.action}. ${pending.summary}`
+          : `${task.agentRole} paused for tool approval.`;
+        previousOutputs[stepId] = output;
+        execCostCents += err.costCents;
+        execTokens += err.tokens;
+
+        if (pending) {
+          const expiryHours = getApprovalExpiryHours(pending.adapter, company.approvalExpiryOverrides);
+          const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
+          await store.createApproval({
+            companyId: company.id,
+            action: pending.action,
+            reason: pending.summary,
+            toolName: `cycle:${cycle.id}:${stepId}:${pending.adapter}`,
+            previewContent: pending.summary,
+            previewKind: "generic",
+            expiresAt,
+          });
+        }
+
+        await store.saveExecution({
+          id: makeId("exec"),
+          companyId: company.id,
+          cycleId: cycle.id,
+          agentRole: task.agentRole,
+          input: [`Step ${step.id}: ${step.title}`, `Mission: ${task.prompt}`].join("\n"),
+          output,
+          toolCalls: err.toolCalls,
+          status: "completed",
+          model: err.model,
+          tokens: err.tokens,
+          costCents: err.costCents,
+          durationMs: 0,
+          createdAt: nowIso(),
+        });
+
+        agentResults.push({
+          role: task.agentRole,
+          success: true,
+          summary: output.slice(0, 160),
+        });
+
+        emitJobEvent({
+          jobRunId: cycle.id,
+          companyId: company.id,
+          status: "step",
+          summary: `${task.agentRole} agent queued approval: ${task.title}`,
+          at: nowIso(),
+          step: { phase: "approval_required", role: task.agentRole, label: task.title, tokens: err.tokens, costCents: err.costCents }
+        });
+
+        continue;
+      }
 
       previousOutputs[stepId] = executionResult.output;
       execCostCents += executionResult.costCents;
@@ -283,4 +343,14 @@ function nextCycleAt(frequency: CycleFrequency, fromIso: string) {
   const date = new Date(fromIso);
   date.setDate(date.getDate() + (frequency === "daily" ? 1 : 7));
   return date.toISOString();
+}
+
+function seatApprovalRequest(toolCalls: ToolCallRecord[]) {
+  const pending = [...toolCalls].reverse().find((record) => record.status === "needs_approval");
+  if (!pending) return undefined;
+  return {
+    adapter: pending.adapter,
+    action: pending.action,
+    summary: pending.summary,
+  };
 }

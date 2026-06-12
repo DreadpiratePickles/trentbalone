@@ -2,6 +2,7 @@ import { decryptJson, encryptJson, maskSecret } from "@/lib/secrets";
 import { store } from "@/lib/store";
 import { nowIso, slugify } from "@/lib/utils";
 import type { Task, ToolCallRecord, ToolConnection } from "@/lib/types";
+import { isHttpHeaderValueSafe, malformedCredentialSummary } from "@/lib/http-credential";
 
 export type GitHubCredentials = {
   token: string;
@@ -19,9 +20,9 @@ const GITHUB_ISSUE_APPROVAL_ACTION = "github.create_issue";
 const GITHUB_PR_SCAFFOLD_APPROVAL_ACTION = "github.scaffold_pr";
 
 function envCredentials(): GitHubCredentials | undefined {
-  const token = process.env.GITHUB_TOKEN;
-  const owner = process.env.GITHUB_OWNER;
-  const repo = process.env.GITHUB_REPO;
+  const token = (process.env.GITHUB_TOKEN || process.env.GITHUBTOKEN)?.trim();
+  const owner = process.env.GITHUB_OWNER?.trim();
+  const repo = process.env.GITHUB_REPO?.trim();
   return token && owner && repo ? { token, owner, repo } : undefined;
 }
 
@@ -29,7 +30,7 @@ export async function saveGitHubConnection(companyId: string, credentials: GitHu
   return store.upsertIntegration({
     companyId,
     provider: "GitHub",
-    scopes: ["repo:read", "issues:write"],
+    scopes: ["repo:read", "issues:write", "pull_requests:write", "contents:write", "statuses:read"],
     status: "connected",
     encryptedData: encryptJson(credentials)
   });
@@ -71,6 +72,8 @@ export async function getGitHubCredentials(companyId?: string): Promise<GitHubCr
 }
 
 async function githubFetch(credentials: GitHubCredentials, path: string, init?: RequestInit) {
+  const credentialError = githubCredentialError(credentials);
+  if (credentialError) throw new Error(credentialError);
   return fetch(`https://api.github.com${path}`, {
     ...init,
     headers: {
@@ -98,6 +101,15 @@ export async function validateGitHubConnection(companyId?: string): Promise<GitH
   const credentials = await getGitHubCredentials(companyId);
   if (!credentials) {
     return { ok: false, status: "needs_credentials", error: "GitHub credentials are not configured." };
+  }
+  const credentialError = githubCredentialError(credentials);
+  if (credentialError) {
+    return {
+      ok: false,
+      status: "failed",
+      repository: `${credentials.owner}/${credentials.repo}`,
+      error: credentialError,
+    };
   }
 
   const response = await githubFetch(credentials, `/repos/${credentials.owner}/${credentials.repo}`);
@@ -133,6 +145,10 @@ export async function listGitHubRepos(companyId?: string) {
   const credentials = await getGitHubCredentials(companyId);
   if (!credentials) {
     return { status: "needs_credentials" as const, repositories: [] };
+  }
+  const credentialError = githubCredentialError(credentials);
+  if (credentialError) {
+    return { status: "failed" as const, repositories: [], error: credentialError };
   }
 
   const response = await githubFetch(credentials, "/user/repos?per_page=100&sort=updated");
@@ -179,6 +195,15 @@ export async function createGitHubIssue(
       action: "create_issue",
       status: "failed",
       summary: "GitHub credentials are not configured. Connect a GitHub App/token with repo write access before Trent can create issues."
+    };
+  }
+  const credentialError = githubCredentialError(credentials);
+  if (credentialError) {
+    return {
+      adapter: "GitHub",
+      action: "create_issue",
+      status: "failed",
+      summary: credentialError,
     };
   }
 
@@ -335,6 +360,16 @@ export async function scaffoldGitHubPullRequestForTask(task: Task) {
       summary: "GitHub credentials are not configured. Connect a GitHub App/token with repo write access before Trent can create a PR scaffold."
     };
   }
+  const credentialError = githubCredentialError(credentials);
+  if (credentialError) {
+    await store.updateTask(task.id, { status: "failed" });
+    return {
+      adapter: "GitHub",
+      action: "scaffold_pr",
+      status: "failed" as const,
+      summary: credentialError,
+    };
+  }
 
   await store.updateTask(task.id, { status: "running" });
   const repo = await validateGitHubConnection(task.companyId);
@@ -401,7 +436,7 @@ export async function scaffoldGitHubPullRequestForTask(task: Task) {
   ].join("\n");
 
   const fileContentBase64 = Buffer.from(markdownContent).toString("base64");
-  await githubFetch(
+  const contentWrite = await githubFetch(
     credentials,
     `/repos/${credentials.owner}/${credentials.repo}/contents/trent-task-${task.id}.md`,
     {
@@ -413,10 +448,22 @@ export async function scaffoldGitHubPullRequestForTask(task: Task) {
       })
     }
   );
+  if (!contentWrite.ok) {
+    await store.updateTask(task.id, { status: "failed" });
+    return {
+      adapter: "GitHub",
+      action: "scaffold_pr",
+      status: "failed" as const,
+      summary: `Could not write PR scaffold commit: ${contentWrite.status} ${(await contentWrite.text()).slice(0, 200)}`
+    };
+  }
+  const contentWriteData = (await contentWrite.json().catch(() => ({}))) as { commit?: { sha?: string } };
+  const commitSha = contentWriteData.commit?.sha;
 
   // 2. Open a real pull request on the repository
   let prUrl: string | undefined;
   let prNumber: number | undefined;
+  let ciStatus: string | undefined;
 
   const prRes = await githubFetch(
     credentials,
@@ -450,6 +497,20 @@ export async function scaffoldGitHubPullRequestForTask(task: Task) {
     }
   }
 
+  if (commitSha) {
+    const statusRes = await githubFetch(
+      credentials,
+      `/repos/${credentials.owner}/${credentials.repo}/commits/${commitSha}/status`,
+      { method: "GET" }
+    );
+    if (statusRes.ok) {
+      const status = (await statusRes.json()) as { state?: string };
+      ciStatus = status.state;
+    } else {
+      ciStatus = `unavailable:${statusRes.status}`;
+    }
+  }
+
   await store.createDocument({
     companyId: task.companyId,
     type: "agent_note",
@@ -459,6 +520,7 @@ export async function scaffoldGitHubPullRequestForTask(task: Task) {
       `Base: ${repo.defaultBranch}`,
       `Branch URL: ${branchUrl}`,
       `Pull Request: ${prUrl ?? "not created or already exists"}`,
+      `CI Status: ${ciStatus ?? "not checked"}`,
       "",
       `Created commit with file: trent-task-${task.id}.md`,
       "Implementation summary committed and pull request submitted."
@@ -474,6 +536,9 @@ export async function scaffoldGitHubPullRequestForTask(task: Task) {
   };
   if (prNumber !== undefined) {
     metadata.pullRequestNumber = prNumber;
+  }
+  if (ciStatus) {
+    metadata.ciStatus = ciStatus;
   }
 
   await store.addUsage({
@@ -495,6 +560,11 @@ export async function scaffoldGitHubPullRequestForTask(task: Task) {
     branchName,
     branchUrl,
     pullRequestUrl: prUrl,
-    pullRequestNumber: prNumber
+    pullRequestNumber: prNumber,
+    ciStatus
   };
+}
+
+function githubCredentialError(credentials: GitHubCredentials): string | undefined {
+  return isHttpHeaderValueSafe(credentials.token) ? undefined : malformedCredentialSummary("GitHub token");
 }

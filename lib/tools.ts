@@ -7,6 +7,11 @@ import { SteelBrowserClient, buildSteelToolScopes } from "@/lib/steel-browser";
 import { sandboxToolAdapters } from "@/lib/sandbox-tool-adapters";
 import { GitNexusVaultIndexAdapter } from "@/lib/vault-memory";
 import { toolUnavailableResult } from "@/lib/provider-readiness";
+import { createResendEmailAdapter } from "@/lib/resend-email-adapter";
+import { createStripeReadAdapter } from "@/lib/stripe-read-adapter";
+import { createSentryReadAdapter } from "@/lib/sentry-read-adapter";
+import { createPostHogReadAdapter } from "@/lib/posthog-read-adapter";
+import { createXSocialAdapter } from "@/lib/x-social-adapter";
 
 export type ToolAdapter = {
   name: string;
@@ -74,6 +79,31 @@ function mockedAdapter(
       };
     },
     fallbackAdapterName: undefined,
+  };
+}
+
+function unavailableAdapter(name: string, scopes: string[], approvalWords: string[]): ToolAdapter {
+  return {
+    name,
+    scopes,
+    availability: "unavailable",
+    async healthCheck() {
+      return "needs_credentials";
+    },
+    estimateCost() {
+      return 0;
+    },
+    requiresApproval(action) {
+      return approvalWords.some((word) => action.toLowerCase().includes(word));
+    },
+    async execute(action) {
+      return {
+        adapter: name,
+        action,
+        status: "failed",
+        summary: `${name} is not configured. Connect real provider credentials before agents can use this tool.`,
+      };
+    },
   };
 }
 
@@ -394,26 +424,28 @@ export const adapters: ToolAdapter[] = [
   },
   new GitNexusVaultIndexAdapter(),
   ...sandboxToolAdapters,
+  createResendEmailAdapter(),
   mockedAdapter("Anthropic", ["llm:primary", "model_telemetry"], []),
   mockedAdapter("AWS Bedrock", ["llm:fallback", "model_routing"], []),
   mockedAdapter("OpenAI", ["llm", "video_generation"], []),
   mockedAdapter("Fal.ai", ["image_generation", "video_generation", "audio_generation"], ["publish"]),
   mockedAdapter("Cloudflare R2", ["asset_storage", "generated_media"], ["delete"]),
-  mockedAdapter("Email", ["draft", "send_requires_approval"], ["send", "reply"]),
-  mockedAdapter("Postmark", ["transactional_email", "inbound_email"], ["send"], { spendsMoneyOnExecute: true, estimatedCents: 1 }),
+  unavailableAdapter("Postmark", ["transactional_email", "inbound_email"], ["send"]),
   mockedAdapter("Hunter.io", ["email_verification", "deliverability"], []),
   mockedAdapter("Meta Ads", ["draft_campaign", "launch_requires_approval"], ["launch", "spend", "budget"], { spendsMoneyOnExecute: true, estimatedCents: 500, approvalExpiryHours: 12 }),
   mockedAdapter("Meta Pixel/CAPI", ["conversion_events", "attribution"], ["send", "identify"]),
-  mockedAdapter("Stripe", ["subscriptions_mock", "connect_ready"], ["charge", "refund", "withdraw"], { spendsMoneyOnExecute: true, estimatedCents: 100 }),
+  createStripeReadAdapter(),
   mockedAdapter("Google OAuth/Gmail", ["auth", "gmail_draft", "send_requires_approval"], ["send"]),
   mockedAdapter("Slack", ["notifications", "workspace_updates"], ["post"]),
-  mockedAdapter("Late.dev", ["social_schedule", "multi_platform_posting"], ["publish", "post"]),
+  createXSocialAdapter(),
+  unavailableAdapter("Late.dev", ["social_schedule", "multi_platform_posting"], ["publish", "post"]),
   mockedAdapter("Browserbase", ["cloud_browser", "screenshots", "extraction"], ["submit", "purchase", "login"]),
   mockedAdapter("ScreenshotOne", ["automated_screenshots"], []),
   mockedAdapter("Render", ["hosting", "deploy_requires_approval"], ["deploy", "rollback"]),
   mockedAdapter("Neon", ["postgres", "database_provisioning"], ["delete", "rotate"]),
   mockedAdapter("Expo", ["mobile_builds", "eas_distribution"], ["submit", "publish"]),
-  mockedAdapter("Sentry", ["error_monitoring", "diagnostics"], []),
+  createSentryReadAdapter(),
+  createPostHogReadAdapter(),
   mockedAdapter("IPinfo", ["ip_geolocation", "enrichment"], [])
 ];
 

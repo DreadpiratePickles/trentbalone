@@ -33,7 +33,7 @@ export function recommendSeatForObjective(objective: string): SeatRouteRecommend
   }
 
   if (/\b(support|ticket|customer issue|customer reply|angry customer|escalate.*customer|customer escalation)\b/.test(text)) {
-    return { role: "support", tool: "support:read_mock", reason: "Customer issue triage and reply drafting belongs to Support / Ops." };
+    return { role: "support", tool: "support:inbound_email", reason: "Customer issue triage and reply drafting belongs to Support / Ops." };
   }
 
   if (/\b(sales|prospect|lead|pipeline|crm|outreach|follow[- ]?up|qualification)\b/.test(text)) {
@@ -44,7 +44,7 @@ export function recommendSeatForObjective(objective: string): SeatRouteRecommend
     /\b(github|code|bug|test|tests|pr\b|pull request|deploy|repo|implementation|app[- ]?solo|workbench|software|notes app|web app|fix)\b/.test(text)
     || /\bbuild\b.{0,80}\b(app|application|site|dashboard|tool)\b/.test(text)
   ) {
-    return { role: "engineer", tool: "github:issue", reason: "Code, repo, test, issue, PR, and deploy planning belongs to Engineer." };
+    return { role: "engineer", tool: "Workbench Sandbox", reason: "Code, repo, test, issue, PR, and deploy planning belongs to Engineer." };
   }
 
   if (/\b(steel|camofox|browser|web research|competitor|competitors|screenshot|website|web evidence|public pages)\b/.test(text)) {
