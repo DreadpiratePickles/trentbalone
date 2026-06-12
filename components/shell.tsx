@@ -113,8 +113,9 @@ export function AppShell({ children, companyId }: AppShellProps) {
 
     fetch(`/api/companies/${companyId}/cycles`, { method: "POST" })
       .then((response) => response.json())
-      .then((data: { cycle?: { id: string } }) => {
-        if (data.cycle?.id) setActiveCycleId(data.cycle.id);
+      .then((data: { cycle?: { id: string }; job?: { id: string }; run?: { id: string } }) => {
+        const activeId = data.run?.id ?? data.cycle?.id ?? data.job?.id;
+        if (activeId) setActiveCycleId(activeId);
         router.refresh();
       })
       .catch(() => {});

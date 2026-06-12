@@ -47,7 +47,7 @@ export const NAV_GROUPS: NavGroupConfig[] = [
     label: "build",
     items: [
       { label: "workbench", slug: "workbench", icon: "building", keywords: ["sandbox", "code", "sessions", "dev"] },
-      { label: "app solo", slug: "app-solo", icon: "play", keywords: ["solo run", "single agent"] },
+      { label: "mcp", slug: "mcp", icon: "plug", keywords: ["model context protocol", "tools", "servers"] },
       { label: "artifacts", slug: "artifacts", icon: "diamond", keywords: ["deliverables", "outputs", "exports"] },
       { label: "reports", slug: "reports", icon: "doc", keywords: ["weekly", "summary"] },
     ],

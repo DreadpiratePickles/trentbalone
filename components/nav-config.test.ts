@@ -12,7 +12,7 @@ describe("NAV_GROUPS", () => {
       "missions",
       "cycles",
       "workbench",
-      "app solo",
+      "mcp",
       "artifacts",
       "reports",
       "memory",
@@ -27,6 +27,7 @@ describe("NAV_GROUPS", () => {
       "agent plug",
       "settings",
     ]);
+    expect(NAV_GROUPS.flatMap((group) => group.items).map((item) => item.slug)).not.toContain("app-solo");
   });
 
   it("keeps approvals badge metadata on the govern group", () => {

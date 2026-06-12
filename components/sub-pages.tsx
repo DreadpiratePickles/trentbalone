@@ -27,6 +27,7 @@ import { ControlPlanePanel } from "@/components/control-plane-panel";
 import { GbrainSettingsPanel } from "@/components/gbrain-settings-panel";
 import { TaskRowActions } from "@/components/task-row-actions";
 import { CompanyMemoryUploadButton } from "@/components/company-memory-upload";
+import { McpServersPanel } from "@/components/mcp-servers-panel";
 import {
   PageHeader,
   Pill,
@@ -1393,7 +1394,7 @@ export function IntegrationsPageClient({ companyId }: { companyId: string }) {
             );
             const Icon = INTEGRATION_ICONS[name] || I.plug;
             const connected = found?.status === "connected";
-            const mocked = found?.status === "mocked";
+            const testOnly = found?.status === "mocked";
 
             return (
               <Reveal key={name} delay={i * 60}>
@@ -1402,7 +1403,7 @@ export function IntegrationsPageClient({ companyId }: { companyId: string }) {
                   style={{
                     borderColor: connected
                       ? "rgba(110,231,183,.2)"
-                      : mocked
+                      : testOnly
                       ? "rgba(148,163,184,.15)"
                       : "rgba(255,255,255,.07)",
                   }}
@@ -1437,8 +1438,8 @@ export function IntegrationsPageClient({ companyId }: { companyId: string }) {
 
                     {connected ? (
                       <Pill tone="pulse">connected</Pill>
-                    ) : mocked ? (
-                      <Pill>mocked</Pill>
+                    ) : testOnly ? (
+                      <Pill>test only</Pill>
                     ) : (
                       <Pill tone="ember">not connected</Pill>
                     )}
@@ -1513,6 +1514,8 @@ export function IntegrationsPageClient({ companyId }: { companyId: string }) {
           })}
         </div>
       )}
+
+      <McpServersPanel companyId={companyId} />
 
       {/* Coming-soon modal for non-GitHub integrations */}
       {connecting && connecting !== "github" && (

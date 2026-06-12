@@ -93,6 +93,7 @@ export function createMcpToolAdapter(server: McpServerRecord): ToolAdapter {
   return {
     name,
     scopes: [...allowed].map((tool) => `mcp:${tool}`),
+    availability: server.enabled && server.status === "connected" ? "real" : "unavailable",
     async healthCheck() {
       return server.status === "connected" ? "connected" : "needs_credentials";
     },
