@@ -41,13 +41,26 @@ function buildContracts(input: {
   internalActions?: ReadonlySet<string>;
   mcpToolNames?: ReadonlySet<string>;
 } = {}) {
-  const registry = input.registry ?? adapters;
+  const registry = input.registry ?? stableAdapters(adapters);
   return buildSeatToolContracts({
     slotEnvironments: slotEnvironments(),
     adapters: registry,
     internalActions: input.internalActions ?? INTERNAL_ACTIONS,
     mcpToolNames: input.mcpToolNames ?? new Set(),
     healthByAdapter: input.health ?? healthFor(registry),
+  });
+}
+
+function stableAdapters(registry: ToolAdapter[]): ToolAdapter[] {
+  return registry.map((adapter) => {
+    if (adapter.name !== "Workbench Sandbox") return adapter;
+    return {
+      ...adapter,
+      availability: "test_only",
+      async healthCheck() {
+        return "mocked";
+      },
+    };
   });
 }
 
