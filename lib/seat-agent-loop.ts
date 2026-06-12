@@ -4,7 +4,15 @@ import type { Subtask } from "@/lib/planner";
 import { routeToolsForStep } from "@/lib/semantic-router";
 import { executeExternalActionWithGuardrails } from "@/lib/external-action-guardrails";
 import { adapters as defaultAdapters, type ToolAdapter } from "@/lib/tools";
-import type { AgentEnvironmentConfig, ToolCallRecord } from "@/lib/types";
+import { INTERNAL_ACTIONS, runInternalAction } from "@/lib/internal-actions";
+import {
+  buildAdvertisedToolSet,
+  buildSeatToolContracts,
+  contractsForSeat,
+  type SeatToolContract,
+  type ToolReadiness,
+} from "@/lib/seat-tool-contracts";
+import type { AgentEnvironmentConfig, AgentRole, ToolCallRecord } from "@/lib/types";
 
 export type SeatLoopPendingToolCall = {
   name: string;
@@ -179,6 +187,8 @@ function maxStepsFallback(toolCalls: ToolCallRecord[]): Record<string, unknown> 
   };
 }
 
+const AGENT_ROLES: AgentRole[] = ["ceo", "engineer", "growth", "content", "support", "analyst", "finance", "escalation", "sales"];
+
 export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResult> {
   const maxSteps = input.maxSteps ?? defaultToolLoopSteps(input.subtask.seat);
   const approvalGranted = input.approvalGranted ?? false;
@@ -189,12 +199,10 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
       ? input.subtask.toolGuidance.filter((name) => input.runtime.environment.tools.includes(name))
       : input.runtime.environment.tools,
   );
-  const availableTools = registry
-    .filter((adapter) => isAdapterAllowed(adapter, allowedTools))
-    .flatMap((adapter) => [
-      adapter.name,
-      ...adapter.scopes.filter((scope) => allowedTools.has(scope)),
-    ]);
+  const activeEnvironment = { ...input.runtime.environment, tools: [...allowedTools] };
+  const contracts = buildRuntimeSeatContracts(input.subtask.seat, activeEnvironment, registry);
+  const seatContracts = contractsForSeat(contracts, input.subtask.seat);
+  const availableTools = [...buildAdvertisedToolSet(contracts, input.subtask.seat)];
 
   const seed = input.resumeSeed;
   const toolCalls: ToolCallRecord[] = seed
@@ -208,11 +216,18 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
 
   if (seed && approvalGranted && seed.pendingToolCall) {
     const pending = seed.pendingToolCall;
-    let adapter = resolveAdapter(pending.name, allowedTools, registry);
-    if (!adapter) {
-      adapter = await fallbackToolForStep(`${pending.name} ${pending.action}`, input.runtime.environment, registry);
-    }
-    if (!adapter) {
+    const record = await executeNamedToolCall({
+      name: pending.name,
+      action: pending.action,
+      companyId: input.companyId,
+      seat: input.subtask.seat,
+      approvalGranted: true,
+      allowedTools,
+      registry,
+      environment: activeEnvironment,
+      contracts: seatContracts,
+    });
+    if (!record) {
       toolCalls.push({
         adapter: pending.name,
         action: pending.action,
@@ -233,7 +248,6 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
         error: `Tool "${pending.name}" is not allowed for this seat.`,
       };
     }
-    const record = await executeAdapter(adapter, pending.action, input.companyId, true);
     toolCalls.push(record);
     if (record.status === "blocked") {
       return {
@@ -326,11 +340,18 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
       };
     }
 
-    let adapter = resolveAdapter(toolCall.name, allowedTools, registry);
-    if (!adapter) {
-      adapter = await fallbackToolForStep(`${toolCall.name} ${toolCall.action}`, input.runtime.environment, registry);
-    }
-    if (!adapter) {
+    const record = await executeNamedToolCall({
+      name: toolCall.name,
+      action: toolCall.action,
+      companyId: input.companyId,
+      seat: input.subtask.seat,
+      approvalGranted,
+      allowedTools,
+      registry,
+      environment: activeEnvironment,
+      contracts: seatContracts,
+    });
+    if (!record) {
       toolCalls.push({
         adapter: toolCall.name,
         action: toolCall.action,
@@ -353,7 +374,6 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
       continue;
     }
 
-    const record = await executeAdapter(adapter, toolCall.action, input.companyId, approvalGranted);
     toolCalls.push(record);
     if (record.status === "blocked") {
       return {
@@ -372,7 +392,7 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
     }
     if (record.status === "needs_approval" && !approvalGranted) {
       return pauseForApproval(toolCalls, tokens, costCents, model, lastError, step, {
-        name: adapter.name,
+        name: record.adapter,
         action: toolCall.action,
       });
     }
@@ -399,6 +419,106 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
     model,
     error: lastError,
     maxStepsReached: true,
+  };
+}
+
+function buildRuntimeSeatContracts(
+  seat: AgentRole,
+  environment: AgentEnvironmentConfig,
+  registry: ToolAdapter[],
+) {
+  const slotEnvironments = Object.fromEntries(
+    AGENT_ROLES.map((role) => [
+      role,
+      role === seat
+        ? environment
+        : { ...environment, memoryNamespace: `${environment.memoryNamespace}:${role}`, tools: [] },
+    ]),
+  ) as Record<AgentRole, AgentEnvironmentConfig>;
+  return buildSeatToolContracts({
+    slotEnvironments,
+    adapters: registry,
+    internalActions: INTERNAL_ACTIONS,
+    mcpToolNames: mcpToolNames(registry),
+    healthByAdapter: staticHealthByAdapter(registry),
+  });
+}
+
+function mcpToolNames(registry: ToolAdapter[]) {
+  return new Set(
+    registry
+      .filter((adapter) => adapter.name.startsWith("mcp_"))
+      .flatMap((adapter) => [adapter.name, ...adapter.scopes]),
+  );
+}
+
+function staticHealthByAdapter(registry: ToolAdapter[]) {
+  return new Map<string, ToolReadiness>(
+    registry.map((adapter) => {
+      if (adapter.availability === "test_only") return [adapter.name, "mocked" as const];
+      if (adapter.availability === "unavailable") return [adapter.name, "unavailable" as const];
+      return [adapter.name, "needs_credentials" as const];
+    }),
+  );
+}
+
+async function executeNamedToolCall(input: {
+  name: string;
+  action: string;
+  companyId: string;
+  seat: AgentRole;
+  approvalGranted: boolean;
+  allowedTools: Set<string>;
+  registry: ToolAdapter[];
+  environment: AgentEnvironmentConfig;
+  contracts: SeatToolContract[];
+}): Promise<ToolCallRecord | undefined> {
+  const contract = contractForTool(input.contracts, input.name);
+  if (contract?.binding === "internal_action") {
+    return runInternalAction(contract.tool, input.action, {
+      companyId: input.companyId,
+      actor: input.seat,
+      payload: { action: input.action },
+    });
+  }
+
+  const adapter = resolveAdapter(input.name, input.allowedTools, input.registry);
+  if (adapter) {
+    return executeAdapter(adapter, input.action, input.companyId, input.approvalGranted);
+  }
+
+  if (contract?.binding === "unavailable_marker") {
+    return {
+      adapter: contract.tool,
+      action: input.action,
+      status: "failed",
+      summary: `Tool "${contract.tool}" is intentionally unavailable. Connect a real provider before this seat can use it.`,
+    };
+  }
+
+  if (contract) {
+    return contractedToolMiss(contract, input.action);
+  }
+
+  const fallback = await fallbackToolForStep(`${input.name} ${input.action}`, input.environment, input.registry);
+  return fallback ? executeAdapter(fallback, input.action, input.companyId, input.approvalGranted) : undefined;
+}
+
+function contractForTool(contracts: SeatToolContract[], name: string) {
+  const normalized = name.trim().toLowerCase();
+  return contracts.find((contract) => contract.tool.toLowerCase() === normalized);
+}
+
+function contractedToolMiss(contract: SeatToolContract, action: string): ToolCallRecord {
+  const summary = `Contracted tool "${contract.tool}" has binding "${contract.binding ?? "orphan"}" but no executable adapter or internal action resolved.`;
+  if (process.env.NODE_ENV !== "production") {
+    throw new Error(summary);
+  }
+  return {
+    adapter: contract.tool,
+    action,
+    status: "failed",
+    summary,
   };
 }
 

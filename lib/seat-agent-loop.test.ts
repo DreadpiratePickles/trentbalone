@@ -306,6 +306,80 @@ describe("runSeatAgent", () => {
     expect(result.output?.summary).toContain("Tests passed");
   });
 
+  it("advertises and executes internal action tools through the contract table", async () => {
+    const capturedAvailableTools: string[][] = [];
+    mockExecuteSeatModel
+      .mockImplementationOnce(async (input: { toolLoopContext?: { availableTools?: string[] } }) => {
+        capturedAvailableTools.push(input.toolLoopContext?.availableTools ?? []);
+        return {
+          output: { toolCall: { name: "tasks:create", action: "Create a follow-up task" } },
+          model: "gpt-4o-mini",
+          tokens: 20,
+          costCents: 1,
+          fallback: false,
+        };
+      })
+      .mockResolvedValueOnce({
+        output: {
+          toolCall: null,
+          summary: "Task was created internally",
+          findings: [],
+          recommendations: [],
+          workRequests: [],
+        },
+        model: "gpt-4o-mini",
+        tokens: 20,
+        costCents: 1,
+        fallback: false,
+      });
+
+    const { runtime, adapters } = makeRuntime(["tasks:create"]);
+    const result = await runSeatAgent({
+      companyId: "co_1",
+      runtime,
+      subtask: makeSubtask({
+        seat: "ceo",
+        objective: "Create a follow-up task",
+        toolGuidance: ["tasks:create"],
+      }),
+      systemPrompt: runtime.systemPrompt,
+      adapters,
+    });
+
+    expect(capturedAvailableTools[0]).toContain("tasks:create");
+    expect(result.toolCalls).toEqual([
+      expect.objectContaining({
+        adapter: "tasks:create",
+        action: "Create a follow-up task",
+        status: "completed",
+        summary: expect.stringContaining("Created task"),
+      }),
+    ]);
+  });
+
+  it("throws in test/dev when a contracted tool string has no binding instead of falling back semantically", async () => {
+    mockExecuteSeatModel.mockResolvedValueOnce({
+      output: { toolCall: { name: "orphan:do_work", action: "Use the orphaned tool" } },
+      model: "gpt-4o-mini",
+      tokens: 20,
+      costCents: 1,
+      fallback: false,
+    });
+
+    const { runtime, adapters } = makeRuntime(["orphan:do_work", "Metrics"]);
+    await expect(runSeatAgent({
+      companyId: "co_1",
+      runtime,
+      subtask: makeSubtask({
+        seat: "analyst",
+        objective: "Use the orphaned tool",
+        toolGuidance: ["orphan:do_work"],
+      }),
+      systemPrompt: runtime.systemPrompt,
+      adapters,
+    })).rejects.toThrow(/Contracted tool "orphan:do_work"/);
+  });
+
   it("returns a degraded source-grounded output when a model repeats a disallowed tool", async () => {
     mockExecuteSeatModel.mockImplementation(async () => ({
       output: { toolCall: { name: "analytics:read_mock", action: "read analytics" } },
