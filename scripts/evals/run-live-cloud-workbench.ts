@@ -9,6 +9,8 @@ type Args = {
   previewPort: number;
   startTimeoutMs: number;
   processTimeoutMs: number;
+  runs: number;
+  threshold: number;
 };
 
 async function main() {
@@ -67,6 +69,7 @@ async function runWorker(args: Args) {
   const { createWorkbenchSession } = await import("@/lib/workbench");
   const { getWorkbenchProvider } = await import("@/lib/workbench-provider");
   const { runCloudWorkbenchBuildProof } = await import("@/lib/workbench-live-cloud-eval");
+  const { runCloudWorkbenchSoak } = await import("@/lib/workbench-live-cloud-soak");
   const { nowIso } = await import("@/lib/utils");
   const loadedEnvKeys = args.envFile ? loadEnvFile(args.envFile) : [];
   const provider = args.provider ?? defaultLiveProvider();
@@ -74,11 +77,57 @@ async function runWorker(args: Args) {
     throw new Error("No live Workbench provider configured. Pass --provider daytona|e2b and set DAYTONA_API_KEY or E2B_API_KEY.");
   }
 
+  if (args.runs > 1) {
+    const company = await store.createCompany({
+      name: `Live Cloud Workbench Soak ${new Date().toISOString()}`,
+      brief: { vision: "Measure repeated Trent Workbench build reliability inside real cloud sandboxes." },
+    });
+    const result = await runCloudWorkbenchSoak({
+      runs: args.runs,
+      threshold: args.threshold,
+      previewPort: args.previewPort,
+      startTimeoutMs: args.startTimeoutMs,
+      createSession: (runIndex) => createWorkbenchSession({
+        companyId: company.id,
+        objective: `Build and verify a Cloud Notes app in a real cloud Workbench sandbox (soak ${runIndex}/${args.runs})`,
+        agentRole: "engineer",
+        agentMode: "build",
+        provider,
+        allowedHosts: ["registry.npmjs.org"],
+        enqueue: false,
+      }),
+      getProvider: (session) => getWorkbenchProvider(session.provider),
+      runProof: async (proofInput) => {
+        const proof = await runCloudWorkbenchBuildProof(proofInput);
+        await store.updateWorkbenchSession(proofInput.session.id, {
+          status: proof.passed ? "completed" : "failed",
+          previewUrl: proof.previewUrl,
+          stoppedAt: nowIso(),
+        });
+        return proof;
+      },
+      onProgress: (event) => {
+        console.error(JSON.stringify({
+          type: "workbench_live_cloud_soak_progress",
+          ...event,
+          at: new Date().toISOString(),
+        }));
+      },
+    });
+
+    console.log(JSON.stringify({
+      ...result,
+      provider,
+      loadedEnvKeys,
+    }, null, 2));
+    process.exitCode = result.passed ? 0 : 1;
+    return;
+  }
+
   const company = await store.createCompany({
     name: `Live Cloud Workbench Proof ${new Date().toISOString()}`,
     brief: { vision: "Prove Trent Workbench can build and verify an app inside a real cloud sandbox." },
   });
-
   const session = await createWorkbenchSession({
     companyId: company.id,
     objective: "Build and verify a Cloud Notes app in a real cloud Workbench sandbox",
@@ -143,7 +192,10 @@ function parseArgs(argv: string[]): Args {
     previewPort: 3000,
     startTimeoutMs: 1000 * 60 * 4,
     processTimeoutMs: 1000 * 60 * 12,
+    runs: 1,
+    threshold: 0.9,
   };
+  let processTimeoutExplicit = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = argv[i + 1];
@@ -174,6 +226,19 @@ function parseArgs(argv: string[]): Args {
     if (arg === "--process-timeout-ms") {
       if (!next || !/^\d+$/.test(next)) throw new Error("--process-timeout-ms requires a numeric timeout");
       args.processTimeoutMs = Number(next);
+      processTimeoutExplicit = true;
+      i++;
+      continue;
+    }
+    if (arg === "--runs") {
+      if (!next || !/^\d+$/.test(next)) throw new Error("--runs requires a numeric count");
+      args.runs = Number(next);
+      i++;
+      continue;
+    }
+    if (arg === "--threshold") {
+      if (!next) throw new Error("--threshold requires a number between 0 and 1");
+      args.threshold = Number(next);
       i++;
       continue;
     }
@@ -184,11 +249,16 @@ function parseArgs(argv: string[]): Args {
     if (arg === "--suite" || arg === "--smoke") {
       continue;
     }
-    if (arg === "--threshold") {
-      i++;
-      continue;
-    }
     throw new Error(`Unknown argument: ${arg}`);
+  }
+  if (!Number.isInteger(args.runs) || args.runs < 1 || args.runs > 100) {
+    throw new Error("--runs must be an integer between 1 and 100");
+  }
+  if (!Number.isFinite(args.threshold) || args.threshold < 0 || args.threshold > 1) {
+    throw new Error("--threshold must be a number between 0 and 1");
+  }
+  if (!processTimeoutExplicit && args.runs > 1) {
+    args.processTimeoutMs *= args.runs;
   }
   return args;
 }
@@ -231,6 +301,7 @@ function printHelp() {
     "",
     "Suite mode (--suite): run golden-objective evals and print scorecard JSON.",
     "Live mode (default): start sandbox -> scaffold -> build -> test -> preview -> screenshot -> cleanup.",
+    "Soak mode: add --runs 20 --threshold 0.9 to repeat the same live Workbench build and report pass rate/failure clusters.",
   ].join("\n"));
 }
 
