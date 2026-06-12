@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { integrationHealth } from "@/lib/tools";
+import { resolveSeatToolContracts, type SeatToolContract, type ToolReadiness } from "@/lib/seat-tool-contracts";
 import { store } from "@/lib/store";
 import { getAuthUser, unauthorized, forbidden, requireRoleForRequest } from "@/lib/session";
 
@@ -19,7 +20,24 @@ export async function GET(request: Request) {
     store.listIntegrations(companyId),
     integrationHealth(companyId)
   ]);
-  return NextResponse.json({ configured, adapters });
+  const contracts = await resolveSeatToolContracts(companyId);
+  return NextResponse.json({
+    configured,
+    adapters: adapters.map((adapter) => ({
+      ...adapter,
+      readiness: readinessForAdapter(adapter.name, contracts) ?? adapter.status,
+    })),
+    toolContracts: contracts,
+  });
+}
+
+function readinessForAdapter(adapterName: string, contracts: SeatToolContract[]): ToolReadiness | undefined {
+  const related = contracts.filter((contract) => contract.resolvedAdapter === adapterName);
+  if (!related.length) return undefined;
+  const order: ToolReadiness[] = ["connected", "needs_credentials", "mocked", "unavailable", "internal"];
+  return related
+    .map((contract) => contract.readiness)
+    .sort((a, b) => order.indexOf(a) - order.indexOf(b))[0];
 }
 
 export async function POST(request: Request) {

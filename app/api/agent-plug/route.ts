@@ -14,6 +14,7 @@ import {
 } from "@/lib/agent-marketplace";
 import { buildAgentPlugReadinessReport } from "@/lib/agent-plug-readiness";
 import { getAgentRuntime } from "@/lib/agent-runtime";
+import { contractsForSeat, resolveSeatToolContracts, type SeatToolContract } from "@/lib/seat-tool-contracts";
 import { forbidden, getAuthUser, requireRoleForRequest, unauthorized } from "@/lib/session";
 import { store } from "@/lib/store";
 import type { AgentEnvironmentConfig, AgentRole } from "@/lib/types";
@@ -30,6 +31,8 @@ async function slotPayload(companyId: string) {
   const slots: Record<AgentRole, string | null> = {} as Record<AgentRole, string | null>;
   const environments: Partial<Record<AgentRole, AgentEnvironmentConfig>> = {};
   const runtimes: Partial<Record<AgentRole, unknown>> = {};
+  const contracts = await resolveSeatToolContracts(companyId);
+  const toolContracts: Partial<Record<AgentRole, SeatToolContract[]>> = {};
 
   for (const slot of AGENT_SLOTS) {
     const assignment = assignments.find((item) => item.role === slot.role);
@@ -45,9 +48,10 @@ async function slotPayload(companyId: string) {
       profile: runtime.profile,
       environment: runtime.environment
     };
+    toolContracts[slot.role] = contractsForSeat(contracts, slot.role);
   }
 
-  return { slots, environments, runtimes };
+  return { slots, environments, runtimes, toolContracts };
 }
 
 export async function GET(request: Request) {

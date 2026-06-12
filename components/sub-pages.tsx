@@ -18,6 +18,7 @@ import type {
   ToolConnection,
   UsageLedgerEntry
 } from "@/lib/types";
+import type { ToolReadiness } from "@/lib/seat-tool-contracts";
 import { shortDate, money, roleLabel } from "@/lib/utils";
 import { CommentThread } from "@/components/comment-thread";
 import { AuditComplianceTools } from "@/components/audit-compliance-tools";
@@ -1321,6 +1322,7 @@ const INTEGRATION_DESCRIPTIONS: Record<string, string> = {
 
 export function IntegrationsPageClient({ companyId }: { companyId: string }) {
   const [integrations, setIntegrations] = useState<ToolConnection[]>([]);
+  const [adapterHealth, setAdapterHealth] = useState<Array<{ name: string; scopes: string[]; status: string; readiness?: ToolReadiness }>>([]);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [ghToken, setGhToken] = useState("");
@@ -1334,6 +1336,7 @@ export function IntegrationsPageClient({ companyId }: { companyId: string }) {
     const res = await fetch(`/api/integrations?companyId=${companyId}`);
     const data = await res.json();
     setIntegrations(data.configured ?? []);
+    setAdapterHealth(data.adapters ?? []);
     setLoading(false);
   }
 
@@ -1367,7 +1370,15 @@ export function IntegrationsPageClient({ companyId }: { companyId: string }) {
   }
 
   // Default integrations to show
-  const KNOWN = ["github", "linear", "notion", "stripe", "postmark", "openai"];
+  const KNOWN = Array.from(new Set([
+    "github",
+    "linear",
+    "notion",
+    "stripe",
+    "postmark",
+    "openai",
+    ...adapterHealth.map((adapter) => adapter.name.toLowerCase()),
+  ]));
 
   return (
     <div>
@@ -1392,9 +1403,11 @@ export function IntegrationsPageClient({ companyId }: { companyId: string }) {
             const found = integrations.find(
               (it) => it.provider.toLowerCase() === name
             );
+            const health = adapterHealth.find((adapter) => adapter.name.toLowerCase() === name);
+            const readiness = health?.readiness ?? health?.status;
             const Icon = INTEGRATION_ICONS[name] || I.plug;
-            const connected = found?.status === "connected";
-            const testOnly = found?.status === "mocked";
+            const connected = readiness === "connected";
+            const testOnly = readiness === "mocked";
 
             return (
               <Reveal key={name} delay={i * 60}>
@@ -1436,13 +1449,7 @@ export function IntegrationsPageClient({ companyId }: { companyId: string }) {
                       <Icon />
                     </div>
 
-                    {connected ? (
-                      <Pill tone="pulse">connected</Pill>
-                    ) : testOnly ? (
-                      <Pill>test only</Pill>
-                    ) : (
-                      <Pill tone="ember">not connected</Pill>
-                    )}
+                    <ContractReadinessPill readiness={readiness} />
                   </div>
 
                   <div
@@ -1463,7 +1470,7 @@ export function IntegrationsPageClient({ companyId }: { companyId: string }) {
                     </div>
                   )}
 
-                  {found?.scopes && (
+                  {(health?.scopes ?? found?.scopes) && (
                     <div
                       className="mono"
                       style={{
@@ -1473,7 +1480,7 @@ export function IntegrationsPageClient({ companyId }: { companyId: string }) {
                         marginBottom: 16,
                       }}
                     >
-                      {found.scopes.join(" · ")}
+                      {(health?.scopes ?? found?.scopes ?? []).join(" · ")}
                     </div>
                   )}
 
@@ -1646,6 +1653,14 @@ export function IntegrationsPageClient({ companyId }: { companyId: string }) {
       )}
     </div>
   );
+}
+
+export function ContractReadinessPill({ readiness }: { readiness?: string }) {
+  if (readiness === "connected") return <Pill tone="pulse">connected</Pill>;
+  if (readiness === "mocked") return <Pill>mocked</Pill>;
+  if (readiness === "needs_credentials") return <Pill tone="ember">needs credentials</Pill>;
+  if (readiness === "unavailable") return <Pill tone="ember">unavailable</Pill>;
+  return <Pill tone="ember">not connected</Pill>;
 }
 
 // ── SETTINGS PAGE ──────────────────────────────────────────────────────

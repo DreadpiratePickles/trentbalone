@@ -6,7 +6,7 @@ vi.mock("@/components/mcp-servers-panel", () => ({
   McpServersPanel: ({ companyId }: { companyId: string }) => <section data-testid="mcp-servers-panel">{companyId}</section>,
 }));
 
-import { IntegrationsPageClient } from "@/components/sub-pages";
+import { ContractReadinessPill, IntegrationsPageClient } from "@/components/sub-pages";
 
 describe("IntegrationsPageClient MCP front door", () => {
   it("renders the MCP servers panel inside integrations", () => {
@@ -14,5 +14,13 @@ describe("IntegrationsPageClient MCP front door", () => {
 
     expect(html).toContain("data-testid=\"mcp-servers-panel\"");
     expect(html).toContain("co_123");
+  });
+});
+
+describe("ContractReadinessPill", () => {
+  it("renders adapter readiness labels from the seat-tool contract axis", () => {
+    expect(renderToStaticMarkup(<ContractReadinessPill readiness="needs_credentials" />)).toContain("needs credentials");
+    expect(renderToStaticMarkup(<ContractReadinessPill readiness="mocked" />)).toContain("mocked");
+    expect(renderToStaticMarkup(<ContractReadinessPill readiness="unavailable" />)).toContain("unavailable");
   });
 });

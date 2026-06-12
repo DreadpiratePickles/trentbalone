@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import {
   AGENT_SLOTS,
   CATEGORY_LABELS,
@@ -10,6 +10,7 @@ import {
   type CatalogCategory,
 } from "@/lib/agent-catalog";
 import type { AgentAccessState, CatalogAgentWithAccess } from "@/lib/agent-marketplace";
+import type { SeatToolContract } from "@/lib/seat-tool-contracts";
 import type { AgentEnvironmentConfig, AgentRole } from "@/lib/types";
 import { I } from "@/components/ui";
 
@@ -21,6 +22,7 @@ type PlugPayload = {
   catalog: CatalogAgentWithAccess[];
   slots: SlotAssignment;
   environments: Partial<Record<AgentRole, AgentEnvironmentConfig>>;
+  toolContracts: Partial<Record<AgentRole, SeatToolContract[]>>;
 };
 
 // ── Slot authority metadata ──────────────────────────────────────────────────
@@ -174,6 +176,7 @@ export function AgentPlugClient({ companyId }: { companyId: string }) {
         catalog: data.catalog ?? [],
         slots: data.slots ?? {},
         environments: data.environments ?? {},
+        toolContracts: data.toolContracts ?? {},
       });
     } finally {
       setLoading(false);
@@ -185,6 +188,7 @@ export function AgentPlugClient({ companyId }: { companyId: string }) {
   const catalog = payload?.catalog ?? [];
   const slots = payload?.slots ?? {};
   const environments = payload?.environments ?? {};
+  const toolContracts = payload?.toolContracts ?? {};
 
   const filtered = useMemo(() => {
     let list = catalog;
@@ -357,6 +361,7 @@ export function AgentPlugClient({ companyId }: { companyId: string }) {
         <SlotsView
           slots={slots}
           environments={environments}
+          toolContracts={toolContracts}
           saving={saving}
           slotAgent={slotAgent}
           onOpenDrawer={(role) => {
@@ -885,6 +890,7 @@ function CatalogView({
 function SlotsView({
   slots,
   environments,
+  toolContracts,
   saving,
   slotAgent,
   onOpenDrawer,
@@ -892,6 +898,7 @@ function SlotsView({
 }: {
   slots: SlotAssignment;
   environments: Partial<Record<AgentRole, AgentEnvironmentConfig>>;
+  toolContracts: Partial<Record<AgentRole, SeatToolContract[]>>;
   saving: string | null;
   slotAgent: (role: string) => CatalogAgentWithAccess | null;
   onOpenDrawer: (role: string) => void;
@@ -908,6 +915,7 @@ function SlotsView({
         const auth = SLOT_AUTHORITY[slot.role];
         const catColor = agent ? CATEGORY_COLORS[agent.category] : auth?.color ?? "var(--haze)";
         const env = environments[slot.role as AgentRole] ?? SLOT_ENVIRONMENTS[slot.role as AgentRole];
+        const contracts = toolContracts[slot.role as AgentRole] ?? [];
         const contract = SLOT_CONTRACTS[slot.role as AgentRole];
 
         return (
@@ -1063,6 +1071,7 @@ function SlotsView({
                       }}
                     >
                       <EnvLine label="Tools" value={(env.tools ?? SLOT_ENVIRONMENTS[slot.role as AgentRole]?.tools ?? []).join(", ") || "none"} />
+                      <SeatToolBadges contracts={contracts} />
                       <EnvLine label="Approval gates" value={(env.approvalRequiredFor ?? SLOT_ENVIRONMENTS[slot.role as AgentRole]?.approvalRequiredFor ?? []).join(", ") || "none"} />
                       <EnvLine label="Budget / run" value={`${env.budgetCentsPerRun ?? SLOT_ENVIRONMENTS[slot.role as AgentRole]?.budgetCentsPerRun ?? 0}¢`} />
                       <EnvLine label="Max runtime" value={`${env.maxRuntimeSeconds ?? SLOT_ENVIRONMENTS[slot.role as AgentRole]?.maxRuntimeSeconds ?? 0}s`} />
@@ -1127,6 +1136,60 @@ function SlotsView({
       })}
     </div>
   );
+}
+
+export function SeatToolBadges({ contracts }: { contracts: SeatToolContract[] }) {
+  if (!contracts.length) {
+    return <EnvLine label="Tool readiness" value="no contract data" />;
+  }
+  const visible = contracts.slice(0, 8);
+  return (
+    <div>
+      <div className="mono" style={{ fontSize: 7, letterSpacing: ".16em", textTransform: "uppercase", color: "var(--haze)", marginBottom: 4 }}>
+        Tool readiness
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+        {visible.map((contract) => (
+          <span
+            key={`${contract.seat}:${contract.tool}`}
+            className="mono"
+            data-testid="seat-tool-readiness"
+            style={{
+              fontSize: 8,
+              letterSpacing: ".08em",
+              textTransform: "uppercase",
+              color: readinessColor(contract.readiness),
+              border: `1px solid ${readinessBorder(contract.readiness)}`,
+              borderRadius: 6,
+              padding: "3px 5px",
+              background: "rgba(255,255,255,.025)",
+            }}
+          >
+            {contract.tool}: {contract.readiness}
+          </span>
+        ))}
+        {contracts.length > visible.length && (
+          <span className="mono" style={{ fontSize: 8, color: "var(--haze)", padding: "3px 0" }}>
+            +{contracts.length - visible.length}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function readinessColor(readiness: SeatToolContract["readiness"]) {
+  if (readiness === "connected" || readiness === "internal") return "var(--pulse)";
+  if (readiness === "mocked") return "var(--mist)";
+  if (readiness === "needs_credentials") return "var(--ember)";
+  return "var(--haze)";
+}
+
+function readinessBorder(readiness: SeatToolContract["readiness"]) {
+  if (readiness === "connected" || readiness === "internal") return "rgba(110,231,183,.22)";
+  if (readiness === "mocked") return "rgba(148,163,184,.2)";
+  if (readiness === "needs_credentials") return "rgba(251,146,60,.22)";
+  return "rgba(255,255,255,.08)";
 }
 
 function EnvLine({ label, value }: { label: string; value: string }) {
