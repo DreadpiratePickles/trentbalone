@@ -212,6 +212,33 @@ describe("Agent Plug runtime", () => {
     expect(runtime.dynamicPrompt).toContain("last_ceo_run");
   });
 
+  it("recalls specialist registries so a later cycle can build on prior experiments", async () => {
+    clearAgentRuntimeCache();
+    const company = await store.createCompany({
+      name: "Experiment Registry Runtime Co",
+      brief: { vision: "Avoid repeating experiments that did not move metrics" },
+    });
+    await store.createDocument({
+      companyId: company.id,
+      type: "agent_note",
+      title: "Experiment registry: Activation proof email",
+      content: [
+        "Registry key: experiments",
+        "Result: proof-led onboarding email shipped last week.",
+        "Metric: activation did not move after 7 days.",
+      ].join("\n"),
+      source: "seat-registry:growth:previous",
+      memoryTier: "semantic",
+    });
+
+    const runtime = await getAgentRuntime(company.id, "growth");
+
+    expect(runtime.dynamicPrompt).toContain("MEMORY PLAN");
+    expect(runtime.dynamicPrompt).toContain("experiments");
+    expect(runtime.dynamicPrompt).toContain("proof-led onboarding email");
+    expect(runtime.dynamicPrompt).toContain("activation did not move");
+  });
+
   it("loads Finance Ledger skill instructions into the default finance runtime", async () => {
     clearAgentRuntimeCache();
     const company = await store.createCompany({

@@ -132,7 +132,7 @@ export const SEAT_MANIFESTS: Record<AgentRole, SeatManifest> = {
     whenNotToUse: "Ledger correctness, engineering implementation, legal commitments, or support replies.",
     methodology: "Start with hypothesis, channel fit, audience, budget, measurement plan, and approval gate before any launch.",
     toolUseStrategy: "Read ICP, offer, channel history, CRM/Stripe aggregates, and brand memory. Draft campaigns; route spend/launch to approval.",
-    contextNeeds: ["companyBrief", "icp", "offer", "metrics", "channelHistory", "brandVoice", "budget", "contentMission", "platformReadiness"],
+    contextNeeds: ["companyBrief", "icp", "offer", "metrics", "channelHistory", "brandVoice", "budget", "experiments", "contentMission", "platformReadiness"],
     outputContract: ["experiment_brief", "audience", "channel_plan", "measurement_plan", "approval_requests"],
     evalRubric: ["testable hypothesis", "CAC realism", "channel fit", "budget awareness", "policy-safe"],
     tools: [

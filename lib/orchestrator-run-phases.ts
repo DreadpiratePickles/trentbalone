@@ -29,6 +29,7 @@ import { buildDelegatedStepsForWorkRequests } from "@/lib/orchestrator-delegatio
 import { recallRelevantMemory } from "@/lib/semantic-router";
 import { buildOperatingStateBundle } from "@/lib/operating-state";
 import { persistCeoDecisionJournal } from "@/lib/ceo-decision-journal";
+import { persistSeatRegistryMemory } from "@/lib/seat-memory-registries";
 import { recordHandoff, type HandoffEvent } from "@/lib/planner";
 import { handleStepCritique, type OrchestrationRun } from "@/lib/orchestrator";
 import { cacheOrchestrationRun } from "@/lib/orchestrator-cache";
@@ -372,6 +373,11 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
     step.seatLoopState = undefined;
     if (step.taskId) await store.updateTask(step.taskId, { status: "completed" }).catch(() => undefined);
     await persistStep(run, step);
+    await persistSeatRegistryMemory({
+      companyId: run.companyId,
+      runId: run.id,
+      step,
+    }).catch(() => undefined);
     await emitPersistedOrcEvent(run, { kind: "step_output", runId: run.id, at: nowIso(), step });
     await emitPersistedOrcEvent(run, { kind: "step_critic", runId: run.id, at: nowIso(), step });
     await emitPersistedOrcEvent(run, { kind: "step_end", runId: run.id, at: nowIso(), step });
