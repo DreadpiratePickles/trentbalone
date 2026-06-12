@@ -1,0 +1,187 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`seat-tool contracts > contract is stable & total 1`] = `
+"analyst | PostHog | adapter_name | PostHog | unavailable | advertised | approval | write
+analyst | Sentry | adapter_name | Sentry | unavailable | advertised | approval | write
+analyst | Steel Browser | adapter_name | Steel Browser | needs_credentials | advertised | approval | write
+analyst | Stripe | adapter_name | Stripe | unavailable | advertised | approval | write
+analyst | Vault Memory | adapter_name | Vault Memory | mocked | advertised | approval | write
+analyst | Workbench Sandbox | adapter_name | Workbench Sandbox | mocked | advertised | approval | write
+analyst | analytics:read | adapter_scope | PostHog | unavailable | advertised | no_approval | read
+analyst | gitnexus:context | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+analyst | gitnexus:search | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+analyst | memory:read | internal_action | - | internal | advertised | no_approval | read
+analyst | reports:create | internal_action | - | internal | advertised | no_approval | read
+analyst | sandbox:exec | adapter_scope | Workbench Sandbox | mocked | advertised | no_approval | read
+analyst | steel:pdf | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+analyst | steel:scrape | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+analyst | steel:screenshot | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+analyst | steel:sessions | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+analyst | usage:read | internal_action | - | internal | advertised | no_approval | read
+analyst | vault:graph | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+analyst | vault:read | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+analyst | vault:write | adapter_scope | Vault Memory | mocked | advertised | approval | write
+ceo | Email | adapter_name | Email | unavailable | advertised | approval | write
+ceo | PostHog | adapter_name | PostHog | unavailable | advertised | approval | write
+ceo | Sentry | adapter_name | Sentry | unavailable | advertised | approval | write
+ceo | Steel Browser | adapter_name | Steel Browser | needs_credentials | advertised | approval | write
+ceo | Stripe | adapter_name | Stripe | unavailable | advertised | approval | write
+ceo | Vault Memory | adapter_name | Vault Memory | mocked | advertised | approval | write
+ceo | approvals:request | internal_action | - | internal | advertised | no_approval | read
+ceo | gitnexus:context | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+ceo | gitnexus:search | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+ceo | memory:read | internal_action | - | internal | advertised | no_approval | read
+ceo | reports:create | internal_action | - | internal | advertised | no_approval | read
+ceo | steel:pdf | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+ceo | steel:scrape | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+ceo | steel:screenshot | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+ceo | steel:sessions | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+ceo | tasks:create | internal_action | - | internal | advertised | no_approval | read
+ceo | vault:graph | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+ceo | vault:read | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+ceo | vault:write | adapter_scope | Vault Memory | mocked | advertised | approval | write
+content | Email | adapter_name | Email | unavailable | advertised | approval | write
+content | Steel Browser | adapter_name | Steel Browser | needs_credentials | advertised | approval | write
+content | Vault Memory | adapter_name | Vault Memory | mocked | advertised | approval | write
+content | X | adapter_name | X | unavailable | advertised | approval | write
+content | documents:write | internal_action | - | internal | advertised | no_approval | read
+content | email:draft | internal_action | - | internal | advertised | no_approval | read
+content | gitnexus:context | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+content | gitnexus:search | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+content | social:draft | internal_action | - | internal | advertised | no_approval | read
+content | steel:pdf | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+content | steel:scrape | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+content | steel:screenshot | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+content | steel:sessions | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+content | vault:graph | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+content | vault:read | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+content | vault:write | adapter_scope | Vault Memory | mocked | advertised | approval | write
+engineer | GitHub | adapter_name | GitHub | needs_credentials | advertised | approval | write
+engineer | Steel Browser | adapter_name | Steel Browser | needs_credentials | advertised | approval | write
+engineer | Vault Memory | adapter_name | Vault Memory | mocked | advertised | approval | write
+engineer | Workbench Sandbox | adapter_name | Workbench Sandbox | mocked | advertised | approval | write
+engineer | documents:write | internal_action | - | internal | advertised | no_approval | read
+engineer | github:branch_scaffold | adapter_scope | GitHub | needs_credentials | advertised | approval | write
+engineer | github:issue | adapter_scope | GitHub | needs_credentials | advertised | approval | write
+engineer | github:read | adapter_scope | GitHub | needs_credentials | advertised | no_approval | read
+engineer | gitnexus:context | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+engineer | gitnexus:search | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+engineer | sandbox:exec | adapter_scope | Workbench Sandbox | mocked | advertised | no_approval | read
+engineer | steel:pdf | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+engineer | steel:scrape | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+engineer | steel:screenshot | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+engineer | steel:sessions | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+engineer | tests:run | adapter_scope | Workbench Sandbox | mocked | advertised | no_approval | read
+engineer | vault:graph | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+engineer | vault:read | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+engineer | vault:write | adapter_scope | Vault Memory | mocked | advertised | approval | write
+engineer | workbench:session | adapter_scope | Workbench Sandbox | mocked | advertised | no_approval | read
+escalation | Steel Browser | adapter_name | Steel Browser | needs_credentials | advertised | approval | write
+escalation | Vault Memory | adapter_name | Vault Memory | mocked | advertised | approval | write
+escalation | approvals:create | internal_action | - | internal | advertised | no_approval | read
+escalation | audit:create | internal_action | - | internal | advertised | no_approval | read
+escalation | gitnexus:context | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+escalation | gitnexus:search | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+escalation | steel:pdf | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+escalation | steel:scrape | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+escalation | steel:screenshot | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+escalation | steel:sessions | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+escalation | tasks:block | internal_action | - | internal | advertised | no_approval | read
+escalation | vault:graph | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+escalation | vault:read | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+escalation | vault:write | adapter_scope | Vault Memory | mocked | advertised | approval | write
+finance | Fincept Terminal | adapter_name | Fincept Terminal | mocked | advertised | approval | write
+finance | Ghostfolio | adapter_name | Ghostfolio | mocked | advertised | approval | write
+finance | Steel Browser | adapter_name | Steel Browser | needs_credentials | advertised | approval | write
+finance | Stripe | adapter_name | Stripe | unavailable | advertised | approval | write
+finance | Vault Memory | adapter_name | Vault Memory | mocked | advertised | approval | write
+finance | approvals:request | internal_action | - | internal | advertised | no_approval | read
+finance | billing:read | internal_action | - | internal | advertised | no_approval | read
+finance | fincept:economic_data | adapter_scope | Fincept Terminal | mocked | advertised | no_approval | read
+finance | fincept:launch_sandbox | adapter_scope | Fincept Terminal | mocked | advertised | approval | write
+finance | fincept:market_research | adapter_scope | Fincept Terminal | mocked | advertised | no_approval | read
+finance | fincept:paper_trading | adapter_scope | Fincept Terminal | mocked | advertised | no_approval | read
+finance | fincept:portfolio_analysis | adapter_scope | Fincept Terminal | mocked | advertised | no_approval | read
+finance | fincept:risk_report | adapter_scope | Fincept Terminal | mocked | advertised | no_approval | read
+finance | ghostfolio:allocation_report | adapter_scope | Ghostfolio | mocked | advertised | no_approval | read
+finance | ghostfolio:fire_projection | adapter_scope | Ghostfolio | mocked | advertised | no_approval | read
+finance | ghostfolio:holdings_import | adapter_scope | Ghostfolio | mocked | advertised | approval | write
+finance | ghostfolio:launch_sandbox | adapter_scope | Ghostfolio | mocked | advertised | approval | write
+finance | ghostfolio:performance_report | adapter_scope | Ghostfolio | mocked | advertised | no_approval | read
+finance | ghostfolio:portfolio_overview | adapter_scope | Ghostfolio | mocked | advertised | no_approval | read
+finance | ghostfolio:risk_insights | adapter_scope | Ghostfolio | mocked | advertised | no_approval | read
+finance | gitnexus:context | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+finance | gitnexus:search | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+finance | steel:pdf | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+finance | steel:scrape | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+finance | steel:screenshot | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+finance | steel:sessions | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+finance | usage:read | internal_action | - | internal | advertised | no_approval | read
+finance | vault:graph | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+finance | vault:read | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+finance | vault:write | adapter_scope | Vault Memory | mocked | advertised | approval | write
+growth | Email | adapter_name | Email | unavailable | advertised | approval | write
+growth | HyperFrames | adapter_name | HyperFrames | mocked | advertised | approval | write
+growth | Open Generative AI | adapter_name | Open Generative AI | mocked | advertised | approval | write
+growth | PostHog | adapter_name | PostHog | unavailable | advertised | approval | write
+growth | Steel Browser | adapter_name | Steel Browser | needs_credentials | advertised | approval | write
+growth | Vault Memory | adapter_name | Vault Memory | mocked | advertised | approval | write
+growth | X | adapter_name | X | unavailable | advertised | approval | write
+growth | ads:draft | internal_action | - | internal | advertised | no_approval | read
+growth | analytics:read | adapter_scope | PostHog | unavailable | advertised | no_approval | read
+growth | documents:write | internal_action | - | internal | advertised | no_approval | read
+growth | email:draft | internal_action | - | internal | advertised | no_approval | read
+growth | gitnexus:context | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+growth | gitnexus:search | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+growth | hyperframes:catalog | adapter_scope | HyperFrames | mocked | advertised | no_approval | read
+growth | hyperframes:create | adapter_scope | HyperFrames | mocked | advertised | approval | write
+growth | hyperframes:inspect | adapter_scope | HyperFrames | mocked | advertised | no_approval | read
+growth | hyperframes:lint | adapter_scope | HyperFrames | mocked | advertised | no_approval | read
+growth | hyperframes:preview | adapter_scope | HyperFrames | mocked | advertised | no_approval | read
+growth | hyperframes:render | adapter_scope | HyperFrames | mocked | advertised | approval | write
+growth | open_gen_ai:asset_export | adapter_scope | Open Generative AI | mocked | advertised | approval | write
+growth | open_gen_ai:cinema_workflow | adapter_scope | Open Generative AI | mocked | advertised | no_approval | read
+growth | open_gen_ai:image_generate | adapter_scope | Open Generative AI | mocked | advertised | approval | write
+growth | open_gen_ai:launch_sandbox | adapter_scope | Open Generative AI | mocked | advertised | approval | write
+growth | open_gen_ai:lip_sync | adapter_scope | Open Generative AI | mocked | advertised | approval | write
+growth | open_gen_ai:video_generate | adapter_scope | Open Generative AI | mocked | advertised | approval | write
+growth | social:draft | internal_action | - | internal | advertised | no_approval | read
+growth | steel:pdf | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+growth | steel:scrape | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+growth | steel:screenshot | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+growth | steel:sessions | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+growth | vault:graph | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+growth | vault:read | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+growth | vault:write | adapter_scope | Vault Memory | mocked | advertised | approval | write
+sales | Email | adapter_name | Email | unavailable | advertised | approval | write
+sales | Steel Browser | adapter_name | Steel Browser | needs_credentials | advertised | approval | write
+sales | Vault Memory | adapter_name | Vault Memory | mocked | advertised | approval | write
+sales | crm:read_unavailable | unavailable_marker | - | unavailable | advertised | no_approval | read
+sales | crm:update_draft | internal_action | - | internal | advertised | no_approval | read
+sales | documents:write | internal_action | - | internal | advertised | no_approval | read
+sales | email:draft | internal_action | - | internal | advertised | no_approval | read
+sales | gitnexus:context | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+sales | gitnexus:search | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+sales | prospects:research | internal_action | - | internal | advertised | no_approval | read
+sales | steel:pdf | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+sales | steel:scrape | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+sales | steel:screenshot | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+sales | steel:sessions | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+sales | vault:graph | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+sales | vault:read | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+sales | vault:write | adapter_scope | Vault Memory | mocked | advertised | approval | write
+support | Email | adapter_name | Email | unavailable | advertised | approval | write
+support | Steel Browser | adapter_name | Steel Browser | needs_credentials | advertised | approval | write
+support | Vault Memory | adapter_name | Vault Memory | mocked | advertised | approval | write
+support | documents:write | internal_action | - | internal | advertised | no_approval | read
+support | gitnexus:context | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+support | gitnexus:search | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+support | steel:pdf | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+support | steel:scrape | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+support | steel:screenshot | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+support | steel:sessions | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
+support | support:inbound_email | internal_action | - | internal | advertised | no_approval | read
+support | vault:graph | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+support | vault:read | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
+support | vault:write | adapter_scope | Vault Memory | mocked | advertised | approval | write"
+`;

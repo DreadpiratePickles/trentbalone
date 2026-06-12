@@ -194,8 +194,8 @@ export class LocalVaultMemoryProvider implements VaultMemoryProvider {
 }
 
 export class GitNexusVaultIndexAdapter implements ToolAdapter {
-  name = "GitNexus Vault";
-  scopes = ["vault:index", "vault:search", "vault:graph", "gitnexus:mcp"];
+  name = "Vault Memory";
+  scopes = vaultMemoryToolScopes();
   availability: ToolAdapter["availability"];
   private vaultRoot: string;
   private enabled: boolean;

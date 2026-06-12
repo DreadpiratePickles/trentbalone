@@ -41,6 +41,7 @@ const HANDLERS = {
   "billing:read": readBilling,
   "goals:read": readGoals,
   "goals:update": updateGoalsDraft,
+  "support:inbound_email": readInboundSupportEmail,
   "email:draft": draftEmail,
   "social:draft": draftSocial,
   "ads:draft": draftAdPlan,
@@ -186,6 +187,16 @@ async function updateGoalsDraft(action: string, ctx: HandlerContext): Promise<To
     memoryTier: "working",
   });
   return completed("goals:update", action, `Drafted goals update in document ${document.id}; no company goals were mutated without review.`);
+}
+
+async function readInboundSupportEmail(action: string, ctx: HandlerContext): Promise<ToolCallRecord> {
+  const documents = await ctx.store.listDocuments(ctx.companyId);
+  const inbound = documents.filter((doc) => doc.source.startsWith("resend:email.received:"));
+  return completed(
+    "support:inbound_email",
+    action,
+    `Read ${inbound.length} inbound support email memory document(s).`,
+  );
 }
 
 async function draftEmail(action: string, ctx: HandlerContext): Promise<ToolCallRecord> {

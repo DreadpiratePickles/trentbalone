@@ -110,7 +110,7 @@ function unavailableAdapter(name: string, scopes: string[], approvalWords: strin
 export const adapters: ToolAdapter[] = [
   {
     name: "GitHub",
-    scopes: ["repo:read", "issues:write", "pull_requests:write"],
+    scopes: ["repo:read", "issues:write", "pull_requests:write", "github:read", "github:issue", "github:branch_scaffold"],
     availability: "real",
     async healthCheck(companyId?: string) {
       return (await getGitHubCredentials(companyId)) ? "connected" : "needs_credentials";
@@ -119,7 +119,7 @@ export const adapters: ToolAdapter[] = [
       return 0;
     },
     requiresApproval(action) {
-      return ["issue", "merge", "delete", "release", "deploy"].some((word) => action.toLowerCase().includes(word));
+      return ["issue", "branch", "merge", "delete", "release", "deploy"].some((word) => action.toLowerCase().includes(word));
     },
     async execute(action, payload) {
       const companyId = typeof payload.companyId === "string" ? payload.companyId : undefined;

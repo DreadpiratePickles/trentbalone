@@ -32,6 +32,7 @@ describe("internal actions", () => {
       "prospects:research",
       "reports:create",
       "social:draft",
+      "support:inbound_email",
       "tasks:block",
       "tasks:create",
       "usage:read",
