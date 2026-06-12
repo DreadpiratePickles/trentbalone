@@ -49,7 +49,7 @@ export function parseMcpAction(action: string): { tool: string; args: Record<str
 }
 
 async function connectMcpClient(server: McpServerRecord): Promise<Client> {
-  const token = await getMcpServerToken(server.companyId, server.id);
+  const token = server.hasCredential ? await getMcpServerToken(server.companyId, server.id) : undefined;
   const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   const client = new Client(MCP_CLIENT_INFO);
   const url = new URL(server.url);
