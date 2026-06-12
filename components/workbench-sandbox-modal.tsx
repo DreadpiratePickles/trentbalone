@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { AgentActivityFeed, CodeBlock, inferCodeBlock, mapWorkbenchEventsToSteps, type ActivityStep } from "@/components/agent-activity";
 import { buildWorkbenchIdeView } from "@/lib/workbench-ide-view";
+import type { WorkbenchSessionMetadata } from "@/lib/types";
 
 type SessionStatus = "queued" | "starting" | "running" | "paused" | "completed" | "failed" | "cancelled";
 type SandboxTab = "preview" | "files" | "diff" | "terminal" | "tests" | "artifacts" | "screenshots";
@@ -53,6 +54,8 @@ export function WorkbenchSandboxModal({
   objective,
   status,
   sessionId,
+  rollbackMode,
+  rollbackDescription,
   events = [],
   artifacts = [],
   activity = [],
@@ -63,6 +66,8 @@ export function WorkbenchSandboxModal({
   objective: string;
   status: SessionStatus;
   sessionId?: string;
+  rollbackMode?: WorkbenchSessionMetadata["rollbackMode"];
+  rollbackDescription?: string;
   events?: WbEvent[];
   artifacts?: WbArtifact[];
   activity?: ActivityStep[];
@@ -209,6 +214,18 @@ export function WorkbenchSandboxModal({
           </div>
         </div>
         <div className="mono" style={SB.urlbar}>{url}</div>
+        {rollbackMode ? (
+          <div style={SB.rollback}>
+            <strong style={SB.rollbackTitle}>
+              {rollbackMode === "text_files_only"
+                ? "text-files-only rollback"
+                : rollbackMode === "provider_native"
+                  ? "provider-native rollback"
+                  : "git-checkpoint rollback"}
+            </strong>
+            {rollbackDescription ? <span style={SB.rollbackText}>{rollbackDescription}</span> : null}
+          </div>
+        ) : null}
         <nav aria-label="Workbench tabs" style={SB.tabs}>
           {WORKBENCH_SANDBOX_TABS.map((item) => (
             <button key={item.key} type="button" onClick={() => setTab(item.key)} title={item.title} style={SB.tab(tab === item.key)}>
@@ -340,6 +357,9 @@ const SB = {
   openTab: { color: "var(--bone-2)", textDecoration: "none", fontSize: 11, letterSpacing: ".1em", padding: "6px 10px", border: "1px solid rgba(255,255,255,.12)", borderRadius: 7 } as React.CSSProperties,
   close: { background: "transparent", border: 0, color: "var(--haze)", cursor: "pointer", fontSize: 20, width: 30, height: 30, borderRadius: 7 } as React.CSSProperties,
   urlbar: { padding: "8px 16px", borderBottom: "1px solid rgba(255,255,255,.06)", fontSize: 11, color: "var(--mist)", background: "var(--steel)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } as React.CSSProperties,
+  rollback: { display: "flex", gap: 8, alignItems: "center", padding: "7px 16px", borderBottom: border, color: "var(--haze)", background: "rgba(255,255,255,.012)", fontSize: 11, minWidth: 0 } as React.CSSProperties,
+  rollbackTitle: { color: "var(--mist)", textTransform: "uppercase", letterSpacing: ".1em", fontSize: 10, whiteSpace: "nowrap" } as React.CSSProperties,
+  rollbackText: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
   tabs: { display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 5, padding: "10px 12px", borderBottom: border, background: "rgba(255,255,255,.015)" } as React.CSSProperties,
   tab: (active: boolean) => ({
     height: 30, minWidth: 0, borderRadius: 7, border: active ? "1px solid rgba(110,231,183,.38)" : border,

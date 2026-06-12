@@ -45,6 +45,8 @@ export function defaultWorkbenchMetadata(input?: {
     maxCostCents: 250,
     approvalRequiredFor: DEFAULT_WORKBENCH_APPROVAL_GATES,
     rollbackAvailable: true,
+    rollbackMode: "text_files_only",
+    rollbackDescription: "Rollback can restore text files only from Workbench checkpoints; full filesystem/provider-native rollback is not yet proven.",
     ...(input?.metadata?.appSolo ? { appSolo: input.metadata.appSolo } : {}),
     ...(input?.metadata?.agentRun ? { agentRun: input.metadata.agentRun } : {})
   };
@@ -82,7 +84,7 @@ export async function createWorkbenchSession(input: WorkbenchCreateInput): Promi
     type: "system",
     status: "completed",
     title: "Workbench session created",
-    content: "Trent reserved an isolated workspace with audit logging, approval gates, cost limits, and rollback metadata."
+    content: "Trent reserved an isolated workspace with audit logging, approval gates, cost limits, and text-files-only rollback metadata."
   });
 
   await store.addWorkbenchEvent({

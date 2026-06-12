@@ -37,6 +37,8 @@ describe("cloud workbench foundation", () => {
     expect(session.metadata.networkPolicy).toBe("allowlist");
     expect(session.metadata.approvalRequiredFor).toContain("workbench_plan");
     expect(session.metadata.approvalRequiredFor).toContain("deploy");
+    expect(session.metadata.rollbackMode).toBe("text_files_only");
+    expect(session.metadata.rollbackDescription).toContain("text files only");
     expect(events.length).toBeGreaterThanOrEqual(2);
   });
 

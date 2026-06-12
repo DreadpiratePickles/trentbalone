@@ -16,6 +16,8 @@ type Session = {
   status?: SessionStatus;
   previewUrl?: string;
   metadata?: {
+    rollbackMode?: WorkbenchSessionMetadata["rollbackMode"];
+    rollbackDescription?: string;
     appSolo?: WorkbenchSessionMetadata["appSolo"];
     agentRun?: WorkbenchSessionMetadata["agentRun"];
   };
@@ -303,6 +305,10 @@ export function WorkbenchEvidenceRail({
         ))}
       </div>
       <EvidenceSummaryStrip summary={ideView.evidenceSummary} />
+      <RollbackModeStrip
+        mode={active?.metadata?.rollbackMode}
+        description={active?.metadata?.rollbackDescription}
+      />
       <AgentContractStrip agentRun={active?.metadata?.agentRun} appSolo={active?.metadata?.appSolo} />
       {railError && <div style={R.railError}>{railError}</div>}
 
@@ -513,6 +519,27 @@ function EvidenceSummaryStrip({ summary }: { summary: WorkbenchIdeEvidenceSummar
   );
 }
 
+function RollbackModeStrip({
+  mode,
+  description,
+}: {
+  mode?: WorkbenchSessionMetadata["rollbackMode"];
+  description?: string;
+}) {
+  if (!mode) return null;
+  const label = mode === "text_files_only"
+    ? "text-files-only rollback"
+    : mode === "provider_native"
+      ? "provider-native rollback"
+      : "git-checkpoint rollback";
+  return (
+    <div style={R.rollbackStrip} aria-label="Workbench rollback scope">
+      <div style={R.rollbackTitle}>{label}</div>
+      {description ? <div style={R.rollbackMeta}>{description}</div> : null}
+    </div>
+  );
+}
+
 function AgentContractStrip({
   agentRun,
   appSolo,
@@ -588,6 +615,9 @@ const R = {
   appSoloTitle: { color: "var(--pulse)", fontSize: 10, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase" } as React.CSSProperties,
   appSoloLine: { display: "flex", gap: 8, flexWrap: "wrap", color: "var(--bone)", fontSize: 11, lineHeight: 1.35 } as React.CSSProperties,
   appSoloMeta: { color: "var(--haze)", fontSize: 10, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
+  rollbackStrip: { padding: "9px 12px", borderBottom: border, display: "grid", gap: 4, background: "rgba(255,255,255,.012)" } as React.CSSProperties,
+  rollbackTitle: { color: "var(--mist)", fontSize: 10, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase" } as React.CSSProperties,
+  rollbackMeta: { color: "var(--haze)", fontSize: 10, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
   railSection: { padding: "14px 16px", borderBottom: border, display: "flex", flexDirection: "column", gap: 10, minHeight: 0 } as React.CSSProperties,
   sectionHead: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } as React.CSSProperties,
   kicker: { fontSize: 10, letterSpacing: ".18em", color: "var(--haze)" } as React.CSSProperties,

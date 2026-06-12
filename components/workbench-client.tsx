@@ -40,6 +40,8 @@ type Session = {
   costCents: number;
   updatedAt: string;
   metadata?: {
+    rollbackMode?: WorkbenchSessionMetadata["rollbackMode"];
+    rollbackDescription?: string;
     agentRun?: WorkbenchSessionMetadata["agentRun"];
     appSolo?: WorkbenchSessionMetadata["appSolo"];
   } & Record<string, unknown>;
@@ -689,7 +691,13 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
           url={previewSrc(active)}
           objective={active.objective}
           status={active.status}
-          sessionId={active.id} events={events} artifacts={artifacts} activity={activity} onRefreshSession={refreshActive}
+          sessionId={active.id}
+          rollbackMode={active.metadata?.rollbackMode as WorkbenchSessionMetadata["rollbackMode"] | undefined}
+          rollbackDescription={typeof active.metadata?.rollbackDescription === "string" ? active.metadata.rollbackDescription : undefined}
+          events={events}
+          artifacts={artifacts}
+          activity={activity}
+          onRefreshSession={refreshActive}
           onClose={() => setSandboxOpen(false)}
         />
       )}

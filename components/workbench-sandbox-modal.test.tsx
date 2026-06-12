@@ -12,6 +12,8 @@ describe("WorkbenchSandboxModal", () => {
         objective="Build a notes app"
         status="completed"
         sessionId="ws_1"
+        rollbackMode="text_files_only"
+        rollbackDescription="Rollback can restore text files only."
         events={[
           {
             id: "evt_1",
@@ -57,5 +59,7 @@ describe("WorkbenchSandboxModal", () => {
     expect(html).toContain("Build a notes app");
     expect(html).toContain("/api/workbench/ws_1/preview/");
     expect(html).toContain("Workbench tabs");
+    expect(html).toContain("text-files-only rollback");
+    expect(html).toContain("Rollback can restore text files only.");
   });
 });

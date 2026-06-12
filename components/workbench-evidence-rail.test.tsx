@@ -7,7 +7,15 @@ describe("WorkbenchEvidenceRail", () => {
   it("renders the derived verification and artifact summary", () => {
     const html = renderToStaticMarkup(
       <WorkbenchEvidenceRail
-        active={{ id: "ws_1", status: "completed", previewUrl: "http://localhost:3000" }}
+        active={{
+          id: "ws_1",
+          status: "completed",
+          previewUrl: "http://localhost:3000",
+          metadata: {
+            rollbackMode: "text_files_only",
+            rollbackDescription: "Rollback can restore text files only.",
+          },
+        }}
         events={[
           {
             id: "evt_verify",
@@ -56,6 +64,8 @@ describe("WorkbenchEvidenceRail", () => {
     expect(html).toContain("1 pass / 1 failed / 0 skipped");
     expect(html).toContain("1 shot / 1 file / 2 artifacts");
     expect(html).toContain("failed: tests");
+    expect(html).toContain("text-files-only rollback");
+    expect(html).toContain("Rollback can restore text files only.");
   });
 
   it("renders Workbench agent contract metadata for agent sessions", () => {

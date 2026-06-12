@@ -6,6 +6,7 @@ export type WorkbenchEventType = "plan" | "shell" | "browser" | "file" | "test" 
 export type WorkbenchEventStatus = "pending" | "running" | "completed" | "failed" | "needs_approval";
 export type WorkbenchArtifactKind = "file" | "screenshot" | "terminal_log" | "test_result" | "preview" | "export" | "har" | "perf_trace";
 export type WorkbenchAttemptStatus = "running" | "completed" | "failed" | "cancelled" | "needs_approval";
+export type WorkbenchRollbackMode = "text_files_only" | "git_commit" | "provider_native";
 
 /**
  * a competing platform-style agent modes. `build` drives the autonomous plan→write→run→heal→preview
@@ -37,6 +38,8 @@ export type WorkbenchSessionMetadata = {
   maxCostCents: number;
   approvalRequiredFor: string[];
   rollbackAvailable: boolean;
+  rollbackMode?: WorkbenchRollbackMode;
+  rollbackDescription?: string;
   appSolo?: {
     agentRole: AgentRole;
     agentLabel: string;
