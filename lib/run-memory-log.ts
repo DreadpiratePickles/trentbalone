@@ -9,6 +9,25 @@ import type {
 } from "@/lib/types";
 import { nowIso } from "@/lib/utils";
 
+export type NormalizedWorkbenchMemoryEvent = {
+  schemaVersion: "workbench.event.v1";
+  eventId: string;
+  runId: string;
+  companyId: string;
+  seq: number | undefined;
+  type: WorkbenchEvent["type"];
+  status: WorkbenchEvent["status"];
+  title: string;
+  detail: string;
+  command: string | undefined;
+  artifactId: string | undefined;
+  attemptNo: number | undefined;
+  durationMs: number | undefined;
+  agentRole: WorkbenchEvent["agentRole"] | undefined;
+  metadata: Record<string, unknown>;
+  occurredAt: string;
+};
+
 export function buildWorkbenchMemoryLog(input: {
   session: WorkbenchSession;
   events: WorkbenchEvent[];
@@ -70,6 +89,27 @@ export function buildWorkbenchMemoryLog(input: {
   ].join("\n");
 }
 
+export function normalizeWorkbenchEventForMemory(event: WorkbenchEvent): NormalizedWorkbenchMemoryEvent {
+  return {
+    schemaVersion: "workbench.event.v1",
+    eventId: event.id,
+    runId: event.sessionId,
+    companyId: event.companyId,
+    seq: event.seq,
+    type: event.type,
+    status: event.status,
+    title: event.title,
+    detail: normalizeEventDetail(event.content),
+    command: event.command,
+    artifactId: event.artifactId,
+    attemptNo: event.attemptNo,
+    durationMs: event.durationMs,
+    agentRole: event.agentRole,
+    metadata: event.metadata ?? {},
+    occurredAt: event.createdAt,
+  };
+}
+
 export async function persistWorkbenchMemoryLog(
   sessionId: string,
   options?: { finalSummary?: string },
@@ -120,15 +160,29 @@ export async function persistWorkbenchMemoryLog(
 }
 
 function formatEvent(event: WorkbenchEvent): string {
+  const normalized = normalizeWorkbenchEventForMemory(event);
   return [
-    `- [${event.seq}] ${event.type}/${event.status}: ${event.title}`,
-    event.command ? `  - command: ${event.command}` : undefined,
-    event.agentRole ? `  - agentRole: ${event.agentRole}` : undefined,
-    event.attemptNo ? `  - attemptNo: ${event.attemptNo}` : undefined,
-    event.durationMs ? `  - durationMs: ${event.durationMs}` : undefined,
-    event.metadata ? `  - metadata: ${JSON.stringify(event.metadata)}` : undefined,
-    event.content ? `  - detail: ${event.content.replace(/\s+/g, " ").slice(0, 600)}` : undefined,
+    `- schemaVersion: ${normalized.schemaVersion}`,
+    `  eventId: ${normalized.eventId}`,
+    `  runId: ${normalized.runId}`,
+    `  companyId: ${normalized.companyId}`,
+    normalized.seq !== undefined ? `  seq: ${normalized.seq}` : undefined,
+    `  type: ${normalized.type}`,
+    `  status: ${normalized.status}`,
+    `  title: ${normalized.title}`,
+    `  occurredAt: ${normalized.occurredAt}`,
+    normalized.command ? `  command: ${normalized.command}` : undefined,
+    normalized.artifactId ? `  artifactId: ${normalized.artifactId}` : undefined,
+    normalized.agentRole ? `  agentRole: ${normalized.agentRole}` : undefined,
+    normalized.attemptNo !== undefined ? `  attemptNo: ${normalized.attemptNo}` : undefined,
+    normalized.durationMs !== undefined ? `  durationMs: ${normalized.durationMs}` : undefined,
+    `  metadata: ${JSON.stringify(normalized.metadata)}`,
+    normalized.detail ? `  detail: ${normalized.detail}` : undefined,
   ].filter(Boolean).join("\n");
+}
+
+function normalizeEventDetail(value: string): string {
+  return value.replace(/\s+/g, " ").slice(0, 600);
 }
 
 function formatArtifact(artifact: WorkbenchArtifact): string {

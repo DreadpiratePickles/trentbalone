@@ -4,7 +4,11 @@ import { store } from "@/lib/store";
 import { withRlsContext } from "@/lib/with-rls";
 import { nowIso } from "@/lib/utils";
 import type { WorkbenchSessionStatus } from "@/lib/types";
-import { stopWorkbenchSession } from "@/lib/workbench-orchestrator";
+import {
+  recordAppSoloHeartbeat,
+  resumeAppSoloWorkbenchSession,
+  stopWorkbenchSession,
+} from "@/lib/workbench-orchestrator";
 
 const statuses: WorkbenchSessionStatus[] = ["queued", "starting", "running", "paused", "completed", "failed", "cancelled"];
 const terminalStatuses = new Set<WorkbenchSessionStatus>(["completed", "failed", "cancelled"]);
@@ -40,11 +44,22 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (!check.ok) return forbidden();
 
   const body = await request.json() as {
+    action?: "app_solo_heartbeat" | "app_solo_resume";
     status?: WorkbenchSessionStatus;
     previewUrl?: string;
     costCents?: number;
     objective?: string;
   };
+
+  if (body.action === "app_solo_heartbeat") {
+    const session = await withRlsContext(existing.companyId, () => recordAppSoloHeartbeat(id));
+    return NextResponse.json({ session });
+  }
+
+  if (body.action === "app_solo_resume") {
+    const session = await withRlsContext(existing.companyId, () => resumeAppSoloWorkbenchSession(id));
+    return NextResponse.json({ session });
+  }
 
   if (body.status && !statuses.includes(body.status)) {
     return NextResponse.json({ error: "Unsupported workbench status" }, { status: 400 });

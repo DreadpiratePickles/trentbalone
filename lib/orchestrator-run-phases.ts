@@ -1,5 +1,5 @@
 import { store } from "@/lib/store";
-import type { AgentRole, Company } from "@/lib/types";
+import type { AgentRole, Company, ToolCallRecord } from "@/lib/types";
 import { ceoChatResponse } from "@/lib/ai";
 import { makeId, nowIso } from "@/lib/utils";
 import { emitJobEvent } from "@/lib/job-events";
@@ -39,6 +39,7 @@ import {
   persistSteps,
 } from "@/lib/orchestrator-run-persist";
 import { enqueueReadyOrchestrationSteps } from "@/lib/orchestrator-run-queue";
+import { isFatalStepOutcome } from "@/lib/orchestrator-step-outcome";
 
 export function buildRecordedHandoffEvent(input: {
   cycleId: string;
@@ -64,6 +65,47 @@ export function buildRecordedHandoffEvent(input: {
     contractVersion: input.handoff.contractVersion,
     timestamp: input.timestamp,
   };
+}
+
+export function buildSeatToolApprovalRequest(
+  err: SeatLoopAwaitingApprovalError,
+): { adapter: string; action: string; summary: string } | undefined {
+  const pending = err.seatLoopState.pendingToolCall;
+  const pendingRecord = [...err.toolCalls]
+    .reverse()
+    .find((record: ToolCallRecord) =>
+      record.status === "needs_approval"
+      && record.adapter.toLowerCase() === pending.name.toLowerCase()
+      && record.action === pending.action,
+    );
+  if (!pendingRecord) return undefined;
+  return {
+    adapter: pending.name,
+    action: pending.action,
+    summary: pendingRecord.summary,
+  };
+}
+
+async function markRunAwaitingApproval(
+  run: OrchestrationRun,
+  step: StepRecord,
+  detail = `Awaiting approval: ${step.title}`,
+): Promise<void> {
+  run.status = "awaiting_approval";
+  cacheOrchestrationRun(run);
+  await store.updateOrchestratorRun(run.id, { status: "awaiting_approval" }).catch(() => undefined);
+  await emitPersistedOrcEvent(run, {
+    kind: "run_awaiting_approval",
+    runId: run.id,
+    at: nowIso(),
+    detail,
+    run: {
+      id: run.id,
+      status: run.status,
+      summary: detail,
+    },
+    step,
+  });
 }
 
 export async function processPlanPhase(run: OrchestrationRun, company: Company): Promise<void> {
@@ -110,11 +152,11 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
   const unmet = step.dependsOn.find((dep) => !(dep in outputs));
   if (unmet) {
     const depStep = run.steps.find((item) => item.id === unmet);
-    // If the dependency FAILED it will never produce output. Marking this step
+    // A fatal dependency will never produce usable output. Marking this step
     // "blocked" would strand it (the scheduler only re-selects "pending" steps),
-    // silently dropping it from the final brief. Cascade to a visible failure so
-    // the run reflects reality and still terminates.
-    if (depStep?.status === "failed") {
+    // silently dropping it from the final brief. Degraded-but-usable failures
+    // satisfy dependencies via buildCompletedOutputs(); truly fatal ones cascade.
+    if (depStep && isFatalStepOutcome(depStep)) {
       step.status = "failed";
       step.completedAt = nowIso();
       step.output = `Skipped — dependency "${depStep.title}" failed.`;
@@ -139,6 +181,7 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
       await persistStep(run, step);
       await auditTransition(run.companyId, "step_start", run.id, `Awaiting approval: ${step.title}`);
       await emitPersistedOrcEvent(run, { kind: "step_awaiting_approval", runId: run.id, at: nowIso(), step });
+      await markRunAwaitingApproval(run, step);
       emitJobEvent({
         jobRunId: run.id,
         companyId: run.companyId,
@@ -153,12 +196,19 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
     if (approval?.status === "pending") {
       step.status = "awaiting_approval";
       await persistStep(run, step);
+      await markRunAwaitingApproval(run, step);
       return;
     }
     if (approval?.status === "rejected") {
       await enqueueReadyOrchestrationSteps(run);
       return;
     }
+  }
+
+  if (run.status === "awaiting_approval") {
+    run.status = "running";
+    cacheOrchestrationRun(run);
+    await store.updateOrchestratorRun(run.id, { status: "running" }).catch(() => undefined);
   }
 
   step.status = "running";
@@ -218,10 +268,24 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
     await persistStep(run, step);
     await store.saveExecution(exec.execution);
 
+    if (exec.maxStepsReached) {
+      step.status = "failed";
+      step.completedAt = nowIso();
+      step.output = exec.output;
+      step.seatLoopState = undefined;
+      if (step.taskId) await store.updateTask(step.taskId, { status: "failed" }).catch(() => undefined);
+      await persistStep(run, step);
+      await emitPersistedOrcEvent(run, { kind: "step_output", runId: run.id, at: nowIso(), step });
+      await emitPersistedOrcEvent(run, { kind: "step_end", runId: run.id, at: nowIso(), step });
+      await enqueueReadyOrchestrationSteps(run);
+      return;
+    }
+
     const critiqueResult = await critiqueStepOutput(step, exec.output, { companyId: run.companyId, runId: run.id });
     step.critique = critiqueResult;
     await persistStep(run, step);
 
+    let effectiveCritique = critiqueResult;
     if (critiqueResult.verdict === "retry") {
       const exec2 = await executeStepWithRuntime({
         step: { ...step, expectedOutput: `${step.expectedOutput}\nImprovement: ${critiqueResult.improvement ?? "tighten the result"}` },
@@ -240,7 +304,35 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
       step.costCents = (step.costCents ?? 0) + exec2.costCents;
       step.toolCalls = [...(step.toolCalls ?? []), ...exec2.toolCalls];
       await persistStep(run, step);
-    } else if (critiqueResult.verdict === "replan" || critiqueResult.verdict === "escalate") {
+
+      // RC2 invariant (Fix Plan Slice 1): a critic 'retry' is NOT a pass.
+      // The revised output must be critiqued again; a second failure marks
+      // the step failed (degraded) instead of silently completing.
+      const recheck = await critiqueStepOutput(step, exec2.output, { companyId: run.companyId, runId: run.id });
+      step.critique = recheck;
+      effectiveCritique = recheck;
+      await persistStep(run, step);
+      if (recheck.verdict === "retry") {
+        const hasUsableOutput = Boolean(step.output?.trim());
+        step.status = hasUsableOutput ? "completed" : "failed";
+        step.completedAt = nowIso();
+        step.output = [
+          step.output ?? "",
+          "",
+          `DEGRADED: output failed critic review twice (${recheck.reason}). Founder review recommended.`,
+        ].join("\n");
+        step.seatLoopState = undefined;
+        if (step.taskId) {
+          await store.updateTask(step.taskId, { status: hasUsableOutput ? "completed" : "failed" }).catch(() => undefined);
+        }
+        await persistStep(run, step);
+        await emitPersistedOrcEvent(run, { kind: "step_critic", runId: run.id, at: nowIso(), step });
+        await emitPersistedOrcEvent(run, { kind: "step_end", runId: run.id, at: nowIso(), step });
+        await enqueueReadyOrchestrationSteps(run);
+        return;
+      }
+    }
+    if (effectiveCritique.verdict === "replan" || effectiveCritique.verdict === "escalate") {
       const recalled = await recallRelevantMemory(company.id, run.objective, { k: 5, tokenBudget: 1200 });
       const completedSteps = run.steps.filter((item) => item.status === "completed");
       const proposedReplan = run.plan
@@ -248,7 +340,7 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
             plan: run.plan,
             completedSteps,
             failedStep: { ...step, output: step.output ?? exec.output },
-            critique: critiqueResult,
+            critique: effectiveCritique,
           })
         : undefined;
       const completedIds = new Set(completedSteps.map((item) => item.id));
@@ -256,7 +348,7 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
       const critiqueOutcome = await handleStepCritique({
         run,
         stepId: step.id,
-        critique: critiqueResult,
+        critique: effectiveCritique,
         revisedTail,
         proposedReplan,
       });
@@ -304,12 +396,23 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
     await enqueueReadyOrchestrationSteps(run);
   } catch (err) {
     if (err instanceof SeatLoopAwaitingApprovalError) {
-      const pendingRecord = [...err.toolCalls].reverse().find((record) => record.status === "needs_approval");
-      const approval = await createApprovalForSeatTool(company, run.id, step, {
-        adapter: err.seatLoopState.pendingToolCall.name,
-        action: err.seatLoopState.pendingToolCall.action,
-        summary: pendingRecord?.summary ?? err.seatLoopState.pendingToolCall.action,
-      });
+      const approvalRequest = buildSeatToolApprovalRequest(err);
+      if (!approvalRequest) {
+        step.status = "failed";
+        step.completedAt = nowIso();
+        step.output = "Step failed because the seat loop paused for approval without a matching needs-approval tool record.";
+        step.seatLoopState = undefined;
+        step.toolCalls = err.toolCalls;
+        step.tokens = err.tokens;
+        step.costCents = err.costCents;
+        step.model = err.model;
+        if (step.taskId) await store.updateTask(step.taskId, { status: "failed" }).catch(() => undefined);
+        await persistStep(run, step);
+        await emitPersistedOrcEvent(run, { kind: "step_end", runId: run.id, at: nowIso(), step });
+        await enqueueReadyOrchestrationSteps(run);
+        return;
+      }
+      const approval = await createApprovalForSeatTool(company, run.id, step, approvalRequest);
       step.status = "awaiting_approval";
       step.approvalId = approval.id;
       step.seatLoopState = err.seatLoopState;
@@ -323,6 +426,7 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
       await persistStep(run, step);
       await auditTransition(run.companyId, "step_start", run.id, `Awaiting tool approval: ${step.title}`);
       await emitPersistedOrcEvent(run, { kind: "step_awaiting_approval", runId: run.id, at: nowIso(), step });
+      await markRunAwaitingApproval(run, step, `Awaiting tool approval: ${step.title}`);
       emitJobEvent({
         jobRunId: run.id,
         companyId: run.companyId,
@@ -349,6 +453,25 @@ export async function processConsolidatePhase(run: OrchestrationRun, company: Co
   if (!run.plan) return;
   await emitPersistedOrcEvent(run, { kind: "consolidate_start", runId: run.id, at: nowIso() });
   run.summary = await consolidateRun(run.plan, run.steps, { companyId: run.companyId, runId: run.id });
+
+  // Fix Plan Slice 1 (approval semantics): when the brief asks the founder to
+  // approve something, back it with a REAL approval record — never imply an
+  // approval gate that doesn't exist. If creation fails, relabel as review.
+  if (run.summary && /\bfounder\b[^.\n]{0,80}\bapprov/i.test(run.summary)) {
+    const approval = await store.createApproval({
+      companyId: run.companyId,
+      action: `Review run output: ${run.objective.slice(0, 120)}`,
+      reason: "The consolidated brief asks for founder approval of this run's output.",
+      previewContent: run.summary.slice(0, 2000),
+      previewKind: "generic",
+      expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
+      toolName: `orchestration:${run.id}:consolidated`,
+    }).catch(() => undefined);
+    run.summary = approval
+      ? `${run.summary}\n\n[Approval ${approval.id} created — pending in the Approvals queue.]`
+      : `${run.summary}\n\n[FOR REVIEW: no approval record could be created — treat the ask above as informal review, not a gate.]`;
+  }
+
   run.status = hasFatalOrchestrationOutcome(run.steps) ? "failed" : "completed";
   run.completedAt = nowIso();
   await store.updateOrchestratorRun(run.id, {
@@ -531,13 +654,9 @@ export async function processConsolidatePhase(run: OrchestrationRun, company: Co
 }
 
 export function hasFatalOrchestrationOutcome(
-  steps: Pick<StepRecord, "status" | "critique">[],
+  steps: Pick<StepRecord, "status" | "critique" | "output">[],
 ): boolean {
-  return steps.some((step) => {
-    if (step.status === "blocked" || step.status === "awaiting_approval") return true;
-    if (step.status === "failed") return step.critique?.verdict !== "replan";
-    return false;
-  });
+  return steps.some(isFatalStepOutcome);
 }
 
 /**

@@ -140,6 +140,14 @@ export function mapOrcEventName(eventName: string, payload: OrcStreamInput, inde
         status: "completed",
         narration: payload.run?.summary,
       };
+    case "run_awaiting_approval":
+      return {
+        id: makeStepId("orc", index, "awaiting-approval"),
+        icon: "approval",
+        verb: "Run awaiting approval",
+        target: payload.detail ?? payload.run?.summary ?? "approval required",
+        status: "waiting",
+      };
     case "run_failed":
       return {
         id: makeStepId("orc", index, "failed"),

@@ -133,6 +133,19 @@ function providersForRoute(
   return useFullChain ? route.fallbackChain : route.providers;
 }
 
+function cappedEnvInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, fallback);
+}
+
+export function maxTokensForWorkbenchRole(role: WorkbenchStreamRole): number {
+  if (role === "executor") return cappedEnvInt("WORKBENCH_MAX_TOKENS_EXECUTOR", 32768);
+  return cappedEnvInt("WORKBENCH_MAX_TOKENS_PLANNER", 8192);
+}
+
 export async function* streamArtifactWithFallback(
   input: StreamInput,
   options?: {
@@ -147,7 +160,7 @@ export async function* streamArtifactWithFallback(
   const injected = options?.streamProvider ?? streamOverrides?.streamProvider;
   const streamFn = injected ?? streamProviderArtifact;
   const providers = providersForRoute(route, Boolean(injected));
-  const maxTokens = role === "executor" ? 32768 : 8192;
+  const maxTokens = maxTokensForWorkbenchRole(role);
 
   if (providers.length === 0) {
     yield { type: "finish", reason: "error" };
@@ -183,7 +196,7 @@ export async function* defaultStream(input: { system: string; user: string }): A
   const injected = streamOverrides?.streamProvider;
   const streamFn = injected ?? streamProviderArtifact;
   const providers = providersForRoute(route, Boolean(injected));
-  const maxTokens = 8192;
+  const maxTokens = maxTokensForWorkbenchRole("planner");
 
   if (providers.length === 0) {
     yield "Model not configured.";

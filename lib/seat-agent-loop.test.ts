@@ -249,4 +249,81 @@ describe("runSeatAgent", () => {
       summary: expect.stringContaining("max tool-use steps"),
     });
   });
+
+  it("returns a degraded source-grounded output when a model repeats a disallowed tool", async () => {
+    mockExecuteSeatModel.mockImplementation(async () => ({
+      output: { toolCall: { name: "analytics:read_mock", action: "read analytics" } },
+      model: "gpt-4o-mini",
+      tokens: 10,
+      costCents: 1,
+      fallback: false,
+    }));
+
+    const { runtime, adapters } = makeRuntime(["Metrics"]);
+    const result = await runSeatAgent({
+      companyId: "co_1",
+      runtime,
+      subtask: makeSubtask({
+        contextBundle: {
+          company: { name: "Acme" },
+          sourceCoverage: "SOURCE COVERAGE:\n- Available: analytics (doc doc_analytics)",
+          sourceDocuments: "SOURCE DOCUMENTS (cite by id when you use one):\n[doc_analytics] analytics.json\n{\"activation\":0.42}",
+        },
+      }),
+      systemPrompt: runtime.systemPrompt,
+      maxSteps: 6,
+      adapters,
+    });
+
+    expect(mockExecuteSeatModel).toHaveBeenCalledTimes(2);
+    expect(result.maxStepsReached).toBeFalsy();
+    expect(result.output).toMatchObject({
+      summary: expect.stringContaining("DEGRADED"),
+    });
+    expect(result.output?.summary).toContain("analytics.json");
+    expect(result.toolCalls).toHaveLength(2);
+  });
+
+  it("returns a degraded source-grounded output when an allowed tool repeatedly fails validation", async () => {
+    const browserAdapter: ToolAdapter = {
+      name: "Steel Browser",
+      scopes: ["read"],
+      async healthCheck() { return "mocked"; },
+      estimateCost() { return 0; },
+      requiresApproval() { return false; },
+      async execute(action) {
+        return { adapter: "Steel Browser", action, status: "failed", summary: "Steel Browser action \"scrape\" requires payload.url." };
+      },
+    };
+    mockExecuteSeatModel.mockImplementation(async () => ({
+      output: { toolCall: { name: "Steel Browser", action: "scrape" } },
+      model: "gpt-4o-mini",
+      tokens: 10,
+      costCents: 1,
+      fallback: false,
+    }));
+
+    const { runtime, adapters } = makeRuntime(["Steel Browser"], [browserAdapter]);
+    const result = await runSeatAgent({
+      companyId: "co_1",
+      runtime,
+      subtask: makeSubtask({
+        toolGuidance: ["Steel Browser"],
+        contextBundle: {
+          company: { name: "Acme" },
+          sourceCoverage: "SOURCE COVERAGE:\n- Available: competitive research (doc doc_competitive)",
+          sourceDocuments: "SOURCE DOCUMENTS (cite by id when you use one):\n[doc_competitive] competitive-research.md\nCompetitor notes.",
+        },
+      }),
+      systemPrompt: runtime.systemPrompt,
+      maxSteps: 6,
+      adapters,
+    });
+
+    expect(mockExecuteSeatModel).toHaveBeenCalledTimes(2);
+    expect(result.maxStepsReached).toBeFalsy();
+    expect(result.output?.summary).toContain("DEGRADED");
+    expect(result.output?.summary).toContain("competitive-research.md");
+    expect(result.toolCalls).toHaveLength(2);
+  });
 });

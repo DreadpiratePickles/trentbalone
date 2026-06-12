@@ -32,6 +32,7 @@ export function ArtifactsPageClient({ companyId }: { companyId: string }) {
   const [format, setFormat] = useState<ArtifactExportFormat>("pdf");
   const [building, setBuilding] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [buildError, setBuildError] = useState("");
 
   async function load() {
     const res = await fetch(`/api/artifacts?companyId=${companyId}`);
@@ -44,22 +45,47 @@ export function ArtifactsPageClient({ companyId }: { companyId: string }) {
 
   useEffect(() => { void load(); }, [companyId]);
 
+  // RC2 fix (Fix Plan Slice 6): every build attempt must end in a visible
+  // terminal state — new artifact, error card, or timeout notice. Failed
+  // POSTs and thrown fetch errors were previously swallowed, which is why
+  // prompts after the first appeared to do nothing.
   async function buildArtifact() {
     if (!prompt.trim() || building) return;
     setBuilding(true);
+    setBuildError("");
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), 180_000);
     try {
       const res = await fetch("/api/artifacts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ companyId, prompt, type, exportFormat: format })
+        body: JSON.stringify({ companyId, prompt, type, exportFormat: format }),
+        signal: timeout.signal,
       });
       if (res.ok) {
         const data = await res.json() as { artifact: Artifact };
-        setArtifacts((prev) => [data.artifact, ...prev]);
+        setArtifacts((prev) => [data.artifact, ...prev.filter((a) => a.id !== data.artifact.id)]);
         setSelected(data.artifact);
+      } else {
+        let message = `Artifact build failed (HTTP ${res.status}).`;
+        try {
+          const err = await res.json() as { error?: string };
+          if (err?.error) message = `Artifact build failed: ${err.error}`;
+        } catch { /* non-JSON error body */ }
+        setBuildError(message);
       }
+    } catch (err) {
+      setBuildError(
+        err instanceof DOMException && err.name === "AbortError"
+          ? "Artifact build timed out after 3 minutes. It may still complete in the background — the list below refreshes automatically."
+          : `Artifact build failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
+      clearTimeout(timer);
       setBuilding(false);
+      // The list can never go stale: reconcile with the server after every
+      // attempt, success or failure (a timed-out build may still have landed).
+      void load();
     }
   }
 
@@ -104,6 +130,29 @@ export function ArtifactsPageClient({ companyId }: { companyId: string }) {
             {building ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> : <I.sparkle />}
             {building ? "building" : "build artifact"}
           </button>
+          {buildError && (
+            <div
+              data-testid="artifact-build-error"
+              style={{
+                marginTop: 12,
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid rgba(255,99,99,.35)",
+                background: "rgba(255,99,99,.08)",
+                color: "var(--bone)",
+                fontSize: 12,
+                lineHeight: 1.5,
+              }}
+            >
+              <div style={{ fontWeight: 650, marginBottom: 6 }}>Build did not complete</div>
+              {buildError}
+              <div style={{ marginTop: 8 }}>
+                <button className="btn btn-mono" style={{ fontSize: 10 }} onClick={() => void buildArtifact()}>
+                  retry
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 12 }}>

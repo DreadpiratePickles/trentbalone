@@ -8,36 +8,89 @@ import type {
   OrchestrationStep,
   StepRecord,
 } from "@/lib/orchestrator-runtime";
-import { repairOrchestrationPlanRoutes } from "@/lib/orchestrator-runtime";
+import {
+  agentRoles,
+  normalizePlannerAgentRole,
+  normalizePlannerRiskLevel,
+  repairOrchestrationPlanRoutes,
+  sanitizeReadOnlyApprovalGates,
+} from "@/lib/orchestrator-runtime";
 
 /** Mirror MAX_DELEGATION_DEPTH from orchestrator-delegation.ts */
 export const MAX_REPLANS = 2;
 
 const PLANNER_MODEL = process.env.PLANNER_MODEL ?? MODELS.STRONG;
 
+function normalizeReplanBoolean(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const normalized = value.toLowerCase().trim();
+  if (/^(true|yes|y|1|required|approval required)$/.test(normalized)) return true;
+  if (/^(false|no|n|0|none|not required|approval not required)$/.test(normalized)) return false;
+  return value;
+}
+
+function normalizeReplanStringList(value: unknown): unknown {
+  if (value == null) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed || /^(none|n\/a|na|no blockers?|no dependencies?)$/i.test(trimmed)) return [];
+  return trimmed
+    .split(/[\n;,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+const roleSchema = z.preprocess(normalizePlannerAgentRole, z.enum(agentRoles));
+const riskSchema = z.preprocess(normalizePlannerRiskLevel, z.enum(["low", "medium", "high"]));
+const booleanSchema = z.preprocess(normalizeReplanBoolean, z.boolean());
+const stringListSchema = z.preprocess(normalizeReplanStringList, z.array(z.string()));
+
 const tailStepSchema = z.object({
   id: z.string(),
   title: z.string(),
   rationale: z.string(),
-  agentRole: z.enum([
-    "ceo", "engineer", "growth", "content", "support",
-    "finance", "analyst", "escalation", "sales",
-  ]),
-  dependsOn: z.array(z.string()).default([]),
+  agentRole: roleSchema,
+  dependsOn: stringListSchema.default([]),
   expectedOutput: z.string(),
-  riskLevel: z.enum(["low", "medium", "high"]),
-  needsApproval: z.boolean().default(false),
+  riskLevel: riskSchema,
+  needsApproval: booleanSchema.default(false),
 });
 
 const tailRevisionSchema = z.object({
   reasoning: z.string(),
   steps: z.array(tailStepSchema).min(1).max(12),
-  successCriteria: z.array(z.string()).optional(),
-  blockers: z.array(z.string()).default([]),
+  successCriteria: stringListSchema.optional(),
+  blockers: stringListSchema.default([]),
 });
 
 export function canApplyReplan(replanCount: number): boolean {
   return replanCount < MAX_REPLANS;
+}
+
+function sanitizeRevisedTailDependencies(input: {
+  completedSteps: StepRecord[];
+  failedStepId: string;
+  revisedTail: OrchestrationStep[];
+}): OrchestrationStep[] {
+  const completedIds = new Set(input.completedSteps.map((step) => step.id));
+  const anchorId = input.completedSteps[input.completedSteps.length - 1]?.id;
+  const priorTailIds = new Set<string>();
+
+  return input.revisedTail.map((step) => {
+    const validDeps = Array.from(new Set(step.dependsOn ?? [])).filter((dep) => (
+      dep !== input.failedStepId
+      && dep !== step.id
+      && (completedIds.has(dep) || priorTailIds.has(dep))
+    ));
+    priorTailIds.add(step.id);
+
+    return {
+      ...step,
+      dependsOn: validDeps.length ? validDeps : (anchorId && step.id !== anchorId ? [anchorId] : []),
+      needsApproval: step.needsApproval ?? false,
+    };
+  });
 }
 
 export function applyRevisedPlanTail(input: {
@@ -57,7 +110,13 @@ export function applyRevisedPlanTail(input: {
     critique: failedStep.critique ?? { verdict: "replan", reason: "structural failure — tail revised" },
   };
 
-  const newTail: StepRecord[] = input.revisedTail.map((step) => ({
+  const sanitizedTail = sanitizeRevisedTailDependencies({
+    completedSteps: completed,
+    failedStepId: input.failedStepId,
+    revisedTail: input.revisedTail,
+  });
+
+  const newTail: StepRecord[] = sanitizedTail.map((step) => ({
     ...step,
     dependsOn: step.dependsOn ?? [],
     needsApproval: step.needsApproval ?? false,
@@ -185,13 +244,18 @@ export async function reviseOrchestrationPlanTail(
     console.error("orchestrator.replan_failed", { error: err instanceof Error ? err.message : String(err) });
   }
 
-  const tailSteps = revision.steps
+  const unsanitizedTailSteps = revision.steps
     .filter((step) => !completedIds.has(step.id))
     .map((step) => ({
       ...step,
       dependsOn: step.dependsOn ?? [],
       needsApproval: step.needsApproval ?? false,
     }));
+  const tailSteps = sanitizeRevisedTailDependencies({
+    completedSteps: input.completedSteps,
+    failedStepId: input.failedStep.id,
+    revisedTail: unsanitizedTailSteps.length ? unsanitizedTailSteps : fallbackTail,
+  });
 
   const mergedSteps = [
     ...input.completedSteps.map((step) => ({
@@ -204,7 +268,7 @@ export async function reviseOrchestrationPlanTail(
       riskLevel: step.riskLevel,
       needsApproval: step.needsApproval,
     })),
-    ...(tailSteps.length ? tailSteps : fallbackTail),
+    ...tailSteps,
   ];
 
   const rawPlan: OrchestrationPlan = {
@@ -215,7 +279,7 @@ export async function reviseOrchestrationPlanTail(
     blockers: revision.blockers ?? input.plan.blockers,
   };
 
-  return repairOrchestrationPlanRoutes({
+  return sanitizeReadOnlyApprovalGates(repairOrchestrationPlanRoutes({
     ...rawPlan,
     blockers: rawPlan.blockers ?? [],
     steps: rawPlan.steps.map((step) => ({
@@ -223,7 +287,7 @@ export async function reviseOrchestrationPlanTail(
       dependsOn: step.dependsOn ?? [],
       needsApproval: step.needsApproval ?? false,
     })),
-  });
+  }), input.plan.objective);
 }
 
 export function buildEscalationReplanPrompt(

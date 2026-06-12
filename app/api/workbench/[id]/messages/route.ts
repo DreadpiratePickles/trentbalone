@@ -4,6 +4,8 @@ import { store } from "@/lib/store";
 import { withRlsContext } from "@/lib/with-rls";
 import { runWorkbenchAgent } from "@/lib/workbench-agent";
 import { ensureWorkbenchSandboxReady } from "@/lib/workbench-orchestrator";
+import { nowIso } from "@/lib/utils";
+import "@/lib/workbench-providers";
 
 /** GET /api/workbench/:id/messages — list the chat transcript for a session. */
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -51,6 +53,28 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     await ensureWorkbenchSandboxReady(session);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Sandbox initialisation failed";
+    const stoppedAt = nowIso();
+    await store.updateWorkbenchSession(session.id, {
+      status: "failed",
+      stoppedAt,
+    }).catch(() => undefined);
+    await store.addWorkbenchEvent({
+      companyId: session.companyId,
+      sessionId: session.id,
+      type: "system",
+      status: "failed",
+      title: "Workbench message failed",
+      content: message,
+      agentRole: session.agentRole,
+      metadata: { phase: "sandbox_ready" },
+    }).catch(() => undefined);
+    await store.addWorkbenchChatMessage({
+      companyId: session.companyId,
+      sessionId: session.id,
+      role: "assistant",
+      agentMode: session.agentMode,
+      content: `Workbench could not start this run: ${message}`,
+    }).catch(() => undefined);
     return NextResponse.json({ error: message }, { status: 503 });
   }
 

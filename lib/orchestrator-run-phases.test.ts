@@ -1,11 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { buildRecordedHandoffEvent, hasFatalOrchestrationOutcome } from "@/lib/orchestrator-run-phases";
-import type { StepRecord } from "@/lib/orchestrator-runtime";
+import {
+  buildRecordedHandoffEvent,
+  buildSeatToolApprovalRequest,
+  hasFatalOrchestrationOutcome,
+} from "@/lib/orchestrator-run-phases";
+import { SeatLoopAwaitingApprovalError, type StepRecord } from "@/lib/orchestrator-runtime";
 
 describe("hasFatalOrchestrationOutcome", () => {
   it("treats blocked and awaiting-approval steps as unresolved fatal outcomes", () => {
     expect(hasFatalOrchestrationOutcome([step("blocked")])).toBe(true);
     expect(hasFatalOrchestrationOutcome([step("awaiting_approval")])).toBe(true);
+  });
+
+  it("does not fail runs for blocked tool-denial steps with usable guidance", () => {
+    expect(hasFatalOrchestrationOutcome([
+      {
+        ...step("blocked"),
+        output: "The escalation seat is not permitted to create an audit using the audit:create tool. Route the audit creation task to a permitted seat.",
+      },
+    ])).toBe(false);
   });
 
   it("preserves the existing replan exception for failed steps", () => {
@@ -48,6 +61,78 @@ describe("buildRecordedHandoffEvent", () => {
       risks: ["Survey sample is small."],
       whatIDidNotDo: ["Did not contact prospects."],
       payloadRef: "artifact_research",
+    });
+  });
+});
+
+describe("buildSeatToolApprovalRequest", () => {
+  it("returns undefined for stale pauses without a needs-approval tool record", () => {
+    const err = new SeatLoopAwaitingApprovalError({
+      seatLoopState: {
+        toolCalls: [
+          {
+            adapter: "analytics:read_mock",
+            action: "read mock analytics",
+            status: "failed",
+            summary: "Tool is not allowed for this seat.",
+          },
+        ],
+        loopStep: 3,
+        tokens: 120,
+        costCents: 1,
+        model: "gpt-4o-mini",
+        pendingToolCall: { name: "analytics:read_mock", action: "read mock analytics" },
+      },
+      toolCalls: [
+        {
+          adapter: "analytics:read_mock",
+          action: "read mock analytics",
+          status: "failed",
+          summary: "Tool is not allowed for this seat.",
+        },
+      ],
+      tokens: 120,
+      costCents: 1,
+      model: "gpt-4o-mini",
+    });
+
+    expect(buildSeatToolApprovalRequest(err)).toBeUndefined();
+  });
+
+  it("builds an approval request only from a real needs-approval tool record", () => {
+    const err = new SeatLoopAwaitingApprovalError({
+      seatLoopState: {
+        toolCalls: [
+          {
+            adapter: "Stripe",
+            action: "charge $50",
+            status: "needs_approval",
+            summary: "Stripe charge requires approval.",
+          },
+        ],
+        loopStep: 2,
+        tokens: 80,
+        costCents: 1,
+        model: "gpt-4o-mini",
+        pendingToolCall: { name: "Stripe", action: "charge $50" },
+      },
+      toolCalls: [
+        {
+          adapter: "Stripe",
+          action: "charge $50",
+          status: "needs_approval",
+          summary: "Stripe charge requires approval.",
+        },
+      ],
+      tokens: 80,
+      costCents: 1,
+      model: "gpt-4o-mini",
+    });
+
+    expect(buildSeatToolApprovalRequest(err)).toEqual({
+      adapter: "Stripe",
+      action: "charge $50",
+      summary: "Stripe charge requires approval.",
     });
   });
 });

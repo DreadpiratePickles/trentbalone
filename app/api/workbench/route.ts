@@ -66,28 +66,57 @@ export async function POST(request: Request) {
   if (!check.ok) return forbidden();
 
   const companyId = body.companyId;
-  const created = await withRlsContext(companyId, async () => {
-    const company = await store.getCompany(companyId);
-    if (!company) return null;
+  // RC2/RC4 fix (Fix Plan Slices 7+8): a failed session launch must leave a
+  // durable trace (episodic memory) and return a structured, actionable error
+  // — testers saw "Could not launch app-solo session" with no evidence and no
+  // recovery path after refresh.
+  try {
+    const created = await withRlsContext(companyId, async () => {
+      const company = await store.getCompany(companyId);
+      if (!company) return null;
 
-    const session = await createWorkbenchSession({
-      companyId,
-      objective: body.objective!.trim(),
-      taskId: body.taskId,
-      agentRole: body.agentRole,
-      agentMode: body.agentMode,
-      repoUrl: body.repoUrl,
-      provider: body.provider,
-      allowedHosts: body.allowedHosts?.filter(Boolean),
-      metadata: parseWorkbenchMetadata(body.metadata)
+      const session = await createWorkbenchSession({
+        companyId,
+        objective: body.objective!.trim(),
+        taskId: body.taskId,
+        agentRole: body.agentRole,
+        agentMode: body.agentMode,
+        repoUrl: body.repoUrl,
+        provider: body.provider,
+        allowedHosts: body.allowedHosts?.filter(Boolean),
+        metadata: parseWorkbenchMetadata(body.metadata)
+      });
+      const events = await store.listWorkbenchEvents(session.id);
+      return { session, events };
     });
-    const events = await store.listWorkbenchEvents(session.id);
-    return { session, events };
-  });
 
-  if (!created) return NextResponse.json({ error: "company not found" }, { status: 404 });
+    if (!created) return NextResponse.json({ error: "company not found" }, { status: 404 });
 
-  return NextResponse.json(created, { status: 201 });
+    return NextResponse.json(created, { status: 201 });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    await withRlsContext(companyId, () => store.createDocument({
+      companyId,
+      type: "agent_note",
+      title: `Workbench launch failed: ${body.objective!.trim().slice(0, 120)}`,
+      content: [
+        "# Workbench launch failure",
+        `- objective: ${body.objective!.trim()}`,
+        `- requestedProvider: ${body.provider ?? "auto"}`,
+        `- agentRole: ${body.agentRole ?? "default"}`,
+        `- agentMode: ${body.agentMode ?? "build"}`,
+        `- error: ${detail}`,
+        `- at: ${new Date().toISOString()}`,
+      ].join("\n"),
+      source: "workbench:launch-failure",
+      memoryTier: "episodic",
+    })).catch(() => undefined);
+    return NextResponse.json({
+      error: `Workbench session launch failed (provider: ${body.provider ?? "auto"}): ${detail}`,
+      provider: body.provider ?? "auto",
+      retryable: true,
+    }, { status: 502 });
+  }
 }
 
 function parseWorkbenchMetadata(value: unknown): Partial<WorkbenchSessionMetadata> | undefined {

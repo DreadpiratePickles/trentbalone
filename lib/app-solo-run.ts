@@ -12,6 +12,27 @@ export type AppSoloRunResult = {
   summary: AppSoloRunSummary;
 };
 
+export async function heartbeatAppSoloRun(
+  sessionId: string,
+  options?: { fetcher?: FetchLike }
+): Promise<WorkbenchSession> {
+  return patchAppSoloSession(sessionId, { action: "app_solo_heartbeat" }, options?.fetcher);
+}
+
+export async function resumeAppSoloRun(
+  sessionId: string,
+  options?: { fetcher?: FetchLike }
+): Promise<WorkbenchSession> {
+  return patchAppSoloSession(sessionId, { action: "app_solo_resume" }, options?.fetcher);
+}
+
+export async function cancelAppSoloRun(
+  sessionId: string,
+  options?: { fetcher?: FetchLike }
+): Promise<WorkbenchSession> {
+  return patchAppSoloSession(sessionId, { status: "cancelled" }, options?.fetcher);
+}
+
 export async function launchAppSoloRun(input: {
   companyId: string;
   agent: AppSoloAgent;
@@ -49,7 +70,16 @@ export async function launchAppSoloRun(input: {
   });
 
   const createData = await readJson(created);
-  if (!created.ok) throw new Error(responseError(createData, "Could not launch app-solo session."));
+  // RC2 fix (Fix Plan Slice 7): launch failures must be actionable — surface
+  // the provider, HTTP status, and server error instead of a dead generic
+  // message with no recovery path.
+  if (!created.ok) {
+    const detail = responseError(createData, "no error detail returned by /api/workbench");
+    throw new Error(
+      `Could not launch app-solo session (provider: ${input.provider ?? "auto"}, HTTP ${created.status}): ${detail}. ` +
+      "Try again, switch provider (Auto/Local), or check workbench provider configuration.",
+    );
+  }
 
   const session = asSession(createData?.session);
   if (!session) throw new Error("Workbench did not return a session for app-solo.");
@@ -149,6 +179,25 @@ async function readJson(response: Response): Promise<Record<string, unknown> | n
   } catch {
     return { error: text };
   }
+}
+
+async function patchAppSoloSession(
+  sessionId: string,
+  body: Record<string, unknown>,
+  fetcher: FetchLike = fetch
+): Promise<WorkbenchSession> {
+  const response = await fetcher(`/api/workbench/${sessionId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await readJson(response);
+  if (!response.ok) {
+    throw new Error(responseError(data, `App-solo session ${sessionId} update failed.`));
+  }
+  const session = asSession(data?.session);
+  if (!session) throw new Error(`Workbench did not return session ${sessionId}.`);
+  return session;
 }
 
 function responseError(data: Record<string, unknown> | null, fallback: string): string {

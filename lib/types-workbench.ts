@@ -46,6 +46,11 @@ export type WorkbenchSessionMetadata = {
     deliverables?: string[];
     approvalGates?: string[];
     mode?: WorkbenchAgentMode;
+    lastHeartbeatAt?: string;
+    heartbeatStaleAfterSeconds?: number;
+    lastLifecycleEvent?: "heartbeat" | "paused" | "resume";
+    pausedAt?: string;
+    resumeCount?: number;
   };
 };
 

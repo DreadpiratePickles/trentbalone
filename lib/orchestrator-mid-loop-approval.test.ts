@@ -290,4 +290,35 @@ describe("mid-loop seat tool approval", () => {
 
     expect(stripeExecuteCount.count).toBe(0);
   });
+
+  it("fails and terminates when a seat exhausts tool steps without an allowed tool", async () => {
+    mockExecuteSeatModel.mockReset();
+    mockExecuteSeatModel.mockImplementation(async () => ({
+      output: { toolCall: { name: "analytics:read_mock", action: "read mock analytics" } },
+      model: "gpt-4o-mini",
+      tokens: 20,
+      costCents: 1,
+      fallback: false,
+    }));
+
+    const run = await launchOrchestration({
+      companyId,
+      objective: "Read mock analytics that are not available to this seat",
+      trigger: "manual",
+    });
+
+    await drainOrchestrationQueue(companyId, run.id, 12);
+
+    const step = (await store.listOrchestratorSteps(run.id)).find((item) => item.id === "s1");
+    expect(step?.status).toBe("failed");
+    expect(step?.approvalId).toBeFalsy();
+    expect(step?.output).toContain("Stopped after max tool-use steps");
+    expect(step?.output).toContain("Tool \"analytics:read_mock\" is not allowed for this seat.");
+
+    const approvals = await store.listApprovals(companyId);
+    expect(approvals.filter((approval) => approval.toolName?.includes(`orchestration:${run.id}:s1:tool`))).toHaveLength(0);
+
+    const persistedRun = await store.getOrchestratorRun(run.id);
+    expect(persistedRun?.status).toBe("failed");
+  });
 });

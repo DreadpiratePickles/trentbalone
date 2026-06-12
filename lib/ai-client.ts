@@ -89,16 +89,24 @@ export function isProviderConfigured(provider: ModelProvider): boolean {
 
 // ── max_tokens defaults ───────────────────────────────────────────────────────
 
-export const MAX_TOKENS = {
-  /** Short structured outputs: JSON plans, critiques. */
-  JSON:     8192,
-  /** Medium prose: agent execution summaries, briefings. */
-  PROSE:    4096,
-  /** Long streaming/chat: CEO chat, research. */
-  CHAT:     8192,
-  /** Orchestration planning: needs room for multi-step DAGs. */
-  PLANNING: 8192,
-} as const;
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, fallback);
+}
+
+export function resolveMaxTokens() {
+  return {
+    JSON: envInt("OPENAI_MAX_TOKENS_JSON", 8192),
+    PROSE: envInt("OPENAI_MAX_TOKENS_PROSE", 4096),
+    CHAT: envInt("OPENAI_MAX_TOKENS_CHAT", 8192),
+    PLANNING: envInt("OPENAI_MAX_TOKENS_PLANNING", 8192),
+  } as const;
+}
+
+export const MAX_TOKENS = resolveMaxTokens();
 
 // ── Client factory ────────────────────────────────────────────────────────────
 

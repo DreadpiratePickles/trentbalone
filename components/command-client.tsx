@@ -196,17 +196,100 @@ export function CommandClient({ companyId }: { companyId: string }) {
 
   async function streamOrchestrationRun(runId: string, messageId: string) {
     setLiveMessageId(messageId);
+    // RC2 fix (Fix Plan Slice 1): the stream is no longer trusted to deliver a
+    // terminal event. On SSE error we reconnect with backoff (2 tries); after
+    // that — or after 45s of stream silence — we fall back to polling the
+    // persisted run snapshot until a terminal status, then render the saved
+    // CEO report. The UI must never stay "loading" while the backend is done.
     await new Promise<void>((resolve) => {
       const transcript = createOrchestrationTranscript(runId);
       const activityState = createOrchestrationActivityState(runId);
+      const TERMINAL = new Set(["awaiting_approval", "completed", "failed", "cancelled"]);
+      const SILENCE_MS = 45_000;
+      const POLL_MS = 3_000;
+      const POLL_LIMIT = 200; // ~10 minutes of polling before giving up
+      let es: EventSource | null = null;
+      let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+      let settled = false;
+      let polling = false;
+      let reconnects = 0;
+
       const update = (content: string) => {
         setMessages((prev) => prev.map((message) => message.id === messageId ? { ...message, content } : message));
       };
       const updateActivity = () => {
         setMessageActivity((prev) => ({ ...prev, [messageId]: [...activityState.steps] }));
       };
-      const es = new EventSource(`/api/companies/${companyId}/orchestrate/stream?runId=${encodeURIComponent(runId)}`);
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (silenceTimer) clearTimeout(silenceTimer);
+        es?.close();
+        setLiveMessageId((current) => (current === messageId ? null : current));
+        resolve();
+      };
+      const applyRunStatus = (runStatus?: string, summary?: string) => {
+        if (!runStatus) return;
+        setOrchRuns((prev) => prev.map((run) => run.id === runId ? {
+          ...run,
+          status: runStatus as CommandRun["status"],
+          summary: summary ?? run.summary,
+        } : run));
+      };
+      const resetSilenceWatchdog = () => {
+        if (silenceTimer) clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(() => {
+          es?.close();
+          void pollUntilTerminal("stream went silent");
+        }, SILENCE_MS);
+      };
+
+      async function pollUntilTerminal(reason: string) {
+        if (settled || polling) return;
+        polling = true;
+        if (silenceTimer) clearTimeout(silenceTimer);
+        activityState.steps.push({
+          id: `${runId}-poll`,
+          icon: "status",
+          verb: "Stream interrupted",
+          target: `Following the run via status polling (${reason}).`,
+          status: "running",
+        });
+        updateActivity();
+        for (let i = 0; i < POLL_LIMIT && !settled; i++) {
+          try {
+            const res = await fetch(`/api/companies/${companyId}/orchestrate?runId=${encodeURIComponent(runId)}`);
+            if (res.ok) {
+              const data = await res.json() as { run?: { status?: string; summary?: string } };
+              const status = data.run?.status;
+              if (status && TERMINAL.has(status)) {
+                const summary = data.run?.summary;
+                const headline = status === "completed" ? "Run completed. Saved CEO report:" : `Run ${status}.`;
+                transcript.lines.push("", headline, ...(summary ? ["", summary] : []));
+                update(transcript.lines.join("\n"));
+                activityState.steps = activityState.steps.map((step) => step.id === `${runId}-poll`
+                  ? { ...step, status: status === "completed" ? "completed" as const : status === "awaiting_approval" ? "waiting" as const : "failed" as const, target: `Run ${status} (recovered by polling).` }
+                  : step);
+                updateActivity();
+                applyRunStatus(status, summary);
+                finish();
+                return;
+              }
+            }
+          } catch {
+            // Transient poll failure — keep trying until the limit.
+          }
+          await new Promise((r) => setTimeout(r, POLL_MS));
+        }
+        if (!settled) {
+          transcript.lines.push("", "Lost contact with the run. It may still be working — its saved CEO report will appear in the run list when it finishes.");
+          update(transcript.lines.join("\n"));
+          finish();
+        }
+      }
+
       const apply = (eventName: string, event: MessageEvent) => {
+        resetSilenceWatchdog();
         const payload = safeJson<OrchStreamPayload>(event.data);
         const next = applyOrchestrationTranscriptEvent(transcript, eventName, payload);
         const activity = applyOrchestrationActivityEvent(activityState, eventName, payload);
@@ -214,36 +297,32 @@ export function CommandClient({ companyId }: { companyId: string }) {
         update(next.content);
         if (activity.runStatus ?? next.runStatus) {
           const runStatus = activity.runStatus ?? next.runStatus;
-          setOrchRuns((prev) => prev.map((run) => run.id === runId ? {
-            ...run,
-            status: runStatus ?? run.status,
-            summary: activity.summary ?? next.summary ?? next.detail ?? run.summary,
-          } : run));
+          applyRunStatus(runStatus, activity.summary ?? next.summary ?? next.detail);
         }
         if (next.done || activity.done) finish();
       };
-      const finish = () => {
-        setLiveMessageId((current) => (current === messageId ? null : current));
-        es.close();
-        resolve();
+
+      const connect = () => {
+        if (settled || polling) return;
+        const source = new EventSource(`/api/companies/${companyId}/orchestrate/stream?runId=${encodeURIComponent(runId)}`);
+        es = source;
+        resetSilenceWatchdog();
+        ORCHESTRATION_TRANSCRIPT_EVENTS.forEach((eventName) => {
+          source.addEventListener(eventName, (event) => apply(eventName, event as MessageEvent));
+        });
+        source.onerror = () => {
+          source.close();
+          if (settled || polling) return;
+          if (reconnects < 2) {
+            reconnects += 1;
+            setTimeout(connect, reconnects * 1_500);
+          } else {
+            void pollUntilTerminal("stream disconnected");
+          }
+        };
       };
 
-      ORCHESTRATION_TRANSCRIPT_EVENTS.forEach((eventName) => {
-        es.addEventListener(eventName, (event) => apply(eventName, event as MessageEvent));
-      });
-      es.onerror = () => {
-        transcript.lines.push("", "Stream disconnected. Refreshing Command will show the saved CEO report when the run finishes.");
-        update(transcript.lines.join("\n"));
-        activityState.steps.push({
-          id: `${runId}-disconnect`,
-          icon: "error",
-          verb: "Stream disconnected",
-          target: "Refresh Command to load the saved CEO report.",
-          status: "failed",
-        });
-        updateActivity();
-        finish();
-      };
+      connect();
     });
   }
 

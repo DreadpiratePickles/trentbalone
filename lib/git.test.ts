@@ -10,7 +10,8 @@ const exec = promisify(execFile);
 
 async function createTempGitRepo(): Promise<string> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "trent-git-test-"));
-  await exec("git", ["init", "-b", "main"], { cwd: tempDir });
+  await exec("git", ["init"], { cwd: tempDir });
+  await exec("git", ["checkout", "-b", "main"], { cwd: tempDir });
   await exec("git", ["config", "user.name", "test"], { cwd: tempDir });
   await exec("git", ["config", "user.email", "test@test.com"], { cwd: tempDir });
   return tempDir;

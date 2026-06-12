@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isWorkspaceUnscaffolded } from "@/lib/workbench-build-loop";
+import {
+  buildDeploymentPlanSummary,
+  buildWorkbenchSourceContext,
+  isWorkspaceUnscaffolded,
+} from "@/lib/workbench-build-loop";
 import { PREVIEW_PID_FILENAME } from "@/lib/workbench-preview-reaper";
 
 describe("isWorkspaceUnscaffolded", () => {
@@ -29,5 +33,69 @@ describe("isWorkspaceUnscaffolded", () => {
       { name: "package.json", isDir: false },
     ])).toBe(false);
     expect(isWorkspaceUnscaffolded([{ name: "src", isDir: true }])).toBe(false);
+  });
+});
+
+describe("buildWorkbenchSourceContext", () => {
+  it("injects required company docs into build-mode prompts", () => {
+    const context = buildWorkbenchSourceContext(
+      "Using the brand voice and marketing plan, create a minimal landing page prototype.",
+      [
+        {
+          id: "doc_brand",
+          title: "Brand Voice",
+          type: "agent_note",
+          content: "Brand voice: plainspoken operator-first copy, no generic startup boilerplate.",
+        },
+        {
+          id: "doc_marketing",
+          title: "Marketing Plan",
+          type: "marketing_plan",
+          content: "Marketing plan: target founder-operators with launch readiness and approval gates.",
+        },
+      ],
+    );
+
+    expect(context).toContain("SOURCE COVERAGE:");
+    expect(context).toContain("brand voice (doc doc_brand)");
+    expect(context).toContain("marketing plan (doc doc_marketing)");
+    expect(context).toContain("[doc_brand] Brand Voice");
+    expect(context).toContain("[doc_marketing] Marketing Plan");
+    expect(context).toContain("Use these source documents for domain claims, landing-page copy, and layout decisions.");
+  });
+
+  it("injects repo deployment evidence for Railway planning prompts", () => {
+    const context = buildWorkbenchSourceContext(
+      "Prepare a Railway deployment plan for this app. Do not deploy. List every required environment variable and a rollback plan.",
+      [],
+    );
+
+    expect(context).toContain("REPO DEPLOYMENT EVIDENCE");
+    expect(context).toContain("DATABASE_URL");
+    expect(context).toContain("REDIS_URL");
+    expect(context).toContain("AUTH_SECRET");
+    expect(context).toContain("SECRET_ENCRYPTION_KEY");
+    expect(context).toContain("NEXT_PUBLIC_APP_URL");
+    expect(context).toMatch(/web.*worker|worker.*web/i);
+    expect(context).not.toContain("JWT_SECRET");
+    expect(context).not.toContain("generic API_KEY");
+  });
+
+  it("builds a deterministic visible deployment summary for Railway planning prompts", () => {
+    const summary = buildDeploymentPlanSummary(
+      "Prepare a Railway deployment plan for this app. Do not deploy. List every required environment variable and a rollback plan.",
+    );
+
+    expect(summary).toContain("Repo Deployment Evidence");
+    expect(summary).toContain("DATABASE_URL");
+    expect(summary).toContain("REDIS_URL");
+    expect(summary).toContain("AUTH_SECRET");
+    expect(summary).toContain("SECRET_ENCRYPTION_KEY");
+    expect(summary).toContain("NEXT_PUBLIC_APP_URL");
+    expect(summary).toMatch(/web.*worker|worker.*web/i);
+    expect(summary).toMatch(/rollback/i);
+    expect(summary).toMatch(/no deploy/i);
+    expect(summary).not.toContain("JWT_SECRET");
+    expect(summary).not.toContain("generic API_KEY");
   });
 });

@@ -57,9 +57,72 @@ type SeatTurnOutput = {
   workRequests?: unknown;
 };
 
+const TOOL_MISUSE_DEGRADE_AFTER = 2;
+
 function isFinalOutput(turn: SeatTurnOutput): boolean {
   if (turn.toolCall?.name && turn.toolCall?.action) return false;
   return typeof turn.summary === "string" && turn.summary.length > 0;
+}
+
+function sourceGroundingText(contextBundle: unknown): string {
+  if (!contextBundle || typeof contextBundle !== "object") return "";
+  const bundle = contextBundle as Record<string, unknown>;
+  return [bundle.sourceCoverage, bundle.sourceDocuments]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join("\n\n");
+}
+
+function hasSourceGroundingContext(contextBundle: unknown): boolean {
+  const text = sourceGroundingText(contextBundle);
+  return /\bAvailable:\s*(?!none of the required sources\b).+\bdoc\b/i.test(text);
+}
+
+function isRecoverableToolMisuse(record: ToolCallRecord): boolean {
+  if (record.status !== "failed") return false;
+  return /not allowed for this seat|requires payload|invalid payload|missing payload|required payload/i.test(record.summary);
+}
+
+function repeatedToolMisuse(toolCalls: ToolCallRecord[]): ToolCallRecord | undefined {
+  const recoverable = toolCalls.filter(isRecoverableToolMisuse);
+  const latest = recoverable.at(-1);
+  if (!latest) return undefined;
+  const signature = `${latest.adapter.toLowerCase()}::${latest.summary.toLowerCase()}`;
+  const count = recoverable.filter((record) =>
+    `${record.adapter.toLowerCase()}::${record.summary.toLowerCase()}` === signature,
+  ).length;
+  return count >= TOOL_MISUSE_DEGRADE_AFTER ? latest : undefined;
+}
+
+function sourceLabels(contextBundle: unknown): string[] {
+  const text = sourceGroundingText(contextBundle);
+  const labels = new Set<string>();
+  for (const line of text.split("\n")) {
+    const docLine = line.match(/^\s*\[[^\]]+\]\s+(.+?)\s*$/);
+    if (docLine?.[1]) labels.add(docLine[1].trim());
+    const coverageLine = line.match(/\bAvailable:\s*(.+)$/i);
+    if (coverageLine?.[1]) labels.add(coverageLine[1].trim());
+  }
+  return [...labels].slice(0, 4);
+}
+
+function degradedSourceOutput(subtask: Subtask, last: ToolCallRecord): Record<string, unknown> {
+  const labels = sourceLabels(subtask.contextBundle);
+  const sources = labels.length ? labels.join("; ") : "the available source documents in the run context";
+  return {
+    summary: [
+      `DEGRADED: The seat could not use ${last.adapter} because ${last.summary}`,
+      `I did not claim that tool succeeded. I continued from ${sources}.`,
+      `Use this step with that caveat and cite the available source documents in downstream outputs.`,
+    ].join(" "),
+    findings: [
+      `Tool degraded: ${last.adapter} ${last.action} -> ${last.summary}`,
+      `Source context available: ${sources}`,
+    ],
+    recommendations: [
+      "Continue the orchestration from the available source context, and flag any metric or web-specific claim that still needs tool-backed verification.",
+    ],
+    workRequests: [],
+  };
 }
 
 function resolveAdapter(
@@ -253,6 +316,19 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
         status: "failed",
         summary: `Tool "${toolCall.name}" is not allowed for this seat.`,
       });
+      const degraded = hasSourceGroundingContext(input.subtask.contextBundle)
+        ? repeatedToolMisuse(toolCalls)
+        : undefined;
+      if (degraded) {
+        return {
+          output: degradedSourceOutput(input.subtask, degraded),
+          toolCalls,
+          tokens,
+          costCents,
+          model,
+          error: lastError,
+        };
+      }
       continue;
     }
 
@@ -278,6 +354,19 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
         name: adapter.name,
         action: toolCall.action,
       });
+    }
+    const degraded = hasSourceGroundingContext(input.subtask.contextBundle)
+      ? repeatedToolMisuse(toolCalls)
+      : undefined;
+    if (degraded) {
+      return {
+        output: degradedSourceOutput(input.subtask, degraded),
+        toolCalls,
+        tokens,
+        costCents,
+        model,
+        error: lastError,
+      };
     }
   }
 

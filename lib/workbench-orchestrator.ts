@@ -1,9 +1,10 @@
 import * as os from "os";
 import * as path from "path";
 import { store } from "@/lib/store";
-import type { WorkbenchCheckpoint } from "@/lib/types";
+import type { WorkbenchCheckpoint, WorkbenchSession } from "@/lib/types";
 import { nowIso } from "@/lib/utils";
 import { getWorkbenchProvider, type WorkbenchSandboxHandle } from "@/lib/workbench-provider";
+import "@/lib/workbench-providers";
 import { reapAllOrphanedPreviews } from "@/lib/workbench-preview-reaper";
 
 // Mirror of WORKBENCH_STORAGE_ROOT in workbench-local-provider.ts. Kept local so
@@ -24,6 +25,9 @@ export type TerminationReason =
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const IDLE_TIMEOUT_SECONDS = Number(
   process.env.WORKBENCH_IDLE_TIMEOUT_SECONDS ?? 600
+);
+const APP_SOLO_HEARTBEAT_STALE_SECONDS = Number(
+  process.env.APP_SOLO_HEARTBEAT_STALE_SECONDS ?? 120
 );
 const STUCK_STARTING_SECONDS = 120;
 
@@ -101,7 +105,7 @@ export async function stopWorkbenchSession(
 
 export async function workbenchSessionSweep(options?: {
   nowMs?: number;
-}): Promise<{ terminated: number }> {
+}): Promise<{ terminated: number; paused: number }> {
   const now = options?.nowMs ?? Date.now();
 
   // Reap orphaned background preview processes left behind by a server/container
@@ -112,6 +116,7 @@ export async function workbenchSessionSweep(options?: {
 
   const sessions = await store.listWorkbenchSessions();
   let terminated = 0;
+  let paused = 0;
 
   for (const session of sessions) {
     if (TERMINAL_STATUSES.has(session.status)) continue;
@@ -145,13 +150,18 @@ export async function workbenchSessionSweep(options?: {
       continue;
     }
 
+    if (await pauseStaleAppSoloSession(session, now)) {
+      paused++;
+      continue;
+    }
+
     if (idleSeconds > IDLE_TIMEOUT_SECONDS) {
       await stopWorkbenchSession(session.id, "idle");
       terminated++;
     }
   }
 
-  return { terminated };
+  return { terminated, paused };
 }
 
 /**
@@ -181,6 +191,131 @@ export async function ensureWorkbenchSandboxReady(
     console.error(`[Orchestrator] ensureWorkbenchSandboxReady failed for ${session.id}:`, err);
     throw err;
   }
+}
+
+export async function recordAppSoloHeartbeat(
+  sessionId: string,
+  options?: { nowIso?: string }
+): Promise<WorkbenchSession | undefined> {
+  const session = await store.getWorkbenchSession(sessionId);
+  if (!session) return undefined;
+  const appSolo = requireAppSoloMetadata(session);
+  const timestamp = options?.nowIso ?? nowIso();
+  return store.updateWorkbenchSession(sessionId, {
+    metadata: {
+      ...session.metadata,
+      appSolo: {
+        ...appSolo,
+        lastHeartbeatAt: timestamp,
+        lastLifecycleEvent: "heartbeat",
+      },
+    },
+  });
+}
+
+export async function resumeAppSoloWorkbenchSession(
+  sessionId: string,
+  options?: {
+    nowIso?: string;
+    ensureReady?: typeof ensureWorkbenchSandboxReady;
+  }
+): Promise<WorkbenchSession> {
+  const session = await store.getWorkbenchSession(sessionId);
+  if (!session) throw new Error(`Workbench session ${sessionId} not found`);
+  if (TERMINAL_STATUSES.has(session.status)) {
+    throw new Error(`Cannot resume terminal workbench session ${sessionId}`);
+  }
+  const appSolo = requireAppSoloMetadata(session);
+  const timestamp = options?.nowIso ?? nowIso();
+  const ensureReady = options?.ensureReady ?? ensureWorkbenchSandboxReady;
+
+  await ensureReady(session);
+
+  const updated = await store.updateWorkbenchSession(sessionId, {
+    status: "running",
+    startedAt: session.startedAt ?? timestamp,
+    metadata: {
+      ...session.metadata,
+      appSolo: {
+        ...appSolo,
+        lastHeartbeatAt: timestamp,
+        lastLifecycleEvent: "resume",
+        resumeCount: (appSolo.resumeCount ?? 0) + 1,
+      },
+    },
+  });
+  if (!updated) throw new Error(`Workbench session ${sessionId} not found`);
+
+  await store.addWorkbenchEvent({
+    companyId: updated.companyId,
+    sessionId: updated.id,
+    type: "system",
+    status: "completed",
+    title: "App Solo session resumed",
+    content: "App Solo session heartbeat and sandbox state were restored.",
+    metadata: {
+      schemaVersion: "workbench.event.v1",
+      action: "resume",
+      resumedAt: timestamp,
+    },
+  });
+
+  return updated;
+}
+
+async function pauseStaleAppSoloSession(
+  session: WorkbenchSession,
+  nowMs: number
+): Promise<boolean> {
+  const appSolo = session.metadata.appSolo;
+  if (!appSolo) return false;
+  const lastHeartbeatMs = appSolo.lastHeartbeatAt
+    ? Date.parse(appSolo.lastHeartbeatAt)
+    : Date.parse(session.updatedAt);
+  if (!Number.isFinite(lastHeartbeatMs)) return false;
+
+  const staleAfterSeconds = Math.max(
+    10,
+    appSolo.heartbeatStaleAfterSeconds ?? APP_SOLO_HEARTBEAT_STALE_SECONDS
+  );
+  const staleForSeconds = Math.floor((nowMs - lastHeartbeatMs) / 1000);
+  if (staleForSeconds <= staleAfterSeconds) return false;
+
+  const pausedAt = new Date(nowMs).toISOString();
+  await store.updateWorkbenchSession(session.id, {
+    status: "paused",
+    metadata: {
+      ...session.metadata,
+      appSolo: {
+        ...appSolo,
+        pausedAt,
+        lastLifecycleEvent: "paused",
+      },
+    },
+  });
+
+  await store.addWorkbenchEvent({
+    companyId: session.companyId,
+    sessionId: session.id,
+    type: "system",
+    status: "needs_approval",
+    title: "App Solo session paused",
+    content: `No App Solo heartbeat received for ${staleForSeconds}s; session is paused for resume or cancel.`,
+    metadata: {
+      schemaVersion: "workbench.event.v1",
+      reason: "heartbeat_stale",
+      staleForSeconds,
+      staleAfterSeconds,
+      pausedAt,
+    },
+  });
+  return true;
+}
+
+function requireAppSoloMetadata(session: WorkbenchSession): NonNullable<WorkbenchSession["metadata"]["appSolo"]> {
+  const appSolo = session.metadata.appSolo;
+  if (!appSolo) throw new Error(`Workbench session ${session.id} is not an App Solo run`);
+  return appSolo;
 }
 
 export async function enqueueWorkbenchSession(

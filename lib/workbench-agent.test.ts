@@ -167,6 +167,65 @@ describe("runWorkbenchAgent — build mode (XML artifact loop)", () => {
     expect(refreshed?.status).toBe("completed");
   });
 
+  it("passes a markdown-only analysis deliverable without preview repair cycles", async () => {
+    const files = new Map<string, string>();
+    provider = makeProvider({
+      listFiles: vi.fn(async () => Array.from(files.entries()).map(([path, content]) => ({
+        name: path.split("/").pop() ?? path,
+        path,
+        isDir: false,
+        sizeBytes: content.length,
+        modifiedAt: new Date().toISOString(),
+      }))),
+      readFile: vi.fn(async (_session, filePath) => files.get(filePath) ?? ""),
+      writeFile: vi.fn(async (_session, filePath, content) => {
+        files.set(filePath, content);
+      }),
+      getPreviewUrl: vi.fn().mockResolvedValue("http://localhost:3000"),
+      inspectPreview: vi.fn(),
+    });
+    const prompt = "Inspect the uploaded technical architecture and product feature inventory. Create a file called trent-test-plan.md summarizing the top engineering risks, recommended test commands, and a short manual QA checklist. Do not deploy anything.";
+    const streamArtifact = makeStreamArtifact([
+      `<boltAction type="file" filePath="trent-test-plan.md"># Trent Test Plan\n\n## Risks\n- Auth and onboarding.\n\n## Commands\n- npm test\n\n## Manual QA\n- Verify onboarding.</boltAction>`,
+    ]);
+
+    const chunks = await collect(runWorkbenchAgent({
+      session,
+      userMessage: prompt,
+      deps: { provider, streamArtifact, interactionDriver: TEST_INTERACTION_DRIVER },
+    }));
+
+    expect(provider.writeFile).toHaveBeenCalledWith(
+      expect.objectContaining({ id: session.id }),
+      "trent-test-plan.md",
+      expect.stringContaining("Trent Test Plan"),
+    );
+    expect(provider.getPreviewUrl).not.toHaveBeenCalled();
+    expect(provider.inspectPreview).not.toHaveBeenCalled();
+    expect(provider.exec).not.toHaveBeenCalled();
+    expect(chunks).toContainEqual(expect.objectContaining({
+      type: "status",
+      phase: "scoping",
+      detail: expect.stringContaining("Task scope: analysis"),
+    }));
+    expect(chunks.filter((chunk) => chunk.type === "verify")).toHaveLength(1);
+    const verifyChunk = chunks.find((chunk) => chunk.type === "verify");
+    expect(verifyChunk).toMatchObject({
+      passed: true,
+      checks: expect.arrayContaining([
+        expect.objectContaining({ name: "files", status: "pass", detail: expect.stringContaining("trent-test-plan.md") }),
+      ]),
+    });
+
+    const attempts = await store.listWorkbenchAttempts(session.id);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].status).toBe("completed");
+    const refreshed = await store.getWorkbenchSession(session.id);
+    expect(refreshed?.status).toBe("completed");
+    const messages = await store.listWorkbenchChatMessages(session.id);
+    expect(messages.at(-1)?.content).toContain("**Verification:** passed");
+  });
+
   it("records workbench events for plan and file step", async () => {
     await collect(runWorkbenchAgent({ session, userMessage: "build it", deps }));
     const events = await store.listWorkbenchEvents(session.id);

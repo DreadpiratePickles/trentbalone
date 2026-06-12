@@ -3,7 +3,7 @@ import { forbidden, getAuthUser, unauthorized, requireRoleForRequest } from "@/l
 import { store } from "@/lib/store";
 import { withRlsContext } from "@/lib/with-rls";
 import { getWorkbenchProvider } from "@/lib/workbench-provider";
-import "@/lib/workbench-local-provider";
+import "@/lib/workbench-providers";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getAuthUser();

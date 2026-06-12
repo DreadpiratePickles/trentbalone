@@ -70,6 +70,12 @@ export type WorkbenchCriticReviewer = (input: {
 
 export type VerifyVerdict = {
   passed: boolean;
+  /**
+   * RC3 (Fix Plan Slice 3): true when the non-skip checks passed but the
+   * critic could not review for lack of evidence. A degraded run must never
+   * be summarized as a clean "passed ✓".
+   */
+  degraded?: boolean;
   checks: VerifyCheck[];
   previewUrl?: string;
   screenshot?: WorkbenchScreenshotResult;
@@ -431,6 +437,9 @@ function buildVerdict(
 ): VerifyVerdict {
   const nonSkip = checks.filter((c) => c.status !== "skip");
   const passed = nonSkip.length > 0 && nonSkip.every((c) => c.status === "pass");
+  // A pass without critic review is only a partial signal — surface it.
+  const criticSkipped = checks.some((c) => c.name === "critic" && c.status === "skip");
+  const degraded = passed && criticSkipped;
   const failedCommands = checks
     .filter((check) => check.status === "fail" && check.command)
     .map((check) => ({
@@ -457,6 +466,7 @@ function buildVerdict(
 
   return {
     passed,
+    degraded,
     checks,
     previewUrl: render.previewUrl,
     screenshot: render.screenshot,

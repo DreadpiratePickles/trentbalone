@@ -1,5 +1,8 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
+import * as fs from "fs/promises";
+import * as os from "os";
+import * as path from "path";
 
 const execFileAsync = promisify(execFile);
 
@@ -107,10 +110,55 @@ export async function detectMergeConflicts(
     };
   }
 
+  if (isUnsupportedWriteTree(res.stderr)) {
+    return detectMergeConflictsWithWorktree(cwd, branchA, branchB);
+  }
+
   return {
     status: "error",
     message: res.stderr || `merge-tree exited with code ${res.exitCode}`
   };
+}
+
+function isUnsupportedWriteTree(stderr: string): boolean {
+  return /unknown (option|switch).*write-tree|usage: git merge-tree|--write-tree/i.test(stderr);
+}
+
+async function detectMergeConflictsWithWorktree(
+  cwd: string,
+  branchA: string,
+  branchB: string
+): Promise<GitMergeResult> {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "trent-merge-tree-"));
+  const add = await execGit(["worktree", "add", "--detach", tmp, branchA], cwd);
+  if (add.exitCode !== 0) {
+    await fs.rm(tmp, { recursive: true, force: true });
+    return { status: "error", message: add.stderr || `worktree add exited with code ${add.exitCode}` };
+  }
+
+  try {
+    const merge = await execGit(["merge", "--no-commit", "--no-ff", branchB], tmp);
+    if (merge.exitCode === 0) {
+      const tree = await execGit(["write-tree"], tmp);
+      if (tree.exitCode === 0) return { status: "clean", treeOid: tree.stdout.trim() };
+      return { status: "error", message: tree.stderr || `write-tree exited with code ${tree.exitCode}` };
+    }
+    if (merge.exitCode === 1) {
+      const files = await execGit(["diff", "--name-only", "--diff-filter=U"], tmp);
+      return {
+        status: "conflict",
+        conflictedFiles: files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      };
+    }
+    return { status: "error", message: merge.stderr || `merge exited with code ${merge.exitCode}` };
+  } finally {
+    await execGit(["merge", "--abort"], tmp).catch(() => undefined);
+    const removed = await execGit(["worktree", "remove", tmp], cwd);
+    if (removed.exitCode !== 0) {
+      await fs.rm(tmp, { recursive: true, force: true });
+      await execGit(["worktree", "prune"], cwd).catch(() => undefined);
+    }
+  }
 }
 
 export type GitPatchResult =

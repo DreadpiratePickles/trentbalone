@@ -11,6 +11,12 @@ import type { AgentRole, CeoArtifactRequest, CeoMessage, CeoSuggestion, Company,
 import { MODELS, MAX_TOKENS, createAIClient } from "@/lib/ai-client";
 import { callJsonWithRepair } from "@/lib/llm-json";
 import { buildOperatingStateBundle } from "@/lib/operating-state";
+import {
+  agentRoles,
+  normalizePlannerAgentRole,
+  normalizePlannerBoolean,
+  normalizePlannerStringList,
+} from "@/lib/orchestrator-runtime";
 
 const planSchema = z.object({
   summary: z.string(),
@@ -170,34 +176,56 @@ function estimateCostCents(tokens: number) {
 
 // ── CEO Chat ─────────────────────────────────────────────────────────────────
 
+const ceoRoleSchema = z.preprocess(normalizePlannerAgentRole, z.enum(agentRoles));
+const ceoStringListSchema = z.preprocess(normalizePlannerStringList, z.array(z.string()));
+const ceoBooleanSchema = z.preprocess(normalizePlannerBoolean, z.boolean());
+const ceoOptionalStringSchema = z.preprocess(
+  (value) => value == null ? undefined : value,
+  z.string().optional(),
+);
+const ceoPrioritySchema = z.preprocess(
+  (value) => typeof value === "string" ? value.toLowerCase().trim() : value,
+  z.enum(["low", "medium", "high", "urgent"]),
+);
+const ceoSuggestionCategorySchema = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const normalized = value.toLowerCase().replace(/[^a-z]+/g, " ").trim();
+  if (/\b(outreach|email|dm|sales|prospect|lead)\b/.test(normalized)) return "outreach";
+  if (/\b(content|copy|post|blog|creative)\b/.test(normalized)) return "content";
+  if (/\b(product|feature|roadmap|bug)\b/.test(normalized)) return "product";
+  if (/\b(finance|budget|spend|cash|revenue)\b/.test(normalized)) return "finance";
+  if (/\b(action|task|todo|approval|operation|ops|next step|follow up)\b/.test(normalized)) return "operations";
+  return "other";
+}, z.enum(["outreach", "content", "product", "operations", "finance", "other"]));
+
 const ceoResponseSchema = z.object({
   message: z.string(),
   // What Trent understood — shown before acting
   understood: z.object({
-    intent: z.string().optional(),
-    routedTo: z.string().optional(),
-    willDo: z.string().optional(),
-    approvalRequired: z.boolean().optional(),
+    intent: ceoOptionalStringSchema,
+    routedTo: ceoOptionalStringSchema,
+    willDo: ceoOptionalStringSchema,
+    approvalRequired: ceoBooleanSchema.optional(),
   }).optional(),
   // Tasks to create on behalf of the founder
   createTasks: z.array(z.object({
     title: z.string(),
     prompt: z.string(),
-    agentRole: z.enum(["ceo", "engineer", "growth", "content", "support", "finance", "analyst", "escalation", "sales"]),
-    priority: z.enum(["low", "medium", "high", "urgent"]),
-    tags: z.array(z.string()),
+    agentRole: ceoRoleSchema,
+    priority: ceoPrioritySchema,
+    tags: ceoStringListSchema.default([]),
   })).optional().default([]),
   createArtifacts: z.array(z.object({
     title: z.string(),
     prompt: z.string(),
     type: z.enum(["board_pdf", "xlsx_report", "dashboard", "investor_update", "campaign_report", "competitive_research", "operating_memo", "support_summary"]),
-    createdByAgent: z.enum(["ceo", "engineer", "growth", "content", "support", "finance", "analyst", "escalation", "sales"]),
+    createdByAgent: ceoRoleSchema,
     exportFormat: z.enum(["markdown", "html", "pdf", "csv", "xlsx", "dashboard_json"]).optional()
   })).optional().default([]),
   suggestions: z.array(z.object({
     title: z.string(),
     body: z.string(),
-    category: z.enum(["outreach", "content", "product", "operations", "finance", "other"])
+    category: ceoSuggestionCategorySchema
   })).optional().default([])
 });
 

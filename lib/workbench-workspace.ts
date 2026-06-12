@@ -131,7 +131,10 @@ export async function syncWorkspace(
   await fs.mkdir(workdir, { recursive: true });
 
   if (needsClone) {
-    const result = await gitExec(workdir, ["clone", "--filter=blob:none", repoUrl, "."], options?.env);
+    let result = await gitExec(workdir, ["clone", "--filter=blob:none", repoUrl, "."], options?.env);
+    if (result.exitCode !== 0 && /filter=blob:none|unknown option [`'"]?filter|unknown option .filter/i.test(result.stderr)) {
+      result = await gitExec(workdir, ["clone", repoUrl, "."], options?.env);
+    }
     if (result.exitCode !== 0) {
       throw new Error(`git clone failed: ${result.stderr.trim()}`);
     }

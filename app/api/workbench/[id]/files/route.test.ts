@@ -1,8 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { WorkbenchArtifact } from "@/lib/types";
+import type { WorkbenchFileEntry } from "@/lib/workbench-provider";
 
-const { mockGetAuthUser, mockRequireRoleForRequest } = vi.hoisted(() => ({
+const {
+  mockGetAuthUser,
+  mockListWorkbenchArtifacts,
+  mockListFiles,
+  mockReadFile,
+  mockRequireRoleForRequest,
+  mockWriteFile,
+} = vi.hoisted(() => ({
   mockGetAuthUser: vi.fn(),
+  mockListWorkbenchArtifacts: vi.fn(),
+  mockListFiles: vi.fn(),
+  mockReadFile: vi.fn(),
   mockRequireRoleForRequest: vi.fn(),
+  mockWriteFile: vi.fn(),
 }));
 
 vi.mock("@/lib/session", () => ({
@@ -15,15 +28,16 @@ vi.mock("@/lib/session", () => ({
 vi.mock("@/lib/store", () => ({
   store: {
     getWorkbenchSession: vi.fn().mockResolvedValue({ id: "ws1", companyId: "c1", provider: "mock_local" }),
+    listWorkbenchArtifacts: mockListWorkbenchArtifacts,
   }
 }));
 
 vi.mock("@/lib/workbench-provider", () => ({
   registerWorkbenchProvider: vi.fn(),
   getWorkbenchProvider: () => ({
-    listFiles: vi.fn().mockResolvedValue([]),
-    readFile: vi.fn().mockResolvedValue("content"),
-    writeFile: vi.fn().mockResolvedValue(undefined),
+    listFiles: mockListFiles,
+    readFile: mockReadFile,
+    writeFile: mockWriteFile,
   }),
 }));
 
@@ -33,6 +47,14 @@ describe("/api/workbench/[id]/files RBAC", () => {
   beforeEach(() => {
     mockGetAuthUser.mockReset();
     mockRequireRoleForRequest.mockReset();
+    mockListWorkbenchArtifacts.mockReset();
+    mockListFiles.mockReset();
+    mockReadFile.mockReset();
+    mockWriteFile.mockReset();
+    mockListWorkbenchArtifacts.mockResolvedValue([]);
+    mockListFiles.mockResolvedValue([]);
+    mockReadFile.mockResolvedValue("content");
+    mockWriteFile.mockResolvedValue(undefined);
   });
 
   it("GET: returns 403 when user lacks viewer role", async () => {
@@ -48,6 +70,39 @@ describe("/api/workbench/[id]/files RBAC", () => {
     mockRequireRoleForRequest.mockResolvedValue({ ok: true, role: "viewer" });
     const res = await GET(new Request("http://x/api/workbench/ws1/files"), { params: Promise.resolve({ id: "ws1" }) });
     expect(res.status).toBe(200);
+  });
+
+  it("GET: hides provider bootstrap README unless a file artifact owns it", async () => {
+    mockGetAuthUser.mockResolvedValue({ id: "u1" });
+    mockRequireRoleForRequest.mockResolvedValue({ ok: true, role: "viewer" });
+    mockListFiles.mockResolvedValue([
+      fileEntry("README.md"),
+      fileEntry("operator-report.md"),
+    ]);
+    mockListWorkbenchArtifacts.mockResolvedValue([
+      artifact({ path: "operator-report.md" }),
+    ]);
+
+    const res = await GET(new Request("http://x/api/workbench/ws1/files"), { params: Promise.resolve({ id: "ws1" }) });
+    const body = await res.json();
+
+    expect(body.files.map((file: WorkbenchFileEntry) => file.path)).toEqual(["operator-report.md"]);
+  });
+
+  it("GET: keeps README when the agent captured it as a file artifact", async () => {
+    mockGetAuthUser.mockResolvedValue({ id: "u1" });
+    mockRequireRoleForRequest.mockResolvedValue({ ok: true, role: "viewer" });
+    mockListFiles.mockResolvedValue([
+      fileEntry("README.md"),
+    ]);
+    mockListWorkbenchArtifacts.mockResolvedValue([
+      artifact({ path: "README.md" }),
+    ]);
+
+    const res = await GET(new Request("http://x/api/workbench/ws1/files"), { params: Promise.resolve({ id: "ws1" }) });
+    const body = await res.json();
+
+    expect(body.files.map((file: WorkbenchFileEntry) => file.path)).toEqual(["README.md"]);
   });
 
   it("POST (read): returns 403 when user lacks viewer role", async () => {
@@ -92,3 +147,29 @@ describe("/api/workbench/[id]/files RBAC", () => {
     expect(res.status).toBe(200);
   });
 });
+
+function fileEntry(path: string): WorkbenchFileEntry {
+  return {
+    name: path.split("/").pop() ?? path,
+    path,
+    isDir: false,
+    sizeBytes: 32,
+    modifiedAt: "2026-06-11T00:00:00.000Z",
+  };
+}
+
+function artifact(overrides: Partial<WorkbenchArtifact>): WorkbenchArtifact {
+  return {
+    id: "artifact_1",
+    companyId: "c1",
+    sessionId: "ws1",
+    kind: "file",
+    title: overrides.path ?? "file",
+    storageKey: `workbench/ws1/${overrides.path ?? "file"}`,
+    mimeType: "text/markdown",
+    sizeBytes: 32,
+    path: overrides.path,
+    createdAt: "2026-06-11T00:00:00.000Z",
+    ...overrides,
+  };
+}

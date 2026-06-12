@@ -1,9 +1,10 @@
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { store } from "@/lib/store";
 import type { WorkbenchChatMessage, WorkbenchSession } from "@/lib/types";
 import type { WorkbenchProviderAdapter } from "@/lib/workbench-provider";
 import { recordSessionSpend } from "@/lib/workbench-orchestrator";
-import { verifyWithRetries } from "@/lib/workbench-verify";
-import type { VerifyCheck } from "@/lib/workbench-verify";
+import { verifyWithRetries, type VerifyCheck, type VerifyVerdict } from "@/lib/workbench-verify";
 import { resolveWorkbenchVerificationCommands } from "@/lib/workbench-command-resolver";
 import { parseArtifact, type ArtifactAction } from "@/lib/workbench-artifact-parser";
 import { applyEditBlocks, fastApply, parseEditBlocks } from "@/lib/workbench-edit-apply";
@@ -16,6 +17,19 @@ import { nowIso } from "@/lib/utils";
 import { WorkbenchApprovalRequiredError } from "@/lib/workbench-approval-gate";
 import { PREVIEW_PID_FILENAME } from "@/lib/workbench-preview-reaper";
 import { syntaxErrorSummary } from "@/lib/workbench-syntax-gate";
+import {
+  checkActionAgainstPolicy,
+  classifyWorkbenchIntent,
+  deriveWorkbenchScopePolicy,
+  type WorkbenchScopePolicy,
+} from "@/lib/workbench-intent-policy";
+import {
+  buildSourceCoverage,
+  type CoverageDocument,
+  formatSourceCoverage,
+  formatSourceDocumentsBlock,
+  selectRelevantDocuments,
+} from "@/lib/source-coverage";
 import {
   type AgentDeps,
   AGENT_PERSONAS,
@@ -62,11 +76,182 @@ const SCAFFOLD_BOOKKEEPING_FILES = new Set<string>([
   ".DS_Store",
 ]);
 
+const DEPLOYMENT_EVIDENCE_FILES = [
+  ".env.example",
+  "railway.json",
+  "railway-worker.json",
+  "nixpacks.toml",
+  "lib/app-base-url.ts",
+  "lib/auth.ts",
+  "lib/secrets.ts",
+  "lib/queue.ts",
+  "scripts/worker-health.ts",
+  "lib/worker.ts",
+];
+
+const DEPLOYMENT_ENV_VARS = [
+  "DATABASE_URL",
+  "REDIS_URL",
+  "AUTH_SECRET",
+  "SECRET_ENCRYPTION_KEY",
+  "NEXT_PUBLIC_APP_URL",
+];
+
 /** True when the workspace contains nothing but provider bookkeeping files. */
 export function isWorkspaceUnscaffolded(
   files: ReadonlyArray<{ name: string; isDir: boolean }>,
 ): boolean {
   return files.every((file) => !file.isDir && SCAFFOLD_BOOKKEEPING_FILES.has(file.name));
+}
+
+export async function verifyScopedWorkbenchRun(input: {
+  policy: WorkbenchScopePolicy;
+  provider: WorkbenchProviderAdapter;
+  session: WorkbenchSession;
+  actionFailures: VerifyCheck[];
+  outcomes: string[];
+}): Promise<VerifyVerdict> {
+  const { policy, provider, session, actionFailures, outcomes } = input;
+  if (policy.intent === "commandRecovery") {
+    const sawFailedCommand = actionFailures.some((check) => check.name === "commands" && check.status === "fail");
+    const sawSuccessfulCommand = outcomes.some((outcome) => /\(exit 0\)/.test(outcome));
+    const sawNote = outcomes.some((outcome) => /wrote|edited/i.test(outcome));
+    const checks: VerifyCheck[] = [
+      {
+        name: "commands",
+        status: sawFailedCommand ? "pass" : "skip",
+        detail: sawFailedCommand
+          ? "Deliberate command failure was captured as part of the recovery task."
+          : "No failed command was observed.",
+      },
+      {
+        name: "commands",
+        status: sawSuccessfulCommand ? "pass" : "skip",
+        detail: sawSuccessfulCommand
+          ? "A corrected command completed successfully."
+          : "No corrected command completed successfully.",
+      },
+      {
+        name: "files",
+        status: sawNote ? "pass" : "skip",
+        detail: sawNote ? "Recovery note/output was written." : "No recovery note file was written.",
+      },
+      {
+        name: "preview",
+        status: "skip",
+        detail: "Preview verification skipped for command-recovery scope.",
+      },
+    ];
+    return { passed: checks.some((check) => check.status === "pass"), checks };
+  }
+
+  const checks: VerifyCheck[] = [];
+  for (const failure of actionFailures) checks.push(failure);
+  for (const deliverable of policy.namedDeliverables) {
+    try {
+      const content = await provider.readFile(session, deliverable);
+      checks.push({
+        name: "files",
+        status: content.trim().length > 0 ? "pass" : "fail",
+        detail: content.trim().length > 0
+          ? `Named deliverable exists: ${deliverable}`
+          : `Named deliverable is empty: ${deliverable}`,
+      });
+    } catch (error) {
+      checks.push({
+        name: "files",
+        status: "fail",
+        detail: `Named deliverable missing: ${deliverable} (${error instanceof Error ? error.message : String(error)})`,
+      });
+    }
+  }
+  if (policy.namedDeliverables.length === 0) {
+    checks.push({
+      name: "files",
+      status: outcomes.length > 0 ? "pass" : "skip",
+      detail: outcomes.length > 0
+        ? "Scoped non-build task produced bounded output."
+        : "No scoped output was produced.",
+    });
+  }
+  checks.push({
+    name: "preview",
+    status: "skip",
+    detail: `Preview/browser verification skipped for ${policy.intent} scope.`,
+  });
+  checks.push({
+    name: "commands",
+    status: "pass",
+    detail: "Scope policy prevented app scaffolding, dev-server starts, and out-of-scope mutating commands.",
+  });
+  const nonSkip = checks.filter((check) => check.status !== "skip");
+  return { passed: nonSkip.length > 0 && nonSkip.every((check) => check.status === "pass"), checks };
+}
+
+export function buildWorkbenchSourceContext(
+  userMessage: string,
+  docs: CoverageDocument[],
+): string {
+  const coverage = buildSourceCoverage(userMessage, docs);
+  const relevant = selectRelevantDocuments(userMessage, docs, 6);
+  const requiredDocs = coverage.used
+    .map((match) => docs.find((doc) => doc.id === match.documentId))
+    .filter((doc): doc is CoverageDocument => Boolean(doc));
+  const byId = new Map<string, CoverageDocument>();
+  for (const doc of [...requiredDocs, ...relevant]) byId.set(doc.id, doc);
+  const sourceDocs = [...byId.values()].slice(0, 8);
+
+  const parts = [
+    buildDeploymentRepoEvidence(userMessage),
+    formatSourceCoverage(coverage),
+    formatSourceDocumentsBlock(sourceDocs, 2000),
+  ].filter(Boolean);
+  if (parts.length === 0) return "";
+
+  parts.push(
+    "Use these source documents for domain claims, landing-page copy, and layout decisions. Cite doc ids in user-visible summaries when a source shapes the work. If a requested source is missing, name it explicitly and do not invent its contents.",
+  );
+  return parts.join("\n\n");
+}
+
+function buildDeploymentRepoEvidence(userMessage: string): string {
+  if (classifyWorkbenchIntent(userMessage) !== "deploymentPlan") return "";
+  const repoRoot = process.cwd();
+  const inspected: string[] = [];
+  const haystack: string[] = [];
+  for (const relative of DEPLOYMENT_EVIDENCE_FILES) {
+    const absolute = path.join(repoRoot, relative);
+    if (!existsSync(absolute)) continue;
+    try {
+      const content = readFileSync(absolute, "utf8").slice(0, 5000);
+      inspected.push(relative);
+      haystack.push(content);
+    } catch {
+      // best-effort; missing evidence should degrade, not crash the run
+    }
+  }
+  const text = haystack.join("\n");
+  const envVars = DEPLOYMENT_ENV_VARS.filter((name) => text.includes(name));
+  if (envVars.length === 0 && inspected.length === 0) return "";
+  return [
+    "REPO DEPLOYMENT EVIDENCE (read-only; extracted from repository files before answering):",
+    `- inspected files: ${inspected.join(", ") || "none found"}`,
+    `- required environment variables found in repo evidence: ${envVars.join(", ") || "none confirmed"}`,
+    "- service topology: plan Railway web and worker services separately; the web service serves the Next.js app, and the worker service needs Redis-backed queue/worker health coverage.",
+    "- deployment boundary: do not deploy, do not start a preview, and do not write files unless the user names a deliverable.",
+    "- rollback requirement: include a rollback plan for both web and worker services, plus env-var rollback checks.",
+  ].join("\n");
+}
+
+export function buildDeploymentPlanSummary(userMessage: string): string {
+  if (classifyWorkbenchIntent(userMessage) !== "deploymentPlan") return "";
+  return [
+    "**Repo Deployment Evidence:**",
+    `- Required environment variables: ${DEPLOYMENT_ENV_VARS.join(", ")}`,
+    "- Service topology: Railway needs separate web and worker services; web serves the Next.js app, worker processes Redis-backed jobs.",
+    "- Deployment boundary: no deploy executed and no preview/server started for this planning task.",
+    "- Rollback: include rollback checks for both web and worker services, including environment-variable rollback.",
+  ].join("\n");
 }
 
 export async function* runBuildLoop(
@@ -82,10 +267,23 @@ export async function* runBuildLoop(
     return { summary: "Stopped: cost ceiling already reached.", passed: false };
   }
 
+  // RC3 fix (Fix Plan Slice 3): derive an enforceable scope policy from the
+  // objective BEFORE the model gets write/shell authority. Analysis, research,
+  // recovery, and deployment-plan tasks must not scaffold templates, edit app
+  // source, or boot dev servers.
+  const scopePolicy = deriveWorkbenchScopePolicy(userMessage);
+  if (scopePolicy.intent !== "build") {
+    yield {
+      type: "status",
+      phase: "scoping",
+      detail: `Task scope: ${scopePolicy.intent} — app source/config writes${scopePolicy.allowMutatingShell ? "" : " and mutating commands"} are disabled.`,
+    };
+  }
+
   const existing = await safeListFiles(deps.provider, session);
   const actionFailures: VerifyCheck[] = [];
   const workspaceState: BuildAttemptState = { packageChanged: false, executedCommands: [] };
-  if (isWorkspaceUnscaffolded(existing)) {
+  if (scopePolicy.allowScaffold && isWorkspaceUnscaffolded(existing)) {
     yield { type: "status", phase: "scaffolding", detail: "Initialising project from starter template" };
     for (const [path, content] of Object.entries(STARTER_TEMPLATE)) {
       const write = await safeWrite(deps.provider, session, path, content);
@@ -114,12 +312,36 @@ export async function* runBuildLoop(
   let feedback = "";
   let finalVerdict: Awaited<ReturnType<typeof verifyWithRetries>> | undefined;
   let finalTitle = "Workbench build";
+  let sourceContext = "";
+  try {
+    sourceContext = buildWorkbenchSourceContext(userMessage, await store.listDocuments(session.companyId));
+  } catch {
+    // best-effort: missing company memory should not prevent the workspace run.
+  }
+  // RC3 (Slice 3): tell the model the enforced scope up front so it doesn't
+  // plan actions the gate will block, and track failure signatures so two
+  // identical failed verifications stop the loop instead of burning attempts.
+  const scopedUserMessage = scopePolicy.intent === "build"
+    ? userMessage
+    : [
+        userMessage,
+        "",
+        `TASK SCOPE CONTRACT (enforced in code — out-of-scope actions are blocked):`,
+        `- intent: ${scopePolicy.intent}`,
+        `- app source/config edits: ${scopePolicy.allowSourceEdits ? "allowed" : "FORBIDDEN"}`,
+        `- dev server / preview: ${scopePolicy.allowDevServer ? "allowed" : "FORBIDDEN"}`,
+        `- mutating shell commands: ${scopePolicy.allowMutatingShell ? "allowed" : "FORBIDDEN (read-only inspection commands only)"}`,
+        `- requested deliverables: ${scopePolicy.namedDeliverables.join(", ") || "as described in the task"}`,
+        "Produce ONLY the requested deliverables. Do not emit checklist or prose lines as shell commands.",
+      ].join("\n");
+  let lastFailureSignature = "";
   const existingAttempts = await store.listWorkbenchAttempts(session.id).catch(() => []);
   const attemptOffset = existingAttempts.reduce((max, attempt) => Math.max(max, attempt.attemptNo), 0);
 
   for (let attempt = 1; attempt <= MAX_BUILD_ATTEMPTS; attempt++) {
     const durableAttemptNo = attemptOffset + attempt;
     const context = await buildProjectContext(deps.provider, session);
+    const groundedContext = [context, sourceContext].filter(Boolean).join("\n\n");
     const attemptFailures: VerifyCheck[] = attempt === 1 ? [...actionFailures] : [];
     const attemptState: BuildAttemptState = {
       packageChanged: workspaceState.packageChanged,
@@ -137,7 +359,7 @@ export async function* runBuildLoop(
       outputTokens: 0,
       costCents: 0,
     });
-    const userText = buildUserPrompt(session, userMessage, history, context, feedback, attempt);
+    const userText = buildUserPrompt(session, scopedUserMessage, history, groundedContext, feedback, attempt);
     const messages: StreamInput["messages"] = [
       { role: "system", content: system },
       { role: "user",   content: userText },
@@ -231,6 +453,21 @@ export async function* runBuildLoop(
         }
         yield { type: "status", phase: "cancelled" }; break;
       }
+      // RC3 (Slice 3): gate every action against the scope policy. Prose
+      // "commands" become notes; out-of-scope writes and dev-server starts are
+      // blocked in code — never dispatched, never counted as command failures.
+      const decision = checkActionAgainstPolicy(scopePolicy, {
+        type: action.type,
+        filePath: "filePath" in action ? action.filePath : undefined,
+        command: "command" in action ? action.command : undefined,
+      });
+      if (!decision.allowed) {
+        const note = decision.note ?? "Action blocked by task scope policy.";
+        outcomes.push(note);
+        await recordEvent(session, "system", "completed", "Scope policy", truncate(note), undefined, durableAttemptNo);
+        yield { type: "status", phase: "scope_blocked", detail: note };
+        continue;
+      }
       try {
         yield* executeAction(action, session, deps.provider, outcomes, attemptFailures, attemptState, durableAttemptNo);
       } catch (err) {
@@ -250,15 +487,23 @@ export async function* runBuildLoop(
       packageChanged: attemptState.packageChanged,
       executedCommands: attemptState.executedCommands,
     });
-    let verdict = await verifyWithRetries({
-      session, provider: deps.provider,
-      commands,
-      acceptanceSteps: deps.acceptanceSteps,
-      interactionDriver: deps.interactionDriver,
-      criticReviewer: deps.criticReviewer,
-      heal: async (cmd) => { await safeSelfHeal(deps.provider, session, cmd); },
-    });
-    if (attemptFailures.length) {
+    let verdict = scopePolicy.intent === "build"
+      ? await verifyWithRetries({
+          session, provider: deps.provider,
+          commands,
+          acceptanceSteps: deps.acceptanceSteps,
+          interactionDriver: deps.interactionDriver,
+          criticReviewer: deps.criticReviewer,
+          heal: async (cmd) => { await safeSelfHeal(deps.provider, session, cmd); },
+        })
+      : await verifyScopedWorkbenchRun({
+          policy: scopePolicy,
+          provider: deps.provider,
+          session,
+          actionFailures: attemptFailures,
+          outcomes,
+        });
+    if (attemptFailures.length && scopePolicy.intent === "build") {
       verdict = { ...verdict, passed: false, checks: [...attemptFailures, ...verdict.checks] };
     }
     const screenshotArtifactId = await persistVerificationScreenshotArtifact({ session, verdict, attemptNo: durableAttemptNo }).catch((error: unknown) => {
@@ -283,6 +528,25 @@ export async function* runBuildLoop(
     );
 
     if (verdict.passed) break;
+
+    // RC3 (Slice 3): smart stopping — MAX_BUILD_ATTEMPTS is a ceiling, not a
+    // target. Two consecutive verifications failing with the identical check
+    // signature mean another repair cycle is not justified; stop as blocked
+    // instead of looping the same failure (tester-reported duplicate loops).
+    const failureSignature = verdict.checks
+      .filter((c) => c.status === "fail")
+      .map((c) => `${c.name}:${c.detail.slice(0, 120)}`)
+      .sort()
+      .join("|");
+    if (failureSignature && failureSignature === lastFailureSignature) {
+      const note = "Stopped: the same verification failures repeated across two attempts — further repair cycles are unlikely to help. Human input needed.";
+      outcomes.push(note);
+      yield { type: "status", phase: "blocked", detail: note };
+      await recordEvent(session, "system", "failed", "Repair loop stopped (no progress)", failureSignature.slice(0, 1000), undefined, durableAttemptNo);
+      break;
+    }
+    lastFailureSignature = failureSignature;
+
     feedback = buildRepairFeedback(verdict.checks, outcomes);
     if (attempt < MAX_BUILD_ATTEMPTS) {
       yield {
@@ -303,12 +567,22 @@ export async function* runBuildLoop(
   }
 
   const artifactSummary = await buildFinalArtifactSummary(session.id);
+  const deploymentSummary = buildDeploymentPlanSummary(userMessage);
+  // RC3 (Slice 3): the headline verdict must match the sub-checks. A pass the
+  // critic never reviewed is reported as degraded, never as a clean pass.
+  const verificationLine = verdict.passed
+    ? (verdict.degraded
+        ? "**Verification:** DEGRADED — checks passed but the critic had no evidence to review; treat as unconfirmed."
+        : "**Verification:** passed ✓")
+    : "**Verification:** FAILED ✗";
   const summary = [
     finalTitle, "",
     "**What I did:**", ...outcomes.map((o) => `- ${o}`), "",
     artifactSummary,
     artifactSummary ? "" : undefined,
-    `**Verification:** ${verdict.passed ? "passed ✓" : "FAILED ✗"}`,
+    deploymentSummary,
+    deploymentSummary ? "" : undefined,
+    verificationLine,
     verdict.passed ? "" : failedCheckSummary(verdict.checks),
   ].filter((line) => line !== undefined).join("\n");
   return { summary, passed: verdict.passed };
@@ -483,7 +757,35 @@ export async function* runStreamingMode(
 ): AsyncGenerator<WorkbenchAgentChunk, string> {
   const mode = session.agentMode ?? "build";
   yield { type: "status", phase: mode === "research" ? "researching" : "designing" };
-  const user = buildUserPrompt(session, userMessage, history, "");
+
+  // RC1 fix (Fix Plan Slice 5): research/design passes were generic text
+  // streams with zero company context — research mode literally asked the
+  // founder to re-send files Trent already had. Inject relevance-ranked
+  // company documents plus a source-coverage report, and forbid fabricating
+  // missing sources.
+  let sourceContext = "";
+  try {
+    const docs = await store.listDocuments(session.companyId);
+    const relevant = selectRelevantDocuments(userMessage, docs, 6);
+    const coverage = buildSourceCoverage(userMessage, docs);
+    const parts = [
+      formatSourceCoverage(coverage),
+      formatSourceDocumentsBlock(
+        relevant.map((d) => ({ id: d.id, title: d.title, content: d.content, type: d.type })),
+        2000,
+      ),
+    ].filter(Boolean);
+    if (coverage.missing.length > 0) {
+      parts.push(
+        "REQUIRED: start your answer with a 'Source coverage' section listing available and missing sources. Never invent the contents of a missing source, and never ask the user to provide a source listed as Available above.",
+      );
+    }
+    sourceContext = parts.join("\n\n");
+  } catch {
+    // best-effort — an empty context degrades to the old behaviour
+  }
+
+  const user = buildUserPrompt(session, userMessage, history, sourceContext);
   let full = "";
   for await (const tok of deps.stream({ system: AGENT_PERSONAS[mode], user })) {
     full += tok;

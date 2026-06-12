@@ -1,8 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockGetAuthUser, mockRequireRoleForRequest, mockStopWorkbenchSession, mockStore } = vi.hoisted(() => ({
+const {
+  mockGetAuthUser,
+  mockRecordAppSoloHeartbeat,
+  mockRequireRoleForRequest,
+  mockResumeAppSoloWorkbenchSession,
+  mockStopWorkbenchSession,
+  mockStore,
+} = vi.hoisted(() => ({
   mockGetAuthUser: vi.fn(),
+  mockRecordAppSoloHeartbeat: vi.fn(),
   mockRequireRoleForRequest: vi.fn(),
+  mockResumeAppSoloWorkbenchSession: vi.fn(),
   mockStopWorkbenchSession: vi.fn(),
   mockStore: {
     getWorkbenchSession: vi.fn(),
@@ -26,6 +35,8 @@ vi.mock("@/lib/store", () => ({
 }));
 
 vi.mock("@/lib/workbench-orchestrator", () => ({
+  recordAppSoloHeartbeat: mockRecordAppSoloHeartbeat,
+  resumeAppSoloWorkbenchSession: mockResumeAppSoloWorkbenchSession,
   stopWorkbenchSession: mockStopWorkbenchSession
 }));
 
@@ -34,7 +45,9 @@ import { DELETE, GET, PATCH } from "./route";
 describe("/api/workbench/[id] RBAC", () => {
   beforeEach(() => {
     mockGetAuthUser.mockReset();
+    mockRecordAppSoloHeartbeat.mockReset();
     mockRequireRoleForRequest.mockReset();
+    mockResumeAppSoloWorkbenchSession.mockReset();
     mockStopWorkbenchSession.mockReset();
     mockStore.getWorkbenchSession.mockReset();
     mockStore.updateWorkbenchSession.mockReset();
@@ -48,6 +61,8 @@ describe("/api/workbench/[id] RBAC", () => {
     mockStore.listWorkbenchEvents.mockResolvedValue([]);
     mockStore.listWorkbenchArtifacts.mockResolvedValue([]);
     mockStore.addWorkbenchEvent.mockResolvedValue({});
+    mockRecordAppSoloHeartbeat.mockResolvedValue({ id: "ws1", companyId: "c1", status: "running", objective: "Old name" });
+    mockResumeAppSoloWorkbenchSession.mockResolvedValue({ id: "ws1", companyId: "c1", status: "running", objective: "Old name" });
     mockStopWorkbenchSession.mockResolvedValue(undefined);
   });
 
@@ -106,6 +121,40 @@ describe("/api/workbench/[id] RBAC", () => {
     expect(mockStore.updateWorkbenchSession).not.toHaveBeenCalled();
     expect(mockStore.addWorkbenchEvent).not.toHaveBeenCalled();
     expect(body.session.status).toBe("cancelled");
+  });
+
+  it("PATCH: records an app-solo heartbeat through the orchestrator", async () => {
+    mockGetAuthUser.mockResolvedValue({ id: "u1" });
+    mockRequireRoleForRequest.mockResolvedValue({ ok: true, role: "member" });
+
+    const res = await PATCH(new Request("http://x/api/workbench/ws1", {
+      method: "PATCH",
+      body: JSON.stringify({ action: "app_solo_heartbeat" }),
+    }), { params: Promise.resolve({ id: "ws1" }) });
+
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(mockRecordAppSoloHeartbeat).toHaveBeenCalledWith("ws1");
+    expect(mockStore.updateWorkbenchSession).not.toHaveBeenCalled();
+    expect(body.session.status).toBe("running");
+  });
+
+  it("PATCH: resumes a paused app-solo session through the orchestrator", async () => {
+    mockGetAuthUser.mockResolvedValue({ id: "u1" });
+    mockRequireRoleForRequest.mockResolvedValue({ ok: true, role: "member" });
+
+    const res = await PATCH(new Request("http://x/api/workbench/ws1", {
+      method: "PATCH",
+      body: JSON.stringify({ action: "app_solo_resume" }),
+    }), { params: Promise.resolve({ id: "ws1" }) });
+
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(mockResumeAppSoloWorkbenchSession).toHaveBeenCalledWith("ws1");
+    expect(mockStore.updateWorkbenchSession).not.toHaveBeenCalled();
+    expect(body.session.status).toBe("running");
   });
 
   it("PATCH: renames a session objective inline and records a system event", async () => {

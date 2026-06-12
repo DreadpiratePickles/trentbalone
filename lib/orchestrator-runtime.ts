@@ -32,6 +32,12 @@ import { getMcpAdaptersForCompany } from "@/lib/mcp-tool-adapter";
 import { InMemorySkillDraftStore, type SkillDraftStore } from "@/lib/skill-foundry";
 import { PrismaSkillDraftStore } from "@/lib/self-improvement/skill-draft-store.prisma";
 import { formatPlanValidationErrors, validateOrchestrationPlan } from "@/lib/plan-validator";
+import {
+  buildSourceCoverage,
+  formatSourceCoverage,
+  formatSourceDocumentsBlock,
+  selectRelevantDocuments,
+} from "@/lib/source-coverage";
 import { seatOutputSchemas } from "@/lib/seat-output-schemas";
 import { logger } from "@/lib/logger";
 
@@ -60,21 +66,81 @@ const PLANNER_MODEL    = process.env.PLANNER_MODEL    ?? MODELS.STRONG;
 const SPECIALIST_MODEL = process.env.SPECIALIST_MODEL ?? MODELS.DEFAULT;
 const CRITIC_MODEL     = process.env.CRITIC_MODEL     ?? MODELS.CRITIC;
 
+export const agentRoles = [
+  "ceo", "engineer", "growth", "content", "support",
+  "finance", "analyst", "escalation", "sales",
+] as const;
+
+export function normalizePlannerAgentRole(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const normalized = value.toLowerCase().replace(/[^a-z]+/g, " ").trim();
+  for (const role of agentRoles) {
+    if (normalized === role || normalized.split(" ").includes(role)) return role;
+  }
+  if (/\b(project manager|program manager|operator|operations lead|team lead|team leader|lead)\b/.test(normalized)) return "ceo";
+  if (/\bresearch\b|\banalysis\b|\banalyst\b|\bdata\b|\bstrategy\b|\bstrategist\b/.test(normalized)) return "analyst";
+  if (/\bengineering\b|\bdeveloper\b|\btechnical\b|\bcode\b/.test(normalized)) return "engineer";
+  if (/\bmarketing\b|\bmarketer\b|\bacquisition\b|\bgo to market\b|\bgtm\b/.test(normalized)) return "growth";
+  if (/\bcopy\b|\bcreative\b|\bwriting\b|\bwriter\b/.test(normalized)) return "content";
+  if (/\bcustomer\b|\bsuccess\b|\bfaq\b|\bticket\b/.test(normalized)) return "support";
+  if (/\bescalate\b|\bapproval\b|\brisk\b|\blegal\b|\bfounder\b/.test(normalized)) return "escalation";
+  return normalized ? "analyst" : value;
+}
+
+export function normalizePlannerRiskLevel(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const normalized = value.toLowerCase().trim();
+  if (/\b(high|critical|severe)\b/.test(normalized)) return "high";
+  if (/\b(medium|moderate|normal)\b/.test(normalized)) return "medium";
+  if (/\b(low|minor|minimal)\b/.test(normalized)) return "low";
+  return value;
+}
+
+export function normalizePlannerBoolean(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const normalized = value.toLowerCase().trim();
+  if (/^(true|yes|y|1|required|approval required)$/.test(normalized)) return true;
+  if (/^(false|no|n|0|none|not required|approval not required)$/.test(normalized)) return false;
+  return value;
+}
+
+export function normalizePlannerStringList(value: unknown): unknown {
+  if (value == null) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed || /^(none|n\/a|na|no blockers?|no dependencies?)$/i.test(trimmed)) return [];
+  return trimmed
+    .split(/[\n;,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+const agentRoleSchema = z.preprocess(
+  normalizePlannerAgentRole,
+  z.enum(agentRoles),
+);
+
+const riskLevelSchema = z.preprocess(
+  normalizePlannerRiskLevel,
+  z.enum(["low", "medium", "high"]),
+);
+
+const booleanSchema = z.preprocess(normalizePlannerBoolean, z.boolean());
+const stringListSchema = z.preprocess(normalizePlannerStringList, z.array(z.string()));
+
 const stepSchema = z.object({
   id: z.string(),
   title: z.string(),
   rationale: z.string(),
-  agentRole: z.enum([
-    "ceo", "engineer", "growth", "content", "support",
-    "finance", "analyst", "escalation", "sales",
-  ]),
-  dependsOn: z.array(z.string()).default([]),
+  agentRole: agentRoleSchema,
+  dependsOn: stringListSchema.default([]),
   expectedOutput: z.string(),
-  riskLevel: z.enum(["low", "medium", "high"]),
-  needsApproval: z.boolean().default(false),
+  riskLevel: riskLevelSchema,
+  needsApproval: booleanSchema.default(false),
   spec: z.object({
-    acceptance: z.array(z.string().min(1)).min(1),
-    inputsFrom: z.array(z.string()).default([]),
+    acceptance: stringListSchema.pipe(z.array(z.string().min(1)).min(1)),
+    inputsFrom: stringListSchema.default([]),
   }).optional(),
 });
 
@@ -82,14 +148,24 @@ const planSchema = z.object({
   objective: z.string(),
   reasoning: z.string(),
   steps: z.array(stepSchema).min(1).max(12),
-  successCriteria: z.array(z.string()),
-  blockers: z.array(z.string()).default([]),
+  successCriteria: stringListSchema,
+  blockers: stringListSchema.default([]),
 });
+
+const requiredStringSchema = z.preprocess(
+  (value) => value == null ? "No supervisor reason provided." : value,
+  z.string(),
+);
+
+const optionalStringSchema = z.preprocess(
+  (value) => value == null ? undefined : value,
+  z.string().optional(),
+);
 
 const critiqueSchema = z.object({
   verdict: z.enum(["pass", "retry", "replan", "escalate"]),
-  reason: z.string(),
-  improvement: z.string().optional(),
+  reason: requiredStringSchema,
+  improvement: optionalStringSchema,
 });
 
 type RawOrchestrationPlan = z.infer<typeof planSchema>;
@@ -295,6 +371,24 @@ export function normalizePlan(plan: RawOrchestrationPlan): OrchestrationPlan {
   };
 }
 
+export function isReadOnlyPlanObjective(objective: string): boolean {
+  const text = objective.toLowerCase();
+  if (/\b(do not|don't|dont|without)\s+(make changes|change|edit|modify|deploy|execute|run|send|publish|launch|merge|spend|write)\b/.test(text)) return true;
+  if (/\b(plan only|read[- ]only|analysis only|do not make changes|no changes)\b/.test(text)) return true;
+  if (/\b(create|prepare|draft|write)\b[^.]{0,80}\b(implementation plan|deployment plan|qa plan|test plan|checklist|audit|analysis|report)\b/.test(text)) return true;
+  if (/\b(identify|list|rank|prioriti[sz]e|summari[sz]e|analy[sz]e|audit|assess|review)\b[^.]{0,120}\b(priority|priorities|risk|risks|metric|metrics|owner|owners|approval yes\/no|approval gates?)\b/.test(text)) return true;
+  if (/\bfounder approval yes\/no\b|\bapproval yes\/no\b/.test(text)) return true;
+  return false;
+}
+
+export function sanitizeReadOnlyApprovalGates(plan: OrchestrationPlan, founderObjective: string): OrchestrationPlan {
+  if (!isReadOnlyPlanObjective(`${founderObjective}\n${plan.objective}`)) return plan;
+  return {
+    ...plan,
+    steps: plan.steps.map((step) => ({ ...step, needsApproval: false })),
+  };
+}
+
 function buildStepSpec(step: Pick<OrchestrationStep, "title" | "expectedOutput" | "dependsOn">) {
   return {
     acceptance: [`Expected output satisfied: ${step.expectedOutput || step.title}`],
@@ -303,6 +397,7 @@ function buildStepSpec(step: Pick<OrchestrationStep, "title" | "expectedOutput" 
 }
 
 export function repairOrchestrationPlanRoutes(plan: OrchestrationPlan): OrchestrationPlan {
+  if (isReadOnlyPlanObjective(plan.objective)) return plan;
   const route = recommendSeatForObjective(plan.objective);
   if (route.role === "ceo" || plan.steps.some((step) => step.agentRole === route.role)) return plan;
 
@@ -448,6 +543,20 @@ const FULL_TEAM_SEATS: AgentRole[] = [
   "engineer", "growth", "content", "support", "analyst", "finance", "sales",
 ];
 
+/**
+ * True for cross-functional planning/audit/prioritization objectives that
+ * must engage multiple specialist seats (Fix Plan Slice 1 — tester evidence:
+ * "top 5 priorities" audits ran with only ceo+escalation).
+ */
+export function isBroadPlanningObjective(objective: string): boolean {
+  const text = (objective ?? "").toLowerCase();
+  if (/\b(top\s+\d+\s+priorit|priorities for the next|prioriti[sz]e (our|the) (work|roadmap|backlog))\b/.test(text)) return true;
+  if (/\b(audit|review|assess)\b/.test(text) && /\b(company|business|product|roadmap|operations|everything|overall)\b/.test(text)) return true;
+  if (/\b(7|seven|30|ninety|90)[- ]day (plan|campaign|roadmap)\b/.test(text)) return true;
+  if (/\bacross\b/.test(text) && /\b(product|growth|support|finance|engineering|marketing)\b/.test(text)) return true;
+  return false;
+}
+
 export async function generateOrchestrationPlan(
   company: Company,
   objective: string,
@@ -455,9 +564,14 @@ export async function generateOrchestrationPlan(
   options?: { fullTeam?: boolean; runId?: string; operatingState?: string },
 ): Promise<OrchestrationPlan> {
   const fullTeam = options?.fullTeam ?? false;
+  // RC1 fix (Fix Plan Slice 2): the planner sees which required sources exist
+  // and which are missing before decomposing the objective. Best-effort.
+  const planningDocs = await store.listDocuments(company.id).catch(() => []);
+  const planCoverage = buildSourceCoverage(objective, planningDocs);
   const prompts = buildOrchestrationPlanningPrompts(company, objective, memory, {
     fullTeam,
     operatingState: options?.operatingState,
+    sourceCoverage: planCoverage.required.length > 0 ? formatSourceCoverage(planCoverage) : undefined,
   });
   const route = recommendSeatForObjective(objective);
   const fallbackNeedsApproval = /\b(publish|send|merge|deploy|spend|charge|refund|withdraw|delete)\b/i.test(objective);
@@ -468,6 +582,8 @@ export async function generateOrchestrationPlan(
     ? buildContentMissionFallbackPlan(objective)
     : fullTeam
     ? buildFullTeamFallbackPlan(objective)
+    : isReadOnlyPlanObjective(objective)
+    ? buildReadOnlyAnalysisFallbackPlan(objective)
     : buildStandardFallbackPlan(objective, route.tool, fallbackPrimaryRole, fallbackNeedsApproval);
 
   const rawPlan = await callJsonWithFallback<RawOrchestrationPlan>(
@@ -478,7 +594,10 @@ export async function generateOrchestrationPlan(
     fallback,
     { stage: "planner", companyId: company.id, jobRunId: options?.runId },
   );
-  const candidate = repairOrchestrationPlanRoutes(normalizePlan(rawPlan));
+  const candidate = sanitizeReadOnlyApprovalGates(
+    repairOrchestrationPlanRoutes(sanitizeReadOnlyApprovalGates(normalizePlan(rawPlan), objective)),
+    objective,
+  );
   if (!orchestrationPlanValidatorEnabled()) return candidate;
 
   const validation = validateOrchestrationPlan(candidate, {
@@ -491,7 +610,10 @@ export async function generateOrchestrationPlan(
     { objective, errors: validation.errors },
     "[orchestrator] generated plan failed semantic validation; using deterministic fallback"
   );
-  const fallbackPlan = repairOrchestrationPlanRoutes(normalizePlan(fallback));
+  const fallbackPlan = sanitizeReadOnlyApprovalGates(
+    repairOrchestrationPlanRoutes(sanitizeReadOnlyApprovalGates(normalizePlan(fallback), objective)),
+    objective,
+  );
   const fallbackValidation = validateOrchestrationPlan(fallbackPlan, {
     seatRoster: Object.keys(seatOutputSchemas) as AgentRole[],
     budgetCapCents: getCompanyBudgetCapCents(company),
@@ -573,6 +695,58 @@ function buildStandardFallbackPlan(
   };
 }
 
+function buildReadOnlyAnalysisFallbackPlan(objective: string): OrchestrationPlan {
+  const steps: OrchestrationStep[] = [
+    {
+      id: "s1",
+      title: "Analyze source evidence and current state",
+      rationale: "Read-only planning starts by grounding the answer in available company context.",
+      agentRole: "analyst",
+      dependsOn: [],
+      expectedOutput: `Summarize the evidence relevant to "${objective}" with citations, available/missing source coverage, and no tool execution claims.`,
+      riskLevel: "low",
+      needsApproval: false,
+    },
+    {
+      id: "s2",
+      title: "Assess technical and operational risks",
+      rationale: "Priorities need implementation risk and owner clarity, not an external action.",
+      agentRole: "engineer",
+      dependsOn: ["s1"],
+      expectedOutput: `Identify technical/operational risks, likely owner seats, and success metrics for "${objective}".`,
+      riskLevel: "medium",
+      needsApproval: false,
+    },
+    {
+      id: "s3",
+      title: "Assess growth and customer impact",
+      rationale: "Priority planning should account for customer and go-to-market impact.",
+      agentRole: "growth",
+      dependsOn: ["s1"],
+      expectedOutput: `Rank customer/growth impact and approval/review needs for "${objective}" without launching or publishing anything.`,
+      riskLevel: "medium",
+      needsApproval: false,
+    },
+    {
+      id: "s4",
+      title: "Consolidate read-only recommendation",
+      rationale: "The CEO synthesizes specialist analysis into the requested founder-facing answer.",
+      agentRole: "ceo",
+      dependsOn: ["s1", "s2", "s3"],
+      expectedOutput: `Deliver the requested read-only output for "${objective}" with owner, expected output, success metric, risk, and founder approval yes/no where requested.`,
+      riskLevel: "low",
+      needsApproval: false,
+    },
+  ];
+  return {
+    objective,
+    reasoning: "Read-only analysis fallback plan.",
+    steps,
+    successCriteria: ["Requested analysis is answered directly", "No unrequested tools, deploys, publishes, or writes are performed"],
+    blockers: [],
+  };
+}
+
 /**
  * Deterministic full-company plan: every specialist seat gets one substantive
  * step (CEO scopes first, CEO consolidates last). Used as the autonomous-mode
@@ -640,13 +814,19 @@ export function buildOrchestrationPlanningPrompts(
   company: Company,
   objective: string,
   memory: string,
-  options?: { fullTeam?: boolean; operatingState?: string },
+  options?: { fullTeam?: boolean; operatingState?: string; sourceCoverage?: string },
 ): { system: string; user: string } {
   const fullTeam = options?.fullTeam ?? false;
   const route = recommendSeatForObjective(objective);
   const contentMissionBrief = buildContentMissionProtocolBrief(objective);
+  // RC1/RC2 (Fix Plan Slice 1): broad planning/audit/prioritization objectives
+  // were routed to only ceo+escalation, producing thin audits. Force the
+  // relevant specialist seats into the plan for cross-functional objectives.
+  const broadPlanning = isBroadPlanningObjective(objective);
   const teamRule = fullTeam
     ? "  4. FULL AUTONOMOUS COMPANY RUN: engage EVERY relevant specialist seat (engineer, growth, content, support, analyst, finance, sales) with at least one substantive step doing real work in its domain, then a final ceo step that consolidates everything. Use up to 12 steps."
+    : broadPlanning
+    ? "  4. BROAD PLANNING/AUDIT OBJECTIVE: this objective spans multiple functions. Engage at least three specialist seats (e.g. analyst, engineer, growth, finance — whichever domains the objective touches) with one substantive step each, then a final ceo step that consolidates. Never plan only ceo/escalation steps for an objective like this. Use 4–10 steps."
     : "  4. Keep step count tight: 3–8 for most objectives, max 12.";
   const system = [
     "You are Trent's chief orchestrator — the long-horizon planner that decomposes an objective into a multi-agent task graph.",
@@ -675,6 +855,11 @@ export function buildOrchestrationPlanningPrompts(
     // §1 P0-2 — the planner sees the REAL operating state (open/stale tasks,
     // pending approvals, budget vs burn, last cycle), never plans from amnesia.
     ...(options?.operatingState ? ["CURRENT OPERATING STATE:", options.operatingState, ""] : []),
+    // RC1 (Slice 2) — required vs missing sources. The plan must state
+    // coverage and must never claim to have audited a missing source.
+    ...(options?.sourceCoverage
+      ? [options.sourceCoverage, "The final consolidated output MUST include this source coverage (available vs missing).", ""]
+      : []),
     `Objective: ${objective}`,
     "",
     "Respond as JSON: { objective, reasoning, steps:[{id,title,rationale,agentRole,dependsOn,expectedOutput,riskLevel,needsApproval,spec:{acceptance:[],inputsFrom:[]}}], successCriteria:[], blockers:[] }",
@@ -691,6 +876,7 @@ export async function critiqueStepOutput(
     "You are Trent's quality supervisor. Review the output of an agent step against its expected output.",
     "Return JSON: { verdict: 'pass'|'retry'|'replan'|'escalate', reason, improvement? }.",
     "Use 'pass' for sufficient work, 'retry' for fixable gaps in the same step, 'replan' when the plan shape is wrong and remaining steps must change, 'escalate' for unsafe/uncertain outputs needing founder review.",
+    "Grounding rules (RC1): if the output claims required documents were unavailable while the step context contains a SOURCE COVERAGE block listing them as Available, return 'retry'. If the output claims to have audited/read a source that coverage lists as Missing, return 'retry'. Document-grounded claims with zero citations to source doc ids are a gap, not a pass.",
     "Be terse and direct.",
   ].join("\n");
   const user = [
@@ -893,6 +1079,8 @@ export type StepExecutionResult = {
   tokens: number;
   costCents: number;
   toolCalls: ToolCallRecord[];
+  /** The seat loop exhausted tool-use turns without producing a final answer. */
+  maxStepsReached?: boolean;
   execution: AgentExecution;
   /** Work the agent is requesting from other agents — routed by the orchestrator. */
   workRequests: WorkRequest[];
@@ -930,12 +1118,15 @@ async function buildLiveContext(
   const needsDocs      = needs.has("productDocs") || needs.has("tonePolicy");
   const needsPlatform  = needs.has("platformReadiness");
 
+  // RC1 fix (Fix Plan Slice 2): documents are ALWAYS fetched so source
+  // retrieval + coverage reach every seat, not only seats declaring
+  // productDocs/tonePolicy. Best-effort: a store failure degrades to null.
   const [tasks, approvals, usage, reports, docs, socialAccounts, marketingAccounts] = await Promise.all([
     needsTasks     ? store.listTasks(companyId)     : Promise.resolve(null),
     needsApprovals ? store.listApprovals(companyId) : Promise.resolve(null),
     needsUsage     ? store.listUsage(companyId)     : Promise.resolve(null),
     needsReports   ? store.listReports(companyId)   : Promise.resolve(null),
-    needsDocs      ? store.listDocuments(companyId) : Promise.resolve(null),
+    store.listDocuments(companyId).catch(() => null),
     needsPlatform  ? store.listSocialAccounts(companyId) : Promise.resolve(null),
     needsPlatform  ? store.listMarketingAccounts(companyId) : Promise.resolve(null),
   ]);
@@ -972,6 +1163,22 @@ async function buildLiveContext(
       const productDocs = docs.filter(d => d.type === "brief" || d.type === "weekly_report").slice(0, 3)
         .map(d => ({ title: d.title, summary: d.content.slice(0, 500) }));
       if (productDocs.length > 0) ctx.productDocs = productDocs;
+    }
+
+    // RC1 fix (Fix Plan Slice 2): every seat gets relevance-ranked source
+    // documents (no type filter) plus a coverage report of required vs
+    // missing sources, so agents cite real docs and never claim to have
+    // audited a source that is absent.
+    const sourceDocs = selectRelevantDocuments(missionText || "", docs, 6);
+    if (sourceDocs.length > 0) {
+      ctx.sourceDocuments = formatSourceDocumentsBlock(
+        sourceDocs.map(d => ({ id: d.id, title: d.title, content: d.content, type: d.type })),
+        1500,
+      );
+    }
+    const coverage = buildSourceCoverage(missionText || "", docs);
+    if (coverage.required.length > 0) {
+      ctx.sourceCoverage = formatSourceCoverage(coverage);
     }
   }
   if (needsPlatform && socialAccounts && marketingAccounts) {
@@ -1172,6 +1379,7 @@ export async function executeStepWithRuntime(input: StepExecutionInput): Promise
     costCents: agentResult.costCents,
     error: agentResult.error,
   };
+  const maxStepsReached = agentResult.maxStepsReached === true;
 
   // Extract text output — the model responds with JSON {summary, findings, recommendations, workRequests}.
   // findings/recommendations may come back as arrays of strings OR objects; coerce
@@ -1215,7 +1423,7 @@ export async function executeStepWithRuntime(input: StepExecutionInput): Promise
     ].join("\n"),
     output,
     toolCalls,
-    status:     seatResult.error ? "failed" : "completed",
+    status:     seatResult.error || maxStepsReached ? "failed" : "completed",
     model:      seatResult.model,
     tokens:     seatResult.tokens,
     costCents:  seatResult.costCents,
@@ -1223,7 +1431,17 @@ export async function executeStepWithRuntime(input: StepExecutionInput): Promise
     createdAt:  nowIso(),
   };
 
-  return { output, handoff, model: seatResult.model, tokens: seatResult.tokens, costCents: seatResult.costCents, toolCalls, workRequests, execution: execRecord };
+  return {
+    output,
+    handoff,
+    model: seatResult.model,
+    tokens: seatResult.tokens,
+    costCents: seatResult.costCents,
+    toolCalls,
+    maxStepsReached,
+    workRequests,
+    execution: execRecord,
+  };
 }
 
 export type OrchestrationTransition =

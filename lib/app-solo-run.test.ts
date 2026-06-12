@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { getAppSoloAgents } from "@/lib/app-solo";
-import { launchAppSoloRun } from "@/lib/app-solo-run";
+import {
+  cancelAppSoloRun,
+  heartbeatAppSoloRun,
+  launchAppSoloRun,
+  resumeAppSoloRun,
+} from "@/lib/app-solo-run";
 import type { WorkbenchSession } from "@/lib/types";
 import type { WorkbenchAgentChunk } from "@/lib/workbench-agent";
 
@@ -118,15 +123,18 @@ describe("launchAppSoloRun", () => {
   it("throws a detailed error when session creation fails", async () => {
     const engineer = getAppSoloAgents().find((agent) => agent.role === "engineer")!;
     const steel = engineer.apps[0]!;
-    const fetcher = vi.fn(async () => jsonResponse({ error: "member role required" }, 403));
+    const fetcher = vi.fn(async () => jsonResponse({ error: "E2B_API_KEY is required" }, 502));
 
     await expect(launchAppSoloRun({
       companyId: "co_1",
       agent: engineer,
       app: steel,
       objective: "Inspect a broken site.",
+      provider: "e2b",
       fetcher,
-    })).rejects.toThrow("member role required");
+    })).rejects.toThrow(
+      "Could not launch app-solo session (provider: e2b, HTTP 502): E2B_API_KEY is required",
+    );
   });
 
   it("throws the streamed agent error when the run endpoint fails", async () => {
@@ -145,6 +153,27 @@ describe("launchAppSoloRun", () => {
       objective: "Run the sandbox.",
       fetcher,
     })).rejects.toThrow("worker unavailable");
+  });
+});
+
+describe("App Solo lifecycle API helpers", () => {
+  it("sends durable heartbeat, resume, and cancel requests for a running session", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return jsonResponse({ session: session({ id: "ws_heartbeat", status: "running" }) });
+    });
+
+    await heartbeatAppSoloRun("ws_heartbeat", { fetcher });
+    await resumeAppSoloRun("ws_heartbeat", { fetcher });
+    await cancelAppSoloRun("ws_heartbeat", { fetcher });
+
+    expect(calls.map((call) => [call.url, JSON.parse(String(call.init?.body))])).toEqual([
+      ["/api/workbench/ws_heartbeat", { action: "app_solo_heartbeat" }],
+      ["/api/workbench/ws_heartbeat", { action: "app_solo_resume" }],
+      ["/api/workbench/ws_heartbeat", { status: "cancelled" }],
+    ]);
+    expect(calls.every((call) => call.init?.method === "PATCH")).toBe(true);
   });
 });
 

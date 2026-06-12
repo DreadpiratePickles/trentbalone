@@ -99,6 +99,8 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState("");
   const [composerError, setComposerError] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadNotice, setUploadNotice] = useState("");
 
   const { readiness, loading: healthLoading } = useRuntimeHealth();
   const { pushError } = useStatusToast();
@@ -108,6 +110,8 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
   const active = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [sessions, activeId]);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const autoOpenedRef = useRef<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const refreshSessions = useCallback(async () => {
     const [sRes, stRes] = await Promise.all([
@@ -324,6 +328,48 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
     await sendContent(`Rerun the failed attempt for: ${active.objective}. Use the exact failed checks and terminal errors as repair input.`);
   }, [active, sendContent, streaming]);
 
+  // RC1 (Fix Plan Slice 4): + upload — files, folders, and zips land in the
+  // session workspace so agents can actually read them. Always ends in a
+  // visible state: success summary, per-file skips, or an error banner.
+  const uploadFiles = useCallback(async (fileList: FileList | null) => {
+    if (!active || !fileList || fileList.length === 0 || uploading) return;
+    setUploading(true);
+    setUploadNotice("");
+    setComposerError("");
+    try {
+      const form = new FormData();
+      const paths: string[] = [];
+      Array.from(fileList).forEach((file) => {
+        form.append("files", file, file.name);
+        const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+        paths.push(rel && rel.trim() ? rel : file.name);
+      });
+      form.append("paths", JSON.stringify(paths));
+      const res = await fetch(`/api/workbench/${active.id}/uploads`, { method: "POST", body: form });
+      const data = await res.json().catch(() => null) as {
+        summary?: string; error?: string;
+        skipped?: Array<{ path: string; reason: string }>;
+      } | null;
+      if (!res.ok) {
+        const message = data?.error ?? `Upload failed (HTTP ${res.status}).`;
+        setComposerError(message);
+        pushError(message);
+        return;
+      }
+      const skippedNote = data?.skipped?.length
+        ? ` Skipped: ${data.skipped.slice(0, 3).map((s) => `${s.path} (${s.reason})`).join("; ")}${data.skipped.length > 3 ? "…" : ""}`
+        : "";
+      setUploadNotice(`${data?.summary ?? "Upload complete."}${skippedNote}`);
+      await refreshActive();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Upload failed.";
+      setComposerError(message);
+      pushError(message);
+    } finally {
+      setUploading(false);
+    }
+  }, [active, uploading, pushError, refreshActive]);
+
   const filteredSessions = sessions.filter((s) => s.agentMode === modeFilter);
 
   return (
@@ -466,12 +512,48 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
                   <ErrorBanner message={composerError} onDismiss={() => setComposerError("")} />
                 </div>
               ) : null}
+              {uploadNotice ? (
+                <div
+                  data-testid="workbench-upload-notice"
+                  className="mono"
+                  style={{ width: "100%", marginBottom: 8, fontSize: 11, color: "var(--mist)", display: "flex", justifyContent: "space-between", gap: 8 }}
+                >
+                  <span>{uploadNotice}</span>
+                  <button onClick={() => setUploadNotice("")} style={S.iconBtn} aria-label="Dismiss upload notice">×</button>
+                </div>
+              ) : null}
               {!llmConfigured ? (
                 <div style={{ flex: 1 }}>
                   <LlmNotConfiguredBanner />
                 </div>
               ) : (
                 <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => { void uploadFiles(e.target.files); e.target.value = ""; }}
+              />
+              <input
+                ref={folderInputRef}
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                // @ts-expect-error — webkitdirectory is a non-standard but widely supported attribute
+                webkitdirectory=""
+                onChange={(e) => { void uploadFiles(e.target.files); e.target.value = ""; }}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                onContextMenu={(e) => { e.preventDefault(); folderInputRef.current?.click(); }}
+                disabled={streaming || uploading}
+                style={S.iconBtn}
+                title="Upload files or zips into this session (right-click to upload a folder)"
+                aria-label="Upload files into the workbench session"
+              >
+                {uploading ? <Spinner /> : "+"}
+              </button>
               <textarea
                 value={composer}
                 onChange={(e) => setComposer(e.target.value)}

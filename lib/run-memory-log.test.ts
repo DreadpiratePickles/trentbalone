@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { store } from "@/lib/store";
 import { makeId } from "@/lib/utils";
-import { buildWorkbenchMemoryLog, persistWorkbenchMemoryLog } from "./run-memory-log";
+import {
+  buildWorkbenchMemoryLog,
+  normalizeWorkbenchEventForMemory,
+  persistWorkbenchMemoryLog,
+} from "./run-memory-log";
 
 describe("run memory log", () => {
   it("builds a markdown log with objective, commands, verification, artifacts, and agent attribution", async () => {
@@ -47,6 +51,46 @@ describe("run memory log", () => {
     expect(markdown).toContain("registry unavailable");
     expect(markdown).toContain("createdByAgent: engineer");
     expect(markdown).toContain("Verification failed because npm install failed.");
+    expect(markdown).toContain("schemaVersion: workbench.event.v1");
+    expect(markdown).toContain("eventId: e2");
+    expect(markdown).toContain("runId: ws1");
+    expect(markdown).toContain("companyId: co1");
+  });
+
+  it("normalizes workbench events into a durable event-to-memory schema", () => {
+    expect(normalizeWorkbenchEventForMemory({
+      id: "e2",
+      companyId: "co1",
+      sessionId: "ws1",
+      seq: 2,
+      type: "shell",
+      status: "failed",
+      title: "$ npm install",
+      content: "registry unavailable",
+      command: "npm install",
+      attemptNo: 1,
+      durationMs: 120,
+      agentRole: "engineer",
+      metadata: { exitCode: 1 },
+      createdAt: "2026-06-04T00:00:20.000Z",
+    })).toEqual({
+      schemaVersion: "workbench.event.v1",
+      eventId: "e2",
+      runId: "ws1",
+      companyId: "co1",
+      seq: 2,
+      type: "shell",
+      status: "failed",
+      title: "$ npm install",
+      detail: "registry unavailable",
+      command: "npm install",
+      attemptNo: 1,
+      durationMs: 120,
+      agentRole: "engineer",
+      artifactId: undefined,
+      metadata: { exitCode: 1 },
+      occurredAt: "2026-06-04T00:00:20.000Z",
+    });
   });
 
   it("persists a Workbench memory log as episodic memory and an attributed artifact", async () => {

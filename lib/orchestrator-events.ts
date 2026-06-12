@@ -24,6 +24,7 @@ export type OrcEventKind =
   | "step_approved"
   | "consolidate_start"
   | "consolidate_end"
+  | "run_awaiting_approval"
   | "run_done"
   | "run_failed"
   | "run_cancelled"

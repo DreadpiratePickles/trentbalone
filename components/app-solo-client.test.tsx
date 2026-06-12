@@ -20,6 +20,8 @@ describe("AppSoloClient", () => {
     expect(html).toContain("gmail.send");
     expect(html).toContain("evidence");
     expect(html).toContain("verification, preview, artifacts, commands");
+    expect(html).toContain("data-testid=\"app-solo-provider-e2b\"");
+    expect(html).toContain("data-testid=\"app-solo-start-run\"");
   });
 
   it("renders the final solo run summary with evidence counts and failed checks", () => {

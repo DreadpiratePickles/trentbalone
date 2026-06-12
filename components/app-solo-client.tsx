@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useEffect, useMemo, useState, type CSSProperties } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AgentActivityFeed, mapWorkbenchChunk, type ActivityStep } from "@/components/agent-activity";
+import { styles } from "@/components/app-solo-client.styles";
 import { getAppSoloAgents, type AppSoloAgent, type AppSoloApp, type AppSoloRunSummary } from "@/lib/app-solo";
 import { APP_SOLO_REVIEW_EVIDENCE } from "@/lib/app-solo-product-review";
 import type { WorkbenchAgentChunk } from "@/lib/workbench-agent-types";
-import { launchAppSoloRun } from "@/lib/app-solo-run";
+import { cancelAppSoloRun, heartbeatAppSoloRun, launchAppSoloRun, resumeAppSoloRun } from "@/lib/app-solo-run";
 import { AppSoloRunSummaryPanel } from "@/components/app-solo-run-summary-panel";
 import { workbenchPreviewFrameSrc } from "@/lib/workbench-preview-url";
 import { Eyebrow, I, Pill, PulseDot } from "@/components/ui";
@@ -20,7 +21,8 @@ type LaunchState =
   | { status: "launching" }
   | { status: "running"; session: WorkbenchSession; trace: ActivityStep[]; previewUrl?: string }
   | { status: "ready"; session: WorkbenchSession; trace: ActivityStep[]; previewUrl?: string; passed?: boolean; summary?: AppSoloRunSummary }
-  | { status: "error"; message: string; trace: ActivityStep[] };
+  | { status: "cancelled"; session: WorkbenchSession; trace: ActivityStep[]; previewUrl?: string }
+  | { status: "error"; message: string; trace: ActivityStep[]; session?: WorkbenchSession; previewUrl?: string };
 
 export function AppSoloClient({ companyId }: { companyId: string }) {
   const agents = useMemo(() => getAppSoloAgents(), []);
@@ -31,11 +33,17 @@ export function AppSoloClient({ companyId }: { companyId: string }) {
   const selectedApp = selectedAgent.apps.find((app) => app.id === selectedAppId) ?? selectedAgent.apps[0];
   const [objective, setObjective] = useState("Create a focused solo run and show me the next useful artifact.");
   const [launch, setLaunch] = useState<LaunchState>({ status: "idle" });
+  const selectedProviderRef = useRef<AppSoloProviderChoice>(selectedProvider);
   const [narrow, setNarrow] = useState(false);
-  const activeSession = launch.status === "running" || launch.status === "ready" ? launch.session : undefined;
-  const activePreviewUrl = launch.status === "running" || launch.status === "ready"
-    ? launch.previewUrl ?? launch.session.previewUrl
+  const activeSession = launch.status === "running" || launch.status === "ready" || launch.status === "cancelled"
+    ? launch.session
+    : launch.status === "error"
+      ? launch.session
+      : undefined;
+  const activePreviewUrl = activeSession && "previewUrl" in launch
+    ? launch.previewUrl ?? activeSession.previewUrl
     : undefined;
+  const runningSessionId = launch.status === "running" ? launch.session.id : undefined;
   const previewSrc = activeSession && activePreviewUrl
     ? workbenchPreviewFrameSrc({ id: activeSession.id, previewUrl: activePreviewUrl })
     : "";
@@ -47,14 +55,28 @@ export function AppSoloClient({ companyId }: { companyId: string }) {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  useEffect(() => {
+    if (!runningSessionId) return;
+    const tick = () => heartbeatAppSoloRun(runningSessionId).catch(() => undefined);
+    void tick();
+    const interval = window.setInterval(tick, 15_000);
+    return () => window.clearInterval(interval);
+  }, [runningSessionId]);
+
   function selectAgent(agent: AppSoloAgent) {
     setSelectedRole(agent.role);
     setSelectedAppId(agent.apps[0]?.id ?? "steel-browser");
     setLaunch({ status: "idle" });
   }
 
-  async function launchSoloRun() {
+  function selectProvider(provider: AppSoloProviderChoice) {
+    selectedProviderRef.current = provider;
+    setSelectedProvider(provider);
+  }
+
+  async function launchSoloRun(providerOverride?: "auto" | "daytona" | "e2b" | "mock_local") {
     if (!selectedApp) return;
+    const provider = providerOverride ?? selectedProviderRef.current;
     setLaunch({ status: "launching" });
 
     const trace: ActivityStep[] = [];
@@ -67,7 +89,7 @@ export function AppSoloClient({ companyId }: { companyId: string }) {
         agent: selectedAgent,
         app: selectedApp,
         objective,
-        provider: selectedProvider === "auto" ? undefined : selectedProvider,
+        provider: provider === "auto" ? undefined : provider,
         onSessionCreated: (session) => {
           activeSession = session;
           trace.push({
@@ -84,7 +106,7 @@ export function AppSoloClient({ companyId }: { companyId: string }) {
           if (chunk.type === "preview") previewUrl = chunk.url;
           if (chunk.type === "verify") passed = chunk.passed;
           if (chunk.type === "error" && activeSession) {
-            setLaunch({ status: "error", message: chunk.message, trace: [...trace] });
+            setLaunch({ status: "error", message: chunk.message, session: activeSession, trace: [...trace], previewUrl });
             return;
           }
           if (activeSession) setLaunch({ status: "running", session: activeSession, trace: [...trace], previewUrl });
@@ -99,8 +121,38 @@ export function AppSoloClient({ companyId }: { companyId: string }) {
         summary: result.summary,
       });
     } catch (err) {
-      setLaunch({ status: "error", message: err instanceof Error ? err.message : "agent run failed", trace: [...trace] });
+      setLaunch({
+        status: "error",
+        message: err instanceof Error ? err.message : "agent run failed",
+        session: activeSession,
+        trace: [...trace],
+        previewUrl,
+      });
     }
+  }
+
+  async function resumeSoloRun() {
+    if (!activeSession) return;
+    const trace = "trace" in launch ? launch.trace : [];
+    try {
+      const session = await resumeAppSoloRun(activeSession.id);
+      setLaunch({ status: "running", session, trace, previewUrl: activePreviewUrl });
+    } catch (err) {
+      setLaunch({
+        status: "error",
+        message: err instanceof Error ? err.message : "resume failed",
+        session: activeSession,
+        trace,
+        previewUrl: activePreviewUrl,
+      });
+    }
+  }
+
+  async function cancelSoloRun() {
+    if (!activeSession) return;
+    const trace = "trace" in launch ? launch.trace : [];
+    const session = await cancelAppSoloRun(activeSession.id);
+    setLaunch({ status: "cancelled", session, trace, previewUrl: activePreviewUrl });
   }
 
   return (
@@ -161,8 +213,50 @@ export function AppSoloClient({ companyId }: { companyId: string }) {
               />
             </div>
           )}
+          {launch.status === "running" && (
+            <button
+              data-testid="app-solo-cancel-run"
+              className="btn btn-mono"
+              onClick={() => void cancelSoloRun()}
+              style={{ ...styles.smallAction, marginTop: 10 }}
+            >
+              cancel run
+            </button>
+          )}
           {launch.status === "error" && (
-            <div style={styles.errorText}>{launch.message}</div>
+            <div>
+              <div data-testid="app-solo-launch-error" style={styles.errorText}>{launch.message}</div>
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                {launch.session && (
+                  <button
+                    data-testid="app-solo-resume-run"
+                    className="btn btn-mono"
+                    onClick={() => void resumeSoloRun()}
+                    style={styles.smallAction}
+                  >
+                    resume session
+                  </button>
+                )}
+                <button
+                  data-testid="app-solo-retry-launch"
+                  className="btn btn-mono"
+                  onClick={() => void launchSoloRun()}
+                  style={styles.smallAction}
+                >
+                  retry launch
+                </button>
+                {selectedProvider !== "auto" && (
+                  <button
+                    data-testid="app-solo-retry-auto"
+                    className="btn btn-mono"
+                    onClick={() => { selectProvider("auto"); void launchSoloRun("auto"); }}
+                    style={styles.smallAction}
+                  >
+                    retry with auto provider
+                  </button>
+                )}
+              </div>
+            </div>
           )}
         </div>
 
@@ -180,7 +274,9 @@ export function AppSoloClient({ companyId }: { companyId: string }) {
               <button
                 key={provider}
                 type="button"
-                onClick={() => setSelectedProvider(provider)}
+                data-testid={`app-solo-provider-${provider}`}
+                aria-pressed={selectedProvider === provider}
+                onClick={() => selectProvider(provider)}
                 style={{
                   ...styles.segmentButton,
                   borderColor: selectedProvider === provider ? "rgba(110,231,183,.5)" : "rgba(255,255,255,.08)",
@@ -194,7 +290,8 @@ export function AppSoloClient({ companyId }: { companyId: string }) {
           </div>
           <button
             className="btn btn-pulse btn-mono"
-            onClick={launchSoloRun}
+            data-testid="app-solo-start-run"
+            onClick={() => void launchSoloRun()}
             disabled={launch.status === "launching" || launch.status === "running" || !selectedApp}
             style={{ width: "100%", justifyContent: "center" }}
           >
@@ -253,7 +350,7 @@ export function AppSoloClient({ companyId }: { companyId: string }) {
             <div>
               <div style={styles.bandLabel}>session output</div>
               <div style={styles.bandTitle}>
-                {launch.status === "ready" || launch.status === "running"
+                {launch.status === "ready" || launch.status === "running" || launch.status === "cancelled"
                   ? launch.session.objective.slice(0, 82)
                   : "Preview will appear after the solo run starts."}
               </div>
@@ -326,92 +423,3 @@ function formatContractList(items: readonly string[], maxItems: number): string 
   const visible = items.slice(0, maxItems).join(", ");
   return items.length > maxItems ? `${visible}, +${items.length - maxItems} more` : visible;
 }
-
-const styles: Record<string, CSSProperties> = {
-  shell: {
-    minHeight: "calc(100vh - 150px)",
-    display: "grid",
-    gap: 18,
-  },
-  leftRail: {
-    minHeight: 720,
-    display: "grid",
-    gridTemplateRows: "auto 1fr auto auto",
-    gap: 18,
-    padding: 18,
-    border: "1px solid rgba(255,255,255,.08)",
-    borderRadius: 8,
-    background: "linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.02))",
-  },
-  leftHeader: { borderBottom: "1px solid rgba(255,255,255,.07)", paddingBottom: 18 },
-  title: { margin: "10px 0 10px", fontFamily: "var(--display)", fontSize: 40, lineHeight: .95, letterSpacing: 0, color: "var(--bone)" },
-  lead: { margin: 0, color: "var(--mist)", lineHeight: 1.55, fontSize: 14 },
-  agentStack: { display: "grid", alignContent: "start", gap: 8, overflow: "auto", paddingRight: 2 },
-  agentButton: {
-    minHeight: 58,
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    padding: "10px 12px",
-    border: "1px solid rgba(255,255,255,.07)",
-    borderRadius: 8,
-    color: "var(--bone)",
-    cursor: "pointer",
-    textAlign: "left",
-  },
-  agentCode: {
-    width: 34,
-    height: 34,
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    border: "1px solid rgba(110,231,183,.28)",
-    color: "var(--pulse)",
-    fontFamily: "var(--mono)",
-    fontSize: 10,
-    letterSpacing: ".12em",
-  },
-  agentName: { display: "block", fontWeight: 650, fontSize: 13 },
-  agentMeta: { display: "block", marginTop: 3, color: "var(--haze)", fontFamily: "var(--mono)", fontSize: 9, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
-  activityPanel: { padding: 14, border: "1px solid rgba(255,255,255,.07)", borderRadius: 8, background: "rgba(10,10,15,.42)" },
-  panelTitle: { fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".18em", textTransform: "uppercase", color: "var(--haze)", marginBottom: 12 },
-  contractPanel: { display: "grid", gap: 7, padding: "0 0 12px", marginBottom: 10, borderBottom: "1px solid rgba(255,255,255,.06)" },
-  contractTitle: { fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".16em", textTransform: "uppercase", color: "var(--pulse)" },
-  contractRow: { display: "grid", gridTemplateColumns: "92px minmax(0, 1fr)", gap: 8, alignItems: "start", fontSize: 12, lineHeight: 1.35 },
-  contractLabel: { fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--haze)" },
-  contractValue: { color: "var(--bone)", overflowWrap: "anywhere" },
-  traceLine: { display: "flex", alignItems: "center", gap: 9, minHeight: 26, fontSize: 13 },
-  traceDot: { width: 6, height: 6, borderRadius: 999, boxShadow: "0 0 18px rgba(110,231,183,.3)" },
-  errorText: { marginTop: 10, color: "#FCA5A5", fontSize: 12, lineHeight: 1.45 },
-  traceLog: { marginTop: 10, display: "grid", gap: 3, maxHeight: 180, overflow: "auto", paddingTop: 8, borderTop: "1px solid rgba(255,255,255,.06)" },
-  traceLogLine: { fontFamily: "var(--font-mono, monospace)", fontSize: 11, lineHeight: 1.5, color: "rgba(255,255,255,.62)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
-  promptDock: { display: "grid", gap: 10 },
-  label: { fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".16em", color: "var(--haze)", textTransform: "uppercase" },
-  textarea: { width: "100%", resize: "vertical", minHeight: 92, borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", background: "rgba(255,255,255,.035)", color: "var(--bone)", padding: 12, lineHeight: 1.45 },
-  segmentedControl: { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6 },
-  segmentButton: { minHeight: 34, border: "1px solid rgba(255,255,255,.08)", borderRadius: 8, fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", cursor: "pointer" },
-  stage: { minWidth: 0, border: "1px solid rgba(255,255,255,.08)", borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,.025)" },
-  stageToolbar: { height: 54, display: "flex", alignItems: "center", gap: 12, padding: "0 14px", borderBottom: "1px solid rgba(255,255,255,.08)", background: "rgba(255,255,255,.035)" },
-  windowDots: { display: "flex", gap: 7 },
-  windowDot: { width: 9, height: 9, borderRadius: 999, background: "rgba(255,255,255,.18)" },
-  pathBar: { minWidth: 0, flex: 1, height: 32, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, border: "1px solid rgba(255,255,255,.07)", borderRadius: 8, color: "var(--haze)", fontFamily: "var(--mono)", fontSize: 11 },
-  heroSandbox: { position: "relative", minHeight: 666, padding: "42px min(5vw, 58px)", overflow: "hidden", background: "radial-gradient(circle at 78% 18%, rgba(110,231,183,.16), transparent 32%), linear-gradient(135deg, #0A0A0F 0%, #111116 52%, #090A0C 100%)" },
-  previewShell: { position: "relative", minHeight: 560, display: "grid", border: "1px solid rgba(255,255,255,.12)", borderRadius: 8, overflow: "hidden", background: "rgba(255,255,255,.04)" },
-  previewFrame: { width: "100%", minHeight: 560, border: 0, background: "#fff" },
-  gridGlow: { position: "absolute", inset: 0, opacity: .18, backgroundImage: "linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px)", backgroundSize: "48px 48px", maskImage: "linear-gradient(90deg, black, transparent 78%)" },
-  stageTopline: { position: "relative", display: "flex", alignItems: "center", gap: 12, fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".22em", textTransform: "uppercase", color: "var(--pulse)", marginBottom: 52 },
-  squareMark: { width: 34, height: 34, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "var(--pulse)", color: "var(--obsidian)" },
-  kicker: { position: "relative", display: "inline-flex", padding: "10px 14px", border: "1px solid rgba(110,231,183,.45)", color: "var(--pulse)", fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".18em", textTransform: "uppercase", marginBottom: 22 },
-  stageTitle: { position: "relative", maxWidth: 820, margin: 0, fontFamily: "var(--display)", fontSize: "clamp(48px, 7vw, 104px)", lineHeight: .88, letterSpacing: 0, color: "var(--bone)" },
-  stageCopy: { position: "relative", maxWidth: 720, margin: "24px 0 34px", color: "var(--bone-2)", fontSize: 17, lineHeight: 1.7 },
-  appGrid: { position: "relative", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, marginBottom: 32 },
-  appCard: { minHeight: 138, padding: 16, textAlign: "left", border: "1px solid rgba(255,255,255,.08)", borderRadius: 8, background: "rgba(10,10,15,.68)", color: "var(--bone)", cursor: "pointer" },
-  appLabel: { display: "block", fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".18em", textTransform: "uppercase", marginBottom: 14 },
-  appName: { display: "block", fontSize: 18, fontWeight: 760, marginBottom: 8 },
-  appDescription: { display: "block", color: "var(--mist)", fontSize: 12, lineHeight: 1.45 },
-  scopeCount: { display: "inline-flex", marginTop: 12, fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--haze)" },
-  outputBand: { position: "relative", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 20, padding: 20, border: "1px solid rgba(255,255,255,.08)", borderRadius: 8, background: "rgba(255,255,255,.035)" },
-  bandLabel: { fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".18em", textTransform: "uppercase", color: "var(--pulse)", marginBottom: 8 },
-  bandTitle: { color: "var(--bone)", fontWeight: 650, lineHeight: 1.4 },
-  bandActions: { display: "flex", gap: 10, flexWrap: "wrap", color: "var(--haze)", fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase" },
-};

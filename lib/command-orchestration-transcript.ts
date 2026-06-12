@@ -80,6 +80,7 @@ export const ORCHESTRATION_TRANSCRIPT_EVENTS = [
   "step_awaiting_approval",
   "step_approved",
   "consolidate_end",
+  "run_awaiting_approval",
   "run_done",
   "run_failed",
   "run_cancelled",
@@ -115,6 +116,10 @@ export function applyOrchestrationTranscriptEvent(
     if (summary) state.lines.push("", `CEO final review:\n${summary}`);
     else state.lines.push("", "Run completed.");
     return result(state, true, "completed", summary);
+  } else if (eventName === "run_awaiting_approval") {
+    const detail = payload.detail ?? payload.run?.summary ?? "Approval required before this run can continue.";
+    state.lines.push("", `Run awaiting approval: ${detail}`);
+    return result(state, true, "awaiting_approval", payload.run?.summary, detail);
   } else if (eventName === "run_failed") {
     const detail = payload.detail ?? "unknown error";
     state.lines.push("", `Run failed: ${detail}`);
@@ -145,6 +150,11 @@ function applySnapshot(
     const summary = run.summary;
     if (summary && !state.lines.join("\n").includes(summary)) state.lines.push("", `CEO final review:\n${summary}`);
     return result(state, true, "completed", summary);
+  }
+  if (run?.status === "awaiting_approval") {
+    const detail = run.summary ?? "Approval required before this run can continue.";
+    state.lines.push("", `Run awaiting approval: ${detail}`);
+    return result(state, true, "awaiting_approval", run.summary, detail);
   }
   if (run?.status === "failed") {
     const detail = run.summary ?? "unknown error";

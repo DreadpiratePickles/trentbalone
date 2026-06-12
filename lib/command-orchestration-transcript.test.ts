@@ -53,6 +53,35 @@ describe("Command orchestration transcript", () => {
     expect(result.content).toContain("CEO final review.");
   });
 
+  it("marks the transcript done when a run is awaiting approval", () => {
+    const state = createOrchestrationTranscript("orc_1");
+
+    const result = applyOrchestrationTranscriptEvent(state, "run_awaiting_approval", {
+      run: { id: "orc_1", status: "awaiting_approval", summary: "approval approval_1 is pending" },
+      detail: "approval approval_1 is pending",
+    });
+
+    expect(result.done).toBe(true);
+    expect(result.runStatus).toBe("awaiting_approval");
+    expect(result.content).toContain("Run awaiting approval");
+    expect(result.content).toContain("approval_1");
+  });
+
+  it("marks an awaiting-approval snapshot as done", () => {
+    const state = createOrchestrationTranscript("orc_1");
+
+    const result = applyOrchestrationTranscriptEvent(state, "snapshot", {
+      id: "orc_1",
+      status: "awaiting_approval",
+      summary: "Founder approval needed.",
+      steps: [{ id: "s1", agentRole: "growth", title: "Approve launch", status: "awaiting_approval", approvalId: "approval_1" }],
+    });
+
+    expect(result.done).toBe(true);
+    expect(result.runStatus).toBe("awaiting_approval");
+    expect(result.content).toContain("Run awaiting approval");
+  });
+
   it("renders critic, approval, blocker, and delegation events in the live transcript", () => {
     const state = createOrchestrationTranscript("orc_1");
 

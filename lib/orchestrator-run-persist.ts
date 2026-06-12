@@ -4,6 +4,7 @@ import { emitOrcEvent, type OrcEvent } from "@/lib/orchestrator-events";
 import type { OrchestrationCritique, OrchestrationPlan, SeatLoopResumeState, StepHandoff, StepRecord } from "@/lib/orchestrator-runtime";
 import type { OrchestrationRun } from "@/lib/orchestrator";
 import { cacheOrchestrationRun } from "@/lib/orchestrator-cache";
+import { stepSatisfiesDependency } from "@/lib/orchestrator-step-outcome";
 
 export async function hydrateOrchestrationRun(runId: string): Promise<OrchestrationRun | undefined> {
   const persisted = await store.getOrchestratorRun(runId).catch(() => undefined);
@@ -35,7 +36,7 @@ export function buildCompletedOutputs(steps: StepRecord[]): Record<string, strin
   // strands dependents and hangs the run.
   return Object.fromEntries(
     steps
-      .filter((step) => step.status === "completed")
+      .filter(stepSatisfiesDependency)
       .map((step) => [step.id, step.output ?? ""]),
   );
 }

@@ -21,6 +21,7 @@ import {
   enqueueExistingJobRunForProcessing,
   type QueueJobName,
 } from "@/lib/queue";
+import type { OrchestratorEvent, OrchestratorRun as OrchestratorRunRecord } from "@/lib/types";
 
 export type { OrchestrationJobAction, OrchestrationStepPayload } from "@/lib/orchestrator-run-queue";
 export { hydrateOrchestrationRun } from "@/lib/orchestrator-run-persist";
@@ -34,10 +35,11 @@ export {
 } from "@/lib/orchestrator-run-queue";
 
 type QueueAddFunction = (type: QueueJobName, data: OrchestrationStepPayload) => Promise<void>;
+const DEFAULT_STALE_ORCHESTRATION_RUN_MS = 15 * 60 * 1000;
 
 export async function processOrchestrationStepJob(payload: OrchestrationStepPayload): Promise<void> {
   const run = await hydrateOrchestrationRun(payload.runId);
-  if (!run || run.status === "cancelled") return;
+  if (!run || run.status === "cancelled" || run.status === "awaiting_approval") return;
   const company = await store.getCompany(payload.companyId);
   if (!company) throw new Error("Company not found");
 
@@ -69,6 +71,7 @@ export async function resumeOrchestrationAfterApproval(
   if (!approval || approval.status !== "pending") return false;
 
   await store.resolveApproval(approval.id, decision);
+  await store.updateOrchestratorRun(runId, { status: "running" }).catch(() => undefined);
   if (decision === "rejected") {
     await store.upsertOrchestratorStep({
       ...step,
@@ -159,6 +162,12 @@ export async function requeueRunningOrchestrationJobs(input?: {
       continue;
     }
 
+    const events = await store.listOrchestratorEvents(run.id).catch(() => []);
+    if (isStaleOrchestrationRun(run, events)) {
+      await markStaleOrchestrationRunFailed(run, events);
+      continue;
+    }
+
     if (hydrated.status === "planning" || !hydrated.plan || hydrated.steps.length === 0) {
       await enqueueOrchestrationPlanJob(run.id, run.companyId);
       requeued += 1;
@@ -186,6 +195,63 @@ export async function requeueRunningOrchestrationJobs(input?: {
   }
 
   return { requeued, skipped };
+}
+
+function readStaleOrchestrationRunMs(): number {
+  const raw = process.env.ORC_STALE_RUN_MS;
+  if (!raw) return DEFAULT_STALE_ORCHESTRATION_RUN_MS;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_STALE_ORCHESTRATION_RUN_MS;
+}
+
+function latestActivityAt(run: OrchestratorRunRecord, events: OrchestratorEvent[]): string {
+  return [...events]
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.createdAt
+    ?? run.updatedAt
+    ?? run.startedAt;
+}
+
+function isStaleOrchestrationRun(run: OrchestratorRunRecord, events: OrchestratorEvent[]): boolean {
+  const staleMs = readStaleOrchestrationRunMs();
+  const latest = Date.parse(latestActivityAt(run, events));
+  if (!Number.isFinite(latest)) return false;
+  return Date.now() - latest > staleMs;
+}
+
+async function markStaleOrchestrationRunFailed(
+  run: OrchestratorRunRecord,
+  events: OrchestratorEvent[],
+): Promise<void> {
+  const lastActivity = latestActivityAt(run, events);
+  const completedAt = nowIso();
+  const detail = `stale: no worker activity since ${lastActivity}`;
+  const steps = await store.listOrchestratorSteps(run.id).catch(() => []);
+  await Promise.all(
+    steps
+      .filter((step) => step.status === "running")
+      .map((step) => store.upsertOrchestratorStep({
+        ...step,
+        status: "failed",
+        output: step.output ?? detail,
+        completedAt,
+      }).catch(() => undefined)),
+  );
+  await store.updateOrchestratorRun(run.id, {
+    status: "failed",
+    summary: detail,
+    completedAt,
+  }).catch(() => undefined);
+  await store.appendOrchestratorEvent({
+    runId: run.id,
+    companyId: run.companyId,
+    kind: "run_failed",
+    payload: {
+      detail,
+      stale: true,
+      run: { id: run.id, status: "failed", summary: detail, completedAt },
+    },
+  }).catch(() => undefined);
+  await auditTransition(run.companyId, "run_failed", run.id, detail).catch(() => undefined);
 }
 
 function parseOrchestrationJobPayload(job: {

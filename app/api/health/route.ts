@@ -30,7 +30,7 @@ export async function GET() {
   const backup = checkBackupHealth();
 
   // Backup is optional infrastructure — only count it if it was actually configured.
-  const backupConfigured = !!process.env.BACKUP_DIR?.trim();
+  const backupConfigured = !!process.env.BACKUP_DIR?.trim() || !backup.ok;
   const allOk = Object.values(checks).every((v) => v === "ok") && (!backupConfigured || backup.ok);
   const status = allOk ? 200 : 503;
 

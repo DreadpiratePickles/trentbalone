@@ -130,7 +130,7 @@ export type OrchestrationRun = {
   id: string;
   companyId: string;
   objective: string;
-  status: "planning" | "running" | "completed" | "failed" | "cancelled";
+  status: "planning" | "running" | "awaiting_approval" | "completed" | "failed" | "cancelled";
   plan?: OrchestrationPlan;
   steps: StepRecord[];
   summary?: string;
@@ -174,6 +174,19 @@ export async function handleStepCritique(input: {
     await store.updateOrchestratorRun(input.run.id, { replanCount: input.run.replanCount }).catch(() => undefined);
     if (input.run.plan) {
       const completed = input.run.steps.filter((item) => item.status === "completed");
+      const revisedTailIds = new Set(input.revisedTail.map((item) => item.id));
+      const sanitizedTail = input.run.steps
+        .filter((item) => revisedTailIds.has(item.id))
+        .map((item) => ({
+          id: item.id,
+          title: item.title,
+          rationale: item.rationale,
+          agentRole: item.agentRole,
+          dependsOn: item.dependsOn,
+          expectedOutput: item.expectedOutput,
+          riskLevel: item.riskLevel,
+          needsApproval: item.needsApproval,
+        }));
       input.run.plan = {
         ...input.run.plan,
         steps: [
@@ -187,7 +200,7 @@ export async function handleStepCritique(input: {
             riskLevel: item.riskLevel,
             needsApproval: item.needsApproval,
           })),
-          ...input.revisedTail,
+          ...sanitizedTail,
         ],
         reasoning: `${input.run.plan.reasoning} Replan ${input.run.replanCount}: ${input.critique.reason}`,
       };

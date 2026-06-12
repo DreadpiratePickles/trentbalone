@@ -355,7 +355,7 @@ function summarizeTask(task: Task): Pick<Task, "id" | "title" | "status" | "prio
 }
 
 function isTerminalOrchestrationStatus(status: OrchestratorRunStatus | string): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
+  return status === "awaiting_approval" || status === "completed" || status === "failed" || status === "cancelled";
 }
 
 function isTerminalWorkbenchStatus(status: WorkbenchSessionStatus | string): boolean {

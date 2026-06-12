@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 import { forbidden, getAuthUser, unauthorized, requireRoleForRequest } from "@/lib/session";
 import { store } from "@/lib/store";
 import { withRlsContext } from "@/lib/with-rls";
-import { getWorkbenchProvider } from "@/lib/workbench-provider";
-import "@/lib/workbench-local-provider";
+import { getWorkbenchProvider, type WorkbenchFileEntry } from "@/lib/workbench-provider";
+import type { WorkbenchArtifact } from "@/lib/types";
+import "@/lib/workbench-providers";
+
+const PROVIDER_BOOTSTRAP_ROOT_FILES = new Set(["README.md"]);
 
 /** GET /api/workbench/:id/files?path=  — list files */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -17,12 +20,17 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const check = await requireRoleForRequest(user.id, "viewer", { companyId: session.companyId });
   if (!check.ok) return forbidden();
 
-  const dirPath = new URL(request.url).searchParams.get("path") ?? undefined;
+  const rawDirPath = new URL(request.url).searchParams.get("path") ?? undefined;
+  const dirPath = rawDirPath?.trim() || undefined;
   const provider = getWorkbenchProvider(session.provider);
 
   try {
-    const files = await withRlsContext(session.companyId, () => provider.listFiles(session, dirPath));
-    return NextResponse.json({ files });
+    const { files, artifacts } = await withRlsContext(session.companyId, async () => {
+      const files = await provider.listFiles(session, dirPath);
+      const artifacts = await store.listWorkbenchArtifacts(session.id).catch(() => []);
+      return { files, artifacts };
+    });
+    return NextResponse.json({ files: filterProviderBootstrapFiles(files, artifacts, dirPath) });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Failed to list files" }, { status: 400 });
   }
@@ -76,4 +84,23 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "File operation failed" }, { status: 400 });
   }
+}
+
+function filterProviderBootstrapFiles(
+  files: WorkbenchFileEntry[],
+  artifacts: WorkbenchArtifact[],
+  dirPath?: string,
+): WorkbenchFileEntry[] {
+  if (dirPath) return files;
+  const artifactFilePaths = new Set(
+    artifacts
+      .filter((artifact) => artifact.kind === "file" && typeof artifact.path === "string" && artifact.path.trim().length > 0)
+      .map((artifact) => artifact.path!.trim()),
+  );
+
+  return files.filter((file) => (
+    file.isDir
+    || !PROVIDER_BOOTSTRAP_ROOT_FILES.has(file.path)
+    || artifactFilePaths.has(file.path)
+  ));
 }

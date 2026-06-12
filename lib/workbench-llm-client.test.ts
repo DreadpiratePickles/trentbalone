@@ -120,6 +120,28 @@ describe("workbench streaming failover", () => {
     });
   });
 
+  it("honors env token caps for executor streams", async () => {
+    const seenMaxTokens: number[] = [];
+    const saved = process.env.WORKBENCH_MAX_TOKENS_EXECUTOR;
+    process.env.WORKBENCH_MAX_TOKENS_EXECUTOR = "900";
+    const streamProvider: WorkbenchStreamProviderFn = async function* (_provider, _model, _input, maxTokens) {
+      seenMaxTokens.push(maxTokens);
+      yield { type: "finish", reason: "stop" };
+    };
+
+    try {
+      const tokens: ArtifactStreamToken[] = [];
+      for await (const token of streamArtifactWithFallback({ messages: MESSAGES }, { policy: BASE_POLICY, streamProvider })) {
+        tokens.push(token);
+      }
+    } finally {
+      if (saved) process.env.WORKBENCH_MAX_TOKENS_EXECUTOR = saved;
+      else delete process.env.WORKBENCH_MAX_TOKENS_EXECUTOR;
+    }
+
+    expect(seenMaxTokens[0]).toBe(900);
+  });
+
   it("exposes a configured provider chain from routeWorkbenchStream", () => {
     const savedOpenAi = process.env.OPENAI_API_KEY;
     const savedAnthropic = process.env.ANTHROPIC_API_KEY;

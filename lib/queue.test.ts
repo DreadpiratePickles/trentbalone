@@ -167,7 +167,7 @@ describe("processJobData — platform_action", () => {
       trigger: "system",
       delayMs: 45000,
       retryAttempt: 2,
-    })).toBe("job_1:retry:2");
+    })).toBe("job_1__retry__2");
   });
 
   it("runs queued platform actions through the durable worker path", async () => {

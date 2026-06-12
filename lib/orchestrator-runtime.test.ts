@@ -8,6 +8,7 @@ import {
   critiqueStepOutput,
   executeStepWithRuntime,
   generateOrchestrationPlan,
+  normalizePlannerAgentRole,
   renderDependencyHandoff,
   repairOrchestrationPlanRoutes,
   toolForStep,
@@ -219,6 +220,186 @@ describe("generateOrchestrationPlan — autonomous full-team fallback", () => {
     expect(plan.steps.every((step) => (step as any).spec?.acceptance?.length > 0)).toBe(true);
   });
 
+  it("normalizes human planner role and risk labels before schema validation", async () => {
+    setRuntimeEvalOverrides({
+      orchestration: {
+        createCompletion: async () => ({
+          totalTokens: 42,
+          content: JSON.stringify({
+            objective: "Identify top priorities.",
+            reasoning: "near-valid model plan",
+            steps: [
+              {
+                id: "s1",
+                title: "Analyze sources",
+                rationale: "research the inputs",
+                agentRole: "Research / Analyst",
+                dependsOn: [],
+                expectedOutput: "Source-grounded findings",
+                riskLevel: "Low",
+                needsApproval: "false",
+                spec: { acceptance: ["Findings cite docs"], inputsFrom: [] },
+              },
+              {
+                id: "s2",
+                title: "Plan implementation",
+                rationale: "make the engineering path concrete",
+                agentRole: "Engineer",
+                dependsOn: "s1",
+                expectedOutput: "Implementation plan",
+                riskLevel: "Medium",
+                needsApproval: "false",
+                spec: { acceptance: ["Plan is actionable"], inputsFrom: "s1" },
+              },
+              {
+                id: "s3",
+                title: "Consolidate",
+                rationale: "summarize",
+                agentRole: "Project Manager",
+                dependsOn: "s1, s2",
+                expectedOutput: "Founder report",
+                riskLevel: "High",
+                needsApproval: "true",
+                spec: { acceptance: ["Report is decision-ready"], inputsFrom: ["s1", "s2"] },
+              },
+            ],
+            successCriteria: "Priorities are clear",
+            blockers: null,
+          }),
+        }),
+      },
+    });
+
+    const plan = await generateOrchestrationPlan(
+      { id: "co_labels", name: "Co", brief: { vision: "v", goals: "g", icp: "i" } } as any,
+      "Identify top priorities.",
+      "",
+    );
+
+    expect(plan.reasoning).toBe("near-valid model plan");
+    expect(plan.steps.map((step) => step.agentRole)).toEqual(["analyst", "engineer", "ceo"]);
+    expect(plan.steps.map((step) => step.riskLevel)).toEqual(["low", "medium", "high"]);
+    expect(plan.steps.map((step) => step.dependsOn)).toEqual([[], ["s1"], ["s1", "s2"]]);
+    expect(plan.steps.map((step) => step.needsApproval)).toEqual([false, false, false]);
+    expect(plan.successCriteria).toEqual(["Priorities are clear"]);
+    expect(plan.blockers).toEqual([]);
+  });
+
+  it("normalizes common marketing role synonyms to growth", () => {
+    expect(normalizePlannerAgentRole("marketer")).toBe("growth");
+    expect(normalizePlannerAgentRole("strategist")).toBe("analyst");
+    expect(normalizePlannerAgentRole("manager")).toBe("analyst");
+    expect(normalizePlannerAgentRole("totally custom role")).toBe("analyst");
+  });
+
+  it("strips approval gates from read-only implementation-plan objectives", async () => {
+    setRuntimeEvalOverrides({
+      orchestration: {
+        createCompletion: async () => ({
+          totalTokens: 42,
+          content: JSON.stringify({
+            objective: "Identify the safest high-impact engineering task.",
+            reasoning: "near-valid read-only plan",
+            steps: [
+              {
+                id: "s1",
+                title: "Prepare implementation plan",
+                rationale: "Plan the safest task",
+                agentRole: "engineer",
+                dependsOn: [],
+                expectedOutput: "Implementation plan only",
+                riskLevel: "high",
+                needsApproval: true,
+                spec: { acceptance: ["Plan is actionable"], inputsFrom: [] },
+              },
+              {
+                id: "s2",
+                title: "Consolidate",
+                rationale: "Summarize the plan",
+                agentRole: "ceo",
+                dependsOn: ["s1"],
+                expectedOutput: "Founder-readable summary",
+                riskLevel: "low",
+                needsApproval: true,
+                spec: { acceptance: ["Summary is clear"], inputsFrom: ["s1"] },
+              },
+            ],
+            successCriteria: ["Plan is created"],
+            blockers: [],
+          }),
+        }),
+      },
+    });
+
+    const plan = await generateOrchestrationPlan(
+      { id: "co_readonly", name: "Co", brief: { vision: "v", goals: "g", icp: "i" } } as any,
+      "Identify the safest high-impact engineering task to do next. Create an implementation plan. Do not make changes.",
+      "",
+    );
+
+    expect(plan.reasoning).toBe("near-valid read-only plan");
+    expect(plan.steps.every((step) => step.needsApproval === false)).toBe(true);
+  });
+
+  it("does not turn approval-reporting analysis into a blocking approval gate", async () => {
+    setRuntimeEvalOverrides({
+      orchestration: {
+        createCompletion: async () => ({
+          totalTokens: 42,
+          content: JSON.stringify({
+            objective: "Identify the top 5 priorities and include founder approval yes/no.",
+            reasoning: "approval reporting plan",
+            steps: [
+              {
+                id: "s1",
+                title: "Conduct priority audit",
+                rationale: "Find priorities",
+                agentRole: "analyst",
+                dependsOn: [],
+                expectedOutput: "Top 5 priorities with founder approval yes/no",
+                riskLevel: "medium",
+                needsApproval: true,
+                spec: { acceptance: ["Priorities are ranked"], inputsFrom: [] },
+              },
+            ],
+            successCriteria: ["Priorities are clear"],
+            blockers: [],
+          }),
+        }),
+      },
+    });
+
+    const plan = await generateOrchestrationPlan(
+      { id: "co_priorities", name: "Co", brief: { vision: "v", goals: "g", icp: "i" } } as any,
+      "Identify the top 5 priorities for the next 7 days. For each include owner, success metric, risk, and founder approval yes/no.",
+      "",
+    );
+
+    expect(plan.reasoning).toBe("approval reporting plan");
+    expect(plan.steps.every((step) => step.needsApproval === false)).toBe(true);
+  });
+
+  it("uses an analysis-only fallback for read-only priority planning when the planner fails", async () => {
+    setRuntimeEvalOverrides({
+      orchestration: {
+        createCompletion: async () => {
+          throw new Error("planner unavailable");
+        },
+      },
+    });
+
+    const plan = await generateOrchestrationPlan(
+      { id: "co_priorities_fallback", name: "Co", brief: { vision: "v", goals: "g", icp: "i" } } as any,
+      "Identify the top 5 priorities for the next 7 days. For each include owner, success metric, risk, and founder approval yes/no.",
+      "",
+    );
+
+    const planText = plan.steps.map((step) => `${step.title}\n${step.expectedOutput}`).join("\n");
+    expect(plan.reasoning).toContain("Read-only analysis fallback");
+    expect(planText).not.toContain("audit:create");
+    expect(plan.steps.at(-1)?.agentRole).toBe("ceo");
+  });
+
   it("anchors every seat's task to the actual objective (not generic boilerplate)", async () => {
     const objective = "do a financial analysis of all stocks related to spacex and make a slideshow";
     const plan = await generateOrchestrationPlan(
@@ -286,6 +467,40 @@ describe("repairOrchestrationPlanRoutes", () => {
 
     expect(plan.steps.some((step) => step.agentRole === "engineer")).toBe(true);
     expect(plan.steps.at(-1)?.agentRole).toBe("ceo");
+  });
+
+  it("does not inject audit tool workstreams for read-only priority planning", () => {
+    const plan = repairOrchestrationPlanRoutes({
+      objective: "Identify the top 5 priorities for the next 7 days. For each include owner, risk, and founder approval yes/no.",
+      reasoning: "model picked CEO-only steps",
+      blockers: [],
+      successCriteria: ["Priorities identified"],
+      steps: [
+        {
+          id: "s1",
+          title: "Identify priorities",
+          rationale: "analysis",
+          agentRole: "ceo",
+          dependsOn: [],
+          expectedOutput: "top priorities with owners and risks",
+          riskLevel: "low",
+          needsApproval: false,
+        },
+        {
+          id: "s2",
+          title: "Consolidate result",
+          rationale: "wrap",
+          agentRole: "ceo",
+          dependsOn: ["s1"],
+          expectedOutput: "summary",
+          riskLevel: "low",
+          needsApproval: false,
+        },
+      ],
+    });
+
+    expect(plan.steps.map((step) => step.title).join("\n")).not.toContain("audit:create");
+    expect(plan.steps).toHaveLength(2);
   });
 });
 
@@ -719,5 +934,21 @@ describe("operator visibility on genuine LLM failures", () => {
     expect(verdict).toEqual({ verdict: "pass", reason: "supervisor offline — auto-pass." });
     expect(mockJobEvents.emitJobEvent).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalledWith("orchestrator.llm_failure", expect.anything());
+  });
+});
+
+// Fix Plan Slice 1 — broad planning objectives must engage specialist seats
+import { isBroadPlanningObjective } from "@/lib/orchestrator-runtime";
+
+describe("isBroadPlanningObjective", () => {
+  it("detects top-N priority audits (tester regression: ceo+escalation only)", () => {
+    expect(isBroadPlanningObjective("Identify the top 5 priorities for the next 7 days across product and growth.")).toBe(true);
+  });
+  it("detects company/business audits", () => {
+    expect(isBroadPlanningObjective("Audit the business and recommend next steps")).toBe(true);
+  });
+  it("leaves narrow single-domain objectives alone", () => {
+    expect(isBroadPlanningObjective("Fix the login button color")).toBe(false);
+    expect(isBroadPlanningObjective("Draft a reply to this support ticket")).toBe(false);
   });
 });

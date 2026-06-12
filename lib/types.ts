@@ -34,7 +34,7 @@ export type AgentRole =
   | "finance"
   | "escalation"
   | "sales";
-export type OrchestratorRunStatus = "planning" | "running" | "completed" | "failed" | "cancelled";
+export type OrchestratorRunStatus = "planning" | "running" | "awaiting_approval" | "completed" | "failed" | "cancelled";
 export type OrchestratorRunTrigger = "manual" | "scheduled" | "delegated" | "heartbeat";
 export type OrchestratorEventKind =
   | "snapshot"
@@ -53,6 +53,7 @@ export type OrchestratorEventKind =
   | "delegation_skipped"
   | "consolidate_start"
   | "consolidate_end"
+  | "run_awaiting_approval"
   | "run_done"
   | "run_failed"
   | "run_cancelled"

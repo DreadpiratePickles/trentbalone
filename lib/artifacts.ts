@@ -11,6 +11,7 @@ import type {
   Task
 } from "@/lib/types";
 import { nowIso } from "@/lib/utils";
+import { buildSourceCoverage, selectRelevantDocuments } from "@/lib/source-coverage";
 
 export const ARTIFACT_TYPE_META: Record<
   ArtifactType,
@@ -116,7 +117,10 @@ export function buildArtifactDraft(input: ArtifactBuildInput): ArtifactDraft {
   const activeTasks = input.tasks.filter((task) => task.status === "queued" || task.status === "running");
   const pendingApprovals = input.tasks.filter((task) => task.status === "waiting_approval");
   const lastCycle = input.cycles[0];
-  const recentDocs = input.documents.slice(0, 5);
+  // RC1 (Fix Plan Slice 6): pick documents by relevance to the request, not
+  // recency, and report required-vs-missing source coverage in the artifact.
+  const recentDocs = selectRelevantDocuments(input.prompt, input.documents, 5);
+  const coverage = buildSourceCoverage(input.prompt, input.documents);
   const recentReports = input.reports.slice(0, 3);
   const sources = [
     "company operating brief",
@@ -155,6 +159,18 @@ export function buildArtifactDraft(input: ArtifactBuildInput): ArtifactDraft {
     "",
     "## Source Notes",
     ...sources.map((source) => `- ${source}`),
+    ...(coverage.required.length > 0
+      ? [
+          "",
+          "## Source Coverage",
+          ...(coverage.used.length > 0
+            ? [`- Available and used: ${coverage.used.map((u) => `${u.need.label} (${u.title})`).join(", ")}`]
+            : ["- Available and used: none of the required sources"]),
+          ...(coverage.missing.length > 0
+            ? [`- Missing (not in company memory — upload to improve this artifact): ${coverage.missing.map((m) => m.label).join(", ")}`]
+            : ["- Missing: none"]),
+        ]
+      : []),
     "",
     "## Provenance",
     `- Request: ${input.prompt}`,

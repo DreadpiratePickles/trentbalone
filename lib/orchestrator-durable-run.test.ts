@@ -116,7 +116,7 @@ vi.mock("@/lib/orchestrator-runtime", async (importOriginal) => {
 const { processJobData } = await import("@/lib/queue");
 const { requeueRunningOrchestrationJobs } = await import("@/lib/queue");
 const { launchOrchestration, approveStep, getOrchestrationRun } = await import("@/lib/orchestrator");
-const { generateOrchestrationPlan } = await import("@/lib/orchestrator-runtime");
+const { critiqueStepOutput, generateOrchestrationPlan } = await import("@/lib/orchestrator-runtime");
 
 async function drainOrchestrationQueue(companyId: string, runId: string, maxJobs = 20) {
   for (let i = 0; i < maxJobs; i += 1) {
@@ -206,6 +206,7 @@ describe("durable orchestration runs", () => {
 
     const awaiting = (await store.listOrchestratorSteps(run.id)).find((step) => step.id === "s2");
     expect(awaiting?.status).toBe("awaiting_approval");
+    expect((await store.getOrchestratorRun(run.id))?.status).toBe("awaiting_approval");
 
     runsCacheClear(run.id);
     await approveStep(run.id, "s2");
@@ -216,6 +217,85 @@ describe("durable orchestration runs", () => {
 
     const persisted = await store.getOrchestratorRun(run.id);
     expect(persisted?.status).toBe("completed");
+  });
+
+  it("treats repeated critic retry as degraded usable output so dependents still run", async () => {
+    vi.mocked(critiqueStepOutput).mockImplementation(async (step) => (
+      step.id === "s2"
+        ? { verdict: "retry", reason: "needs stronger evidence", improvement: "add concrete evidence" }
+        : { verdict: "pass", reason: "ok" }
+    ));
+
+    const run = await launchOrchestration({
+      companyId,
+      objective: "Ship a durable checklist with quality review",
+      trigger: "manual",
+    });
+
+    await drainOrchestrationQueue(companyId, run.id, 12);
+
+    const steps = await store.listOrchestratorSteps(run.id);
+    const s2 = steps.find((step) => step.id === "s2");
+    const s3 = steps.find((step) => step.id === "s3");
+    expect(s2?.status).toBe("completed");
+    expect(s2?.output).toContain("DEGRADED");
+    expect(s3?.status).toBe("completed");
+    expect(executionCounts.get("s3")).toBe(1);
+
+    const persisted = await store.getOrchestratorRun(run.id);
+    expect(persisted?.status).toBe("completed");
+    expect(persisted?.summary).toContain("Run consolidated");
+  });
+
+  it("marks stale running runs failed when no worker activity remains", async () => {
+    vi.stubEnv("ORC_STALE_RUN_MS", "1");
+    const staleAt = "2026-06-10T00:00:00.000Z";
+    const run = await store.createOrchestratorRun({
+      id: makeId("orc"),
+      companyId,
+      objective: "Stale worker test",
+      trigger: "manual",
+      status: "running",
+      modelPolicy: {},
+      budgetCents: 250,
+      costCents: 0,
+      summary: undefined,
+      cycleId: undefined,
+      startedAt: staleAt,
+      updatedAt: staleAt,
+    });
+    await store.upsertOrchestratorStep({
+      id: "s1",
+      runId: run.id,
+      companyId,
+      seq: 1,
+      title: "Long running step",
+      rationale: "exercise stale detection",
+      agentRole: "engineer",
+      dependsOn: [],
+      expectedOutput: "Done",
+      riskLevel: "medium",
+      needsApproval: false,
+      status: "running",
+      startedAt: staleAt,
+    });
+
+    const addJob = vi.fn().mockResolvedValue(undefined);
+    const result = await requeueRunningOrchestrationJobs({ companyId, addJob });
+
+    expect(result.requeued).toBe(0);
+    expect(addJob).not.toHaveBeenCalled();
+    await expect(store.getOrchestratorRun(run.id)).resolves.toEqual(expect.objectContaining({
+      status: "failed",
+      summary: expect.stringContaining("stale"),
+      completedAt: expect.any(String),
+    }));
+    await expect(store.listOrchestratorEvents(run.id)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "run_failed",
+        payload: expect.objectContaining({ detail: expect.stringContaining("stale") }),
+      }),
+    ]));
   });
 });
 

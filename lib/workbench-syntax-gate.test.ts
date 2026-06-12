@@ -40,3 +40,42 @@ describe("syntaxErrorSummary", () => {
     expect(await syntaxErrorSummary("README.md", "# hi <<<")).toBeUndefined();
   });
 });
+
+// RC3 (Fix Plan Slice 3) — duplicate-import pre-write gate
+import { duplicateImportSummary } from "@/lib/workbench-syntax-gate";
+
+describe("duplicateImportSummary", () => {
+  it("flags identifiers imported twice (tester regression: duplicate Button/Card imports)", () => {
+    const content = [
+      'import { Button } from "@/components/ui/button";',
+      'import { Card, CardContent } from "@/components/ui/card";',
+      'import { Button } from "@/components/ui/button";',
+      'import { CardContent } from "@/components/ui/card";',
+    ].join("\n");
+    const summary = duplicateImportSummary(content);
+    expect(summary).toContain("duplicate import identifier");
+    expect(summary).toContain("Button");
+    expect(summary).toContain("CardContent");
+  });
+
+  it("flags duplicate default imports", () => {
+    const content = 'import React from "react";\nimport React from "react";';
+    expect(duplicateImportSummary(content)).toContain("React");
+  });
+
+  it("accepts clean imports including aliases and namespaces", () => {
+    const content = [
+      'import React from "react";',
+      'import { useState, useEffect } from "react";',
+      'import { Button as UIButton } from "@/components/ui/button";',
+      'import * as THREE from "three";',
+      'import type { Foo } from "./types";',
+    ].join("\n");
+    expect(duplicateImportSummary(content)).toBeUndefined();
+  });
+
+  it("ignores duplicate-looking names inside string content", () => {
+    const content = 'const s = `import { Button } from "x"`;\nimport { Button } from "@/ui";';
+    expect(duplicateImportSummary(content)).toBeUndefined();
+  });
+});

@@ -13,6 +13,14 @@ import { deleteCachedOrchestrationRun } from "@/lib/orchestrator-cache";
 import { hydrateOrchestrationRun } from "@/lib/orchestrator-run-persist";
 import { handleStepCritique, type OrchestrationRun } from "@/lib/orchestrator";
 
+const mockAi = vi.hoisted(() => ({
+  callJson: vi.fn(),
+  MAX_TOKENS: { PLANNING: 1200 },
+  MODELS: { STRONG: "strong-model" },
+}));
+
+vi.mock("@/lib/ai-client", () => mockAi);
+
 const basePlan = vi.hoisted((): OrchestrationPlan => ({
   objective: "Ship a revised checklist",
   reasoning: "test plan",
@@ -59,6 +67,11 @@ function completedStep(step: OrchestrationStep, output: string): StepRecord {
 function pendingStep(step: OrchestrationStep): StepRecord {
   return { ...step, status: "pending" };
 }
+
+beforeEach(() => {
+  mockAi.callJson.mockReset();
+  mockAi.callJson.mockRejectedValue(new Error("not configured"));
+});
 
 describe("MAX_REPLANS budget", () => {
   it("mirrors delegation depth cap", () => {
@@ -114,6 +127,60 @@ describe("applyRevisedPlanTail", () => {
     expect(next.find((step) => step.id === "s4")).toMatchObject({ status: "pending" });
     expect(next.find((step) => step.id === "s5")).toMatchObject({ status: "pending", dependsOn: ["s4"] });
   });
+
+  it("rewrites revised-tail dependencies that still point at the failed step", () => {
+    const steps: StepRecord[] = [
+      completedStep(basePlan.steps[0], "scoped"),
+      completedStep(basePlan.steps[1], "first pass"),
+      { ...pendingStep(basePlan.steps[2]), status: "running", output: "wrong shape" },
+      {
+        id: "s4",
+        title: "Original downstream step",
+        rationale: "Old tail",
+        agentRole: "growth",
+        dependsOn: ["s3"],
+        expectedOutput: "Old downstream output",
+        riskLevel: "medium",
+        needsApproval: false,
+        status: "pending",
+      },
+    ];
+
+    const revisedTail: OrchestrationStep[] = [
+      {
+        id: "s5",
+        title: "Recovery deliverable",
+        rationale: "Corrected path",
+        agentRole: "engineer",
+        dependsOn: ["s3"],
+        expectedOutput: "Fixed output",
+        riskLevel: "medium",
+        needsApproval: false,
+      },
+      {
+        id: "s6",
+        title: "Consolidate recovery output",
+        rationale: "Wrap up",
+        agentRole: "ceo",
+        dependsOn: ["s5"],
+        expectedOutput: "Summary",
+        riskLevel: "low",
+        needsApproval: false,
+      },
+    ];
+
+    const next = applyRevisedPlanTail({ steps, failedStepId: "s3", revisedTail });
+
+    expect(next.find((step) => step.id === "s4")).toBeUndefined();
+    expect(next.find((step) => step.id === "s5")).toMatchObject({
+      status: "pending",
+      dependsOn: ["s2"],
+    });
+    expect(next.find((step) => step.id === "s6")).toMatchObject({
+      status: "pending",
+      dependsOn: ["s5"],
+    });
+  });
 });
 
 describe("reviseOrchestrationPlanTail", () => {
@@ -137,6 +204,65 @@ describe("reviseOrchestrationPlanTail", () => {
     expect(tail.some((step) => step.dependsOn.includes("s1"))).toBe(true);
     expect(tail.some((step) => /recover|revised|correct/i.test(step.title))).toBe(true);
     vi.unstubAllEnvs();
+  });
+
+  it("normalizes near-valid replan labels, booleans, and string arrays", async () => {
+    mockAi.callJson.mockImplementation(async (_model, _system, _user, schema) => ({
+      data: schema.parse({
+        reasoning: "near-valid tail revision",
+        steps: [
+          {
+            id: "s4",
+            title: "Analyze available operating data",
+            rationale: "Recover with a data-first path",
+            agentRole: "data analyst",
+            dependsOn: "s1",
+            expectedOutput: "Grounded operating priorities",
+            riskLevel: "Moderate",
+            needsApproval: "false",
+          },
+          {
+            id: "s5",
+            title: "Consolidate revised output",
+            rationale: "Make the recovery founder-readable",
+            agentRole: "team_lead",
+            dependsOn: "s4",
+            expectedOutput: "Founder-ready summary",
+            riskLevel: "Low",
+            needsApproval: "true",
+          },
+        ],
+        successCriteria: "Produce a revised grounded priority brief",
+        blockers: null,
+      }),
+    }));
+    const company = await store.createCompany({
+      name: `Near Valid Replan ${makeId("test")}`,
+      brief: { vision: "schema tolerance" },
+    });
+
+    const plan = await reviseOrchestrationPlanTail(company, basePlan.objective, "", {
+      plan: basePlan,
+      completedSteps: [completedStep(basePlan.steps[0], "scoped")],
+      failedStep: { ...pendingStep(basePlan.steps[1]), status: "running", output: "wrong shape" },
+      critique: { verdict: "replan", reason: "plan needs a data-first recovery path" },
+    });
+
+    expect(plan.reasoning).toBe("near-valid tail revision");
+    expect(plan.successCriteria).toEqual(["Produce a revised grounded priority brief"]);
+    expect(plan.blockers).toEqual([]);
+    expect(plan.steps.find((step) => step.id === "s4")).toMatchObject({
+      agentRole: "analyst",
+      dependsOn: ["s1"],
+      riskLevel: "medium",
+      needsApproval: false,
+    });
+    expect(plan.steps.find((step) => step.id === "s5")).toMatchObject({
+      agentRole: "ceo",
+      dependsOn: ["s4"],
+      riskLevel: "low",
+      needsApproval: true,
+    });
   });
 });
 
@@ -371,5 +497,45 @@ describe("handleStepCritique", () => {
     expect(result.action).toBe("replan_applied");
     const persisted = await store.getOrchestratorRun(runId);
     expect(persisted?.replanCount).toBe(1);
+  });
+
+  it("updates the run plan with the sanitized revised tail", async () => {
+    const run: OrchestrationRun = {
+      id: makeId("orc"),
+      companyId,
+      objective: basePlan.objective,
+      status: "running",
+      plan: basePlan,
+      replanCount: 0,
+      steps: [
+        completedStep(basePlan.steps[0], "scoped"),
+        completedStep(basePlan.steps[1], "first pass"),
+        { ...pendingStep(basePlan.steps[2]), status: "running", output: "wrong shape" },
+      ],
+      startedAt: new Date().toISOString(),
+      trigger: "manual",
+    };
+
+    const result = await handleStepCritique({
+      run,
+      stepId: "s3",
+      critique: { verdict: "replan", reason: "tail depended on broken consolidation" },
+      revisedTail: [
+        {
+          id: "s4",
+          title: "Recovery deliverable",
+          rationale: "Corrected path",
+          agentRole: "engineer",
+          dependsOn: ["s3"],
+          expectedOutput: "Fixed output",
+          riskLevel: "medium",
+          needsApproval: false,
+        },
+      ],
+    });
+
+    expect(result.action).toBe("replan_applied");
+    expect(run.steps.find((step) => step.id === "s4")).toMatchObject({ dependsOn: ["s2"] });
+    expect(run.plan?.steps.find((step) => step.id === "s4")).toMatchObject({ dependsOn: ["s2"] });
   });
 });
