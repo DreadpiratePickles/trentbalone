@@ -220,8 +220,19 @@ function toolForStepRegex(
   const allowedTools = new Set(environment.tools);
   const haystack = stepText.toLowerCase();
   return adapters.find(
-    (adapter) => allowedTools.has(adapter.name) && haystack.includes(adapter.name.toLowerCase()),
+    (adapter) => toolAllowed(adapter, allowedTools) && (
+      haystack.includes(adapter.name.toLowerCase())
+      || adapter.scopes.some((scope) => isSpecificScopeAlias(scope) && haystack.includes(scope.toLowerCase()))
+    ),
   );
+}
+
+function isSpecificScopeAlias(scope: string) {
+  return scope.includes(":") || scope.length >= 8;
+}
+
+function toolAllowed(adapter: ToolAdapter, allowedTools: ReadonlySet<string>) {
+  return allowedTools.has(adapter.name) || adapter.scopes.some((scope) => allowedTools.has(scope));
 }
 
 export async function routeToolsForStep(
@@ -232,7 +243,7 @@ export async function routeToolsForStep(
 ): Promise<ToolAdapter[]> {
   const allowed = new Set(environment.tools);
   await ensureToolCatalog();
-  let eligible = toolCatalog!.filter((entry) => allowed.has(entry.name));
+  let eligible = toolCatalog!.filter((entry) => toolAllowed(entry.adapter, allowed));
   if (!eligible.length) return [];
 
   // Health-aware grounding (OpenSpace quality-monitor → tool selection): avoid

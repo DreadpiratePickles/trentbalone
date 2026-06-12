@@ -250,6 +250,62 @@ describe("runSeatAgent", () => {
     });
   });
 
+  it("executes a scoped sandbox tool call when guidance names sandbox:exec instead of adapter display name", async () => {
+    const sandboxAdapter: ToolAdapter = {
+      name: "Workbench Sandbox",
+      scopes: ["sandbox:exec", "tests:run"],
+      async healthCheck() { return "connected"; },
+      estimateCost() { return 5; },
+      requiresApproval() { return false; },
+      async execute(action) {
+        return { adapter: "Workbench Sandbox", action, status: "completed", summary: "Sandbox tests passed" };
+      },
+    };
+    mockExecuteSeatModel
+      .mockResolvedValueOnce({
+        output: { toolCall: { name: "sandbox:exec", action: "run tests" } },
+        model: "gpt-4o-mini",
+        tokens: 20,
+        costCents: 1,
+        fallback: false,
+      })
+      .mockResolvedValueOnce({
+        output: {
+          toolCall: null,
+          summary: "Tests passed in the Workbench sandbox",
+          findings: [],
+          recommendations: [],
+          workRequests: [],
+        },
+        model: "gpt-4o-mini",
+        tokens: 20,
+        costCents: 1,
+        fallback: false,
+      });
+
+    const { runtime, adapters } = makeRuntime(["Workbench Sandbox", "sandbox:exec"], [sandboxAdapter]);
+    const result = await runSeatAgent({
+      companyId: "co_1",
+      runtime,
+      subtask: makeSubtask({
+        seat: "engineer",
+        objective: "Run tests in a real sandbox",
+        toolGuidance: ["sandbox:exec"],
+      }),
+      systemPrompt: runtime.systemPrompt,
+      adapters,
+    });
+
+    expect(result.toolCalls).toEqual([
+      expect.objectContaining({
+        adapter: "Workbench Sandbox",
+        action: "run tests",
+        status: "completed",
+      }),
+    ]);
+    expect(result.output?.summary).toContain("Tests passed");
+  });
+
   it("returns a degraded source-grounded output when a model repeats a disallowed tool", async () => {
     mockExecuteSeatModel.mockImplementation(async () => ({
       output: { toolCall: { name: "analytics:read_mock", action: "read analytics" } },

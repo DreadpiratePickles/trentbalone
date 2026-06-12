@@ -167,6 +167,24 @@ describe("routeToolsForStep", () => {
     expect(ranked[0]?.name).toBe("GitHub");
   });
 
+  it("treats adapter scopes as allowed tool aliases", async () => {
+    setSemanticRouterEmbedderForTests(
+      async (texts) =>
+        texts.map((text) => {
+          if (text.startsWith("Workbench Sandbox")) return unit([0, 1, 0, 0, 0, 0, 0, 0]);
+          if (text.toLowerCase().includes("sandbox") || text.toLowerCase().includes("tests")) {
+            return unit([0, 1, 0, 0, 0, 0, 0, 0]);
+          }
+          return unit([0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]);
+        }),
+    );
+    resetSemanticRouterForTests();
+
+    const ranked = await routeToolsForStep("run tests in the sandbox", { tools: ["sandbox:exec"] }, 1);
+
+    expect(ranked[0]?.name).toBe("Workbench Sandbox");
+  });
+
   it("avoids a degraded tool when a healthy alternative matches", async () => {
     // Both tools match the step; Steel Browser would rank first, but it is
     // degraded, so the healthy GitHub is returned instead.

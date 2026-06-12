@@ -131,8 +131,17 @@ function resolveAdapter(
   registry: ToolAdapter[],
 ): ToolAdapter | undefined {
   return registry.find(
-    (adapter) => allowedTools.has(adapter.name) && adapter.name.toLowerCase() === name.toLowerCase(),
+    (adapter) => isAdapterAllowed(adapter, allowedTools) && adapterMatchesNameOrScope(adapter, name),
   );
+}
+
+function isAdapterAllowed(adapter: ToolAdapter, allowedTools: Set<string>) {
+  return allowedTools.has(adapter.name) || adapter.scopes.some((scope) => allowedTools.has(scope));
+}
+
+function adapterMatchesNameOrScope(adapter: ToolAdapter, name: string) {
+  const normalized = name.toLowerCase();
+  return adapter.name.toLowerCase() === normalized || adapter.scopes.some((scope) => scope.toLowerCase() === normalized);
 }
 
 /** Fallback when the model names a tool ambiguously — uses semantic router with regex fallback. */
@@ -146,8 +155,15 @@ async function fallbackToolForStep(
   const allowedTools = new Set(environment.tools);
   const haystack = stepText.toLowerCase();
   return registry.find(
-    (adapter) => allowedTools.has(adapter.name) && haystack.includes(adapter.name.toLowerCase()),
+    (adapter) => isAdapterAllowed(adapter, allowedTools) && (
+      haystack.includes(adapter.name.toLowerCase())
+      || adapter.scopes.some((scope) => isSpecificScopeAlias(scope) && haystack.includes(scope.toLowerCase()))
+    ),
   );
+}
+
+function isSpecificScopeAlias(scope: string) {
+  return scope.includes(":") || scope.length >= 8;
 }
 
 function maxStepsFallback(toolCalls: ToolCallRecord[]): Record<string, unknown> {
@@ -172,8 +188,11 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
       : input.runtime.environment.tools,
   );
   const availableTools = registry
-    .filter((adapter) => allowedTools.has(adapter.name))
-    .map((adapter) => adapter.name);
+    .filter((adapter) => isAdapterAllowed(adapter, allowedTools))
+    .flatMap((adapter) => [
+      adapter.name,
+      ...adapter.scopes.filter((scope) => allowedTools.has(scope)),
+    ]);
 
   const seed = input.resumeSeed;
   const toolCalls: ToolCallRecord[] = seed
