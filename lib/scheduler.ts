@@ -3,6 +3,7 @@ import { store } from "@/lib/store";
 import { nowIso } from "@/lib/utils";
 import { nextRunFromSchedule } from "@/lib/schedule-grammar";
 import { deliverMorningBriefingEmail } from "@/lib/morning-briefing-email";
+import { buildMorningOutcomeSnapshot } from "@/lib/morning-outcome-snapshot";
 
 export { parseSchedule, nextRunFromSchedule as nextRunFromGrammar } from "@/lib/schedule-grammar";
 
@@ -275,6 +276,7 @@ export async function assembleMorningBriefing(companyId: string): Promise<Report
   const completedOvernight = overnightTasks.filter((t) => t.status === "completed");
   const newApprovals = overnightTasks.filter((t) => t.status === "waiting_approval");
   const pendingApprovals = approvals.filter((a) => a.status === "pending");
+  const outcomeSnapshot = await buildMorningOutcomeSnapshot({ company, usage, approvals });
   const overnightSpend = usage
     .filter((u) => u.createdAt >= twelveHoursAgoIso)
     .reduce((sum, u) => sum + u.amountCents, 0);
@@ -330,6 +332,7 @@ export async function assembleMorningBriefing(companyId: string): Promise<Report
   const delivery = await deliverMorningBriefingEmail({
     company,
     report,
+    outcomeSnapshot,
     findings,
     recommendations,
   });
@@ -340,6 +343,8 @@ export async function assembleMorningBriefing(companyId: string): Promise<Report
     type: "weekly_report",
     title: subject,
     content: [
+      outcomeSnapshot.join("\n"),
+      "",
       findings.join("\n"),
       "",
       `Email delivery: ${delivery.summary}`,

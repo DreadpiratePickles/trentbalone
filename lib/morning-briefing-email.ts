@@ -9,6 +9,7 @@ export type MorningBriefingDelivery = {
 export async function deliverMorningBriefingEmail(input: {
   company: Company;
   report: Report;
+  outcomeSnapshot?: string[];
   findings: string[];
   recommendations: string[];
 }): Promise<MorningBriefingDelivery> {
@@ -71,6 +72,7 @@ export function resolveMorningBriefingRecipient(env: NodeJS.ProcessEnv = process
 function renderMorningBriefingText(input: {
   company: Company;
   report: Report;
+  outcomeSnapshot?: string[];
   findings: string[];
   recommendations: string[];
 }) {
@@ -79,6 +81,7 @@ function renderMorningBriefingText(input: {
     "",
     `Company: ${input.company.name}`,
     "",
+    ...(input.outcomeSnapshot?.length ? [...input.outcomeSnapshot, ""] : []),
     "What happened",
     ...input.findings.map((finding) => `- ${finding}`),
     "",
@@ -90,12 +93,17 @@ function renderMorningBriefingText(input: {
 function renderMorningBriefingHtml(input: {
   company: Company;
   report: Report;
+  outcomeSnapshot?: string[];
   findings: string[];
   recommendations: string[];
 }) {
   return [
     `<h1>${escapeHtml(input.report.title)}</h1>`,
     `<p><strong>Company:</strong> ${escapeHtml(input.company.name)}</p>`,
+    ...(input.outcomeSnapshot?.length ? [
+      "<h2>Outcome snapshot</h2>",
+      `<pre>${escapeHtml(input.outcomeSnapshot.join("\n"))}</pre>`,
+    ] : []),
     "<h2>What happened</h2>",
     `<ul>${input.findings.map((finding) => `<li>${escapeHtml(finding)}</li>`).join("")}</ul>`,
     "<h2>Next</h2>",
