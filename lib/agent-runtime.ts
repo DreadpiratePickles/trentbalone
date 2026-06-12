@@ -11,6 +11,7 @@ import { store } from "@/lib/store";
 import type { AgentEnvironmentConfig, AgentRole } from "@/lib/types";
 import { logger } from "@/lib/logger";
 import { buildSeatSystemPrompt } from "@/lib/seat-manifest";
+import { SEAT_MANIFESTS } from "@/lib/seat-manifest";
 import { buildOperatingStateBundle } from "@/lib/operating-state";
 import { providerReadinessSnapshot } from "@/lib/provider-readiness";
 
@@ -98,6 +99,7 @@ export async function getAgentRuntime(companyId: string, role: AgentRole): Promi
       ].join("\n")
     : "Plugged profile: Trent default slot persona";
 
+  const memoryPlanBlock = await buildMemoryPlanBlock(companyId, role, profile);
   const outcomeSnapshotBlock = await buildRuntimeOutcomeSnapshot(companyId, role);
 
   const environmentBlock = [
@@ -118,7 +120,7 @@ export async function getAgentRuntime(companyId: string, role: AgentRole): Promi
   ].join("\n");
 
   const staticPrompt = [...skillInstructionBlocks, basePrompt, buildSeatSystemPrompt(role)].join("\n\n");
-  const dynamicPrompt = [contractBlock, profileBlock, outcomeSnapshotBlock, environmentBlock].filter(Boolean).join("\n\n");
+  const dynamicPrompt = [contractBlock, profileBlock, memoryPlanBlock, outcomeSnapshotBlock, environmentBlock].filter(Boolean).join("\n\n");
 
   const runtime = {
     role,
@@ -134,6 +136,48 @@ export async function getAgentRuntime(companyId: string, role: AgentRole): Promi
   runtimeCache.set(cacheKey, runtime);
   logger.debug({ agentRole: role, profileId: profile?.id ?? null, toolCount: environment.tools.length }, "agent.runtime_built");
   return runtime;
+}
+
+async function buildMemoryPlanBlock(
+  companyId: string,
+  role: AgentRole,
+  profile?: ReturnType<typeof getCatalogAgent>,
+): Promise<string> {
+  const manifestPlan = SEAT_MANIFESTS[role].memory;
+  const profilePlan = profile?.memoryPlan;
+  const readPlans = [
+    ...manifestPlan.readsOnStart,
+    ...(profilePlan ? [{ tier: "semantic" as const, keys: profilePlan.readsOnStart }] : []),
+  ];
+  const writePlans = [
+    ...manifestPlan.writesOnFinish,
+    ...(profilePlan ? [{ tier: "episodic" as const, keys: profilePlan.writesOnFinish }] : []),
+  ];
+  const readKeys = uniqueStable(readPlans.flatMap((plan) => plan.keys));
+  const writeKeys = uniqueStable(writePlans.flatMap((plan) => plan.keys));
+  const documents = await store.listDocuments(companyId).catch(() => []);
+  const relevant = documents
+    .filter((doc) => {
+      const tierMatches = readPlans.some((plan) => !doc.memoryTier || doc.memoryTier === plan.tier);
+      if (!tierMatches) return false;
+      const haystack = `${doc.type} ${doc.title} ${doc.source} ${doc.content}`.toLowerCase();
+      return readKeys.some((key) => haystack.includes(key.toLowerCase()))
+        || (role === "ceo" && haystack.includes("ceo decision journal"));
+    })
+    .slice(0, 6);
+
+  return [
+    "MEMORY PLAN",
+    `Namespace: ${manifestPlan.namespaceTemplate.replace("{companyId}", companyId)}`,
+    `readsOnStart: ${readKeys.join(", ") || "none"}`,
+    relevant.length
+      ? [
+          "Recalled memory:",
+          ...relevant.map((doc) => `- [${doc.id}] ${doc.title}: ${doc.content.slice(0, 240)}`),
+        ].join("\n")
+      : "Recalled memory: none",
+    `writesOnFinish: ${writeKeys.join(", ") || "none"}`,
+  ].join("\n");
 }
 
 async function buildRuntimeOutcomeSnapshot(companyId: string, role: AgentRole): Promise<string> {

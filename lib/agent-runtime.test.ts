@@ -186,6 +186,30 @@ describe("Agent Plug runtime", () => {
     expect(engineer.dynamicPrompt).not.toContain("OUTCOME SNAPSHOT");
   });
 
+  it("executes the seat memory plan by recalling matching memory on runtime start", async () => {
+    clearAgentRuntimeCache();
+    const company = await store.createCompany({
+      name: "Memory Plan Runtime Co",
+      brief: { vision: "Use durable decisions" },
+    });
+    await store.createDocument({
+      companyId: company.id,
+      type: "agent_note",
+      title: "activeTasks CEO decision journal",
+      content: "Prior CEO decision: activation is the highest-leverage priority this week.",
+      source: "ceo-decision-journal:previous",
+      memoryTier: "semantic",
+    });
+
+    const runtime = await getAgentRuntime(company.id, "ceo");
+
+    expect(runtime.dynamicPrompt).toContain("MEMORY PLAN");
+    expect(runtime.dynamicPrompt).toContain("readsOnStart");
+    expect(runtime.dynamicPrompt).toContain("Prior CEO decision: activation");
+    expect(runtime.dynamicPrompt).toContain("writesOnFinish");
+    expect(runtime.dynamicPrompt).toContain("last_ceo_run");
+  });
+
   it("loads Finance Ledger skill instructions into the default finance runtime", async () => {
     clearAgentRuntimeCache();
     const company = await store.createCompany({

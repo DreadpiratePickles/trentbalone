@@ -28,6 +28,7 @@ import { reviseOrchestrationPlanTail } from "@/lib/orchestrator-replan";
 import { buildDelegatedStepsForWorkRequests } from "@/lib/orchestrator-delegation";
 import { recallRelevantMemory } from "@/lib/semantic-router";
 import { buildOperatingStateBundle } from "@/lib/operating-state";
+import { persistCeoDecisionJournal } from "@/lib/ceo-decision-journal";
 import { recordHandoff, type HandoffEvent } from "@/lib/planner";
 import { handleStepCritique, type OrchestrationRun } from "@/lib/orchestrator";
 import { cacheOrchestrationRun } from "@/lib/orchestrator-cache";
@@ -494,6 +495,7 @@ export async function processConsolidatePhase(run: OrchestrationRun, company: Co
   await Promise.all(
     suggestions.map((suggestion) => store.addCeoSuggestion({ companyId: run.companyId, ...suggestion })),
   ).catch(() => {});
+  await persistCeoDecisionJournal(run, suggestions).catch(() => {});
 
   const { buildRunMarkdownReport } = await import("@/lib/orchestrator") as typeof import("@/lib/orchestrator");
   const markdownReport = buildRunMarkdownReport(run, suggestions);
