@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { store } from "@/lib/store";
 import {
+  ensureWorkbenchPlanApproval,
+  fingerprintWorkbenchPlan,
   inferApprovalAction,
   isExternalWriteApprovalBlock,
   pauseWorkbenchForCommandApproval,
+  summarizeWorkbenchPlanActions,
 } from "@/lib/workbench-approval-gate";
 
 describe("workbench-approval-gate", () => {
@@ -52,5 +55,48 @@ describe("workbench-approval-gate", () => {
 
     const events = await store.listWorkbenchEvents(session.id);
     expect(events.some((e) => e.type === "approval" && e.status === "needs_approval")).toBe(true);
+  });
+
+  it("creates a stable implementation plan approval before writes", async () => {
+    const company = await store.createCompany({
+      name: `Plan Gate ${Date.now()}`,
+      brief: { vision: "approve plans" },
+    });
+    const session = await store.createWorkbenchSession({
+      companyId: company.id,
+      agentRole: "engineer",
+      agentMode: "build",
+      provider: "mock_local",
+      status: "running",
+      objective: "Build after plan approval",
+      metadata: {
+        networkPolicy: "deny_all",
+        allowedHosts: [],
+        maxRuntimeSeconds: 600,
+        maxCostCents: 100,
+        approvalRequiredFor: ["workbench_plan"],
+        rollbackAvailable: true,
+      },
+    });
+    const actions = [
+      { type: "file" as const, filePath: "index.html", content: "<h1>Hi</h1>" },
+      { type: "shell" as const, command: "npm test" },
+    ];
+
+    const first = await ensureWorkbenchPlanApproval(session, "Build approved UI", actions);
+    const pending = await store.getApproval(first.approvalId);
+
+    expect(first.approved).toBe(false);
+    expect(first.fingerprint).toBe(fingerprintWorkbenchPlan(actions));
+    expect(pending?.status).toBe("pending");
+    expect(pending?.action).toBe("workbench.plan");
+    expect(pending?.toolName).toBe(`workbench:${session.id}:plan`);
+    expect(pending?.previewContent).toContain("Plan fingerprint:");
+    expect(pending?.previewContent).toContain("write index.html");
+    expect(summarizeWorkbenchPlanActions(actions)).toContain("run npm test");
+
+    await store.resolveApproval(first.approvalId, "approved");
+    const second = await ensureWorkbenchPlanApproval(session, "Build approved UI", actions);
+    expect(second).toMatchObject({ approved: true, approvalId: first.approvalId, fingerprint: first.fingerprint });
   });
 });

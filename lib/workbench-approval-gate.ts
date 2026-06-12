@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { store } from "@/lib/store";
 import type { WorkbenchSession } from "@/lib/types";
+import type { ArtifactAction } from "@/lib/workbench-artifact-parser";
 import { requiresApproval } from "@/lib/workbench-safety";
 
 export class WorkbenchApprovalRequiredError extends Error {
@@ -28,6 +30,80 @@ export function isExternalWriteApprovalBlock(result: {
   blockedReason?: string;
 }): boolean {
   return Boolean(result.blocked && result.blockedReason === "external_write_requires_approval");
+}
+
+export function summarizeWorkbenchPlanActions(actions: ArtifactAction[]): string {
+  return actions.map((action, index) => {
+    const prefix = `${index + 1}.`;
+    if (action.type === "file") return `${prefix} write ${action.filePath}`;
+    if (action.type === "edit") return `${prefix} edit ${action.filePath}`;
+    if (action.type === "shell") return `${prefix} run ${action.command}`;
+    return `${prefix} start ${action.command}`;
+  }).join("\n");
+}
+
+export function fingerprintWorkbenchPlan(actions: ArtifactAction[]): string {
+  const normalized = actions.map((action) => {
+    if (action.type === "file") return { type: action.type, filePath: action.filePath, contentHash: createHash("sha256").update(action.content).digest("hex") };
+    if (action.type === "edit") return { type: action.type, filePath: action.filePath, patchHash: createHash("sha256").update(action.content).digest("hex") };
+    return { type: action.type, command: action.command };
+  });
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex").slice(0, 16);
+}
+
+export async function ensureWorkbenchPlanApproval(
+  session: WorkbenchSession,
+  title: string,
+  actions: ArtifactAction[],
+): Promise<{ approved: boolean; approvalId: string; fingerprint: string; rejected?: boolean }> {
+  const fingerprint = fingerprintWorkbenchPlan(actions);
+  const toolName = `workbench:${session.id}:plan`;
+  const fingerprintLine = `Plan fingerprint: ${fingerprint}`;
+  const existing = (await store.listApprovals(session.companyId)).find((approval) =>
+    approval.action === "workbench.plan"
+    && approval.toolName === toolName
+    && approval.previewContent?.includes(fingerprintLine)
+  );
+
+  if (existing?.status === "approved") {
+    return { approved: true, approvalId: existing.id, fingerprint };
+  }
+  if (existing?.status === "pending") {
+    await store.updateWorkbenchSession(session.id, { status: "paused" });
+    return { approved: false, approvalId: existing.id, fingerprint };
+  }
+  if (existing?.status === "rejected") {
+    await store.updateWorkbenchSession(session.id, { status: "paused" });
+    return { approved: false, approvalId: existing.id, fingerprint, rejected: true };
+  }
+
+  const approval = await store.createApproval({
+    companyId: session.companyId,
+    action: "workbench.plan",
+    reason: `Approve Workbench implementation plan before file writes for session ${session.id}.`,
+    previewContent: [
+      fingerprintLine,
+      `Title: ${title}`,
+      "",
+      "Planned actions:",
+      summarizeWorkbenchPlanActions(actions),
+    ].join("\n"),
+    previewKind: "generic",
+    toolName,
+  });
+
+  await store.updateWorkbenchSession(session.id, { status: "paused" });
+  await store.addWorkbenchEvent({
+    companyId: session.companyId,
+    sessionId: session.id,
+    type: "approval",
+    status: "needs_approval",
+    title: "Plan approval required",
+    content: `Workbench paused before file writes. Approve plan ${fingerprint} to continue.`,
+    metadata: { approvalId: approval.id, gate: "plan", fingerprint },
+  });
+
+  return { approved: false, approvalId: approval.id, fingerprint };
 }
 
 /** Pause the session and create a founder approval — does not execute the command. */

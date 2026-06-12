@@ -1,6 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const mockWikiEmbeddings = vi.hoisted(() => ({
+  semanticSearch: vi.fn(async () => [] as Array<{
+    noteId: string;
+    title: string;
+    path: string;
+    chunkIdx: number;
+    text: string;
+    score: number;
+  }>),
+}));
+
+vi.mock("@/lib/wiki-embeddings", () => mockWikiEmbeddings);
+
 import {
   buildDeploymentPlanSummary,
+  buildGroundedWorkbenchSourceContext,
   buildWorkbenchSourceContext,
   isWorkspaceUnscaffolded,
 } from "@/lib/workbench-build-loop";
@@ -79,6 +94,30 @@ describe("buildWorkbenchSourceContext", () => {
     expect(context).toMatch(/web.*worker|worker.*web/i);
     expect(context).not.toContain("JWT_SECRET");
     expect(context).not.toContain("generic API_KEY");
+  });
+
+  it("injects semantic wiki chunks into grounded Workbench prompts", async () => {
+    mockWikiEmbeddings.semanticSearch.mockResolvedValueOnce([
+      {
+        noteId: "note_roadmap",
+        title: "Roadmap Wiki",
+        path: "wiki/roadmap.md",
+        chunkIdx: 0,
+        text: "Roadmap: import GitHub repos before adding paid social automation.",
+        score: 0.9,
+      },
+    ]);
+
+    const context = await buildGroundedWorkbenchSourceContext(
+      "co_1",
+      "Using the roadmap, build the next Workbench priority screen.",
+      [],
+    );
+
+    expect(context).toContain("SOURCE COVERAGE:");
+    expect(context).toContain("roadmap (doc wiki:note_roadmap#0)");
+    expect(context).toContain("[wiki:note_roadmap#0] Roadmap Wiki");
+    expect(context).toContain("GitHub repos");
   });
 
   it("builds a deterministic visible deployment summary for Railway planning prompts", () => {

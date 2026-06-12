@@ -556,9 +556,88 @@ describe("runWorkbenchAgent — build mode (XML artifact loop)", () => {
     const refreshed = await store.getWorkbenchSession(session.id);
     expect(refreshed?.status).toBe("failed");
   });
+
+  it("rolls back text workspace changes from failed build attempts instead of checkpointing them", async () => {
+    const files = new Map<string, string>([
+      ["package.json", "{}"],
+      ["src/App.tsx", "export default function App(){return <h1>Original</h1>}"],
+    ]);
+    const streamArtifact = makeStreamArtifact([
+      `<boltAction type="file" filePath="src/App.tsx">export default function App(){return <h1>Broken</h1>}</boltAction>`,
+      `<boltAction type="file" filePath="src/New.tsx">export const bad = true;</boltAction>`,
+      `<boltAction type="start">npm run dev</boltAction>`,
+    ]);
+    provider = makeProvider({
+      listFiles: vi.fn(async () => Array.from(files.entries()).map(([path, content]) => ({
+        name: path.split("/").pop() ?? path,
+        path,
+        isDir: false,
+        sizeBytes: content.length,
+        modifiedAt: "2026-06-12T00:00:00.000Z",
+      }))),
+      readFile: vi.fn(async (_session, path: string) => files.get(path) ?? ""),
+      writeFile: vi.fn(async (_session, path: string, content: string) => {
+        files.set(path, content);
+      }),
+      exec: vi.fn(async (_session: WorkbenchSession, command: string): Promise<WorkbenchExecResult> => {
+        if (command.includes("src/New.tsx")) files.delete("src/New.tsx");
+        return { stdout: "ok", stderr: "", exitCode: 0, durationMs: 5 };
+      }),
+      runTests: vi.fn(async (): Promise<WorkbenchTestResult> => ({
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        durationMs: 5,
+        output: "regression still failing",
+        exitCode: 1,
+      })),
+    });
+
+    await collect(runWorkbenchAgent({
+      session,
+      userMessage: "build it",
+      deps: { provider, streamArtifact, interactionDriver: TEST_INTERACTION_DRIVER },
+    }));
+
+    expect(files.get("src/App.tsx")).toContain("Original");
+    expect(files.has("src/New.tsx")).toBe(false);
+    expect(await store.getWorkbenchCheckpoint(session.id)).toBeUndefined();
+    const rollbackEvents = await store.listWorkbenchEvents(session.id);
+    expect(rollbackEvents.some((event) => event.title === "Rolled back failed Workbench run")).toBe(true);
+  });
 });
 
 describe("runWorkbenchAgent — approval gates", () => {
+  it("pauses before file writes when implementation plan approval is required", async () => {
+    const company = await store.createCompany({ name: `Plan Approval ${Date.now()}`, brief: { vision: "test" } });
+    const baseSession = await createSession("build", company.id);
+    const session: WorkbenchSession = {
+      ...baseSession,
+      metadata: {
+        ...baseSession.metadata,
+        approvalRequiredFor: ["workbench_plan"],
+      },
+    };
+    const provider = makeProvider();
+
+    const chunks = await collect(runWorkbenchAgent({
+      session,
+      userMessage: "Build a landing page",
+      deps: { provider, streamArtifact: DEFAULT_STREAM, interactionDriver: TEST_INTERACTION_DRIVER },
+    }));
+
+    expect(chunks.some((c) => c.type === "plan")).toBe(true);
+    expect(chunks.some((c) => c.type === "status" && c.phase === "awaiting_approval")).toBe(true);
+    expect(provider.writeFile).not.toHaveBeenCalled();
+    expect(provider.exec).not.toHaveBeenCalled();
+    const refreshed = await store.getWorkbenchSession(session.id);
+    expect(refreshed?.status).toBe("paused");
+    const approvals = await store.listApprovals(company.id);
+    expect(approvals.some((approval) => approval.action === "workbench.plan" && approval.status === "pending")).toBe(true);
+    const attempts = await store.listWorkbenchAttempts(session.id);
+    expect(attempts[0]).toMatchObject({ status: "needs_approval" });
+  });
+
   it("pauses the session when a shell action requires external-write approval", async () => {
     const company = await store.createCompany({ name: `Approval ${Date.now()}`, brief: { vision: "test" } });
     const session = await createSession("build", company.id);

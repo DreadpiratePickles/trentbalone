@@ -47,6 +47,28 @@ describe("verifyBuild", () => {
     expect(verdict.domSummary).toContain("visibleElements=7");
   });
 
+  it("produces a browser trace artifact payload from Playwright preview evidence", async () => {
+    const provider = fakeProvider({});
+    provider.inspectPreview = vi.fn(async (_session, url) => ({
+      url,
+      httpStatus: 200,
+      screenshot: { dataUri: "data:image/png;base64,AAAA", width: 1280, height: 720, storageKey: "provider.png" },
+      domText: "Workbench preview rendered",
+      visibleElements: 7,
+      consoleErrors: [],
+      pageErrors: [],
+    }));
+
+    const verdict = await verifyBuild(baseVerifyInput({ session: session(), provider, skipDefaultRenderInspector: true }));
+
+    expect(verdict.checks.find((check) => check.name === "browser_trace")).toEqual(expect.objectContaining({
+      status: "pass",
+      detail: expect.stringContaining("Playwright evidence trace"),
+    }));
+    expect(verdict.browserTrace?.content).toContain("Workbench preview rendered");
+    expect(verdict.browserTrace?.storageKey).toContain("playwright-trace");
+  });
+
   it("requires a successful install check when package dependencies changed", async () => {
     const provider = fakeProvider({ commandResults: { "npm install --legacy-peer-deps": { exitCode: 1, output: "registry unavailable" } } });
     const verdict = await verifyBuild(baseVerifyInput({

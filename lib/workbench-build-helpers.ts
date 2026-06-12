@@ -11,6 +11,15 @@ import {
 } from "@/lib/workbench-approval-gate";
 import { nowIso } from "@/lib/utils";
 
+const SNAPSHOT_MAX_FILES = 160;
+const SNAPSHOT_MAX_FILE_BYTES = 250_000;
+const SNAPSHOT_IGNORE_RE = /(^|\/)(node_modules|\.git|\.next|dist|build|coverage|tmp|\.cache)(\/|$)/;
+const SNAPSHOT_BINARY_RE = /\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|tar|mp4|mov|mp3|wav|woff2?|ttf|otf)$/i;
+
+export type WorkbenchTextSnapshot = {
+  files: Map<string, string>;
+};
+
 export async function safeWrite(provider: WorkbenchProviderAdapter, session: WorkbenchSession, path: string, content: string) {
   try {
     await provider.writeFile(session, path, content);
@@ -50,6 +59,55 @@ export async function safePreview(provider: WorkbenchProviderAdapter, session: W
   try { return await provider.getPreviewUrl(session); } catch { return undefined; }
 }
 
+export async function captureWorkbenchTextSnapshot(
+  provider: WorkbenchProviderAdapter,
+  session: WorkbenchSession,
+): Promise<WorkbenchTextSnapshot> {
+  const files = await safeListFiles(provider, session);
+  const snapshot = new Map<string, string>();
+  for (const file of files) {
+    if (snapshot.size >= SNAPSHOT_MAX_FILES) break;
+    if (file.isDir || shouldSkipSnapshotPath(file.path, file.sizeBytes)) continue;
+    try {
+      snapshot.set(file.path, await provider.readFile(session, file.path));
+    } catch {
+      // Binary/unreadable files are left to provider-native snapshots.
+    }
+  }
+  return { files: snapshot };
+}
+
+export async function restoreWorkbenchTextSnapshot(
+  provider: WorkbenchProviderAdapter,
+  session: WorkbenchSession,
+  snapshot: WorkbenchTextSnapshot,
+): Promise<{ restored: string[]; removed: string[]; failed: string[] }> {
+  const restored: string[] = [];
+  const removed: string[] = [];
+  const failed: string[] = [];
+  const current = await safeListFiles(provider, session);
+  for (const file of current) {
+    if (file.isDir || shouldSkipSnapshotPath(file.path, file.sizeBytes)) continue;
+    if (snapshot.files.has(file.path)) continue;
+    try {
+      const result = await provider.exec(session, `rm -f -- ${shellQuote(file.path)}`);
+      if (result.exitCode === 0) removed.push(file.path);
+      else failed.push(file.path);
+    } catch {
+      failed.push(file.path);
+    }
+  }
+  for (const [filePath, content] of snapshot.files) {
+    try {
+      await provider.writeFile(session, filePath, content);
+      restored.push(filePath);
+    } catch {
+      failed.push(filePath);
+    }
+  }
+  return { restored, removed, failed };
+}
+
 export async function safeStartPreview(provider: WorkbenchProviderAdapter, session: WorkbenchSession, cmd: string) {
   try {
     if (provider.startPreview) {
@@ -72,6 +130,16 @@ export async function safeStartPreview(provider: WorkbenchProviderAdapter, sessi
     if (err instanceof WorkbenchApprovalRequiredError) throw err;
     return { url: undefined, result: { exitCode: 1, output: errorText(err) } };
   }
+}
+
+function shouldSkipSnapshotPath(path: string, sizeBytes = 0): boolean {
+  return SNAPSHOT_IGNORE_RE.test(path)
+    || SNAPSHOT_BINARY_RE.test(path)
+    || sizeBytes > SNAPSHOT_MAX_FILE_BYTES;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export async function persistLatestWorkbenchCheckpoint(

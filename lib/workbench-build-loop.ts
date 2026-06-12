@@ -10,11 +10,12 @@ import { parseArtifact, type ArtifactAction } from "@/lib/workbench-artifact-par
 import { applyEditBlocks, fastApply, parseEditBlocks } from "@/lib/workbench-edit-apply";
 import { STARTER_TEMPLATE } from "@/lib/workbench-starter-template";
 import {
+  persistVerificationBrowserTraceArtifact,
   persistVerificationScreenshotArtifact,
   persistWorkbenchFileArtifact,
 } from "@/lib/workbench-verification-artifacts";
 import { nowIso } from "@/lib/utils";
-import { WorkbenchApprovalRequiredError } from "@/lib/workbench-approval-gate";
+import { ensureWorkbenchPlanApproval, WorkbenchApprovalRequiredError } from "@/lib/workbench-approval-gate";
 import { PREVIEW_PID_FILENAME } from "@/lib/workbench-preview-reaper";
 import { syntaxErrorSummary } from "@/lib/workbench-syntax-gate";
 import {
@@ -30,6 +31,7 @@ import {
   formatSourceDocumentsBlock,
   selectRelevantDocuments,
 } from "@/lib/source-coverage";
+import { buildGroundedSourceContext } from "@/lib/source-grounding";
 import {
   type AgentDeps,
   AGENT_PERSONAS,
@@ -49,11 +51,13 @@ import {
 } from "@/lib/workbench-agent-prompts";
 import {
   buildFinalArtifactSummary,
+  captureWorkbenchTextSnapshot,
   failedCheckSummary,
   isInstallCommand,
   normalizeArtifactFilePath,
   persistLatestWorkbenchCheckpoint,
   recordEvent,
+  restoreWorkbenchTextSnapshot,
   safeExec,
   safeListFiles,
   safePreview,
@@ -201,11 +205,32 @@ export function buildWorkbenchSourceContext(
   for (const doc of [...requiredDocs, ...relevant]) byId.set(doc.id, doc);
   const sourceDocs = [...byId.values()].slice(0, 8);
 
-  const parts = [
+  return formatWorkbenchSourceContext([
     buildDeploymentRepoEvidence(userMessage),
     formatSourceCoverage(coverage),
     formatSourceDocumentsBlock(sourceDocs, 2000),
-  ].filter(Boolean);
+  ].filter(Boolean));
+}
+
+export async function buildGroundedWorkbenchSourceContext(
+  companyId: string,
+  userMessage: string,
+  docs: CoverageDocument[],
+): Promise<string> {
+  const sourceContext = await buildGroundedSourceContext({
+    companyId,
+    query: userMessage,
+    documents: docs,
+    maxCharsPerDoc: 2000,
+  });
+  return formatWorkbenchSourceContext([
+    buildDeploymentRepoEvidence(userMessage),
+    sourceContext.sourceCoverage,
+    sourceContext.sourceDocuments,
+  ].filter((part): part is string => Boolean(part)));
+}
+
+function formatWorkbenchSourceContext(parts: string[]): string {
   if (parts.length === 0) return "";
 
   parts.push(
@@ -272,6 +297,9 @@ export async function* runBuildLoop(
   // recovery, and deployment-plan tasks must not scaffold templates, edit app
   // source, or boot dev servers.
   const scopePolicy = deriveWorkbenchScopePolicy(userMessage);
+  const requiresPlanApproval = session.metadata.approvalRequiredFor.some((gate) =>
+    gate === "workbench_plan" || gate === "workbench.plan" || gate === "plan",
+  );
   if (scopePolicy.intent !== "build") {
     yield {
       type: "status",
@@ -283,8 +311,10 @@ export async function* runBuildLoop(
   const existing = await safeListFiles(deps.provider, session);
   const actionFailures: VerifyCheck[] = [];
   const workspaceState: BuildAttemptState = { packageChanged: false, executedCommands: [] };
-  if (scopePolicy.allowScaffold && isWorkspaceUnscaffolded(existing)) {
-    yield { type: "status", phase: "scaffolding", detail: "Initialising project from starter template" };
+  const scaffoldStarterTemplate = async (): Promise<WorkbenchAgentChunk[]> => {
+    const chunks: WorkbenchAgentChunk[] = [
+      { type: "status", phase: "scaffolding", detail: "Initialising project from starter template" },
+    ];
     for (const [path, content] of Object.entries(STARTER_TEMPLATE)) {
       const write = await safeWrite(deps.provider, session, path, content);
       if (path === "package.json") workspaceState.packageChanged = true;
@@ -292,10 +322,10 @@ export async function* runBuildLoop(
         actionFailures.push({ name: "files", status: "fail", detail: `${path}: ${write.error}` });
       }
     }
-    yield { type: "status", phase: "installing", detail: "npm install" };
+    chunks.push({ type: "status", phase: "installing", detail: "npm install" });
     const install = await safeExec(deps.provider, session, "npm install --legacy-peer-deps");
     workspaceState.executedCommands.push("npm install --legacy-peer-deps");
-    yield { type: "command", command: "npm install", exitCode: install.exitCode, output: truncate(install.output) };
+    chunks.push({ type: "command", command: "npm install", exitCode: install.exitCode, output: truncate(install.output) });
     if (install.exitCode !== 0) {
       actionFailures.push({
         name: "install",
@@ -305,7 +335,12 @@ export async function* runBuildLoop(
         exitCode: install.exitCode,
       });
     }
+    return chunks;
+  };
+  if (scopePolicy.allowScaffold && isWorkspaceUnscaffolded(existing) && !requiresPlanApproval) {
+    for (const chunk of await scaffoldStarterTemplate()) yield chunk;
   }
+  const runRollbackSnapshot = await captureWorkbenchTextSnapshot(deps.provider, session).catch(() => undefined);
 
   const system   = buildSystemPrompt();
   const outcomes: string[] = [];
@@ -314,7 +349,11 @@ export async function* runBuildLoop(
   let finalTitle = "Workbench build";
   let sourceContext = "";
   try {
-    sourceContext = buildWorkbenchSourceContext(userMessage, await store.listDocuments(session.companyId));
+    sourceContext = await buildGroundedWorkbenchSourceContext(
+      session.companyId,
+      userMessage,
+      await store.listDocuments(session.companyId),
+    );
   } catch {
     // best-effort: missing company memory should not prevent the workspace run.
   }
@@ -439,6 +478,26 @@ export async function* runBuildLoop(
                              { kind: "preview", summary: `Start: ${a.command}` }),
     };
 
+    if (scopePolicy.intent === "build" && attempt === 1 && requiresPlanApproval) {
+      const approval = await ensureWorkbenchPlanApproval(session, artifact.title, artifact.actions);
+      if (!approval.approved) {
+        await store.updateWorkbenchAttempt(attemptRecord.id, {
+          status: "needs_approval",
+          completedAt: nowIso(),
+        }).catch(() => {});
+        const status = approval.rejected ? "Plan approval was rejected" : "Session paused for plan approval";
+        yield { type: "status", phase: "awaiting_approval", detail: `${status}: ${approval.approvalId}` };
+        return {
+          summary: `${status}. Approve the Workbench plan before file writes or commands can run. Approval: ${approval.approvalId}.`,
+          passed: false,
+          paused: true,
+        };
+      }
+      if (scopePolicy.allowScaffold && isWorkspaceUnscaffolded(existing)) {
+        for (const chunk of await scaffoldStarterTemplate()) yield chunk;
+      }
+    }
+
     for (const action of artifact.actions) {
       const fresh = await store.getWorkbenchSession(session.id);
       if (fresh && fresh.costCents >= session.metadata.maxCostCents) {
@@ -511,14 +570,21 @@ export async function* runBuildLoop(
       return undefined;
     });
     if (screenshotArtifactId) verdict = { ...verdict, screenshotArtifactId };
+    const browserTraceArtifactId = await persistVerificationBrowserTraceArtifact({ session, verdict, attemptNo: durableAttemptNo }).catch((error: unknown) => {
+      console.error("Failed to persist verification browser trace artifact:", error);
+      return undefined;
+    });
+    if (browserTraceArtifactId) verdict = { ...verdict, browserTraceArtifactId };
     finalVerdict = verdict;
     await store.updateWorkbenchAttempt(attemptRecord.id, {
       status: verdict.passed ? "completed" : "failed",
       completedAt: nowIso(),
     }).catch(() => {});
-    await persistLatestWorkbenchCheckpoint(session, deps.provider, verdict).catch((error: unknown) => {
-      console.error("Failed to persist Workbench checkpoint:", error);
-    });
+    if (verdict.passed) {
+      await persistLatestWorkbenchCheckpoint(session, deps.provider, verdict).catch((error: unknown) => {
+        console.error("Failed to persist Workbench checkpoint:", error);
+      });
+    }
     yield { type: "verify", passed: verdict.passed, checks: verdict.checks };
     await recordEvent(session, "test", verdict.passed ? "completed" : "failed",
       verdict.passed ? "Verification passed" : "Verification failed",
@@ -563,6 +629,26 @@ export async function* runBuildLoop(
     checks: [{ name: "commands", status: "fail", detail: "Build did not run" } satisfies VerifyCheck],
   };
   if (!verdict.passed) {
+    if (runRollbackSnapshot) {
+      const rollback = await restoreWorkbenchTextSnapshot(deps.provider, session, runRollbackSnapshot).catch((error: unknown) => ({
+        restored: [],
+        removed: [],
+        failed: [error instanceof Error ? error.message : String(error)],
+      }));
+      await recordEvent(
+        session,
+        "system",
+        rollback.failed.length ? "failed" : "completed",
+        "Rolled back failed Workbench run",
+        [
+          `restored=${rollback.restored.length}`,
+          `removed=${rollback.removed.length}`,
+          `failed=${rollback.failed.length}`,
+        ].join("; "),
+        undefined,
+        attemptOffset + MAX_BUILD_ATTEMPTS,
+      );
+    }
     yield { type: "status", phase: "needs_input", detail: "Verification failed — human review needed" };
   }
 

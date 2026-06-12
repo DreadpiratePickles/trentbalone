@@ -78,6 +78,48 @@ export async function persistVerificationScreenshotArtifact(input: {
   return artifact.id;
 }
 
+export async function persistVerificationBrowserTraceArtifact(input: {
+  session: WorkbenchSession;
+  verdict: VerifyVerdict;
+  attemptNo: number;
+}): Promise<string | undefined> {
+  const { session, verdict, attemptNo } = input;
+  const trace = verdict.browserTrace;
+  if (!trace?.content) return undefined;
+
+  const artifact = await store.addWorkbenchArtifact({
+    companyId: session.companyId,
+    sessionId: session.id,
+    kind: "perf_trace",
+    title: "Playwright verification trace",
+    storageKey: trace.storageKey,
+    mimeType: trace.mimeType,
+    sizeBytes: trace.sizeBytes,
+    createdByAgent: session.agentRole,
+    previewUrl: verdict.previewUrl,
+    metadata: {
+      attemptNo,
+      verificationPassed: verdict.passed,
+      source: "playwright_core",
+    },
+  });
+
+  await store.addWorkbenchEvent({
+    companyId: session.companyId,
+    sessionId: session.id,
+    type: "browser",
+    status: "completed",
+    title: "Playwright verification trace captured",
+    content: trace.content.slice(0, 2000),
+    artifactId: artifact.id,
+    attemptNo,
+    agentRole: session.agentRole,
+    metadata: { verificationPassed: verdict.passed, source: "playwright_core" },
+  });
+
+  return artifact.id;
+}
+
 function mimeTypeForPath(path: string): string {
   const lower = path.toLowerCase();
   if (lower.endsWith(".html")) return "text/html";

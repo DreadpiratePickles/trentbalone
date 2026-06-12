@@ -42,6 +42,7 @@ export type VerifyCheckName =
   | "console"
   | "objective"
   | "interaction"
+  | "browser_trace"
   | "critic"
   | "commands"
   | "files"
@@ -84,6 +85,13 @@ export type VerifyVerdict = {
   domSummary?: string;
   visibleText?: string;
   interactionTranscript?: string;
+  browserTrace?: {
+    storageKey: string;
+    mimeType: "application/json";
+    sizeBytes: number;
+    content: string;
+  };
+  browserTraceArtifactId?: string;
   failedCommands?: Array<{ name: VerifyCheckName; command: string; exitCode: number; detail: string }>;
   repairPrompt?: string;
 };
@@ -132,6 +140,13 @@ export async function verifyBuild(input: {
     driver: input.interactionDriver,
   });
   checks.push(interaction.check);
+  if (renders.previewUrl && hasBrowserTraceEvidence(renders, interaction.transcript)) {
+    checks.push({
+      name: "browser_trace",
+      status: "pass",
+      detail: `Playwright evidence trace ready for ${renders.previewUrl}`,
+    });
+  }
   checks.push(await verifyObjective({ session, provider, render: renders }));
   const criticEvidence = hasCriticEvidence(renders, interaction.transcript);
   checks.push(await criticCheck({
@@ -143,7 +158,7 @@ export async function verifyBuild(input: {
     reviewer: input.criticReviewer ?? defaultCriticReviewer(criticEvidence),
   }));
 
-  return buildVerdict(checks, renders, interaction);
+  return buildVerdict(session, checks, renders, interaction);
 }
 
 function enforcePreviewEvidenceRequirement(
@@ -349,6 +364,18 @@ function hasCriticEvidence(render: RenderVerificationResult, interactionTranscri
   return Boolean(visibleText && visibleText.length >= 3 && interactionTranscript?.trim());
 }
 
+function hasBrowserTraceEvidence(render: RenderVerificationResult, interactionTranscript?: string): boolean {
+  return Boolean(
+    render.previewUrl
+    && (
+      render.domSummary?.trim()
+      || render.visibleText?.trim()
+      || render.consoleErrors?.length
+      || interactionTranscript?.trim()
+    )
+  );
+}
+
 async function criticCheck(input: {
   session: WorkbenchSession;
   checks: VerifyCheck[];
@@ -431,6 +458,7 @@ function defaultCriticReviewer(hasEvidence = false): WorkbenchCriticReviewer | u
 }
 
 function buildVerdict(
+  session: WorkbenchSession,
   checks: VerifyCheck[],
   render: RenderVerificationResult,
   interaction?: { transcript?: string; visibleText?: string },
@@ -475,8 +503,43 @@ function buildVerdict(
     domSummary: render.domSummary,
     visibleText: interaction?.visibleText ?? render.visibleText,
     interactionTranscript: interaction?.transcript,
+    browserTrace: buildBrowserTrace(session, checks, render, interaction),
     failedCommands,
     repairPrompt,
+  };
+}
+
+function buildBrowserTrace(
+  session: WorkbenchSession,
+  checks: VerifyCheck[],
+  render: RenderVerificationResult,
+  interaction?: { transcript?: string; visibleText?: string },
+): VerifyVerdict["browserTrace"] {
+  if (!render.previewUrl || !hasBrowserTraceEvidence(render, interaction?.transcript)) return undefined;
+  const payload = {
+    schemaVersion: "workbench.playwright_trace.v1",
+    source: "playwright_core",
+    sessionId: session.id,
+    objective: session.objective,
+    previewUrl: render.previewUrl,
+    screenshotStorageKey: render.screenshot?.storageKey,
+    domSummary: render.domSummary,
+    visibleText: interaction?.visibleText ?? render.visibleText,
+    consoleErrors: render.consoleErrors ?? [],
+    interactionTranscript: interaction?.transcript,
+    checks: checks.map((check) => ({
+      name: check.name,
+      status: check.status,
+      detail: check.detail,
+    })),
+  };
+  const content = JSON.stringify(payload, null, 2);
+  const hash = Buffer.from(`${session.id}:${render.previewUrl}`).toString("base64url").slice(0, 12);
+  return {
+    storageKey: `workbench/${session.id}/playwright-trace-${hash}.json`,
+    mimeType: "application/json",
+    sizeBytes: Buffer.byteLength(content, "utf8"),
+    content,
   };
 }
 

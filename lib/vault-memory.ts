@@ -196,12 +196,14 @@ export class LocalVaultMemoryProvider implements VaultMemoryProvider {
 export class GitNexusVaultIndexAdapter implements ToolAdapter {
   name = "GitNexus Vault";
   scopes = ["vault:index", "vault:search", "vault:graph", "gitnexus:mcp"];
+  availability: ToolAdapter["availability"];
   private vaultRoot: string;
   private enabled: boolean;
 
   constructor(options: { vaultRoot?: string; enabled?: boolean } = {}) {
     this.vaultRoot = options.vaultRoot ?? defaultVaultRoot();
     this.enabled = options.enabled ?? process.env.GITNEXUS_VAULT_ENABLED === "1";
+    this.availability = this.enabled ? "real" : "test_only";
   }
 
   async healthCheck(): Promise<"mocked" | "connected" | "needs_credentials"> {
