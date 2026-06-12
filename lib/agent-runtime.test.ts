@@ -79,6 +79,8 @@ describe("Agent Plug runtime", () => {
 
     expect(engineer.tools).toEqual(expect.arrayContaining(["GitHub", "Workbench Sandbox", "tests:run", "sandbox:exec"]));
     expect(analyst.tools).toEqual(expect.arrayContaining(["PostHog", "Sentry", "Stripe", "Workbench Sandbox"]));
+    expect(engineer.budgetCentsPerRun).toBeGreaterThanOrEqual(500);
+    expect(analyst.budgetCentsPerRun).toBeGreaterThanOrEqual(350);
     expect(finance.tools).toEqual(expect.arrayContaining(["Stripe", "billing:read"]));
     expect(growth.tools).toEqual(expect.arrayContaining(["Email", "X", "PostHog"]));
     expect(support.tools).toEqual(expect.arrayContaining(["Email", "support:inbound_email"]));

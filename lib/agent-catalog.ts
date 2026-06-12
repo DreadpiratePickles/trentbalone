@@ -2084,7 +2084,7 @@ export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "
   engineer: {
     tools: withSteelTools(["GitHub", "Workbench Sandbox", "github:read", "github:issue", "github:branch_scaffold", "documents:write", "tests:run", "sandbox:exec", "workbench:session"]),
     approvalRequiredFor: withSteelApprovalGates(["github.issue", "github.branch", "github.pr", "github.merge", "deploy", "delete", "sandbox.side_effect"]),
-    budgetCentsPerRun: 350,
+    budgetCentsPerRun: 500,
     maxRuntimeSeconds: 900,
     outputContract: ["implementation_plan", "test_plan", "risk_notes", "approval_requests"],
     skills: ENGINEER_RUNTIME_SKILLS
@@ -2116,7 +2116,7 @@ export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "
   analyst: {
     tools: withSteelTools(["PostHog", "Sentry", "Stripe", "Workbench Sandbox", "analytics:read", "usage:read", "reports:create", "memory:read", "sandbox:exec"]),
     approvalRequiredFor: withSteelApprovalGates(["external.analytics.write", "data.export"]),
-    budgetCentsPerRun: 225,
+    budgetCentsPerRun: 350,
     maxRuntimeSeconds: 600,
     outputContract: ["findings", "data_caveats", "recommendations", "metric_definitions"],
     skills: RESEARCH_ANALYST_LENS_SKILLS

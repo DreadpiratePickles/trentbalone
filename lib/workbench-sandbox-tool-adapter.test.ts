@@ -45,6 +45,57 @@ describe("Workbench sandbox tool adapter", () => {
     expect(result.summary).toContain(session.id);
   });
 
+  it("opens a workbench session, writes files, runs tests, and returns a diff", async () => {
+    const session = fakeSession();
+    const createSessionFn = vi.fn(async () => session);
+    const provider = fakeProvider({ stdout: "1 passed", exitCode: 0 });
+    provider.snapshot = vi.fn(async () => ({
+      id: "snapshot_before",
+      fileTreeHash: "hash_before",
+      createdAt: "2026-06-12T00:00:00.000Z",
+    }));
+    provider.diffSinceCheckpoint = vi.fn(async () => ({
+      changedPaths: ["src/seat-proof.test.ts"],
+      summary: "1 file changed",
+      patch: "diff --git a/src/seat-proof.test.ts b/src/seat-proof.test.ts",
+      fromHash: "hash_before",
+      toHash: "hash_after",
+    }));
+    const adapter = createWorkbenchSandboxToolAdapter({
+      env: { DAYTONA_API_KEY: "daytona_secret" },
+      createSessionFn,
+      getProviderFn: vi.fn(() => provider),
+    });
+
+    const result = await adapter.execute(JSON.stringify({
+      kind: "workbench:session",
+      objective: "prove engineer can write and test code",
+      writeFiles: [
+        { path: "src/seat-proof.test.ts", content: "test('seat proof', () => expect(1 + 1).toBe(2));\n" },
+      ],
+      command: "npm test",
+    }), { companyId: "co_1" });
+
+    expect(createSessionFn).toHaveBeenCalledWith(expect.objectContaining({
+      objective: "prove engineer can write and test code",
+      agentRole: "engineer",
+      enqueue: false,
+    }));
+    expect(provider.start).toHaveBeenCalledWith(session);
+    expect(provider.snapshot).toHaveBeenCalledWith(session);
+    expect(provider.writeFile).toHaveBeenCalledWith(session, "src/seat-proof.test.ts", "test('seat proof', () => expect(1 + 1).toBe(2));\n");
+    expect(provider.exec).toHaveBeenCalledWith(session, "npm test", expect.objectContaining({ timeoutMs: 120000 }));
+    expect(provider.diffSinceCheckpoint).toHaveBeenCalledWith(session, "hash_before");
+    expect(result).toMatchObject({
+      adapter: "Workbench Sandbox",
+      status: "completed",
+    });
+    expect(result.summary).toContain(session.id);
+    expect(result.summary).toContain("src/seat-proof.test.ts");
+    expect(result.summary).toContain("1 file changed");
+    expect(result.summary).toContain("diff --git");
+  });
+
   it("requires approval for side-effecting shell actions", async () => {
     const provider = fakeProvider({ stdout: "", exitCode: 0 });
     const adapter = createWorkbenchSandboxToolAdapter({

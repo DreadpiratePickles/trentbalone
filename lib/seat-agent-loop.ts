@@ -58,6 +58,8 @@ type SeatTurnOutput = {
 };
 
 const TOOL_MISUSE_DEGRADE_AFTER = 2;
+const DEFAULT_TOOL_LOOP_STEPS = 6;
+const EXTENDED_TOOL_LOOP_STEPS = 15;
 
 function isFinalOutput(turn: SeatTurnOutput): boolean {
   if (turn.toolCall?.name && turn.toolCall?.action) return false;
@@ -178,7 +180,7 @@ function maxStepsFallback(toolCalls: ToolCallRecord[]): Record<string, unknown> 
 }
 
 export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResult> {
-  const maxSteps = input.maxSteps ?? 6;
+  const maxSteps = input.maxSteps ?? defaultToolLoopSteps(input.subtask.seat);
   const approvalGranted = input.approvalGranted ?? false;
   const registry = input.adapters ?? defaultAdapters;
   const runModel = input.executeSeatModelFn ?? executeSeatModel;
@@ -398,6 +400,12 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
     error: lastError,
     maxStepsReached: true,
   };
+}
+
+function defaultToolLoopSteps(seat: Subtask["seat"]) {
+  return seat === "engineer" || seat === "analyst"
+    ? EXTENDED_TOOL_LOOP_STEPS
+    : DEFAULT_TOOL_LOOP_STEPS;
 }
 
 function normalizeTurnOutput(output: unknown): SeatTurnOutput {
