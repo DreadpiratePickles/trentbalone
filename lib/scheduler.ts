@@ -2,6 +2,7 @@ import type { Company, JobRun, RecurringTaskTemplate, Report } from "@/lib/types
 import { store } from "@/lib/store";
 import { nowIso } from "@/lib/utils";
 import { nextRunFromSchedule } from "@/lib/schedule-grammar";
+import { deliverMorningBriefingEmail } from "@/lib/morning-briefing-email";
 
 export { parseSchedule, nextRunFromSchedule as nextRunFromGrammar } from "@/lib/schedule-grammar";
 
@@ -290,6 +291,7 @@ export async function assembleMorningBriefing(companyId: string): Promise<Report
 
   if (completedOvernight.length > 0) {
     findings.push(`${completedOvernight.length} task${completedOvernight.length === 1 ? "" : "s"} completed overnight.`);
+    findings.push(`Completed: ${completedOvernight.map((task) => task.title).slice(0, 8).join("; ")}.`);
   }
 
   if (newApprovals.length > 0) {
@@ -325,13 +327,25 @@ export async function assembleMorningBriefing(companyId: string): Promise<Report
     findings,
     recommendations,
   });
+  const delivery = await deliverMorningBriefingEmail({
+    company,
+    report,
+    findings,
+    recommendations,
+  });
 
   // Save as a searchable document in memory
   await store.createDocument({
     companyId,
     type: "weekly_report",
     title: subject,
-    content: `${findings.join("\n")}\n\nAction items:\n${recommendations.join("\n")}`,
+    content: [
+      findings.join("\n"),
+      "",
+      `Email delivery: ${delivery.summary}`,
+      "",
+      `Action items:\n${recommendations.join("\n")}`,
+    ].join("\n"),
     source: "morning-briefing",
     version: 1,
   });
@@ -342,7 +356,16 @@ export async function assembleMorningBriefing(companyId: string): Promise<Report
     "morning_briefing.assembled",
     "report",
     report.id,
-    `Morning briefing assembled for ${company.name}. Email delivery is not configured.`
+    `Morning briefing assembled for ${company.name}.`
+  );
+
+  await store.addAudit(
+    companyId,
+    "system",
+    `morning_briefing.email_${delivery.status}`,
+    "report",
+    report.id,
+    delivery.summary,
   );
 
   return report;
