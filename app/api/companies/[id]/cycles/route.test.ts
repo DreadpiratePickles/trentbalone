@@ -24,12 +24,11 @@ vi.mock("@/lib/session", () => ({
   forbidden: () => new Response("f", { status: 403 }),
 }));
 
-const { mockGetCompany, mockGetJobRun, mockListCycles, mockListExecutions, mockRunCompanyCycle } = vi.hoisted(() => ({
+const { mockGetCompany, mockGetJobRun, mockListCycles, mockListExecutions } = vi.hoisted(() => ({
   mockGetCompany: vi.fn(),
   mockGetJobRun: vi.fn(),
   mockListCycles: vi.fn().mockResolvedValue([]),
   mockListExecutions: vi.fn().mockResolvedValue([]),
-  mockRunCompanyCycle: vi.fn(),
 }));
 const { mockEnqueueCompanyCycle, mockProcessJobData, mockRemoveQueuedBullJob } = vi.hoisted(() => ({
   mockEnqueueCompanyCycle: vi.fn(),
@@ -46,9 +45,6 @@ vi.mock("@/lib/store", () => ({
   },
 }));
 
-vi.mock("@/lib/cycles", () => ({
-  runCompanyCycle: mockRunCompanyCycle,
-}));
 vi.mock("@/lib/queue", () => ({
   enqueueCompanyCycle: mockEnqueueCompanyCycle,
   processJobData: mockProcessJobData,
@@ -71,7 +67,6 @@ describe("/api/companies/[id]/cycles RBAC", () => {
     mockGetJobRun.mockReset();
     mockListCycles.mockReset();
     mockListExecutions.mockReset();
-    mockRunCompanyCycle.mockReset();
     mockEnqueueCompanyCycle.mockReset();
     mockProcessJobData.mockReset();
     mockRemoveQueuedBullJob.mockReset();
@@ -168,7 +163,6 @@ describe("/api/companies/[id]/cycles RBAC", () => {
         trigger: "user",
         cycleTrigger: "manual",
       });
-      expect(mockRunCompanyCycle).not.toHaveBeenCalled();
     });
 
     it("processNow removes the queued BullMQ job and runs the persisted cycle job immediately", async () => {

@@ -23,6 +23,18 @@ import {
 const mockJobEvents = vi.hoisted(() => ({ emitJobEvent: vi.fn() }));
 vi.mock("@/lib/job-events", () => mockJobEvents);
 
+const mockWikiEmbeddings = vi.hoisted(() => ({
+  semanticSearch: vi.fn(async () => [] as Array<{
+    noteId: string;
+    title: string;
+    path: string;
+    chunkIdx: number;
+    text: string;
+    score: number;
+  }>),
+}));
+vi.mock("@/lib/wiki-embeddings", () => mockWikiEmbeddings);
+
 const mockSpend = vi.hoisted(() => ({
   assertSpendAvailable: vi.fn().mockResolvedValue(undefined),
   assertAgentTokenBudget: vi.fn().mockResolvedValue(undefined),
@@ -132,6 +144,23 @@ describe("buildOrchestrationPlanningPrompts", () => {
 
     expect(prompts.system).toContain("acceptance");
     expect(prompts.user).toContain("spec");
+  });
+
+  it("includes grounded source documents and coverage in the planner prompt", () => {
+    const prompts = buildOrchestrationPlanningPrompts(
+      { id: "co_1", name: "Co", brief: { vision: "v", goals: "g", icp: "i" } } as any,
+      "Audit the roadmap.",
+      "",
+      {
+        sourceCoverage: "SOURCE COVERAGE:\n- Available: roadmap (doc wiki:roadmap#0)\n- Missing: none",
+        sourceDocuments: "SOURCE DOCUMENTS (cite by id when you use one):\n[wiki:roadmap#0] Roadmap Wiki\nRoadmap priorities.",
+      },
+    );
+
+    expect(prompts.user).toContain("SOURCE COVERAGE");
+    expect(prompts.user).toContain("SOURCE DOCUMENTS");
+    expect(prompts.user).toContain("[wiki:roadmap#0]");
+    expect(prompts.user).toContain("cite their ids");
   });
 
   it("injects the content publishing mission protocol for social/ads objectives", () => {
@@ -521,6 +550,7 @@ describe("executeStepWithRuntime", () => {
     mockSpend.assertAgentTokenBudget.mockClear();
     mockRuntime.getAgentRuntime.mockClear();
     mockGateway.executeSeatModel.mockClear();
+    mockWikiEmbeddings.semanticSearch.mockClear();
   });
 
   it("checks budget before executing", async () => {
@@ -594,6 +624,46 @@ describe("executeStepWithRuntime", () => {
 
     expect(captured.subtask.objective).toContain("analyze spacex stocks and make a slideshow");
     expect(captured.subtask.contextBundle.overallObjective).toBe("analyze spacex stocks and make a slideshow");
+  });
+
+  it("injects semantic wiki chunks into seat source documents and coverage", async () => {
+    let captured: any;
+    mockWikiEmbeddings.semanticSearch.mockResolvedValueOnce([
+      {
+        noteId: "note_roadmap",
+        title: "Roadmap Wiki",
+        path: "wiki/roadmap.md",
+        chunkIdx: 0,
+        text: "Roadmap: import existing projects, then add Playwright verification evidence.",
+        score: 0.93,
+      },
+    ]);
+    mockGateway.executeSeatModel.mockImplementationOnce(async (input: any) => {
+      captured = input;
+      return { output: { summary: "ok", findings: [], recommendations: [] }, model: "gpt-4o-mini", tokens: 10, costCents: 1, fallback: false };
+    });
+    const company = await store.createCompany({
+      name: `Runtime Wiki Grounding ${makeId("test")}`,
+      brief: { vision: "ground agents in wiki evidence" },
+    });
+    const analystStep: RuntimeStep = {
+      ...step,
+      agentRole: "analyst",
+      title: "Audit the roadmap",
+      expectedOutput: "Use the roadmap to rank the next build priorities.",
+    };
+
+    await executeStepWithRuntime({
+      step: analystStep,
+      company,
+      previousOutputs: {},
+      objective: "Audit the roadmap.",
+    });
+
+    expect(captured.subtask.contextBundle.sourceDocuments).toContain("[wiki:note_roadmap#0]");
+    expect(captured.subtask.contextBundle.sourceDocuments).toContain("Playwright verification");
+    expect(captured.subtask.contextBundle.sourceCoverage).toContain("Available: roadmap (doc wiki:note_roadmap#0)");
+    expect(captured.subtask.contextBundle.sourceCoverage).toContain("Missing: none");
   });
 
   it("injects sanitized platform readiness into content/social/ads mission seats", async () => {

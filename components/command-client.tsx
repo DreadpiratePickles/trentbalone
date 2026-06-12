@@ -30,6 +30,7 @@ import {
   type ActivityStep,
 } from "@/components/agent-activity";
 import { OrchestratorTraceDrawer } from "@/components/orchestrator-trace-drawer";
+import { McpToolVisibilityPanel } from "@/components/mcp-tool-visibility-panel";
 import type { Artifact, CeoMessage, CeoSuggestion } from "@/lib/types";
 import type { CeoChatMode } from "@/lib/ceo-chat-mode";
 import {
@@ -377,6 +378,9 @@ export function CommandClient({ companyId }: { companyId: string }) {
           setModelPickerOpen={setModelPickerOpen}
           selectedModel={selectedModel}
         />
+        <div style={{ padding: "0 24px" }}>
+          <McpToolVisibilityPanel companyId={companyId} compact />
+        </div>
 
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflowY: "auto", padding: "0 24px" }}>
           {messages.length === 0 ? (

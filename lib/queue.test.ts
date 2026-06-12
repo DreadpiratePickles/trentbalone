@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { Subtask } from "@/lib/planner";
 
-const { mockWorkbenchSessionSweep, mockProcessSubtaskJob, mockRunCompanyCycle, mockExecuteQueuedPlatformAction, mockExecuteContentPerformanceFeedbackJob } = vi.hoisted(() => ({
+const { mockWorkbenchSessionSweep, mockProcessSubtaskJob, mockLaunchOrchestration, mockExecuteQueuedPlatformAction, mockExecuteContentPerformanceFeedbackJob } = vi.hoisted(() => ({
   mockWorkbenchSessionSweep: vi.fn(),
   mockProcessSubtaskJob: vi.fn(),
-  mockRunCompanyCycle: vi.fn(),
+  mockLaunchOrchestration: vi.fn(),
   mockExecuteQueuedPlatformAction: vi.fn(),
   mockExecuteContentPerformanceFeedbackJob: vi.fn(),
 }));
@@ -15,8 +15,8 @@ vi.mock("@/lib/workbench-orchestrator", () => ({
 vi.mock("@/lib/seat-worker", () => ({
   processSubtaskJob: mockProcessSubtaskJob,
 }));
-vi.mock("@/lib/cycles", () => ({
-  runCompanyCycle: mockRunCompanyCycle,
+vi.mock("@/lib/orchestrator", () => ({
+  launchOrchestration: mockLaunchOrchestration,
 }));
 vi.mock("@/lib/platform-action-runner", () => ({
   executeQueuedPlatformAction: mockExecuteQueuedPlatformAction,
@@ -123,14 +123,17 @@ describe("processJobData — run_subtask persistence", () => {
 describe("processJobData — company_scheduled_cycle persistence", () => {
   afterEach(() => { vi.clearAllMocks(); });
 
-  it("queues a company cycle and stores the cycle result on completion", async () => {
-    mockRunCompanyCycle.mockResolvedValue({
-      cycle: { id: "cycle_1", status: "completed", summary: "Cycle complete" },
-      tasks: [{ id: "task_1" }],
-      approvals: [],
-      reports: [],
-      usage: [],
-      executions: [],
+  it("launches a durable full-team orchestration for a company cycle", async () => {
+    mockLaunchOrchestration.mockResolvedValue({
+      id: "orc_1",
+      cycleId: "orc_1",
+      companyId: "co_1",
+      objective: "Inspect company state",
+      status: "planning",
+      steps: [],
+      startedAt: "2026-06-12T00:00:00.000Z",
+      trigger: "manual",
+      fullTeam: true,
     });
     const company = await createQueueCompany("Queued Cycle Co");
     const jobRun = await enqueueCompanyCycle({
@@ -149,10 +152,16 @@ describe("processJobData — company_scheduled_cycle persistence", () => {
     });
 
     const updated = await store.getJobRun(jobRun.id);
-    expect(mockRunCompanyCycle).toHaveBeenCalledWith(company.id, "manual");
+    expect(mockLaunchOrchestration).toHaveBeenCalledWith({
+      companyId: company.id,
+      objective: expect.stringContaining("Inspect company state"),
+      trigger: "manual",
+      fullTeam: true,
+      cycleKind: "scheduled",
+    });
     expect(updated?.status).toBe("completed");
     expect(updated?.metadata.result).toMatchObject({
-      cycle: { id: "cycle_1", status: "completed" },
+      run: { id: "orc_1", status: "planning" },
     });
   });
 });

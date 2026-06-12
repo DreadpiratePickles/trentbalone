@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { runCompanyCycle } from "@/lib/cycles";
 import { enqueueCompanyCycle, processJobData, removeQueuedBullJob } from "@/lib/queue";
+import { launchOrchestration } from "@/lib/orchestrator";
 import { store } from "@/lib/store";
 import { getAuthUser, unauthorized, forbidden, requireRoleForRequest } from "@/lib/session";
 import { checkRateLimit, checkCycleRateLimit, rateLimitExceeded } from "@/lib/rate-limit";
@@ -65,8 +65,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         tags: ["debug", "rerun"],
         costCents: 0,
       });
-      const cycle = await runCompanyCycle(id, "manual");
-      return NextResponse.json({ cycle, debugTask }, { status: 201 });
+      const run = await launchOrchestration({
+        companyId: id,
+        objective: [
+          `Debug rerun from execution ${fromExecutionId}.`,
+          `Original ${sourceExec.agentRole} input: ${sourceExec.input}`,
+          "Use the durable orchestrator path and preserve audit, critic, and memory records.",
+        ].join("\n"),
+        trigger: "manual",
+        fullTeam: false,
+        cycleKind: "scheduled",
+      });
+      return NextResponse.json({ run, cycle: { id: run.cycleId ?? run.id, status: run.status }, debugTask }, { status: 201 });
     }
 
     const job = await enqueueCompanyCycle({ companyId: id, trigger: "user", cycleTrigger: "manual" });

@@ -250,24 +250,36 @@ export async function processJobData(type: QueueJobName, data: QueueJobPayload) 
   if (type === "company_scheduled_cycle") {
     const { companyId, cycleTrigger } = data as CompanyCyclePayload;
     try {
-      const { runCompanyCycle } = await import("@/lib/cycles") as typeof import("@/lib/cycles");
-      const result = await withTimeout(
-        runCompanyCycle(companyId, cycleTrigger),
+      const { launchOrchestration } = await import("@/lib/orchestrator") as typeof import("@/lib/orchestrator");
+      const run = await withTimeout(
+        launchOrchestration({
+          companyId,
+          objective: buildOperatingCycleObjective(cycleTrigger),
+          trigger: cycleTrigger,
+          fullTeam: true,
+          cycleKind: "scheduled",
+        }),
         jobTimeoutMs(data),
         jobRunId
       );
       if ((await store.getJobRun(jobRunId))?.status === "cancelled") return;
       const current = await store.getJobRun(jobRunId);
-      const taskCount = Array.isArray(result.tasks) ? result.tasks.length : 0;
       await updateJobRunWithEvent(jobRunId, {
         status: "completed",
         completedAt: nowIso(),
-        resultCount: taskCount,
-        summary: `Completed company cycle ${result.cycle.id}.`,
+        resultCount: 1,
+        summary: `Launched durable operating cycle ${run.cycleId ?? run.id}.`,
         metadata: {
           ...(current?.metadata ?? {}),
-          result,
-          completedCycleAt: nowIso(),
+          result: {
+            run: {
+              id: run.id,
+              cycleId: run.cycleId,
+              status: run.status,
+              objective: run.objective,
+            },
+          },
+          launchedOrchestrationAt: nowIso(),
         },
       });
       console.log(`[Worker] Job ${jobRunId} completed successfully`);
@@ -592,6 +604,16 @@ export async function processJobData(type: QueueJobName, data: QueueJobPayload) 
   throw new Error(`Unknown job type: ${String(type)}`);
 }
 
+function buildOperatingCycleObjective(trigger: "manual" | "scheduled"): string {
+  return [
+    `Inspect company state for this ${trigger} operating cycle.`,
+    "Identify the highest-leverage opportunities across company memory, tasks, approvals, usage, recent cycles, and connected tools.",
+    "Execute safe work through the durable multi-agent orchestrator.",
+    "Surface required approvals instead of taking irreversible external actions.",
+    "Produce a CEO-ready summary, report, audit trail, and memory log.",
+  ].join(" ");
+}
+
 async function addBullJobOrMarkFailed(type: QueueJobName, data: QueueJobPayload) {
   const q = await getQueue();
   if (!q) {
@@ -696,7 +718,7 @@ export async function enqueueCompanyCycle(input: {
     status: "running",
     companyId: input.companyId,
     trigger: input.trigger,
-    summary: "Queued company operating cycle.",
+    summary: "Queued durable company operating cycle.",
     resultCount: 0,
     metadata: {
       at: nowIso(),

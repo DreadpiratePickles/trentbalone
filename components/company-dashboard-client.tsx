@@ -68,10 +68,10 @@ export function CompanyDashboardClient({ companyId }: { companyId: string }) {
       if (body.job) setJobRuns((prev) => [body.job as JobRun, ...prev.filter((job) => job.id !== body.job?.id)]);
       setCycleNotice(
         body.processed
-          ? "The operating cycle ran and wrote its results."
+          ? "The operating cycle launched in the durable orchestrator."
           : body.processing === "worker_active"
           ? "A worker is already processing this cycle."
-          : "The cycle is queued. Open Queue if it does not advance."
+          : "The durable operating cycle is queued. Open Queue if it does not advance."
       );
     } catch (e) {
       setCycleError(e instanceof Error ? e.message : "Cycle could not start");

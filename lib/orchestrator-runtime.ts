@@ -32,12 +32,7 @@ import { getMcpAdaptersForCompany } from "@/lib/mcp-tool-adapter";
 import { InMemorySkillDraftStore, type SkillDraftStore } from "@/lib/skill-foundry";
 import { PrismaSkillDraftStore } from "@/lib/self-improvement/skill-draft-store.prisma";
 import { formatPlanValidationErrors, validateOrchestrationPlan } from "@/lib/plan-validator";
-import {
-  buildSourceCoverage,
-  formatSourceCoverage,
-  formatSourceDocumentsBlock,
-  selectRelevantDocuments,
-} from "@/lib/source-coverage";
+import { buildGroundedSourceContext } from "@/lib/source-grounding";
 import { seatOutputSchemas } from "@/lib/seat-output-schemas";
 import { logger } from "@/lib/logger";
 
@@ -567,11 +562,16 @@ export async function generateOrchestrationPlan(
   // RC1 fix (Fix Plan Slice 2): the planner sees which required sources exist
   // and which are missing before decomposing the objective. Best-effort.
   const planningDocs = await store.listDocuments(company.id).catch(() => []);
-  const planCoverage = buildSourceCoverage(objective, planningDocs);
+  const sourceContext = await buildGroundedSourceContext({
+    companyId: company.id,
+    query: [objective, memory].filter(Boolean).join("\n"),
+    documents: planningDocs,
+  });
   const prompts = buildOrchestrationPlanningPrompts(company, objective, memory, {
     fullTeam,
     operatingState: options?.operatingState,
-    sourceCoverage: planCoverage.required.length > 0 ? formatSourceCoverage(planCoverage) : undefined,
+    sourceCoverage: sourceContext.sourceCoverage,
+    sourceDocuments: sourceContext.sourceDocuments,
   });
   const route = recommendSeatForObjective(objective);
   const fallbackNeedsApproval = /\b(publish|send|merge|deploy|spend|charge|refund|withdraw|delete)\b/i.test(objective);
@@ -814,7 +814,7 @@ export function buildOrchestrationPlanningPrompts(
   company: Company,
   objective: string,
   memory: string,
-  options?: { fullTeam?: boolean; operatingState?: string; sourceCoverage?: string },
+  options?: { fullTeam?: boolean; operatingState?: string; sourceCoverage?: string; sourceDocuments?: string },
 ): { system: string; user: string } {
   const fullTeam = options?.fullTeam ?? false;
   const route = recommendSeatForObjective(objective);
@@ -859,6 +859,9 @@ export function buildOrchestrationPlanningPrompts(
     // coverage and must never claim to have audited a missing source.
     ...(options?.sourceCoverage
       ? [options.sourceCoverage, "The final consolidated output MUST include this source coverage (available vs missing).", ""]
+      : []),
+    ...(options?.sourceDocuments
+      ? [options.sourceDocuments, "Use these source documents/wiki chunks when planning evidence-gathering and cite their ids in downstream step expectations.", ""]
       : []),
     `Objective: ${objective}`,
     "",
@@ -1165,22 +1168,20 @@ async function buildLiveContext(
       if (productDocs.length > 0) ctx.productDocs = productDocs;
     }
 
-    // RC1 fix (Fix Plan Slice 2): every seat gets relevance-ranked source
-    // documents (no type filter) plus a coverage report of required vs
-    // missing sources, so agents cite real docs and never claim to have
-    // audited a source that is absent.
-    const sourceDocs = selectRelevantDocuments(missionText || "", docs, 6);
-    if (sourceDocs.length > 0) {
-      ctx.sourceDocuments = formatSourceDocumentsBlock(
-        sourceDocs.map(d => ({ id: d.id, title: d.title, content: d.content, type: d.type })),
-        1500,
-      );
-    }
-    const coverage = buildSourceCoverage(missionText || "", docs);
-    if (coverage.required.length > 0) {
-      ctx.sourceCoverage = formatSourceCoverage(coverage);
-    }
   }
+
+  // RC1 + competitive upgrade: every seat gets relevance-ranked source
+  // documents from company docs/uploads plus semantic wiki chunks. The same
+  // coverage contract drives critic grounding, so wiki pages can satisfy
+  // required-source needs without a separate prompt vocabulary.
+  const sourceContext = await buildGroundedSourceContext({
+    companyId,
+    query: missionText || "",
+    documents: (docs ?? []).map(d => ({ id: d.id, title: d.title, content: d.content, type: d.type })),
+  });
+  if (sourceContext.sourceDocuments) ctx.sourceDocuments = sourceContext.sourceDocuments;
+  if (sourceContext.sourceCoverage) ctx.sourceCoverage = sourceContext.sourceCoverage;
+
   if (needsPlatform && socialAccounts && marketingAccounts) {
     const inferred = inferPlatformRequirements(missionText);
     const readiness = buildPlatformAuthReadiness({

@@ -1,7 +1,6 @@
 import type { Company, JobRun, RecurringTaskTemplate, Report } from "@/lib/types";
 import { store } from "@/lib/store";
 import { nowIso } from "@/lib/utils";
-import { runCompanyCycle } from "@/lib/cycles";
 import { nextRunFromSchedule } from "@/lib/schedule-grammar";
 
 export { parseSchedule, nextRunFromSchedule as nextRunFromGrammar } from "@/lib/schedule-grammar";
@@ -97,8 +96,15 @@ export async function runDueScheduledCycles(atIso = nowIso(), companyIds?: strin
   const results = [];
   for (const company of dueCompanies) {
     await materializeDueRecurringTasks(company.id, atIso);
-    const cycle = await runCompanyCycle(company.id, "scheduled");
-    results.push(cycle);
+    const { launchOrchestration } = await import("@/lib/orchestrator");
+    const run = await launchOrchestration({
+      companyId: company.id,
+      objective: buildOperatingCycleObjective("scheduled"),
+      trigger: "scheduled",
+      fullTeam: true,
+      cycleKind: "scheduled",
+    });
+    results.push(run);
     // Assemble morning briefing after nightly autonomous runs
     if (isNightlyRunDue(company, atIso)) {
       try {
@@ -109,6 +115,16 @@ export async function runDueScheduledCycles(atIso = nowIso(), companyIds?: strin
     }
   }
   return results;
+}
+
+function buildOperatingCycleObjective(trigger: "manual" | "scheduled"): string {
+  return [
+    `Inspect company state for this ${trigger} operating cycle.`,
+    "Identify the highest-leverage opportunities across company memory, tasks, approvals, usage, recent cycles, and connected tools.",
+    "Execute safe work through the durable multi-agent orchestrator.",
+    "Surface required approvals instead of taking irreversible external actions.",
+    "Produce a CEO-ready summary, report, audit trail, and memory log.",
+  ].join(" ");
 }
 
 export async function runScheduledCycleSweep(trigger: JobRun["trigger"] = "system", companyIds?: string[]) {
@@ -186,7 +202,7 @@ export async function materializeCompanyRecurringTasksJob(
  * Assembly point for the morning briefing (T3.1 / T9.1).
  * Called after the nightly cycle sweep to create a "morning_briefing" report
  * that summarises what Trent did while the founder slept.
- * Delivery to email is mocked in Phase 1 — wire Postmark in Phase 2.
+ * Email delivery is optional; when no provider is configured this function only creates the report.
  */
 /**
  * T6.5 — Re-plan on approval expiry.
@@ -320,14 +336,13 @@ export async function assembleMorningBriefing(companyId: string): Promise<Report
     version: 1,
   });
 
-  // Phase 1: mocked email delivery — log to audit
   await store.addAudit(
     companyId,
     "system",
     "morning_briefing.assembled",
     "report",
     report.id,
-    `Morning briefing assembled for ${company.name}. Email delivery mocked (Phase 1).`
+    `Morning briefing assembled for ${company.name}. Email delivery is not configured.`
   );
 
   return report;
