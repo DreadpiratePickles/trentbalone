@@ -142,6 +142,14 @@ describe("git-checkout orchestration", () => {
     expect(injectedEnvs[0]?.GIT_ASKPASS).toBe("/tmp/git-askpass.sh");
   });
 
+  it("allows public repository checkout without stored credentials", async () => {
+    await checkoutRepository(mockSession, mockAdapter, "feature-branch");
+
+    expect(executedCommands).toContain("git clone https://github.com/owner/repo.git .");
+    expect(executedCommands).toContain("git checkout feature-branch");
+    expect(injectedEnvs).toHaveLength(0);
+  });
+
   it("falls back to git checkout -b when git checkout fails", async () => {
     await saveGitHubConnection(companyId, {
       token: "ghp_mock_token",
@@ -186,5 +194,4 @@ describe("git-checkout orchestration", () => {
     );
   });
 });
-
 

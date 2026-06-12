@@ -17,6 +17,7 @@ type Session = {
   previewUrl?: string;
   metadata?: {
     appSolo?: WorkbenchSessionMetadata["appSolo"];
+    agentRun?: WorkbenchSessionMetadata["agentRun"];
   };
 };
 
@@ -88,6 +89,7 @@ export function WorkbenchEvidenceRail({
   streaming,
   onRefreshSession,
   onOpenSandbox,
+  onUploadFiles,
 }: {
   active: Session | null;
   events: WbEvent[];
@@ -96,6 +98,7 @@ export function WorkbenchEvidenceRail({
   streaming: boolean;
   onRefreshSession: () => Promise<void>;
   onOpenSandbox: () => void;
+  onUploadFiles?: (files: FileList) => void;
 }) {
   const [railTab, setRailTab] = useState<RailTab>("preview");
   const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
@@ -280,7 +283,18 @@ export function WorkbenchEvidenceRail({
   }, [active?.id, selectedFile, railTab]);
 
   return (
-    <aside style={R.rail}>
+    <aside
+      style={R.rail}
+      onDragOver={(event) => {
+        if (!active || !onUploadFiles) return;
+        event.preventDefault();
+      }}
+      onDrop={(event) => {
+        if (!active || !onUploadFiles || event.dataTransfer.files.length === 0) return;
+        event.preventDefault();
+        onUploadFiles(event.dataTransfer.files);
+      }}
+    >
       <div style={R.railTabs}>
         {RAIL_TABS.map((tab) => (
           <button key={tab.key} onClick={() => setRailTab(tab.key)} style={R.railTab(railTab === tab.key)} title={tab.title}>
@@ -289,7 +303,7 @@ export function WorkbenchEvidenceRail({
         ))}
       </div>
       <EvidenceSummaryStrip summary={ideView.evidenceSummary} />
-      <AppSoloMetadataStrip appSolo={active?.metadata?.appSolo} />
+      <AgentContractStrip agentRun={active?.metadata?.agentRun} appSolo={active?.metadata?.appSolo} />
       {railError && <div style={R.railError}>{railError}</div>}
 
       {railTab === "preview" && (
@@ -499,7 +513,28 @@ function EvidenceSummaryStrip({ summary }: { summary: WorkbenchIdeEvidenceSummar
   );
 }
 
-function AppSoloMetadataStrip({ appSolo }: { appSolo?: WorkbenchSessionMetadata["appSolo"] }) {
+function AgentContractStrip({
+  agentRun,
+  appSolo,
+}: {
+  agentRun?: WorkbenchSessionMetadata["agentRun"];
+  appSolo?: WorkbenchSessionMetadata["appSolo"];
+}) {
+  if (agentRun) {
+    return (
+      <div style={R.appSoloStrip} aria-label="Workbench agent contract">
+        <div style={R.appSoloTitle}>agent contract</div>
+        <div style={R.appSoloLine}>
+          <strong>{agentRun.agentLabel}</strong>
+          <span>{agentRun.mode ?? "mode unset"}</span>
+        </div>
+        <div style={R.appSoloMeta}>tools: {compactList(agentRun.tools)}</div>
+        <div style={R.appSoloMeta}>deliverables: {compactList(agentRun.deliverables)}</div>
+        <div style={R.appSoloMeta}>approval gates: {compactList(agentRun.approvalGates)}</div>
+        <div style={R.appSoloMeta}>evidence: {compactList(agentRun.evidenceRequired)}</div>
+      </div>
+    );
+  }
   if (!appSolo) return null;
   return (
     <div style={R.appSoloStrip} aria-label="App Solo session contract">

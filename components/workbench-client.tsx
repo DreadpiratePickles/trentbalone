@@ -1,17 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { I, Pill, Spinner, AgentChip } from "@/components/ui";
 import { WorkbenchEvidenceRail } from "@/components/workbench-evidence-rail";
 import { WorkbenchSandboxModal } from "@/components/workbench-sandbox-modal";
 import { AgentActivityFeed, mapWorkbenchChunk, type ActivityStep } from "@/components/agent-activity";
-import { WorkbenchBubble, WorkbenchNewSession, WorkbenchStatusDot } from "@/components/workbench-session-parts";
+import { WorkbenchBubble, WorkbenchNewSession, WorkbenchStatusDot, type WorkbenchCreateSource } from "@/components/workbench-session-parts";
 import { buildWorkbenchCreateRequestBody } from "@/lib/workbench-session-request";
+import { getWorkbenchAgents, type WorkbenchAgent } from "@/lib/workbench-agents";
+import {
+  buildWorkbenchAgentCreateRequest,
+  filterWorkbenchSessionsForSurface,
+  surfaceModeFromQuery,
+  type WorkbenchSurfaceMode,
+} from "@/lib/workbench-client-surface";
 import { workbenchPreviewFrameSrc } from "@/lib/workbench-preview-url";
 import { readApiError } from "@/lib/read-api-error";
 import { ErrorBanner, LlmNotConfiguredBanner } from "@/components/error-banner";
 import { useRuntimeHealth } from "@/components/runtime-health";
 import { useStatusToast } from "@/components/status-toast";
+import type { AgentRole, WorkbenchSessionMetadata } from "@/lib/types";
+import { McpToolVisibilityPanel } from "@/components/mcp-tool-visibility-panel";
 
 // ── Types (mirror lib/types-workbench + lib/workbench-agent chunk protocol) ──────
 
@@ -21,6 +31,7 @@ type SessionStatus = "queued" | "starting" | "running" | "paused" | "completed" 
 type Session = {
   id: string;
   companyId: string;
+  agentRole?: AgentRole;
   agentMode: AgentMode;
   status: SessionStatus;
   objective: string;
@@ -28,6 +39,10 @@ type Session = {
   messageCount?: number;
   costCents: number;
   updatedAt: string;
+  metadata?: {
+    agentRun?: WorkbenchSessionMetadata["agentRun"];
+    appSolo?: WorkbenchSessionMetadata["appSolo"];
+  } & Record<string, unknown>;
 };
 
 type ChatMessage = { id: string; role: "user" | "assistant" | "system"; content: string; createdAt: string };
@@ -83,6 +98,7 @@ const MODE_TONE: Record<AgentMode, "pulse" | "ember" | "mist"> = { build: "pulse
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function WorkbenchClient({ companyId }: { companyId: string }) {
+  const searchParams = useSearchParams();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -101,6 +117,13 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
   const [composerError, setComposerError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadNotice, setUploadNotice] = useState("");
+  const [surfaceMode, setSurfaceMode] = useState<WorkbenchSurfaceMode>(() => surfaceModeFromQuery(searchParams.get("mode")));
+  const agents = useMemo(() => getWorkbenchAgents(), []);
+  const [selectedAgentRole, setSelectedAgentRole] = useState<WorkbenchAgent["role"]>("engineer");
+  const selectedAgent = useMemo(
+    () => agents.find((agent) => agent.role === selectedAgentRole) ?? agents[0],
+    [agents, selectedAgentRole],
+  );
 
   const { readiness, loading: healthLoading } = useRuntimeHealth();
   const { pushError } = useStatusToast();
@@ -112,6 +135,10 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
   const autoOpenedRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setSurfaceMode(surfaceModeFromQuery(searchParams.get("mode")));
+  }, [searchParams]);
 
   const refreshSessions = useCallback(async () => {
     const [sRes, stRes] = await Promise.all([
@@ -172,7 +199,12 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
     }
   }, [active]);
 
-  const createSession = useCallback(async (objective: string, mode: AgentMode): Promise<boolean> => {
+  const createSession = useCallback(async (
+    objective: string,
+    mode: AgentMode,
+    agent?: WorkbenchAgent,
+    source?: WorkbenchCreateSource,
+  ): Promise<boolean> => {
     if (!llmConfigured) {
       setSessionError("LLM not configured — see docs/RUN.md");
       return false;
@@ -180,10 +212,19 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
     setCreating(true);
     setSessionError("");
     try {
+      const importFiles = source?.files?.filter(Boolean) ?? [];
+      const repoUrl = source?.repoUrl?.trim();
+      const needsImport = importFiles.length > 0 || !!repoUrl;
+      const body = agent
+        ? buildWorkbenchAgentCreateRequest({ companyId, objective, agent })
+        : buildWorkbenchCreateRequestBody({ companyId, objective, agentMode: mode });
+      if (repoUrl) body.repoUrl = repoUrl;
+      if (needsImport) body.enqueue = false;
+
       const res = await fetch(`/api/workbench`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildWorkbenchCreateRequestBody({ companyId, objective, agentMode: mode })),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const message = await readApiError(res);
@@ -192,6 +233,29 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
         return false;
       }
       const { session } = await res.json();
+      if (needsImport) {
+        if (importFiles.length) {
+          const upload = await postWorkbenchUpload(session.id, importFiles);
+          if (!upload.ok) {
+            const message = upload.message;
+            setSessionError(message);
+            pushError(message);
+            await refreshSessions();
+            await loadSession(session.id);
+            return false;
+          }
+          setUploadNotice(upload.message);
+        }
+        const started = await fetch(`/api/workbench/${session.id}/start`, { method: "POST" });
+        if (!started.ok) {
+          const message = await readApiError(started);
+          setSessionError(message);
+          pushError(message);
+          await refreshSessions();
+          await loadSession(session.id);
+          return false;
+        }
+      }
       await refreshSessions();
       await loadSession(session.id);
       return true;
@@ -337,29 +401,14 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
     setUploadNotice("");
     setComposerError("");
     try {
-      const form = new FormData();
-      const paths: string[] = [];
-      Array.from(fileList).forEach((file) => {
-        form.append("files", file, file.name);
-        const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
-        paths.push(rel && rel.trim() ? rel : file.name);
-      });
-      form.append("paths", JSON.stringify(paths));
-      const res = await fetch(`/api/workbench/${active.id}/uploads`, { method: "POST", body: form });
-      const data = await res.json().catch(() => null) as {
-        summary?: string; error?: string;
-        skipped?: Array<{ path: string; reason: string }>;
-      } | null;
-      if (!res.ok) {
-        const message = data?.error ?? `Upload failed (HTTP ${res.status}).`;
+      const result = await postWorkbenchUpload(active.id, Array.from(fileList));
+      if (!result.ok) {
+        const message = result.message;
         setComposerError(message);
         pushError(message);
         return;
       }
-      const skippedNote = data?.skipped?.length
-        ? ` Skipped: ${data.skipped.slice(0, 3).map((s) => `${s.path} (${s.reason})`).join("; ")}${data.skipped.length > 3 ? "…" : ""}`
-        : "";
-      setUploadNotice(`${data?.summary ?? "Upload complete."}${skippedNote}`);
+      setUploadNotice(result.message);
       await refreshActive();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upload failed.";
@@ -370,7 +419,11 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
     }
   }, [active, uploading, pushError, refreshActive]);
 
-  const filteredSessions = sessions.filter((s) => s.agentMode === modeFilter);
+  const filteredSessions = filterWorkbenchSessionsForSurface(sessions, surfaceMode, modeFilter);
+  const newSessionMode = surfaceMode === "agents" ? selectedAgent.mode : modeFilter;
+  const newSessionPlaceholder = surfaceMode === "agents"
+    ? `Brief ${selectedAgent.label} for a scoped Workbench run...`
+    : undefined;
 
   return (
     <div style={S.root}>
@@ -383,21 +436,52 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
               <I.refresh />
             </button>
           </div>
-          <div style={S.modeTabs}>
-            {MODES.map((m) => (
-              <button key={m.key} onClick={() => setModeFilter(m.key)} style={S.modeTab(modeFilter === m.key, MODE_TONE[m.key])} title={m.blurb}>
-                {m.label}
+          <div style={S.surfaceTabs} aria-label="Workbench surface">
+            {(["workbench", "agents"] as const).map((surface) => (
+              <button
+                key={surface}
+                onClick={() => setSurfaceMode(surface)}
+                style={S.surfaceTab(surfaceMode === surface)}
+                title={surface === "agents" ? "Run scoped agent seats inside Workbench" : "Run standard Workbench build, research, and design sessions"}
+              >
+                {surface === "agents" ? "Agents" : "Workbench"}
               </button>
             ))}
           </div>
+          {surfaceMode === "workbench" ? (
+            <div style={S.modeTabs}>
+              {MODES.map((m) => (
+                <button key={m.key} onClick={() => setModeFilter(m.key)} style={S.modeTab(modeFilter === m.key, MODE_TONE[m.key])} title={m.blurb}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div style={S.agentList} aria-label="Workbench agents">
+              {agents.map((agent) => (
+                <button
+                  key={agent.role}
+                  onClick={() => setSelectedAgentRole(agent.role)}
+                  style={S.agentButton(selectedAgentRole === agent.role)}
+                  title={agent.mission}
+                >
+                  <span>{agent.label}</span>
+                  <span className="mono">{agent.mode}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <WorkbenchNewSession
-          mode={modeFilter}
+          mode={newSessionMode}
           creating={creating}
           llmConfigured={llmConfigured}
-          onCreate={createSession}
+          placeholder={newSessionPlaceholder}
+          onCreate={(objective, mode, source) => createSession(objective, mode, surfaceMode === "agents" ? selectedAgent : undefined, source)}
         />
+
+        <McpToolVisibilityPanel companyId={companyId} compact />
 
         {sessionError ? (
           <div style={{ padding: "8px 14px 0" }}>
@@ -406,12 +490,18 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
         ) : null}
 
         <div style={S.sessionList}>
-          {filteredSessions.length === 0 && <p style={S.empty}>No {modeFilter} sessions yet. Describe an objective above to start one.</p>}
+          {filteredSessions.length === 0 && (
+            <p style={S.empty}>
+              {surfaceMode === "agents"
+                ? `No ${selectedAgent.label} agent sessions yet. Describe an objective above to start one.`
+                : `No ${modeFilter} sessions yet. Describe an objective above to start one.`}
+            </p>
+          )}
           {filteredSessions.map((s) => (
             <div key={s.id} style={S.sessionWrap(s.id === activeId)}>
               <button onClick={() => void loadSession(s.id)} style={S.sessionRow}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <AgentChip code={MODES.find((m) => m.key === s.agentMode)?.code ?? "BLD"} size={24} tone={MODE_TONE[s.agentMode]} />
+                <AgentChip code={sessionChipCode(s)} size={24} tone={MODE_TONE[s.agentMode]} />
                 <span style={S.sessionTitle}>{s.objective}</span>
               </div>
               <div style={S.sessionMeta}>
@@ -506,7 +596,18 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
               )}
             </div>
 
-            <div style={S.composer}>
+            <div
+              style={S.composer}
+              onDragOver={(event) => {
+                if (!active || uploading) return;
+                event.preventDefault();
+              }}
+              onDrop={(event) => {
+                if (!active || uploading || event.dataTransfer.files.length === 0) return;
+                event.preventDefault();
+                void uploadFiles(event.dataTransfer.files);
+              }}
+            >
               {composerError ? (
                 <div style={{ width: "100%", marginBottom: 8 }}>
                   <ErrorBanner message={composerError} onDismiss={() => setComposerError("")} />
@@ -580,6 +681,7 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
         streaming={streaming}
         onRefreshSession={refreshActive}
         onOpenSandbox={() => setSandboxOpen(true)}
+        onUploadFiles={(files) => void uploadFiles(files)}
       />
 
       {sandboxOpen && active?.previewUrl && (
@@ -599,6 +701,37 @@ function previewSrc(session: Session): string {
   return workbenchPreviewFrameSrc(session);
 }
 
+async function postWorkbenchUpload(sessionId: string, files: File[]): Promise<{ ok: boolean; message: string }> {
+  const form = new FormData();
+  const paths: string[] = [];
+  files.forEach((file) => {
+    form.append("files", file, file.name);
+    const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+    paths.push(rel && rel.trim() ? rel : file.name);
+  });
+  form.append("paths", JSON.stringify(paths));
+
+  const res = await fetch(`/api/workbench/${sessionId}/uploads`, { method: "POST", body: form });
+  const data = await res.json().catch(() => null) as {
+    summary?: string;
+    error?: string;
+    skipped?: Array<{ path: string; reason: string }>;
+  } | null;
+  const skippedNote = data?.skipped?.length
+    ? ` Skipped: ${data.skipped.slice(0, 3).map((s) => `${s.path} (${s.reason})`).join("; ")}${data.skipped.length > 3 ? "..." : ""}`
+    : "";
+  if (!res.ok) {
+    return { ok: false, message: data?.error ?? `Upload failed (HTTP ${res.status}).` };
+  }
+  return { ok: true, message: `${data?.summary ?? "Upload complete."}${skippedNote}` };
+}
+
+function sessionChipCode(session: Session): string {
+  if (session.metadata?.agentRun?.agentLabel) return session.metadata.agentRun.agentLabel.slice(0, 3).toUpperCase();
+  if (session.metadata?.appSolo?.agentRole) return session.metadata.appSolo.agentRole.slice(0, 3).toUpperCase();
+  return MODES.find((mode) => mode.key === session.agentMode)?.code ?? "BLD";
+}
+
 // ── Inline styles (house design tokens) ───────────────────────────────────────
 
 const border = "1px solid rgba(255,255,255,.07)";
@@ -609,12 +742,26 @@ const S = {
   sidebar: { borderRight: border, display: "flex", flexDirection: "column", minHeight: 0 } as React.CSSProperties,
   sidebarHead: { padding: "16px 14px 12px", borderBottom: border } as React.CSSProperties,
   kicker: { fontSize: 10, letterSpacing: ".18em", color: "var(--haze)" } as React.CSSProperties,
+  surfaceTabs: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 12 } as React.CSSProperties,
+  surfaceTab: (active: boolean) => ({
+    padding: "7px 0", fontSize: 12, fontWeight: 700, cursor: "pointer", borderRadius: 7,
+    border: active ? "1px solid rgba(110,231,183,.34)" : border,
+    background: active ? "rgba(110,231,183,.08)" : "transparent",
+    color: active ? "var(--pulse)" : "var(--mist)",
+  }) as React.CSSProperties,
   modeTabs: { display: "flex", gap: 6, marginTop: 10 } as React.CSSProperties,
   modeTab: (active: boolean, tone: string) => ({
     flex: 1, padding: "6px 0", fontSize: 12, fontWeight: 600, cursor: "pointer", borderRadius: 7,
     border: active ? `1px solid var(--${tone})` : border,
     background: active ? `color-mix(in oklab, var(--${tone}) 12%, transparent)` : "transparent",
     color: active ? `var(--${tone})` : "var(--mist)", transition: "all .18s ease",
+  }) as React.CSSProperties,
+  agentList: { display: "grid", gridTemplateColumns: "1fr", gap: 5, marginTop: 10, maxHeight: 230, overflowY: "auto", paddingRight: 2 } as React.CSSProperties,
+  agentButton: (active: boolean) => ({
+    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+    padding: "7px 8px", borderRadius: 7, border: active ? "1px solid rgba(110,231,183,.3)" : border,
+    background: active ? "rgba(110,231,183,.06)" : "rgba(255,255,255,.018)",
+    color: active ? "var(--pulse)" : "var(--mist)", fontSize: 12, cursor: "pointer", minWidth: 0,
   }) as React.CSSProperties,
   sessionList: { flex: 1, overflowY: "auto", padding: 8, minHeight: 0 } as React.CSSProperties,
   empty: { fontSize: 12, color: "var(--haze)", padding: 12, lineHeight: 1.5 } as React.CSSProperties,

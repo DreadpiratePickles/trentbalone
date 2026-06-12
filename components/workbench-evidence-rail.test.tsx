@@ -58,7 +58,45 @@ describe("WorkbenchEvidenceRail", () => {
     expect(html).toContain("failed: tests");
   });
 
-  it("renders App Solo contract metadata for solo sessions", () => {
+  it("renders Workbench agent contract metadata for agent sessions", () => {
+    const html = renderToStaticMarkup(
+      <WorkbenchEvidenceRail
+        active={{
+          id: "ws_agent",
+          status: "completed",
+          previewUrl: "http://localhost:3000",
+          metadata: {
+            agentRun: {
+              agentRole: "engineer",
+              agentLabel: "Engineer",
+              tools: ["github:read [real]", "steel:scrape [unavailable]"],
+              deliverables: ["implementation plan"],
+              approvalGates: ["github.pr"],
+              evidenceRequired: ["tests", "screenshots"],
+              mode: "build",
+            },
+          },
+        }}
+        events={[]}
+        artifacts={[]}
+        activity={[]}
+        streaming={false}
+        onRefreshSession={async () => undefined}
+        onOpenSandbox={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("agent contract");
+    expect(html).toContain("Engineer");
+    expect(html).toContain("build");
+    expect(html).toContain("github:read [real]");
+    expect(html).toContain("implementation plan");
+    expect(html).toContain("github.pr");
+    expect(html).toContain("tests");
+    expect(html).not.toContain("app solo contract");
+  });
+
+  it("renders legacy App Solo contract metadata for old solo sessions", () => {
     const html = renderToStaticMarkup(
       <WorkbenchEvidenceRail
         active={{

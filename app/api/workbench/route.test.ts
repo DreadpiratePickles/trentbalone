@@ -93,6 +93,21 @@ describe("/api/workbench RBAC", () => {
     expect(data.session).toBeDefined();
   });
 
+  it("POST: can create a session without enqueueing so imports happen first", async () => {
+    mockGetAuthUser.mockResolvedValue({ id: "u1" });
+    mockRequireRoleForRequest.mockResolvedValue({ ok: true, role: "member" });
+
+    const res = await POST(new Request("http://x/api/workbench", {
+      method: "POST",
+      body: JSON.stringify({ companyId: "c1", objective: "Import then build", enqueue: false }),
+    }));
+
+    expect(res.status).toBe(201);
+    expect(createWorkbenchSession).toHaveBeenCalledWith(expect.objectContaining({
+      enqueue: false,
+    }));
+  });
+
   it("POST: forwards sanitized app-solo attribution metadata", async () => {
     mockGetAuthUser.mockResolvedValue({ id: "u1" });
     mockRequireRoleForRequest.mockResolvedValue({ ok: true, role: "member" });
@@ -130,6 +145,46 @@ describe("/api/workbench RBAC", () => {
           deliverables: ["video brief"],
           approvalGates: ["external_publish"],
           mode: "design",
+        },
+      },
+    }));
+  });
+
+  it("POST: forwards sanitized Workbench agent contract metadata", async () => {
+    mockGetAuthUser.mockResolvedValue({ id: "u1" });
+    mockRequireRoleForRequest.mockResolvedValue({ ok: true, role: "member" });
+
+    const res = await POST(new Request("http://x/api/workbench", {
+      method: "POST",
+      body: JSON.stringify({
+        companyId: "c1",
+        objective: "[workbench-agent] Engineer",
+        metadata: {
+          agentRun: {
+            agentRole: "engineer",
+            agentLabel: "Engineer",
+            tools: ["github:read [real]", "steel:scrape [unavailable]"],
+            deliverables: ["implementation plan"],
+            approvalGates: ["github.pr"],
+            evidenceRequired: ["tests", "screenshots"],
+            mode: "build",
+            ignored: "nope",
+          },
+        },
+      }),
+    }));
+
+    expect(res.status).toBe(201);
+    expect(createWorkbenchSession).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: {
+        agentRun: {
+          agentRole: "engineer",
+          agentLabel: "Engineer",
+          tools: ["github:read [real]", "steel:scrape [unavailable]"],
+          deliverables: ["implementation plan"],
+          approvalGates: ["github.pr"],
+          evidenceRequired: ["tests", "screenshots"],
+          mode: "build",
         },
       },
     }));

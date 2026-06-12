@@ -53,4 +53,36 @@ describe("buildWorkbenchCreateRequestBody", () => {
       },
     });
   });
+
+  it("includes Workbench agent contract metadata when supplied", () => {
+    const body = buildWorkbenchCreateRequestBody({
+      companyId: "co_1",
+      objective: "[workbench-agent] Engineer",
+      agentRole: "engineer",
+      agentMode: "build",
+      metadata: {
+        agentRun: {
+          agentRole: "engineer",
+          agentLabel: "Engineer",
+          tools: ["github:read [real]"],
+          deliverables: ["implementation plan"],
+          approvalGates: ["github.pr"],
+          evidenceRequired: ["tests"],
+          mode: "build",
+        },
+      },
+    });
+
+    expect(body.metadata).toEqual({
+      agentRun: {
+        agentRole: "engineer",
+        agentLabel: "Engineer",
+        tools: ["github:read [real]"],
+        deliverables: ["implementation plan"],
+        approvalGates: ["github.pr"],
+        evidenceRequired: ["tests"],
+        mode: "build",
+      },
+    });
+  });
 });

@@ -5,7 +5,7 @@ export type WorkbenchProvider = "mock_local" | "e2b" | "daytona" | "railway" | "
 export type WorkbenchEventType = "plan" | "shell" | "browser" | "file" | "test" | "screenshot" | "artifact" | "deploy" | "approval" | "system";
 export type WorkbenchEventStatus = "pending" | "running" | "completed" | "failed" | "needs_approval";
 export type WorkbenchArtifactKind = "file" | "screenshot" | "terminal_log" | "test_result" | "preview" | "export" | "har" | "perf_trace";
-export type WorkbenchAttemptStatus = "running" | "completed" | "failed" | "cancelled";
+export type WorkbenchAttemptStatus = "running" | "completed" | "failed" | "cancelled" | "needs_approval";
 
 /**
  * a competing platform-style agent modes. `build` drives the autonomous plan→write→run→heal→preview
@@ -45,6 +45,20 @@ export type WorkbenchSessionMetadata = {
     appScopes?: string[];
     deliverables?: string[];
     approvalGates?: string[];
+    mode?: WorkbenchAgentMode;
+    lastHeartbeatAt?: string;
+    heartbeatStaleAfterSeconds?: number;
+    lastLifecycleEvent?: "heartbeat" | "paused" | "resume";
+    pausedAt?: string;
+    resumeCount?: number;
+  };
+  agentRun?: {
+    agentRole: AgentRole;
+    agentLabel: string;
+    tools?: string[];
+    deliverables?: string[];
+    approvalGates?: string[];
+    evidenceRequired?: string[];
     mode?: WorkbenchAgentMode;
     lastHeartbeatAt?: string;
     heartbeatStaleAfterSeconds?: number;

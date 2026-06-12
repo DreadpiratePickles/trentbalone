@@ -27,10 +27,13 @@ export type UploadFileInput = {
 export type UploadEntry = {
   path: string;
   size: number;
-  status: "ok" | "skipped";
+  status: "ok" | "artifact" | "skipped";
   reason?: string;
   /** UTF-8 content for ok entries. */
   content?: string;
+  /** Raw bytes for artifact-only assets. Never returned to the model context. */
+  bytes?: Uint8Array;
+  mimeType?: string;
   /** Where the entry came from (direct upload or a zip member). */
   source: "file" | "zip";
 };
@@ -95,8 +98,13 @@ function entryFor(
   }
   if (!isProbablyText(bytes, path)) {
     return {
-      path, size: bytes.length, status: "skipped", source,
-      reason: "binary file — workbench providers accept text files only (upload data as csv/json/md)",
+      path,
+      size: bytes.length,
+      status: "artifact",
+      source,
+      reason: "binary asset stored as artifact; not added to model context",
+      bytes,
+      mimeType: mimeTypeForPath(path),
     };
   }
   return { path, size: bytes.length, status: "ok", source, content: decodeText(bytes) };
@@ -172,10 +180,23 @@ export function expandUploads(
 /** One-line summary for events/UI: counts only, never file contents. */
 export function summarizeUpload(entries: UploadEntry[], errors: string[]): string {
   const ok = entries.filter((e) => e.status === "ok");
+  const assets = entries.filter((e) => e.status === "artifact");
   const skipped = entries.filter((e) => e.status === "skipped");
   const bytes = ok.reduce((sum, e) => sum + e.size, 0);
   const parts = [`${ok.length} file${ok.length === 1 ? "" : "s"} written (${bytes} bytes)`];
+  if (assets.length) parts.push(`${assets.length} asset${assets.length === 1 ? "" : "s"} attached`);
   if (skipped.length) parts.push(`${skipped.length} skipped`);
   if (errors.length) parts.push(`${errors.length} error${errors.length === 1 ? "" : "s"}`);
   return parts.join(", ");
+}
+
+function mimeTypeForPath(path: string): string {
+  if (/\.png$/i.test(path)) return "image/png";
+  if (/\.jpe?g$/i.test(path)) return "image/jpeg";
+  if (/\.gif$/i.test(path)) return "image/gif";
+  if (/\.webp$/i.test(path)) return "image/webp";
+  if (/\.svg$/i.test(path)) return "image/svg+xml";
+  if (/\.pdf$/i.test(path)) return "application/pdf";
+  if (/\.zip$/i.test(path)) return "application/zip";
+  return "application/octet-stream";
 }

@@ -21,6 +21,7 @@ export type WorkbenchCreateInput = {
 };
 
 export const DEFAULT_WORKBENCH_APPROVAL_GATES = [
+  "workbench_plan",
   "external_form_submit",
   "login",
   "purchase",
@@ -44,13 +45,14 @@ export function defaultWorkbenchMetadata(input?: {
     maxCostCents: 250,
     approvalRequiredFor: DEFAULT_WORKBENCH_APPROVAL_GATES,
     rollbackAvailable: true,
-    ...(input?.metadata?.appSolo ? { appSolo: input.metadata.appSolo } : {})
+    ...(input?.metadata?.appSolo ? { appSolo: input.metadata.appSolo } : {}),
+    ...(input?.metadata?.agentRun ? { agentRun: input.metadata.agentRun } : {})
   };
 }
 
 export function resolveWorkbenchSessionProvider(provider?: WorkbenchProvider): WorkbenchProvider {
   if (provider === "mock_local" && process.env.NODE_ENV === "production") {
-    throw new Error("mock_local Workbench provider is dev/test only. Configure WORKBENCH_DEFAULT_PROVIDER=daytona or e2b in production.");
+    throw new Error("mock_local Workbench provider is dev/test only. Configure WORKBENCH_DEFAULT_PROVIDER=railway, daytona, or e2b in production.");
   }
   return provider ?? getDefaultWorkbenchProvider();
 }

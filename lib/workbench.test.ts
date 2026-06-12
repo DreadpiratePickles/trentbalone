@@ -35,6 +35,7 @@ describe("cloud workbench foundation", () => {
 
     expect(session.status).toBe("running");
     expect(session.metadata.networkPolicy).toBe("allowlist");
+    expect(session.metadata.approvalRequiredFor).toContain("workbench_plan");
     expect(session.metadata.approvalRequiredFor).toContain("deploy");
     expect(events.length).toBeGreaterThanOrEqual(2);
   });
@@ -113,6 +114,42 @@ describe("cloud workbench foundation", () => {
       agentLabel: "Growth / Marketing",
       appId: "hyperframes",
       appName: "HyperFrames",
+    });
+  });
+
+  it("stores Workbench agent contract metadata on the workbench session", async () => {
+    const company = await store.createCompany({
+      name: uniqueCompanyName("Workbench Agent Contract Co"),
+      brief: { vision: "test" }
+    });
+
+    const session = await createWorkbenchSession({
+      companyId: company.id,
+      objective: "[workbench-agent] Engineer",
+      agentRole: "engineer",
+      agentMode: "build",
+      enqueue: false,
+      metadata: {
+        agentRun: {
+          agentRole: "engineer",
+          agentLabel: "Engineer",
+          tools: ["github:read [real]"],
+          deliverables: ["implementation plan"],
+          approvalGates: ["github.pr"],
+          evidenceRequired: ["tests"],
+          mode: "build",
+        },
+      },
+    });
+
+    expect(session.metadata.agentRun).toEqual({
+      agentRole: "engineer",
+      agentLabel: "Engineer",
+      tools: ["github:read [real]"],
+      deliverables: ["implementation plan"],
+      approvalGates: ["github.pr"],
+      evidenceRequired: ["tests"],
+      mode: "build",
     });
   });
 

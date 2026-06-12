@@ -91,10 +91,14 @@ describe("expandUploads", () => {
     expect(errors.join(" ")).toContain("total upload size limit");
   });
 
-  it("skips binary files with an actionable reason", () => {
+  it("accepts binary image/assets as artifact-only entries", () => {
     const { entries } = expandUploads([{ name: "logo.png", bytes: new Uint8Array([0x89, 0x50, 0x00, 0x47]) }]);
-    expect(entries[0].status).toBe("skipped");
-    expect(entries[0].reason).toContain("binary");
+    expect(entries[0]).toMatchObject({
+      path: "logo.png",
+      status: "artifact",
+      reason: "binary asset stored as artifact; not added to model context",
+    });
+    expect(entries[0].content).toBeUndefined();
   });
 });
 
@@ -108,5 +112,15 @@ describe("summarizeUpload", () => {
     expect(summary).toContain("1 file written");
     expect(summary).toContain("1 skipped");
     expect(summary).not.toContain("hello");
+  });
+
+  it("reports accepted binary assets separately from text writes", () => {
+    const { entries, errors } = expandUploads([
+      { name: "a.md", bytes: text("hello") },
+      { name: "logo.png", bytes: new Uint8Array([0x89, 0x50, 0x00, 0x47]) },
+    ]);
+    const summary = summarizeUpload(entries, errors);
+    expect(summary).toContain("1 file written");
+    expect(summary).toContain("1 asset");
   });
 });

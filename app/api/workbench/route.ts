@@ -47,6 +47,7 @@ export async function POST(request: Request) {
     provider?: WorkbenchProvider;
     allowedHosts?: string[];
     metadata?: unknown;
+    enqueue?: boolean;
   };
 
   if (!body.companyId || !body.objective?.trim()) {
@@ -84,7 +85,8 @@ export async function POST(request: Request) {
         repoUrl: body.repoUrl,
         provider: body.provider,
         allowedHosts: body.allowedHosts?.filter(Boolean),
-        metadata: parseWorkbenchMetadata(body.metadata)
+        metadata: parseWorkbenchMetadata(body.metadata),
+        enqueue: typeof body.enqueue === "boolean" ? body.enqueue : undefined,
       });
       const events = await store.listWorkbenchEvents(session.id);
       return { session, events };
@@ -121,30 +123,49 @@ export async function POST(request: Request) {
 
 function parseWorkbenchMetadata(value: unknown): Partial<WorkbenchSessionMetadata> | undefined {
   if (!value || typeof value !== "object") return undefined;
+  const metadata: Partial<WorkbenchSessionMetadata> = {};
   const appSolo = (value as { appSolo?: unknown }).appSolo;
-  if (!appSolo || typeof appSolo !== "object") return undefined;
-  const candidate = appSolo as Record<string, unknown>;
-  if (
-    typeof candidate.agentRole !== "string"
-    || !isAgentRole(candidate.agentRole)
-    || typeof candidate.agentLabel !== "string"
-    || typeof candidate.appId !== "string"
-    || typeof candidate.appName !== "string"
-  ) {
-    return undefined;
+  if (appSolo && typeof appSolo === "object") {
+    const candidate = appSolo as Record<string, unknown>;
+    if (
+      typeof candidate.agentRole === "string"
+      && isAgentRole(candidate.agentRole)
+      && typeof candidate.agentLabel === "string"
+      && typeof candidate.appId === "string"
+      && typeof candidate.appName === "string"
+    ) {
+      metadata.appSolo = {
+        agentRole: candidate.agentRole,
+        agentLabel: candidate.agentLabel,
+        appId: candidate.appId,
+        appName: candidate.appName,
+        appScopes: stringList(candidate.appScopes),
+        deliverables: stringList(candidate.deliverables),
+        approvalGates: stringList(candidate.approvalGates),
+        ...(typeof candidate.mode === "string" && isAgentMode(candidate.mode) ? { mode: candidate.mode } : {}),
+      };
+    }
   }
-  return {
-    appSolo: {
-      agentRole: candidate.agentRole,
-      agentLabel: candidate.agentLabel,
-      appId: candidate.appId,
-      appName: candidate.appName,
-      appScopes: stringList(candidate.appScopes),
-      deliverables: stringList(candidate.deliverables),
-      approvalGates: stringList(candidate.approvalGates),
-      ...(typeof candidate.mode === "string" && isAgentMode(candidate.mode) ? { mode: candidate.mode } : {}),
-    },
-  };
+  const agentRun = (value as { agentRun?: unknown }).agentRun;
+  if (agentRun && typeof agentRun === "object") {
+    const candidate = agentRun as Record<string, unknown>;
+    if (
+      typeof candidate.agentRole === "string"
+      && isAgentRole(candidate.agentRole)
+      && typeof candidate.agentLabel === "string"
+    ) {
+      metadata.agentRun = {
+        agentRole: candidate.agentRole,
+        agentLabel: candidate.agentLabel,
+        tools: stringList(candidate.tools),
+        deliverables: stringList(candidate.deliverables),
+        approvalGates: stringList(candidate.approvalGates),
+        evidenceRequired: stringList(candidate.evidenceRequired),
+        ...(typeof candidate.mode === "string" && isAgentMode(candidate.mode) ? { mode: candidate.mode } : {}),
+      };
+    }
+  }
+  return Object.keys(metadata).length ? metadata : undefined;
 }
 
 function stringList(value: unknown): string[] | undefined {

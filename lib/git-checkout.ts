@@ -91,41 +91,39 @@ export async function checkoutRepository(
     throw new Error("No repository URL configured for this session");
   }
 
-  let authEnv: Record<string, string>;
+  let authEnv: Record<string, string> = {};
   try {
     authEnv = await setupSandboxGitAuth(session, adapter);
   } catch (err) {
-    if (err instanceof GitCredentialsNotFoundError) {
-      // Transform the error to a descriptive developer-friendly message:
-      throw new Error(`${err.provider} credentials not configured for this company.`);
-    }
-    throw err;
+    if (!(err instanceof GitCredentialsNotFoundError)) throw err;
+    // Public repositories can be cloned without credentials. If the clone
+    // fails, we add a private-repo credential hint to that failure.
+    authEnv = {};
   }
 
+  const execOptions = Object.keys(authEnv).length ? { env: authEnv } : undefined;
+
   // 1. Run git clone into the active workbench directory (.)
-  const cloneRes = await adapter.exec(session, `git clone ${session.repoUrl} .`, {
-    env: authEnv
-  });
+  const cloneRes = await adapter.exec(session, `git clone ${session.repoUrl} .`, execOptions);
 
   if (cloneRes.exitCode !== 0) {
-    throw new Error(`Git clone failed with code ${cloneRes.exitCode}: ${cloneRes.stderr}`);
+    const provider = getGitProviderFromUrl(session.repoUrl);
+    const credentialHint = Object.keys(authEnv).length || !provider
+      ? ""
+      : ` Configure ${provider} credentials for this company if the repository is private.`;
+    throw new Error(`Git clone failed with code ${cloneRes.exitCode}: ${cloneRes.stderr}${credentialHint}`);
   }
 
   // 2. Checkout the desired branch if specified
   if (branch) {
-    const checkoutRes = await adapter.exec(session, `git checkout ${branch}`, {
-      env: authEnv
-    });
+    const checkoutRes = await adapter.exec(session, `git checkout ${branch}`, execOptions);
 
     if (checkoutRes.exitCode !== 0) {
       // Fallback: try creating the branch locally
-      const createBranchRes = await adapter.exec(session, `git checkout -b ${branch}`, {
-        env: authEnv
-      });
+      const createBranchRes = await adapter.exec(session, `git checkout -b ${branch}`, execOptions);
       if (createBranchRes.exitCode !== 0) {
         throw new Error(`Git checkout for branch ${branch} failed: ${createBranchRes.stderr}`);
       }
     }
   }
 }
-

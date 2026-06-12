@@ -5,11 +5,13 @@ import { withRlsContext } from "@/lib/with-rls";
 import { getWorkbenchProvider } from "@/lib/workbench-provider";
 import "@/lib/workbench-providers";
 import { recordEvent } from "@/lib/workbench-build-helpers";
+import { ensureWorkbenchSandboxReady } from "@/lib/workbench-orchestrator";
 import {
   DEFAULT_UPLOAD_LIMITS,
   expandUploads,
   summarizeUpload,
   type UploadFileInput,
+  type UploadEntry,
 } from "@/lib/workbench-upload";
 
 /**
@@ -23,7 +25,8 @@ import {
  *
  * Zips are extracted server-side preserving directory structure; traversal
  * entries are rejected; limits produce explicit per-file skip reasons.
- * Every written file becomes a Workbench event so the run has evidence.
+ * Text files are written to the workspace; binary image/assets become artifact
+ * records and stay out of model context.
  */
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getAuthUser();
@@ -72,13 +75,37 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const { entries, errors } = expandUploads(inputs, DEFAULT_UPLOAD_LIMITS);
   const provider = getWorkbenchProvider(session.provider);
   const written: Array<{ path: string; bytes: number }> = [];
+  const assets: Array<{ path: string; bytes: number; mimeType: string }> = [];
   const failed: Array<{ path: string; reason: string }> = [];
 
   await withRlsContext(session.companyId, async () => {
+    await ensureWorkbenchSandboxReady(session);
     for (const entry of entries) {
+      if (entry.status === "artifact") {
+        try {
+          await provider.captureArtifact(session, {
+            title: `Uploaded asset: ${entry.path}`,
+            kind: "file",
+            mimeType: entry.mimeType ?? "application/octet-stream",
+            sizeBytes: entry.size,
+            path: entry.path,
+            metadata: {
+              schemaVersion: "workbench.upload.v1",
+              source: entry.source,
+              artifactOnly: true,
+              reason: entry.reason,
+            },
+          });
+          assets.push({ path: entry.path, bytes: entry.size, mimeType: entry.mimeType ?? "application/octet-stream" });
+        } catch (err) {
+          failed.push({ path: entry.path, reason: err instanceof Error ? err.message : String(err) });
+        }
+        continue;
+      }
       if (entry.status !== "ok" || entry.content === undefined) continue;
       try {
         await provider.writeFile(session, entry.path, entry.content);
+        await ingestUploadForRetrieval(session, entry);
         written.push({ path: entry.path, bytes: entry.size });
         await recordEvent(
           session, "file", "completed",
@@ -100,9 +127,43 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   return NextResponse.json({
     written,
+    assets,
     skipped,
     failed,
     errors,
     summary: summarizeUpload(entries, [...errors, ...failed.map((f) => `${f.path}: ${f.reason}`)]),
   }, { status: failed.length && written.length === 0 ? 500 : 201 });
+}
+
+const MAX_UPLOAD_RETRIEVAL_CHARS = 80_000;
+const SECRET_PATH_RE = /(^|\/)(\.env|\.npmrc|\.pypirc|\.netrc|id_rsa|id_ed25519|secrets?\.|credentials?\.|.*secret.*|.*token.*|.*key.*)(\/|$)/i;
+const SECRET_CONTENT_RE = /\b(?:OPENAI|ANTHROPIC|GITHUB|STRIPE|POSTMARK|RESEND|E2B|DAYTONA|RAILWAY|VERCEL|AWS|GOOGLE|META|SLACK|SENTRY|DATABASE|REDIS)_[A-Z0-9_]*\s*=\s*['"]?[^'"\s]+/i;
+
+async function ingestUploadForRetrieval(
+  session: NonNullable<Awaited<ReturnType<typeof store.getWorkbenchSession>>>,
+  entry: UploadEntry,
+): Promise<void> {
+  if (entry.status !== "ok" || entry.content === undefined) return;
+  if (SECRET_PATH_RE.test(entry.path) || SECRET_CONTENT_RE.test(entry.content)) return;
+  const truncated = entry.content.length > MAX_UPLOAD_RETRIEVAL_CHARS
+    ? `${entry.content.slice(0, MAX_UPLOAD_RETRIEVAL_CHARS)}\n\n[Truncated for retrieval context at ${MAX_UPLOAD_RETRIEVAL_CHARS} characters.]`
+    : entry.content;
+
+  await store.createDocument({
+    companyId: session.companyId,
+    type: "agent_note",
+    title: `Workbench upload: ${entry.path}`,
+    content: [
+      `# Workbench upload: ${entry.path}`,
+      "",
+      `- sessionId: ${session.id}`,
+      `- source: ${entry.source}`,
+      `- bytes: ${entry.size}`,
+      "",
+      truncated,
+    ].join("\n"),
+    source: `workbench-upload:${session.id}:${entry.path}`,
+    version: 1,
+    memoryTier: "semantic",
+  });
 }
