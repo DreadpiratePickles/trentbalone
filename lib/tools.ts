@@ -6,10 +6,13 @@ import { CamofoxBrowserClient, buildCamofoxToolScopes } from "@/lib/camofox-brow
 import { SteelBrowserClient, buildSteelToolScopes } from "@/lib/steel-browser";
 import { sandboxToolAdapters } from "@/lib/sandbox-tool-adapters";
 import { GitNexusVaultIndexAdapter } from "@/lib/vault-memory";
+import { toolUnavailableResult } from "@/lib/provider-readiness";
 
 export type ToolAdapter = {
   name: string;
   scopes: string[];
+  /** Real = configured adapter, unavailable = visible but blocked, test_only = mocks/dev fallback only. */
+  availability?: "real" | "unavailable" | "test_only";
   /** If true, real external money can be spent — pre-flight check runs before execute */
   spendsMoneyOnExecute?: boolean;
   /** Custom approval expiry in hours (default: 48 h) */
@@ -31,6 +34,7 @@ function mockedAdapter(
   return {
     name,
     scopes,
+    availability: "test_only",
     spendsMoneyOnExecute: opts.spendsMoneyOnExecute,
     approvalExpiryHours: opts.approvalExpiryHours,
     async healthCheck() {
@@ -43,6 +47,8 @@ function mockedAdapter(
       return approvalWords.some((word) => action.toLowerCase().includes(word));
     },
     async execute(action, payload) {
+      const unavailable = toolUnavailableResult(this, action);
+      if (unavailable) return unavailable;
       // Pre-flight: if this adapter spends real money, assert budget before executing
       const companyId = typeof payload.companyId === "string" ? payload.companyId : undefined;
       const needsApproval = this.requiresApproval(action);
@@ -75,6 +81,7 @@ export const adapters: ToolAdapter[] = [
   {
     name: "GitHub",
     scopes: ["repo:read", "issues:write", "pull_requests:write"],
+    availability: "real",
     async healthCheck(companyId?: string) {
       return (await getGitHubCredentials(companyId)) ? "connected" : "needs_credentials";
     },
@@ -91,8 +98,8 @@ export const adapters: ToolAdapter[] = [
         return {
           adapter: "GitHub",
           action,
-          status: "mocked",
-          summary: "GitHub credentials are not configured, so Trent created a safe mocked issue/PR plan."
+          status: "failed",
+          summary: "GitHub credentials are not configured. Connect a GitHub App/token before agents can create issues or PRs."
         };
       }
       if (action.toLowerCase().includes("issue")) {
@@ -113,6 +120,7 @@ export const adapters: ToolAdapter[] = [
   {
     name: "Steel Browser",
     scopes: buildSteelToolScopes(),
+    availability: "real",
     spendsMoneyOnExecute: true,
     async healthCheck() {
       return new SteelBrowserClient().healthCheck();
@@ -199,8 +207,8 @@ export const adapters: ToolAdapter[] = [
           return {
             adapter: "Steel Browser",
             action,
-            status: "mocked",
-            summary: "Steel Sessions are registered for routing, but multi-step session execution is not enabled without an explicit session adapter.",
+            status: "failed",
+            summary: "Steel Sessions are not configured. Use Playwright preview verification or connect an explicit session browser provider.",
           };
         }
 
@@ -232,6 +240,7 @@ export const adapters: ToolAdapter[] = [
   {
     name: "Camofox",
     scopes: buildCamofoxToolScopes(),
+    availability: "real",
     async healthCheck() {
       return new CamofoxBrowserClient().healthCheck();
     },
@@ -459,6 +468,8 @@ export async function executeToolWithPolicy(
   if (policy.allowedActions && !policy.allowedActions.includes(action)) {
     return { adapter: adapter.name, action, status: "failed", summary: `Action "${action}" is not allowed by the Plug permission matrix.` };
   }
+  const unavailable = toolUnavailableResult(adapter, action);
+  if (unavailable) return unavailable;
   if (policy.dryRun && adapter.dryRun) return adapter.dryRun(action, payload);
 
   const maxAttempts = policy.maxAttempts ?? 2;

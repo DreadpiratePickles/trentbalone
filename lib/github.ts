@@ -177,8 +177,8 @@ export async function createGitHubIssue(
     return {
       adapter: "GitHub",
       action: "create_issue",
-      status: "mocked",
-      summary: "GitHub credentials are not configured, so Trent recorded a safe mocked issue request."
+      status: "failed",
+      summary: "GitHub credentials are not configured. Connect a GitHub App/token with repo write access before Trent can create issues."
     };
   }
 
@@ -327,12 +327,12 @@ export async function scaffoldGitHubPullRequestForTask(task: Task) {
 
   const credentials = await getGitHubCredentials(task.companyId);
   if (!credentials) {
-    await store.updateTask(task.id, { status: "blocked" });
+    await store.updateTask(task.id, { status: "failed" });
     return {
       adapter: "GitHub",
       action: "scaffold_pr",
-      status: "mocked" as const,
-      summary: "GitHub credentials are not configured, so Trent recorded a PR scaffold plan without external writes."
+      status: "failed" as const,
+      summary: "GitHub credentials are not configured. Connect a GitHub App/token with repo write access before Trent can create a PR scaffold."
     };
   }
 

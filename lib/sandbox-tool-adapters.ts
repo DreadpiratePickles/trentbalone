@@ -25,6 +25,7 @@ import {
   formatOpenGenerativeAiCommand,
   isOpenGenerativeAiAction,
 } from "@/lib/open-generative-ai";
+import { toolUnavailableResult } from "@/lib/provider-readiness";
 import type { ToolAdapter } from "@/lib/tools";
 
 function isHyperFramesAction(action: string): action is HyperFramesAction {
@@ -35,6 +36,7 @@ export const sandboxToolAdapters: ToolAdapter[] = [
   {
     name: "HyperFrames",
     scopes: buildHyperFramesToolScopes(),
+    availability: getHyperFramesConfig().executionEnabled ? "real" : "test_only",
     async healthCheck() {
       return getHyperFramesConfig().executionEnabled ? "connected" : "mocked";
     },
@@ -47,6 +49,8 @@ export const sandboxToolAdapters: ToolAdapter[] = [
       );
     },
     async execute(action, payload) {
+      const unavailable = toolUnavailableResult(this, action);
+      if (unavailable) return unavailable;
       if (this.requiresApproval(action)) {
         return {
           adapter: "HyperFrames",
@@ -80,6 +84,8 @@ export const sandboxToolAdapters: ToolAdapter[] = [
       }
     },
     async dryRun(action, payload) {
+      const unavailable = toolUnavailableResult(this, action);
+      if (unavailable) return unavailable;
       if (!isHyperFramesAction(action)) {
         return { adapter: "HyperFrames", action, status: "failed", summary: `Unsupported HyperFrames action "${action}".` };
       }
@@ -94,6 +100,7 @@ export const sandboxToolAdapters: ToolAdapter[] = [
   {
     name: "Claude Ads",
     scopes: buildClaudeAdsToolScopes(),
+    availability: "test_only",
     async healthCheck() {
       return "mocked";
     },
@@ -106,6 +113,8 @@ export const sandboxToolAdapters: ToolAdapter[] = [
       );
     },
     async execute(action, payload) {
+      const unavailable = toolUnavailableResult(this, action);
+      if (unavailable) return unavailable;
       if (this.requiresApproval(action)) {
         return {
           adapter: "Claude Ads",
@@ -129,6 +138,8 @@ export const sandboxToolAdapters: ToolAdapter[] = [
       };
     },
     async dryRun(action, payload) {
+      const unavailable = toolUnavailableResult(this, action);
+      if (unavailable) return unavailable;
       const command = formatClaudeAdsCommand(buildClaudeAdsCommandPlan(action, {
         platform: typeof payload.platform === "string" ? payload.platform : undefined,
         businessType: typeof payload.businessType === "string" ? payload.businessType : undefined,
@@ -145,6 +156,7 @@ export const sandboxToolAdapters: ToolAdapter[] = [
   {
     name: "Fincept Terminal",
     scopes: buildFinceptTerminalToolScopes(),
+    availability: "test_only",
     async healthCheck() {
       return "mocked";
     },
@@ -157,6 +169,8 @@ export const sandboxToolAdapters: ToolAdapter[] = [
       );
     },
     async execute(action, payload) {
+      const unavailable = toolUnavailableResult(this, action);
+      if (unavailable) return unavailable;
       if (this.requiresApproval(action)) {
         return {
           adapter: "Fincept Terminal",
@@ -176,6 +190,8 @@ export const sandboxToolAdapters: ToolAdapter[] = [
       };
     },
     async dryRun(action, payload) {
+      const unavailable = toolUnavailableResult(this, action);
+      if (unavailable) return unavailable;
       if (!isFinceptTerminalAction(action)) {
         return { adapter: "Fincept Terminal", action, status: "failed", summary: `Unsupported Fincept Terminal action "${action}".` };
       }
@@ -190,6 +206,7 @@ export const sandboxToolAdapters: ToolAdapter[] = [
   {
     name: "Ghostfolio",
     scopes: buildGhostfolioToolScopes(),
+    availability: "test_only",
     async healthCheck() {
       return "mocked";
     },
@@ -202,6 +219,8 @@ export const sandboxToolAdapters: ToolAdapter[] = [
       );
     },
     async execute(action, payload) {
+      const unavailable = toolUnavailableResult(this, action);
+      if (unavailable) return unavailable;
       if (this.requiresApproval(action)) {
         return {
           adapter: "Ghostfolio",
@@ -221,6 +240,8 @@ export const sandboxToolAdapters: ToolAdapter[] = [
       };
     },
     async dryRun(action, payload) {
+      const unavailable = toolUnavailableResult(this, action);
+      if (unavailable) return unavailable;
       if (!isGhostfolioAction(action)) {
         return { adapter: "Ghostfolio", action, status: "failed", summary: `Unsupported Ghostfolio action "${action}".` };
       }
@@ -235,6 +256,7 @@ export const sandboxToolAdapters: ToolAdapter[] = [
   {
     name: "Open Generative AI",
     scopes: buildOpenGenerativeAiToolScopes(),
+    availability: "test_only",
     async healthCheck() {
       return "mocked";
     },
@@ -247,6 +269,8 @@ export const sandboxToolAdapters: ToolAdapter[] = [
       );
     },
     async execute(action, payload) {
+      const unavailable = toolUnavailableResult(this, action);
+      if (unavailable) return unavailable;
       if (this.requiresApproval(action)) {
         return {
           adapter: "Open Generative AI",
@@ -266,6 +290,8 @@ export const sandboxToolAdapters: ToolAdapter[] = [
       };
     },
     async dryRun(action, payload) {
+      const unavailable = toolUnavailableResult(this, action);
+      if (unavailable) return unavailable;
       if (!isOpenGenerativeAiAction(action)) {
         return { adapter: "Open Generative AI", action, status: "failed", summary: `Unsupported Open Generative AI action "${action}".` };
       }

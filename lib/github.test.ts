@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createGitHubIssue,
   createGitHubIssueForTask,
   listGitHubRepos,
   publicGitHubConnection,
@@ -99,6 +100,25 @@ describe("GitHub integration", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(updated?.status).toBe("waiting_approval");
     expect(updated?.approvalId).toBeDefined();
+  });
+
+  it("fails GitHub issue creation when credentials are not configured", async () => {
+    const company = await store.createCompany({
+      name: "Missing GitHub Credentials Co",
+      brief: { vision: "No fake GitHub writes" }
+    });
+    vi.stubEnv("GITHUB_TOKEN", "");
+    vi.stubEnv("GITHUB_OWNER", "");
+    vi.stubEnv("GITHUB_REPO", "");
+
+    const result = await createGitHubIssue(company.id, {
+      title: "Create real issue",
+      body: "This should not be mocked.",
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.summary).toMatch(/credentials are not configured/i);
+    expect(result.summary).not.toMatch(/mock/i);
   });
 
   it("validates configured repo and lists repos", async () => {

@@ -109,7 +109,7 @@ export function summarizeAgentWork(role: AgentRole, company: Company) {
     engineer: "Prepared a safe GitHub issue/PR path and held merge actions behind approval.",
     growth: "Drafted channel experiments and campaign ideas without sending messages or launching ads.",
     content: "Outlined founder-facing copy and launch content from the operating brief.",
-    support: "Checked the mocked inbox and marked sensitive replies for approval.",
+    support: "Prepared support triage notes and marked sensitive replies for approval; no live inbox is configured.",
     finance: "Checked budget caps and logged model usage to the cost ledger.",
     analyst: "Reviewed research targets, funnel, signup, revenue, retention, and cost signals for the next report.",
     escalation: "Confirmed human approval is required for public, financial, destructive, email, ad, code-merge, billing, and domain actions.",
@@ -493,7 +493,7 @@ function deterministicPlan(company: Company): GeneratedPlan {
     reportFindings: [
       "The company has a complete enough brief to generate operating tasks.",
       "External execution is intentionally constrained by approval gates.",
-      "GitHub can become the first real tool path while email, ads, billing, social, browser, and deploys stay mocked."
+      "GitHub can become the first real tool path while email, ads, billing, social, browser, and deploys stay not configured until real credentials and approvals are in place."
     ],
     reportRecommendations: [
       "Run one daily cycle and review approvals each morning.",

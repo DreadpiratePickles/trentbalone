@@ -1411,7 +1411,7 @@ function UnlockModal({
           <div style={{ fontSize: 13, color: "var(--mist)", lineHeight: 1.65, marginBottom: 20 }}>
             This is a premium specialist. Unlock it to plug into any seat.
             <br />
-            <span style={{ fontSize: 11, color: "var(--haze)" }}>Stripe billing coming — mock purchases are free during preview.</span>
+            <span style={{ fontSize: 11, color: "var(--haze)" }}>Stripe billing coming — preview unlocks are free during preview.</span>
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>

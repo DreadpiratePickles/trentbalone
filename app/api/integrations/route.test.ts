@@ -48,6 +48,22 @@ describe("/api/integrations RBAC", () => {
     expect(mockRequireRoleForRequest).toHaveBeenCalledWith("u1", "admin", { companyId: "c1" });
   });
 
+  it("POST: returns not configured instead of mocked success for generic connectors", async () => {
+    mockGetAuthUser.mockResolvedValue({ id: "u1" });
+    mockRequireRoleForRequest.mockResolvedValue({ ok: true, role: "admin" });
+    const req = new Request("http://x/api/integrations", {
+      method: "POST",
+      body: JSON.stringify({ companyId: "c1" })
+    });
+
+    const res = await POST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(501);
+    expect(body.status).toBe("not_configured");
+    expect(body.message).not.toMatch(/mock/i);
+  });
+
   it("DELETE: returns 403 when caller lacks admin role", async () => {
     mockGetAuthUser.mockResolvedValue({ id: "u1" });
     mockRequireRoleForRequest.mockResolvedValue({ ok: false, reason: "insufficient_role" });

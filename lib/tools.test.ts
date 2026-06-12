@@ -4,6 +4,12 @@ import { adapters, integrationHealth } from "@/lib/tools";
 import { store } from "@/lib/store";
 
 describe("integration health", () => {
+  it("declares availability for every registered adapter", () => {
+    for (const adapter of adapters) {
+      expect(["real", "unavailable", "test_only"]).toContain(adapter.availability);
+    }
+  });
+
   it("uses company-scoped GitHub credentials", async () => {
     const company = await store.createCompany({
       name: "Integration Health Co",

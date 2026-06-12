@@ -1,10 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolAdapter } from "@/lib/tools";
 import {
   checkExternalSendOutputGuardrail,
   executeExternalActionWithGuardrails,
   isExternalSendAction,
 } from "@/lib/external-action-guardrails";
+
+const originalNodeEnv = process.env.NODE_ENV;
+
+afterEach(() => {
+  (process.env as Record<string, string | undefined>).NODE_ENV = originalNodeEnv;
+});
 
 describe("external-action guardrails", () => {
   it("detects external send actions", () => {
@@ -73,5 +79,35 @@ describe("external-action guardrails", () => {
     expect(record.status).toBe("completed");
     expect(executeSpy).toHaveBeenCalledOnce();
     expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
+  it("blocks test-only adapters in production instead of returning mocked success", async () => {
+    (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+    const executeSpy = vi.fn(async () => ({
+      adapter: "Email",
+      action: "draft",
+      status: "mocked" as const,
+      summary: "mocked send",
+    }));
+    const adapter: ToolAdapter = {
+      name: "Email",
+      scopes: ["draft"],
+      availability: "test_only",
+      async healthCheck() { return "mocked"; },
+      estimateCost() { return 0; },
+      requiresApproval() { return false; },
+      execute: executeSpy,
+    };
+
+    const record = await executeExternalActionWithGuardrails({
+      adapter,
+      action: "draft",
+      payload: {},
+      approvalGranted: false,
+    });
+
+    expect(record.status).toBe("failed");
+    expect(record.summary).toContain("not configured");
+    expect(executeSpy).not.toHaveBeenCalled();
   });
 });

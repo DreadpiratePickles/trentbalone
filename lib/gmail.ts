@@ -65,7 +65,7 @@ export async function createGmailDraftForTask(
     type: "email_draft",
     title: `Gmail draft: ${subject}`,
     content: [`To: ${to}`, `Subject: ${subject}`, "", body].join("\n"),
-    source: "gmail_mock",
+    source: "gmail-draft",
     version: 1
   });
 
@@ -89,34 +89,33 @@ export async function sendGmailDraftForTask(task: Task): Promise<ToolCallRecord 
       status: "needs_approval",
       summary: approval.rejected
         ? "Gmail send was rejected and the task is blocked."
-        : "Gmail send requires approval before Trent can send or simulate sending email.",
+        : "Gmail send requires approval before Trent can send email.",
       approvalId: approval.approvalId
     };
   }
 
-  await store.updateTask(task.id, { status: "running" });
+  await store.updateTask(task.id, { status: "failed" });
   await store.createDocument({
     companyId: task.companyId,
     type: "agent_note",
-    title: `Mock Gmail send: ${task.title}`,
+    title: `Gmail send not configured: ${task.title}`,
     content:
-      "Gmail remains mocked. Trent recorded that this approved email would be sent through the Gmail provider once OAuth/send credentials are production-ready.",
-    source: "gmail_mock",
+      "Gmail send approval was granted, but no production Gmail/Postmark/Resend send provider is configured. Connect a real email provider before retrying this task.",
+    source: "gmail-provider",
     version: 1
   });
   await store.addUsage({
     companyId: task.companyId,
     category: "infra",
-    description: "Mock Gmail send",
+    description: "Gmail send provider missing",
     amountCents: 0,
-    metadata: { taskId: task.id, at: nowIso(), mocked: true }
+    metadata: { taskId: task.id, at: nowIso(), providerConfigured: false }
   });
-  await store.updateTask(task.id, { status: "completed" });
 
   return {
     adapter: "Gmail",
     action: "send",
-    status: "mocked",
-    summary: "Approved Gmail send recorded in mocked mode; no email was sent."
+    status: "failed",
+    summary: "Gmail send provider is not configured. Connect Gmail/Postmark/Resend credentials before Trent can send email."
   };
 }

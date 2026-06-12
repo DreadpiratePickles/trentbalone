@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createGmailDraftForTask, sendGmailDraftForTask } from "@/lib/gmail";
 import { store } from "@/lib/store";
 
-describe("Gmail mocked workflow", () => {
+describe("Gmail workflow", () => {
   it("creates a Gmail draft document without sending", async () => {
     const company = await store.createCompany({
       name: "Gmail Draft Co",
@@ -28,7 +28,7 @@ describe("Gmail mocked workflow", () => {
     expect(draft.content).toContain("To: founder@example.com");
   });
 
-  it("creates an approval interrupt before mocked Gmail send", async () => {
+  it("creates an approval interrupt before Gmail send", async () => {
     const company = await store.createCompany({
       name: "Gmail Approval Co",
       brief: { vision: "Require email approval" }
@@ -51,10 +51,10 @@ describe("Gmail mocked workflow", () => {
     expect(updated?.approvalId).toBeDefined();
   });
 
-  it("records mocked Gmail send after approval", async () => {
+  it("fails approved Gmail send when no send provider is configured", async () => {
     const company = await store.createCompany({
       name: "Gmail Send Co",
-      brief: { vision: "Mock approved send" }
+      brief: { vision: "No fake approved send" }
     });
     const task = await store.createTask({
       companyId: company.id,
@@ -69,13 +69,15 @@ describe("Gmail mocked workflow", () => {
       companyId: company.id,
       taskId: task.id,
       action: "gmail.send",
-      reason: "Approve mocked Gmail send."
+      reason: "Approve Gmail send."
     });
     await store.resolveApproval(approval.id, "approved");
     await store.updateTask(task.id, { approvalId: approval.id });
 
     const result = await sendGmailDraftForTask(task);
-    expect(result.status).toBe("mocked");
-    expect((await store.getTask(task.id))?.status).toBe("completed");
+    expect(result.status).toBe("failed");
+    expect(result.summary).toMatch(/provider is not configured/i);
+    expect(result.summary).not.toMatch(/mock/i);
+    expect((await store.getTask(task.id))?.status).toBe("failed");
   });
 });

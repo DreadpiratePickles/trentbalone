@@ -1,5 +1,6 @@
 import type { ToolAdapter } from "@/lib/tools";
 import type { ToolCallRecord } from "@/lib/types";
+import { toolUnavailableResult } from "@/lib/provider-readiness";
 
 export type GuardrailTripwire = "policy_violation" | "missing_content" | "blocked_recipient";
 
@@ -92,6 +93,9 @@ export async function executeExternalActionWithGuardrails(input: {
       summary: inputGuardrail.reason ?? "Input guardrail blocked external action.",
     };
   }
+
+  const unavailable = toolUnavailableResult(input.adapter, input.action);
+  if (unavailable) return unavailable;
 
   const needsApproval = input.adapter.requiresApproval(input.action);
   if (needsApproval && !input.approvalGranted) {

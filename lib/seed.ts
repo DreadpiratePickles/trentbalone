@@ -135,7 +135,7 @@ export function createSeedState(): AppState {
         type: "feature_gap",
         title: "a competing product Feature Coverage Delta",
         content:
-          "Public a competing product research indicates daily agent cycles, public dashboards/subdomains, GitHub, email, ads, billing, social scheduling, media generation, browser automation, screenshots, hosted apps, managed databases, object storage, error monitoring, and attribution. Trent currently implements the safe operating loop and mocks high-risk providers until approvals, credentials, and budgets are wired.",
+          "Public a competing product research indicates daily agent cycles, public dashboards/subdomains, GitHub, email, ads, billing, social scheduling, media generation, browser automation, screenshots, hosted apps, managed databases, object storage, error monitoring, and attribution. Trent currently implements the safe operating loop and marks high-risk providers as needing credentials until approvals, budgets, and real provider access are wired.",
         source: "public-research",
         version: 1,
         createdAt
@@ -182,7 +182,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Email",
         scopes: ["draft", "send_requires_approval"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -190,7 +190,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Postmark",
         scopes: ["transactional_email", "inbound_email"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -198,7 +198,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Hunter.io",
         scopes: ["email_verification", "deliverability"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -206,7 +206,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Meta Ads",
         scopes: ["draft_campaign", "launch_requires_approval"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -214,15 +214,15 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Meta Pixel/CAPI",
         scopes: ["conversion_events", "attribution"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
         id: makeId("integration"),
         companyId,
         provider: "Stripe",
-        scopes: ["subscriptions_mock", "connect_ready"],
-        status: "mocked",
+        scopes: ["subscriptions", "connect_ready"],
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -230,7 +230,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Cloudflare R2",
         scopes: ["asset_storage", "generated_media"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -238,7 +238,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Anthropic",
         scopes: ["llm_primary", "model_telemetry"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -246,7 +246,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "AWS Bedrock",
         scopes: ["llm_fallback", "model_routing"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -254,7 +254,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Fal.ai",
         scopes: ["image_generation", "video_generation", "audio_generation"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -262,7 +262,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Late.dev",
         scopes: ["social_schedule", "multi_platform_posting"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -270,7 +270,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Browserbase",
         scopes: ["cloud_browser", "screenshots", "extraction"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -286,7 +286,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "HyperFrames",
         scopes: ["hyperframes:create", "hyperframes:preview", "hyperframes:lint", "hyperframes:render"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -294,7 +294,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Open Generative AI",
         scopes: ["open_gen_ai:launch_sandbox", "open_gen_ai:image_generate", "open_gen_ai:video_generate", "open_gen_ai:asset_export"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -302,7 +302,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Claude Ads",
         scopes: ["claude_ads:audit", "claude_ads:creative_review", "claude_ads:budget_review", "claude_ads:report"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -310,7 +310,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Fincept Terminal",
         scopes: ["fincept:launch_sandbox", "fincept:market_research", "fincept:portfolio_analysis", "fincept:risk_report"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -318,7 +318,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Ghostfolio",
         scopes: ["ghostfolio:launch_sandbox", "ghostfolio:portfolio_overview", "ghostfolio:allocation_report", "ghostfolio:risk_insights"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       },
       {
@@ -326,7 +326,7 @@ export function createSeedState(): AppState {
         companyId,
         provider: "Sentry",
         scopes: ["error_monitoring", "diagnostics"],
-        status: "mocked",
+        status: "needs_credentials",
         lastCheckedAt: createdAt
       }
     ],

@@ -36,10 +36,10 @@ export async function POST(request: Request) {
   if (!check.ok) return forbidden();
 
   return NextResponse.json({
-    status: "mocked",
+    status: "not_configured",
     message:
-      "Connector install/connect flows are intentionally mocked in Phase 1. Add credentials in .env.local to activate supported adapters."
-  });
+      "Generic connector install is not configured. Use a provider-specific connection flow, such as GitHub, or configure the required provider credentials."
+  }, { status: 501 });
 }
 
 export async function DELETE(request: Request) {
@@ -66,4 +66,3 @@ export async function DELETE(request: Request) {
 
   return NextResponse.json({ ok: true });
 }
-
