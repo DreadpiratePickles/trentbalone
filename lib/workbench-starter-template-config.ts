@@ -11,6 +11,7 @@ export const STARTER_PACKAGE_JSON = JSON.stringify({
     // PORT env var, so the flags are the authoritative source of the listen port.
     dev: "vite --host 0.0.0.0 --port 3000",
     build: "tsc && vite build",
+    typecheck: "tsc --noEmit",
     preview: "vite preview --host 0.0.0.0 --port 3000",
   },
   dependencies: {

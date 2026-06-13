@@ -1,3 +1,6 @@
+import { readdirSync, existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { NAV_GROUPS, flattenNav, fuzzyScore, hrefFor, matchesNavItem } from "@/components/nav-config";
 
@@ -12,6 +15,7 @@ describe("NAV_GROUPS", () => {
       "missions",
       "cycles",
       "workbench",
+      "trenchpad",
       "mcp",
       "artifacts",
       "reports",
@@ -37,6 +41,44 @@ describe("NAV_GROUPS", () => {
       label: "approvals",
       approvalsBadge: true,
     });
+  });
+});
+
+describe("nav ⇄ filesystem reconciliation", () => {
+  const INTENTIONALLY_UNLINKED: Record<string, string> = {
+    "app-solo": "redirect stub to /workbench?mode=agents (legacy URL kept alive)",
+  };
+
+  const companyPagesDir = fileURLToPath(new URL("../app/companies/[id]", import.meta.url));
+  const pageDirs = readdirSync(companyPagesDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => existsSync(path.join(companyPagesDir, name, "page.tsx")));
+  const navSlugs = new Set(NAV_GROUPS.flatMap((group) => group.items).map((item) => item.slug));
+
+  it("every company page directory is reachable from the nav or explicitly allowlisted", () => {
+    const orphans = pageDirs.filter((dir) => !navSlugs.has(dir) && !(dir in INTENTIONALLY_UNLINKED));
+    expect(
+      orphans,
+      `Pages exist under app/companies/[id]/ that no nav item points to: ${orphans.join(", ")}. Add a nav item in components/nav-config.ts or allowlist with a reason.`,
+    ).toEqual([]);
+  });
+
+  it("every nav slug resolves to a real page", () => {
+    const deadLinks = [...navSlugs].filter((slug) => {
+      const target = slug === ""
+        ? path.join(companyPagesDir, "page.tsx")
+        : path.join(companyPagesDir, slug, "page.tsx");
+      return !existsSync(target);
+    });
+    expect(deadLinks, `Nav items point at slugs with no page.tsx: ${deadLinks.join(", ")}`).toEqual([]);
+  });
+
+  it("allowlist entries stay honest", () => {
+    for (const dir of Object.keys(INTENTIONALLY_UNLINKED)) {
+      expect(pageDirs, `Allowlisted page "${dir}" no longer exists; remove it from INTENTIONALLY_UNLINKED`).toContain(dir);
+      expect(navSlugs.has(dir), `"${dir}" is allowlisted as unlinked but now has a nav item; remove the allowlist entry`).toBe(false);
+    }
   });
 });
 

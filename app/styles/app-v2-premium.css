@@ -1,0 +1,359 @@
+/* ─── App v2 premium layer ─────────────────────────────────────────
+   Editorial / quiet-luxury upgrade for the in-app experience.
+   Loaded after the other app-v2 sheets; everything here is additive.
+   CSS-only: staggered entry reveals, glass surfaces, dramatic depth,
+   noise + geometric atmosphere, micro-interactions. */
+
+/* ── Surface + depth tokens ──
+   `--ink` is re-tokenised inside the shell as a glass gradient, so every
+   inline `background: var(--ink)` panel across the app upgrades at once.
+   (Safe: the app always uses it with the `background` shorthand.) */
+.app-v2 {
+  --ink:
+    linear-gradient(168deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.014) 34%, rgba(255, 255, 255, 0) 70%),
+    rgba(16, 16, 25, 0.82);
+  --shadow-card:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 16px 40px -12px rgba(0, 0, 0, 0.55),
+    0 48px 120px -32px rgba(0, 0, 0, 0.7);
+  --shadow-float:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 2px 6px rgba(0, 0, 0, 0.45),
+    0 28px 80px -16px rgba(0, 0, 0, 0.78),
+    0 80px 200px -40px rgba(0, 0, 0, 0.62);
+  --surface-1: rgba(17, 17, 26, 0.78);
+  --surface-2: rgba(27, 27, 38, 0.66);
+  --surface-3: rgba(38, 38, 51, 0.6);
+  /* larger radius scale, app-side only */
+  --r-md: 18px;
+  --r-lg: 26px;
+  --r-xl: 36px;
+}
+
+/* Every inline `background: var(--ink)` panel gets the dramatic depth.
+   (Attribute match on the rendered style string — panels only use the
+   shorthand, so this stays precise.) */
+.app-main div[style*="var(--ink)"],
+.app-main section[style*="var(--ink)"] {
+  box-shadow: var(--shadow-card);
+}
+
+/* ── Atmosphere: noise + geometry behind every page ── */
+.app-shell-main,
+.portfolio-main {
+  position: relative;
+}
+
+/* fine architectural grid, masked toward the top — editorial graph paper */
+.app-shell-main::before,
+.portfolio-main::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(closest-side at 78% -10%, rgba(110, 231, 183, 0.07), transparent 62%),
+    radial-gradient(closest-side at 8% 110%, rgba(251, 146, 60, 0.05), transparent 60%),
+    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+  background-size: auto, auto, 56px 56px, 56px 56px;
+  mask-image: radial-gradient(ellipse 90% 80% at 50% 0%, #000 30%, transparent 86%);
+  -webkit-mask-image: radial-gradient(ellipse 90% 80% at 50% 0%, #000 30%, transparent 86%);
+}
+
+/* film grain */
+.app-shell-main::after,
+.portfolio-main::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.045;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+/* grid-breaking ornament: a huge quiet ring bleeding off the corner */
+.app-main {
+  position: relative;
+  z-index: 1;
+}
+.app-main::before {
+  content: "";
+  position: absolute;
+  top: -220px;
+  right: -260px;
+  width: 640px;
+  height: 640px;
+  border: 1px solid rgba(110, 231, 183, 0.07);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.app-main::after {
+  content: "";
+  position: absolute;
+  top: -120px;
+  right: -160px;
+  width: 380px;
+  height: 380px;
+  border: 1px solid rgba(241, 236, 226, 0.045);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+/* ── Staggered entry reveals (CSS-only, every page) ──
+   Keyframes resolve to `none` so no containing-block lingers for
+   fixed-position descendants (modals, menus). */
+@keyframes premium-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+    filter: blur(7px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+.app-main > *,
+.portfolio-main > * {
+  animation: premium-rise 0.85s var(--ease-out-expo) both;
+}
+.app-main > *:nth-child(1),  .portfolio-main > *:nth-child(1)  { animation-delay: 50ms; }
+.app-main > *:nth-child(2),  .portfolio-main > *:nth-child(2)  { animation-delay: 120ms; }
+.app-main > *:nth-child(3),  .portfolio-main > *:nth-child(3)  { animation-delay: 190ms; }
+.app-main > *:nth-child(4),  .portfolio-main > *:nth-child(4)  { animation-delay: 260ms; }
+.app-main > *:nth-child(5),  .portfolio-main > *:nth-child(5)  { animation-delay: 330ms; }
+.app-main > *:nth-child(6),  .portfolio-main > *:nth-child(6)  { animation-delay: 400ms; }
+.app-main > *:nth-child(7),  .portfolio-main > *:nth-child(7)  { animation-delay: 470ms; }
+.app-main > *:nth-child(n + 8),
+.portfolio-main > *:nth-child(n + 8) { animation-delay: 540ms; }
+
+/* Pages that render a single wrapper stagger one level deeper instead. */
+.app-main > *:only-child,
+.portfolio-main > *:only-child {
+  animation: none;
+}
+.app-main > *:only-child > *,
+.portfolio-main > *:only-child > * {
+  animation: premium-rise 0.85s var(--ease-out-expo) both;
+}
+.app-main > *:only-child > *:nth-child(1),
+.portfolio-main > *:only-child > *:nth-child(1) { animation-delay: 50ms; }
+.app-main > *:only-child > *:nth-child(2),
+.portfolio-main > *:only-child > *:nth-child(2) { animation-delay: 120ms; }
+.app-main > *:only-child > *:nth-child(3),
+.portfolio-main > *:only-child > *:nth-child(3) { animation-delay: 190ms; }
+.app-main > *:only-child > *:nth-child(4),
+.portfolio-main > *:only-child > *:nth-child(4) { animation-delay: 260ms; }
+.app-main > *:only-child > *:nth-child(5),
+.portfolio-main > *:only-child > *:nth-child(5) { animation-delay: 330ms; }
+.app-main > *:only-child > *:nth-child(6),
+.portfolio-main > *:only-child > *:nth-child(6) { animation-delay: 400ms; }
+.app-main > *:only-child > *:nth-child(7),
+.portfolio-main > *:only-child > *:nth-child(7) { animation-delay: 470ms; }
+.app-main > *:only-child > *:nth-child(n + 8),
+.portfolio-main > *:only-child > *:nth-child(n + 8) { animation-delay: 540ms; }
+
+/* sidebar settles in a half-beat behind the canvas */
+.nav-logo,
+.nav-company,
+.nav-groups .nav-section,
+.nav-cycle {
+  animation: premium-rise 0.7s var(--ease-out-expo) both;
+}
+.nav-logo { animation-delay: 40ms; }
+.nav-company { animation-delay: 90ms; }
+.nav-groups .nav-section:nth-child(1) { animation-delay: 140ms; }
+.nav-groups .nav-section:nth-child(2) { animation-delay: 190ms; }
+.nav-groups .nav-section:nth-child(3) { animation-delay: 240ms; }
+.nav-groups .nav-section:nth-child(4) { animation-delay: 290ms; }
+.nav-groups .nav-section:nth-child(n + 5) { animation-delay: 340ms; }
+.nav-cycle { animation-delay: 380ms; }
+
+/* ── Glass chrome ── */
+.nav-sidebar {
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, rgba(11, 11, 17, 0.86), rgba(10, 10, 15, 0.72));
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+}
+
+.tbar {
+  background: linear-gradient(180deg, rgba(10, 10, 15, 0.78), rgba(10, 10, 15, 0.62));
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.portfolio-topbar {
+  background: linear-gradient(180deg, rgba(10, 10, 15, 0.8), rgba(10, 10, 15, 0.64));
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+}
+
+/* floating panels: heavy glass, generous radius, dramatic depth */
+.cmdk-panel {
+  border-radius: 20px;
+  border-color: rgba(255, 255, 255, 0.1);
+  background: linear-gradient(170deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 46%), rgba(13, 13, 20, 0.82);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  box-shadow: var(--shadow-float);
+}
+
+.tbar-notif-menu,
+.nav-company-menu {
+  border-radius: 16px;
+  background: linear-gradient(170deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 50%), rgba(13, 13, 20, 0.86);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: var(--shadow-float);
+}
+
+/* ── Editorial page header ── */
+.pagehead {
+  margin-bottom: 36px;
+  padding-bottom: 24px;
+  border-bottom: 0;
+  position: relative;
+}
+.pagehead::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(110, 231, 183, 0.4), rgba(255, 255, 255, 0.09) 32%, rgba(255, 255, 255, 0.03) 70%, transparent);
+}
+
+.pagehead-title {
+  font-size: 34px;
+  font-weight: 760;
+  letter-spacing: -0.022em;
+  line-height: 1.06;
+}
+
+.pagehead-lead {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 17px;
+  color: #C9C3B4;
+  line-height: 1.5;
+  margin-top: 10px;
+}
+
+.pagehead-meta {
+  margin-top: 14px;
+}
+
+/* ── Micro-interactions (CSS-only) ── */
+
+/* buttons: lift, press, and a passing sheen */
+.app-v2 .btn,
+.btn {
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.18s var(--ease-out-expo), background 0.25s ease, border-color 0.25s ease, color 0.25s ease, box-shadow 0.25s ease;
+}
+.btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 32%, rgba(255, 255, 255, 0.16) 50%, transparent 68%);
+  transform: translateX(-130%);
+  transition: transform 0.7s ease;
+  pointer-events: none;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn:hover::after { transform: translateX(130%); }
+.btn:active { transform: translateY(0) scale(0.97); }
+
+/* nav items: icon nudge + rail growth */
+.nav-item .nav-item-icon {
+  transition: transform 0.2s var(--ease-out-expo), color 0.2s ease;
+}
+.nav-item:hover .nav-item-icon {
+  transform: translateX(2px);
+  color: var(--mist);
+}
+.nav-active-rail {
+  transition: top 0.25s var(--ease-out-expo), bottom 0.25s var(--ease-out-expo);
+}
+.nav-item:not([data-active="true"]):hover .nav-active-rail {
+  top: 12px;
+  bottom: 12px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* topbar controls: lift + glow */
+.tbar-icon-button,
+.tbar-run-button,
+.tbar-search-trigger,
+.portfolio-referral {
+  transition: transform 0.18s var(--ease-out-expo), background 0.22s ease, border-color 0.22s ease, color 0.22s ease, box-shadow 0.22s ease;
+}
+.tbar-icon-button:hover,
+.tbar-run-button:hover,
+.portfolio-referral:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.6);
+}
+.tbar-icon-button:active,
+.tbar-run-button:active {
+  transform: translateY(0) scale(0.95);
+}
+.tbar-search-trigger:hover {
+  border-color: var(--line-2);
+  color: var(--mist);
+}
+.tbar-run-button:hover {
+  box-shadow: 0 6px 22px -6px rgba(110, 231, 183, 0.35);
+}
+
+/* pills, inputs, list rows */
+.pill {
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+}
+.input {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.input:focus {
+  background: rgba(38, 38, 51, 0.55);
+}
+.agent-row {
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s var(--ease-out-expo);
+}
+.agent-row:hover {
+  transform: translateX(3px);
+}
+.cmdk-item,
+.nav-company-option,
+.tbar-notif-item {
+  transition: background 0.16s ease, box-shadow 0.16s ease, color 0.16s ease;
+}
+
+/* user chip: ring on hover */
+.tbar-user,
+.portfolio-user {
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.tbar-user:hover,
+.portfolio-user:hover {
+  border-color: var(--line-pulse);
+  box-shadow: 0 0 0 4px rgba(110, 231, 183, 0.12);
+}
+
+/* ── Breathing room ── */
+.app-main {
+  padding: 40px 48px 110px;
+}
+.app-shell-grid[data-mobile="true"] .app-main {
+  padding: 22px 16px 96px;
+}

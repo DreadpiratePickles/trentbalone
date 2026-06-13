@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, beforeEach } from "vitest";
+import * as fs from "fs/promises";
+import * as path from "path";
+import * as os from "os";
 import { localProvider } from "@/lib/workbench-local-provider";
 import { getWorkbenchProvider } from "@/lib/workbench-provider";
 import { store } from "@/lib/store";
@@ -23,6 +26,10 @@ async function makeSession(objective = "test"): Promise<WorkbenchSession> {
       rollbackAvailable: false
     }
   });
+}
+
+function defaultSessionDir(sessionId: string): string {
+  return path.join(process.env.WORKBENCH_STORAGE_ROOT ?? path.join(os.tmpdir(), "trent-workbench"), "sessions", sessionId);
 }
 
 describe("workbench-local-provider — registration", () => {
@@ -312,6 +319,51 @@ describe("workbench-local-provider — start/stop", () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     expect(closed).toBe(true);
+  });
+});
+
+describe("workbench-local-provider — workspace checkpoints", () => {
+  it("captures and restores binaries, nested dirs, and deletions while preserving dependencies", async () => {
+    const session = await makeSession("checkpoint roundtrip");
+    const workdir = defaultSessionDir(session.id);
+    const binaryBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe, 0x01]);
+
+    await localProvider.writeFile(session, "src/app.ts", "export const version = 1;\n");
+    await localProvider.writeFile(session, "src/nested/deep/util.ts", "export const ok = true;\n");
+    await fs.writeFile(path.join(workdir, "logo.png"), binaryBytes);
+    await fs.mkdir(path.join(workdir, "node_modules", "fake-dep"), { recursive: true });
+    await fs.writeFile(path.join(workdir, "node_modules", "fake-dep", "index.js"), "module.exports = 1;\n");
+
+    const checkpoint = await localProvider.captureWorkspaceCheckpoint!(session);
+
+    await localProvider.writeFile(session, "src/app.ts", "export const version = 999;\n");
+    await localProvider.writeFile(session, "src/added-by-failed-run.ts", "export const junk = 1;\n");
+    await fs.rm(path.join(workdir, "src", "nested", "deep", "util.ts"));
+    await fs.writeFile(path.join(workdir, "logo.png"), Buffer.from([0x00, 0x01]));
+    await fs.writeFile(path.join(workdir, "node_modules", "fake-dep", "index.js"), "module.exports = 2;\n");
+
+    const result = await localProvider.restoreWorkspaceCheckpoint!(session, checkpoint.id);
+    expect(result.restored).toBe(true);
+
+    await expect(localProvider.readFile(session, "src/app.ts")).resolves.toBe("export const version = 1;\n");
+    await expect(localProvider.readFile(session, "src/nested/deep/util.ts")).resolves.toBe("export const ok = true;\n");
+    await expect(fs.readFile(path.join(workdir, "logo.png"))).resolves.toEqual(binaryBytes);
+    await expect(fs.access(path.join(workdir, "src", "added-by-failed-run.ts"))).rejects.toThrow();
+    await expect(fs.readFile(path.join(workdir, "node_modules", "fake-dep", "index.js"), "utf8"))
+      .resolves.toBe("module.exports = 2;\n");
+  });
+
+  it("keeps per-attempt checkpoints alongside the run-start baseline", async () => {
+    const session = await makeSession("checkpoint coexistence");
+    await localProvider.writeFile(session, "a.txt", "run start\n");
+    const baseline = await localProvider.captureWorkspaceCheckpoint!(session);
+    await localProvider.writeFile(session, "a.txt", "attempt 1\n");
+    const attempt = await localProvider.captureWorkspaceCheckpoint!(session, { replace: false });
+
+    expect((await localProvider.restoreWorkspaceCheckpoint!(session, attempt.id)).restored).toBe(true);
+    await expect(localProvider.readFile(session, "a.txt")).resolves.toBe("attempt 1\n");
+    expect((await localProvider.restoreWorkspaceCheckpoint!(session, baseline.id)).restored).toBe(true);
+    await expect(localProvider.readFile(session, "a.txt")).resolves.toBe("run start\n");
   });
 });
 

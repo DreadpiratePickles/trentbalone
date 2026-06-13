@@ -5,6 +5,7 @@ import { nowIso } from "@/lib/utils";
 // `workbench-providers` self-registers mock_local synchronously and async-loads
 // e2b / daytona when their API keys are present and SDKs are installed.
 import { getDefaultWorkbenchProvider } from "@/lib/workbench-providers";
+import { getWorkbenchProvider } from "@/lib/workbench-provider";
 import { enqueueWorkbenchSession } from "@/lib/workbench-orchestrator";
 
 export type WorkbenchCreateInput = {
@@ -37,6 +38,7 @@ export const DEFAULT_WORKBENCH_APPROVAL_GATES = [
 export function defaultWorkbenchMetadata(input?: {
   allowedHosts?: string[];
   metadata?: Partial<WorkbenchSessionMetadata>;
+  provider?: WorkbenchProvider;
 }): WorkbenchSession["metadata"] {
   const allowedHosts = uniqueHosts(input?.allowedHosts ?? []);
   return {
@@ -46,10 +48,27 @@ export function defaultWorkbenchMetadata(input?: {
     maxCostCents: 250,
     approvalRequiredFor: DEFAULT_WORKBENCH_APPROVAL_GATES,
     rollbackAvailable: true,
-    rollbackMode: "text_files_only",
-    rollbackDescription: "Rollback can restore text files only from Workbench checkpoints; full filesystem/provider-native rollback is not yet proven.",
+    ...rollbackCapability(input?.provider),
     ...(input?.metadata?.appSolo ? { appSolo: input.metadata.appSolo } : {}),
     ...(input?.metadata?.agentRun ? { agentRun: input.metadata.agentRun } : {})
+  };
+}
+
+function rollbackCapability(provider?: WorkbenchProvider): Pick<WorkbenchSessionMetadata, "rollbackMode" | "rollbackDescription"> {
+  try {
+    const adapter = provider ? getWorkbenchProvider(provider) : undefined;
+    if (adapter?.captureWorkspaceCheckpoint && adapter.restoreWorkspaceCheckpoint) {
+      return {
+        rollbackMode: "provider_native",
+        rollbackDescription: "Rollback restores the full workspace from a provider checkpoint taken at run start.",
+      };
+    }
+  } catch {
+    // Unknown/unregistered provider: keep the conservative text-only label.
+  }
+  return {
+    rollbackMode: "text_files_only",
+    rollbackDescription: "Rollback can restore text files only from Workbench checkpoints; full filesystem/provider-native rollback is not yet proven.",
   };
 }
 
@@ -80,7 +99,7 @@ export async function createWorkbenchSession(input: WorkbenchCreateInput): Promi
     workdir: `/workspaces/${input.companyId}/${timestamp.slice(0, 10)}`,
     previewUrl: undefined,
     storageKey: `workbench/${input.companyId}/${timestamp}`,
-    metadata: defaultWorkbenchMetadata({ allowedHosts, metadata: input.metadata })
+    metadata: defaultWorkbenchMetadata({ allowedHosts, metadata: input.metadata, provider })
   });
 
   await store.addWorkbenchEvent({
@@ -89,7 +108,7 @@ export async function createWorkbenchSession(input: WorkbenchCreateInput): Promi
     type: "system",
     status: "completed",
     title: "Workbench session created",
-    content: "Trent reserved an isolated workspace with audit logging, approval gates, cost limits, and text-files-only rollback metadata."
+    content: `Trent reserved an isolated workspace with audit logging, approval gates, cost limits, and ${session.metadata.rollbackMode === "provider_native" ? "full-workspace" : "text-files-only"} rollback metadata.`
   });
 
   await store.addWorkbenchEvent({

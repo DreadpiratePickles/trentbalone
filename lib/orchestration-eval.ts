@@ -1,5 +1,6 @@
 import { median, passRate, roundMetric } from "@/lib/eval-scorecard";
 import type { OrchestrationStep } from "@/lib/orchestrator-runtime";
+import type { TrajectoryCaseResult } from "@/lib/orchestration-eval-trajectory";
 
 export type OrchestrationGoldenObjective = {
   id: string;
@@ -19,7 +20,19 @@ export type OrchestrationEvalInput = {
 export type OrchestrationEvalResult = OrchestrationEvalInput & {
   passed: boolean;
   failureTags: string[];
+  trajectory?: TrajectoryCaseResult;
+  quarantined?: boolean;
 };
+
+export function partitionQuarantinedResults(results: OrchestrationEvalResult[]): {
+  blocking: OrchestrationEvalResult[];
+  quarantined: OrchestrationEvalResult[];
+} {
+  return {
+    blocking: results.filter((result) => !result.quarantined),
+    quarantined: results.filter((result) => result.quarantined),
+  };
+}
 
 export type OrchestrationReproducibilityResult = {
   objectiveId: string;

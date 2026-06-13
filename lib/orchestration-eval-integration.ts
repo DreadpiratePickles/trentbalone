@@ -11,6 +11,11 @@ import {
   validateOrchestrationPlanDag,
   type OrchestrationEvalResult,
 } from "@/lib/orchestration-eval";
+import {
+  evaluateOrchestrationTrajectory,
+  loadOrchestrationTrajectory,
+} from "@/lib/orchestration-eval-trajectory";
+import { goldenObjectives, listOrchestrationGoldens } from "@/lib/orchestration-golden-capture";
 import { launchOrchestration } from "@/lib/orchestrator";
 import { deleteCachedOrchestrationRun } from "@/lib/orchestrator-cache";
 import type { OrchestrationStep } from "@/lib/orchestrator-runtime";
@@ -47,6 +52,13 @@ export async function runOrchestrationIntegrationSuite(options?: {
     const results: OrchestrationEvalResult[] = [];
     for (const item of objectives) {
       results.push(await runSingleOrchestrationIntegrationObjective(item.objective, item.id));
+    }
+    const goldens = await listOrchestrationGoldens().catch(() => []);
+    for (const item of goldenObjectives(goldens, { statuses: ["blocking"] })) {
+      results.push(await runSingleOrchestrationIntegrationObjective(item.objective, item.id));
+    }
+    for (const item of goldenObjectives(goldens, { statuses: ["quarantined"] })) {
+      results.push({ ...(await runSingleOrchestrationIntegrationObjective(item.objective, item.id)), quarantined: true });
     }
     return results;
   } finally {
@@ -99,7 +111,7 @@ async function runSingleOrchestrationIntegrationObjective(
   const stepSuccessRate = actionable > 0 ? completed / actionable : 0;
   const costCents = steps.reduce((total, step) => total + (step.costCents ?? 0), 0);
 
-  return scoreOrchestrationRun({
+  const scored = scoreOrchestrationRun({
     objectiveId,
     planValid: dag.valid && steps.length >= 3,
     stepSuccessRate,
@@ -107,6 +119,8 @@ async function runSingleOrchestrationIntegrationObjective(
     costCents,
     wallClockMs: Date.now() - startedAt,
   });
+  const trajectory = evaluateOrchestrationTrajectory(objectiveId, await loadOrchestrationTrajectory(run.id));
+  return { ...scored, trajectory };
 }
 
 async function drainOrchestrationRun(companyId: string, runId: string, maxJobs = 30): Promise<void> {

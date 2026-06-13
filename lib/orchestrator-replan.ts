@@ -176,7 +176,7 @@ export function buildReplanPlanningPrompts(
   },
 ): { system: string; user: string } {
   const completedSummary = input.completedSteps
-    .map((step) => `- ${step.id} [${step.status}] ${step.title}: ${step.output?.slice(0, 400) ?? "(no output)"}`)
+    .map((step) => `- ${step.id} [${step.status}] ${step.title}: ${(step.handoff?.summary ?? step.output)?.slice(0, 400) ?? "(no output)"}`)
     .join("\n");
 
   const system = [

@@ -151,6 +151,8 @@ export interface CycleResult {
   results: SeatResult[];
   /** Set when low confidence / irreversible work routed to a human (§3.6). */
   escalationReason?: string;
+  /** Set when the planned plan failed validation and a fallback was used. */
+  degraded?: boolean;
 }
 
 function planValidatorEnabled(): boolean {
@@ -207,8 +209,17 @@ export async function plan(request: CycleRequest, cycleId: string): Promise<Pars
     }
   }
 
+  logger.info({ cycleId, classification }, "[planner] planned deterministic subtasks");
+  return buildDeterministicSubtasks(request, classification);
+}
+
+/**
+ * The deterministic seat plan: one subtask per selected seat, no
+ * cross-dependencies, escalation added for irreversible work. Valid by
+ * construction in normal budgets, so it doubles as the validator fallback.
+ */
+function buildDeterministicSubtasks(request: CycleRequest, classification: TaskClassification): ParsedSubtask[] {
   const seats = selectPlannerSeats(request.prompt, classification);
-  logger.info({ cycleId, classification, seats }, "[planner] planned deterministic subtasks");
   return seats.map((seat) =>
     subtaskSchema.parse({
       id: makeId("subtask"),
@@ -246,16 +257,52 @@ function uniqueStrings(items: string[]): string[] {
   return [...new Set(items)];
 }
 
-function validateSubtasksBeforeExecution(subtasks: ParsedSubtask[], request: CycleRequest): void {
-  if (!planValidatorEnabled()) return;
+function isPlanValid(subtasks: ParsedSubtask[], request: CycleRequest): { ok: boolean; detail?: string } {
   const plannedBudgetCents = subtasks.reduce((sum, subtask) => sum + subtask.budgetCents, 0);
   const validation = validatePlan(subtasks, {
     seatRoster: Object.keys(seatOutputSchemas) as AgentRole[],
     budgetCapCents: budgetCapCentsFor(request, plannedBudgetCents),
   });
-  if (!validation.ok) {
-    throw new Error(`Invalid subtask plan: ${formatPlanValidationErrors(validation.errors)}`);
+  return validation.ok ? { ok: true } : { ok: false, detail: formatPlanValidationErrors(validation.errors) };
+}
+
+export type ValidatedPlan = { subtasks: ParsedSubtask[]; degraded: boolean; invalidReason?: string };
+
+/**
+ * Pure decision over an already-planned plan and its deterministic fallback.
+ * This keeps the validator from hard-throwing when a safe fallback can run, but
+ * still refuses to execute when no valid plan can satisfy the contract.
+ */
+export function resolveValidatedPlan(
+  planned: ParsedSubtask[],
+  fallback: ParsedSubtask[],
+  request: CycleRequest,
+  validatorEnabled = planValidatorEnabled(),
+): ValidatedPlan {
+  if (!validatorEnabled) return { subtasks: planned, degraded: false };
+  if (isPlanValid(planned, request).ok) return { subtasks: planned, degraded: false };
+
+  const fallbackVerdict = isPlanValid(fallback, request);
+  if (fallbackVerdict.ok) return { subtasks: fallback, degraded: true };
+  return { subtasks: fallback, degraded: true, invalidReason: fallbackVerdict.detail };
+}
+
+export async function planWithValidation(request: CycleRequest, cycleId: string): Promise<ValidatedPlan> {
+  const subtasks = await plan(request, cycleId);
+  if (!planValidatorEnabled()) return { subtasks, degraded: false };
+
+  const classification = await classifyTask(request.prompt);
+  const fallback = buildDeterministicSubtasks(request, classification);
+  const resolved = resolveValidatedPlan(subtasks, fallback, request);
+  if (resolved.invalidReason) {
+    logger.error(
+      { cycleId, fallbackErrors: resolved.invalidReason },
+      "[planner] planned and deterministic plans both failed validation — refusing to execute",
+    );
+  } else if (resolved.degraded) {
+    logger.warn({ cycleId }, "[planner] plan failed validation — using deterministic fallback (cycle degraded)");
   }
+  return resolved;
 }
 
 function budgetCapCentsFor(request: CycleRequest, fallback: number): number {
@@ -531,8 +578,17 @@ export async function runCycle(request: CycleRequest, runner: SeatRunner): Promi
   const companyId = request.companyId;
 
   try {
-    const subtasks = await plan(request, cycleId);
-    validateSubtasksBeforeExecution(subtasks, request);
+    const { subtasks, degraded, invalidReason } = await planWithValidation(request, cycleId);
+    if (invalidReason) {
+      await appendAuditLog(companyId, "system", "escalate", "cycle", cycleId, `invalid plan: ${invalidReason}`);
+      return {
+        cycleId,
+        status: "failed",
+        results: [],
+        escalationReason: `invalid plan: ${invalidReason}`,
+        degraded: true,
+      };
+    }
     const seatUniverse = buildOrchestratorSeatDossier().seats.map((seat) => seat.role);
 
     // Route + log every subtask before doing any work.
@@ -571,10 +627,10 @@ export async function runCycle(request: CycleRequest, runner: SeatRunner): Promi
     if (lowConfidence || anyIrreversible) {
       const reason = lowConfidence ? "low combined-signal confidence" : "irreversible action requires approval";
       await appendAuditLog(companyId, "system", "escalate", "cycle", cycleId, reason);
-      return { cycleId, status: "escalated", results: allResults, escalationReason: reason };
+      return { cycleId, status: "escalated", results: allResults, escalationReason: reason, degraded };
     }
 
-    return { cycleId, status: "completed", results: allResults };
+    return { cycleId, status: "completed", results: allResults, degraded };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "unknown orchestrator error";
     logger.error({ cycleId, err: message }, "[planner] cycle failed");

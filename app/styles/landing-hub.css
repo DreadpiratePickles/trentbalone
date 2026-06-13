@@ -1,0 +1,306 @@
+/* ─── Landing: cinematic HUD layer ─────────────────────────────────
+   Scroll-linked chrome for the public landing page only.
+   Scoped under .hub-* / .bevel to avoid leaking into the app shell. */
+
+/* ── Beveled box (notched corner) ──
+   Outer paints the border, inner paints the fill; both share the clip. */
+.bevel {
+  --bevel-cut: 10px;
+  --bevel-border: rgba(241, 236, 226, 0.22);
+  --bevel-fill: rgba(10, 10, 15, 0.72);
+  --bevel-ink: var(--bone);
+  position: relative;
+  display: inline-flex;
+  padding: 1px;
+  background: var(--bevel-border);
+  clip-path: polygon(
+    0 0, 100% 0, 100% calc(100% - var(--bevel-cut)),
+    calc(100% - var(--bevel-cut)) 100%, 0 100%
+  );
+  transition: background 0.25s ease;
+  cursor: pointer;
+  border: 0;
+  text-decoration: none;
+}
+.bevel-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 14px 26px;
+  background: var(--bevel-fill);
+  color: var(--bevel-ink);
+  clip-path: polygon(
+    0 0, 100% 0, 100% calc(100% - var(--bevel-cut)),
+    calc(100% - var(--bevel-cut)) 100%, 0 100%
+  );
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+.bevel:hover { background: rgba(110, 231, 183, 0.55); }
+.bevel:focus-visible,
+.hub-rail button:focus-visible,
+.hub-cell:focus-visible {
+  outline: 2px solid var(--pulse);
+  outline-offset: 2px;
+}
+.bevel:hover .bevel-inner { background: rgba(16, 22, 20, 0.92); color: var(--pulse); }
+.bevel:active .bevel-inner { background: rgba(16, 22, 20, 0.98); }
+
+.bevel.fill { --bevel-border: rgba(110, 231, 183, 0.9); }
+.bevel.fill .bevel-inner { background: var(--pulse); color: var(--obsidian); }
+.bevel.fill:hover { --bevel-border: rgba(141, 238, 196, 1); background: rgba(141, 238, 196, 1); }
+.bevel.fill:hover .bevel-inner { background: #8deec4; color: var(--obsidian); }
+
+.bevel.ghost { --bevel-border: rgba(241, 236, 226, 0.14); }
+.bevel.ghost .bevel-inner { background: rgba(255, 255, 255, 0.02); color: var(--mist); }
+.bevel.ghost:hover .bevel-inner { color: var(--bone); }
+
+.bevel.sm .bevel-inner { padding: 9px 16px; font-size: 10px; gap: 8px; min-height: 36px; }
+.bevel.lg .bevel-inner { padding: 18px 36px; font-size: 12px; }
+
+/* Tiny square glyph used inside beveled buttons (2×2 dot grid) */
+.bevel-glyph {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 3px);
+  gap: 1.5px;
+  flex-shrink: 0;
+}
+.bevel-glyph i { width: 3px; height: 3px; background: currentColor; display: block; }
+
+/* ── HUD frame: thin inset border around the viewport ── */
+.hub-frame {
+  position: fixed;
+  inset: 12px;
+  border: 1px solid rgba(241, 236, 226, 0.08);
+  pointer-events: none;
+  z-index: 70;
+}
+.hub-frame::before,
+.hub-frame::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-color: rgba(110, 231, 183, 0.45);
+  border-style: solid;
+}
+.hub-frame::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+.hub-frame::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+
+/* ── Left chapter rail ── */
+.hub-rail {
+  position: fixed;
+  left: 36px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 75;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.hub-rail button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--haze);
+  transition: color 0.35s ease;
+  cursor: pointer;
+}
+.hub-rail button .sq {
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+  opacity: 0;
+  transform: scale(0.4);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+  flex-shrink: 0;
+}
+.hub-rail button:hover { color: var(--mist); }
+.hub-rail button.on { color: var(--bone); }
+.hub-rail button.on .sq { opacity: 1; transform: scale(1); background: var(--pulse); }
+
+/* ── Bottom HUD bar ── */
+.hub-bottom {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 75;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+  border-top: 1px solid rgba(241, 236, 226, 0.08);
+  background: linear-gradient(180deg, rgba(10, 10, 15, 0), rgba(10, 10, 15, 0.55));
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+.hub-bottom > * { pointer-events: auto; }
+.hub-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 12px 22px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--mist);
+  background: none;
+  border: 0;
+}
+.hub-cell.mid { border-left: 1px solid rgba(241, 236, 226, 0.08); border-right: 1px solid rgba(241, 236, 226, 0.08); justify-content: center; cursor: pointer; }
+.hub-cell.end { justify-content: flex-end; color: var(--pulse); cursor: pointer; }
+.hub-cell.end:hover { color: #8deec4; }
+
+@keyframes hub-chev-drop {
+  0%, 100% { transform: translateY(-2px); opacity: 0.4; }
+  50% { transform: translateY(2px); opacity: 1; }
+}
+.hub-chev { animation: hub-chev-drop 1.8s ease-in-out infinite; display: inline-flex; }
+
+/* ── Square-bullet eyebrow (HUD flavour of .eyebrow) ── */
+.hub-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--mist);
+}
+.hub-eyebrow::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  background: var(--pulse);
+  box-shadow: 0 0 12px rgba(110, 231, 183, 0.8);
+  flex-shrink: 0;
+}
+
+/* ── Chapter headings: tracked caps display ── */
+.hub-h {
+  font-family: var(--display);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1.08;
+  color: var(--bone);
+  margin: 0;
+}
+
+/* ── Glowing 3-D cube ── */
+.hub-cube-stage {
+  perspective: 900px;
+  display: grid;
+  place-items: center;
+}
+@keyframes hub-cube-spin {
+  from { transform: rotateX(-22deg) rotateY(0deg); }
+  to { transform: rotateX(-22deg) rotateY(360deg); }
+}
+@keyframes hub-cube-bob {
+  0%, 100% { transform: translateY(-8px); }
+  50% { transform: translateY(8px); }
+}
+.hub-cube-bob { animation: hub-cube-bob 5.5s ease-in-out infinite; }
+.hub-cube {
+  --cube: 120px;
+  width: var(--cube);
+  height: var(--cube);
+  position: relative;
+  transform-style: preserve-3d;
+  animation: hub-cube-spin 26s linear infinite;
+}
+.hub-cube i {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(160deg, rgba(110, 231, 183, 0.32), rgba(16, 185, 129, 0.10) 55%, rgba(110, 231, 183, 0.22));
+  border: 1px solid rgba(110, 231, 183, 0.55);
+  box-shadow: inset 0 0 34px rgba(110, 231, 183, 0.35);
+}
+.hub-cube i:nth-child(1) { transform: translateZ(calc(var(--cube) / 2)); }
+.hub-cube i:nth-child(2) { transform: rotateY(180deg) translateZ(calc(var(--cube) / 2)); }
+.hub-cube i:nth-child(3) { transform: rotateY(90deg) translateZ(calc(var(--cube) / 2)); }
+.hub-cube i:nth-child(4) { transform: rotateY(-90deg) translateZ(calc(var(--cube) / 2)); }
+.hub-cube i:nth-child(5) { transform: rotateX(90deg) translateZ(calc(var(--cube) / 2)); }
+.hub-cube i:nth-child(6) { transform: rotateX(-90deg) translateZ(calc(var(--cube) / 2)); }
+.hub-cube-glow {
+  position: absolute;
+  width: 320px;
+  height: 320px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(110, 231, 183, 0.28), transparent 70%);
+  filter: blur(18px);
+  pointer-events: none;
+}
+
+/* ── Scene canvas ── */
+.hub-scene {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* ── Smooth-scroll shell ── */
+.hub-smooth-fixed {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  will-change: transform;
+}
+
+/* ── Responsive chrome ── */
+@media (max-width: 1100px) {
+  .hub-rail { display: none; }
+}
+@media (max-width: 980px) {
+  .hub-cols-2,
+  .hub-cols-3 { grid-template-columns: 1fr !important; gap: 40px !important; }
+  .hub-cols-4 { grid-template-columns: 1fr 1fr !important; }
+}
+@media (max-width: 760px) {
+  .hub-nav-links { display: none !important; }
+  .hub-nav-extra > a,
+  .hub-nav-extra > button:not(.bevel) { display: none !important; }
+  .hub-cta-card { padding: 48px 28px !important; }
+}
+@media (max-width: 760px) {
+  .hub-frame { display: none; }
+  .hub-bottom { grid-template-columns: auto 1fr; left: 0; right: 0; bottom: 0; }
+  .hub-cell:first-child { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hub-cube,
+  .hub-cube-bob,
+  .hub-chev { animation: none; }
+  .hub-blur-reveal {
+    transition: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+  }
+}

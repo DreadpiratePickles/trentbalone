@@ -62,6 +62,8 @@ type SeatTurnOutput = {
   summary?: string | null;
   findings?: unknown;
   recommendations?: unknown;
+  riskNotes?: unknown;
+  whatIDidNotDo?: unknown;
   workRequests?: unknown;
 };
 
@@ -291,6 +293,8 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
           summary: turn.summary,
           findings: turn.findings ?? [],
           recommendations: turn.recommendations ?? [],
+          riskNotes: turn.riskNotes ?? [],
+          whatIDidNotDo: turn.whatIDidNotDo ?? [],
           workRequests: turn.workRequests ?? [],
         },
         toolCalls,
@@ -330,6 +334,8 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
           summary: typeof turn.summary === "string" ? turn.summary : "Model returned an invalid tool-use turn.",
           findings: turn.findings ?? [],
           recommendations: turn.recommendations ?? [],
+          riskNotes: turn.riskNotes ?? [],
+          whatIDidNotDo: turn.whatIDidNotDo ?? [],
           workRequests: turn.workRequests ?? [],
         },
         toolCalls,

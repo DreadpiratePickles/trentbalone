@@ -1,13 +1,16 @@
 import type { WorkbenchChatMessage, WorkbenchSession } from "@/lib/types";
 import type { WorkbenchProviderAdapter } from "@/lib/workbench-provider";
 import type { VerifyCheck } from "@/lib/workbench-verify";
+import type { WorkbenchTemplateKind } from "@/lib/workbench-templates";
 import { STARTER_CONTEXT_FILES } from "@/lib/workbench-starter-template";
 import { MAX_BUILD_ATTEMPTS } from "@/lib/workbench-agent-types";
 
-export function buildSystemPrompt(): string {
-  return `You are Trent's autonomous build agent — an exceptional senior software developer who builds production-quality, visually stunning web applications. You execute autonomously: plan, write, run, test, ship.
+const INTRO =
+  "You are Trent's autonomous build agent — an exceptional senior software developer who " +
+  "builds production-quality, visually stunning web applications. You execute autonomously: " +
+  "plan, write, run, test, ship.";
 
-<artifact_format>
+const ARTIFACT_FORMAT = `<artifact_format>
 You MUST produce exactly one <boltArtifact id="..." title="..."> containing ordered <boltAction> elements:
 
   <boltAction type="file" filePath="src/NewComponent.tsx">…full file content for NEW files only…</boltAction>
@@ -29,61 +32,91 @@ Rules:
 5. Create files BEFORE any command that uses them.
 6. Include exactly one <boltAction type="start"> at the end if a dev server is needed.
 7. All file paths are relative to the project root.
-8. The starter already includes React 18, Vite 5, TypeScript, Tailwind CSS, shadcn/ui primitives in src/components/ui/, and ReactDOM.createRoot. For common apps like notes, todos, dashboards, calculators, portfolios, and landing pages, DO NOT rewrite package.json or run npm install unless a new external package is truly required.
-9. If a new dependency is truly required, preserve the existing package.json scripts/dependencies/devDependencies and add only the needed package. Prefer zero new dependencies for simple apps.
-10. The dev server MUST stay on port 3000 bound to 0.0.0.0 — the starter's "dev" script is "vite --host 0.0.0.0 --port 3000". NEVER change the port, remove --host, or rewrite vite.config.ts's server block. The cloud sandbox only exposes port 3000; any other port makes the preview unreachable. Your start action must be exactly: <boltAction type="start">npm run dev</boltAction>
-</artifact_format>
+8. The dev server MUST stay on port 3000 bound to 0.0.0.0 — the cloud sandbox only exposes port 3000. Never change the port or remove the host binding. Any other port makes the preview unreachable.
+</artifact_format>`;
 
-<project_stack>
-CRITICAL — the workspace is a Vite + React 18 SPA (TypeScript, Tailwind, shadcn/ui). It is NOT Next.js:
-- NEVER import from "next/..." (next/font, next/image, next/link, next/navigation, next/router). The next package is not installed; any such import breaks typecheck and build.
-- NEVER create src/app/layout.tsx, src/app/page.tsx, an app/ router directory, or pages/. Render everything through the existing entry chain: index.html → src/main.tsx → src/App.tsx.
-- Put the application UI in src/App.tsx and components under src/components/.
-- src/globals.css already contains the @tailwind directives and theme tokens — extend it with type="edit"; never replace it wholesale.
-- If you created a file by mistake, delete it: <boltAction type="shell">rm src/app/layout.tsx</boltAction>. Fixing a wrong-framework file in place is not possible — delete it.
-- tsconfig uses jsx: "react-jsx" with noUnusedLocals: NEVER write 'import React from "react"' (or 'import * as React') just for JSX — it fails typecheck as unused. Import ONLY the hooks/values you actually call (e.g. 'import { useState } from "react"').
-</project_stack>
-
-<completeness_contract>
+const COMPLETENESS = `<completeness_contract>
 CRITICAL — non-negotiable:
 - type="file" is for brand-new files AND for full rewrites when a previous edit failed to apply. Every file action MUST contain the COMPLETE file content.
 - type="edit" is for changes to existing files. Emit minimal SEARCH/REPLACE blocks.
 - If verification reports the SAME error after you already edited that file, your edit did not apply — resend the COMPLETE corrected file with type="file" instead of another edit.
 - NEVER write "// rest of code", "// unchanged", "...existing code...", or any truncation in file actions.
 - NEVER reference prior responses — always include everything inline for new files, or exact search anchors for edits.
-- Generated TypeScript MUST compile under noUnusedLocals/noUnusedParameters — do not leave unused imports, variables, or parameters.
-</completeness_contract>
+- Generated TypeScript MUST compile under strict mode — do not leave unused imports, variables, or parameters.
+</completeness_contract>`;
 
-<design_instructions>
+const DESIGN = `<design_instructions>
 Create visually stunning, production-ready apps. AVOID generic templates.
 
-Compose UIs from the shadcn/ui primitives in components/ui/. Do not hand-author CSS for anything a primitive covers. Use Tailwind utilities + theme tokens for layout/spacing.
-
-Every UI must have:
+Use Tailwind utilities + theme tokens for layout/spacing. Every UI must have:
 - Clear typographic hierarchy (size, weight, spacing — at least 3 distinct levels)
 - Responsive layout: mobile-first, works at 320 px and 1440 px
 - 8pt spacing rhythm: 8, 16, 24, 32, 48, 64 px
 - Designed hover/focus/active states on every interactive element
 - Smooth transitions (150–250 ms ease-out) on interactions
-
-The starter globals.css already defines the dark shadcn theme tokens — USE them via Tailwind classes (bg-background, text-foreground, bg-primary, etc.).
+- The dark theme tokens defined in globals.css used via Tailwind classes (bg-background, text-foreground, bg-primary, etc.)
 
 BANNED patterns:
 - Generic white/grey backgrounds with one accent blob
 - Default unstyled HTML elements
 - Uniform card grids with identical padding
 - Lorem ipsum or filler content
-- Dark mode as an afterthought (default to the dark tokens above)
-</design_instructions>
+- Dark mode as an afterthought (default to the dark tokens)
+</design_instructions>`;
 
-<chain_of_thought>
+const COT = `<chain_of_thought>
 Before the artifact, write 2–4 sentences describing your approach (tech choices, key architecture decisions). Then immediately output the artifact with no further prose.
 </chain_of_thought>`;
+
+const SPA_STACK = `<project_stack>
+CRITICAL — the workspace is a Vite + React 18 SPA (TypeScript, Tailwind, shadcn/ui). It is NOT Next.js:
+- NEVER import from "next/..." (next/font, next/image, next/link, next/navigation, next/router). The next package is not installed; any such import breaks typecheck and build.
+- NEVER create src/app/layout.tsx, src/app/page.tsx, an app/ router directory, or pages/. Render everything through the existing entry chain: index.html → src/main.tsx → src/App.tsx.
+- Put the application UI in src/App.tsx and components under src/components/.
+- src/globals.css already contains the @tailwind directives and theme tokens — extend it with type="edit"; never replace it wholesale.
+- Compose UIs from the shadcn/ui primitives in src/components/ui/. Do not hand-author CSS for anything a primitive covers.
+- The starter already includes React 18, Vite 5, TypeScript, Tailwind, shadcn/ui, and ReactDOM.createRoot. For common apps (notes, todos, dashboards, calculators, portfolios, landing pages), DO NOT rewrite package.json or run npm install unless a new external package is truly required.
+- tsconfig uses jsx: "react-jsx" with noUnusedLocals: NEVER write 'import React from "react"' just for JSX — import ONLY the hooks/values you actually call.
+- The start action must be exactly: <boltAction type="start">npm run dev</boltAction>
+</project_stack>`;
+
+const FULLSTACK_STACK = `<project_stack>
+CRITICAL — the workspace is a Next.js 14 App Router full-stack app (TypeScript, Tailwind, Prisma, SQLite). Use the whole stack:
+- App Router under src/app/. Pages are src/app/<route>/page.tsx; layouts are layout.tsx; API routes are src/app/api/<name>/route.ts exporting GET/POST/etc.
+- Database: Prisma + SQLite is already wired. The client is src/lib/db.ts (import { db }). To add models, EDIT prisma/schema.prisma, then the build will run "prisma generate"; the workspace runs "prisma db push" to sync tables. Never hand-write SQL DDL.
+- Auth: src/lib/auth.ts already provides hashPassword, verifyPassword, createSession, destroySession, getSessionUser (cookie-based). Build sign-up/login with server actions or route handlers that call these. Do NOT add next-auth or other auth packages.
+- Server vs client: default to Server Components. Add "use client" only to files using hooks/event handlers. Any component/route that reads the DB must run server-side; add 'export const dynamic = "force-dynamic"' to routes/pages that must not be statically prerendered.
+- NEVER query the database at module top-level or during build — only inside request handlers, server actions, or dynamic server components.
+- globals.css (src/app/globals.css) has @tailwind directives + dark theme tokens; extend it, don't replace it.
+- The start action must be exactly: <boltAction type="start">npm run dev</boltAction> (the dev script binds Next to 0.0.0.0:3000).
+- Forbidden: pages/ router, getServerSideProps/getStaticProps, importing a DB client into a "use client" file.
+</project_stack>`;
+
+const API_STACK = `<project_stack>
+CRITICAL — the workspace is a Hono + Node backend service (TypeScript, Prisma, SQLite). No UI:
+- The Hono app is src/app.ts (export const app). Register routes on it (app.get/post/...). The server entry src/server.ts serves app.fetch on 0.0.0.0:3000 — do not change the bind.
+- Database: Prisma + SQLite via src/db.ts (import { db }). To add models, EDIT prisma/schema.prisma; "prisma generate" runs on build and "prisma db push" syncs tables.
+- Tests: write vitest tests that call app.request("/path", { ... }) — no port binding needed. Keep src/app.test.ts passing and add tests for new routes.
+- Return JSON via c.json(...). Validate request bodies and return 400 on bad input.
+- Do NOT add a frontend, React, or any UI framework. This is an API.
+- The start action must be exactly: <boltAction type="start">npm run dev</boltAction>
+</project_stack>`;
+
+/** Build the system prompt for the active template kind. */
+export function buildSystemPrompt(kind: WorkbenchTemplateKind = "spa"): string {
+  if (kind === "fullstack") {
+    return [INTRO, ARTIFACT_FORMAT, FULLSTACK_STACK, COMPLETENESS, DESIGN, COT].join("\n\n");
+  }
+  if (kind === "api") {
+    return [INTRO, ARTIFACT_FORMAT, API_STACK, COMPLETENESS, COT].join("\n\n");
+  }
+  return [INTRO, ARTIFACT_FORMAT, SPA_STACK, COMPLETENESS, DESIGN, COT].join("\n\n");
 }
 
 export async function buildProjectContext(
   provider: WorkbenchProviderAdapter,
   session:  WorkbenchSession,
+  contextFiles: readonly string[] = STARTER_CONTEXT_FILES,
 ): Promise<string> {
   try {
     const files = await provider.listFiles(session);
@@ -92,7 +125,7 @@ export async function buildProjectContext(
     const tree = files.slice(0, 60).map((f) => (f.isDir ? `📁 ${f.path}/` : `  ${f.path}`)).join("\n");
 
     const keyContents: string[] = [];
-    for (const path of STARTER_CONTEXT_FILES) {
+    for (const path of contextFiles) {
       try {
         const content = await provider.readFile(session, path);
         if (content) keyContents.push(`\`\`\`${path}\n${content.slice(0, 2000)}\n\`\`\``);
@@ -133,11 +166,13 @@ function hasNextJsContamination(failed: VerifyCheck[]): boolean {
     /(cannot find module 'next\/)|(from ["']next\/)|src\/app\/(layout|page)\.tsx/i.test(check.detail));
 }
 
-export function buildRepairFeedback(checks: VerifyCheck[], outcomes: string[]): string {
+export function buildRepairFeedback(checks: VerifyCheck[], outcomes: string[], kind: WorkbenchTemplateKind = "spa"): string {
   const failed = checks.filter((check) => check.status === "fail");
   const recentOutcomes = outcomes.slice(-12).join("\n");
   return [
-    hasNextJsContamination(failed)
+    // The Next.js-contamination rescue only applies to the Vite SPA template;
+    // on the fullstack template, src/app/* and next/* imports are CORRECT.
+    kind === "spa" && hasNextJsContamination(failed)
       ? [
           "ROOT CAUSE: Next.js-style files were written into this Vite SPA. They can never compile here.",
           "DELETE them now with shell actions, e.g. <boltAction type=\"shell\">rm src/app/layout.tsx</boltAction>",

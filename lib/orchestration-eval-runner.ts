@@ -4,6 +4,7 @@ import {
   buildOrchestrationSmokeRuns,
   compareOrchestrationReproducibility,
   meetsOrchestrationPassRateThreshold,
+  partitionQuarantinedResults,
   scoreOrchestrationRun,
   type OrchestrationEvalResult,
 } from "@/lib/orchestration-eval";
@@ -27,11 +28,13 @@ export async function runOrchestrationEvalCommand(
   const secondPass = options.smoke || options.integration
     ? firstPass
     : firstPass.map((run) => scoreOrchestrationRun({ ...run, costCents: run.costCents + 5, wallClockMs: run.wallClockMs + 1_000 }));
+  const { blocking, quarantined } = partitionQuarantinedResults(firstPass);
+  const blockingSecondPass = secondPass.filter((run) => !run.quarantined);
   const reproducibility = options.integration
-    ? firstPass.map((run) => compareOrchestrationReproducibility(run, run))
-    : firstPass.map((run, index) => compareOrchestrationReproducibility(run, secondPass[index]!));
-  const scorecard = buildOrchestrationEvalScorecard(firstPass, reproducibility);
-  await io.write(`${JSON.stringify(scorecard, null, 2)}\n`);
+    ? blocking.map((run) => compareOrchestrationReproducibility(run, run))
+    : blocking.map((run, index) => compareOrchestrationReproducibility(run, blockingSecondPass[index]!));
+  const scorecard = buildOrchestrationEvalScorecard(blocking, reproducibility);
+  await io.write(`${JSON.stringify(quarantined.length ? { ...scorecard, quarantined } : scorecard, null, 2)}\n`);
   const passed = meetsOrchestrationPassRateThreshold(scorecard, options.threshold);
   return { exitCode: passed ? 0 : 1, scorecard };
 }

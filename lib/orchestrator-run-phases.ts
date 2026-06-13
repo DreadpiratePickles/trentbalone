@@ -283,7 +283,8 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
       return;
     }
 
-    const critiqueResult = await critiqueStepOutput(step, exec.output, { companyId: run.companyId, runId: run.id });
+    const upstreamHandoffs = step.dependsOn.map((dep) => handoffs[dep]).filter((handoff): handoff is StepHandoff => Boolean(handoff));
+    const critiqueResult = await critiqueStepOutput(step, exec.output, { companyId: run.companyId, runId: run.id }, upstreamHandoffs);
     step.critique = critiqueResult;
     await persistStep(run, step);
 
@@ -310,7 +311,7 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
       // RC2 invariant (Fix Plan Slice 1): a critic 'retry' is NOT a pass.
       // The revised output must be critiqued again; a second failure marks
       // the step failed (degraded) instead of silently completing.
-      const recheck = await critiqueStepOutput(step, exec2.output, { companyId: run.companyId, runId: run.id });
+      const recheck = await critiqueStepOutput(step, exec2.output, { companyId: run.companyId, runId: run.id }, upstreamHandoffs);
       step.critique = recheck;
       effectiveCritique = recheck;
       await persistStep(run, step);

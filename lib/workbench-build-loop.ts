@@ -8,7 +8,14 @@ import { verifyWithRetries, type VerifyCheck, type VerifyVerdict } from "@/lib/w
 import { resolveWorkbenchVerificationCommands } from "@/lib/workbench-command-resolver";
 import { parseArtifact, type ArtifactAction } from "@/lib/workbench-artifact-parser";
 import { applyEditBlocks, fastApply, parseEditBlocks } from "@/lib/workbench-edit-apply";
-import { STARTER_TEMPLATE } from "@/lib/workbench-starter-template";
+import { resolveWorkbenchTemplate } from "@/lib/workbench-templates";
+import { planBuild } from "@/lib/workbench-build-planner";
+import { planToWaves } from "@/lib/workbench-build-graph";
+import { runEditorWaves } from "@/lib/workbench-build-editors";
+import { shouldUseMultiAgentPlan } from "@/lib/workbench-build-multi";
+import { createWorkbenchEditFile } from "@/lib/workbench-build-editor-runner";
+import { deriveAcceptanceJourney } from "@/lib/workbench-acceptance-journey";
+import { scoreWorkbenchDesign } from "@/lib/workbench-design-critic";
 import {
   persistVerificationBrowserTraceArtifact,
   persistVerificationScreenshotArtifact,
@@ -51,13 +58,14 @@ import {
 } from "@/lib/workbench-agent-prompts";
 import {
   buildFinalArtifactSummary,
+  captureWorkbenchRunCheckpoint,
   captureWorkbenchTextSnapshot,
   failedCheckSummary,
   isInstallCommand,
   normalizeArtifactFilePath,
   persistLatestWorkbenchCheckpoint,
   recordEvent,
-  restoreWorkbenchTextSnapshot,
+  restoreWorkbenchRunCheckpoint,
   safeExec,
   safeListFiles,
   safePreview,
@@ -297,6 +305,20 @@ export async function* runBuildLoop(
   // recovery, and deployment-plan tasks must not scaffold templates, edit app
   // source, or boot dev servers.
   const scopePolicy = deriveWorkbenchScopePolicy(userMessage);
+  // W1: pick the substrate from the objective. Landing pages/todos stay on the
+  // fast SPA path; products that need auth/DB/API get the full-stack Next.js
+  // template; backend-only prompts get the Hono+SQLite API template.
+  const template = resolveWorkbenchTemplate({
+    objective: session.objective || userMessage,
+    templateId: typeof session.metadata.templateId === "string" ? session.metadata.templateId : undefined,
+  });
+  if (scopePolicy.intent === "build" && template.kind !== "spa") {
+    yield {
+      type: "status",
+      phase: "template",
+      detail: `Substrate: ${template.label} (${template.summary})`,
+    };
+  }
   const requiresPlanApproval = session.metadata.approvalRequiredFor.some((gate) =>
     gate === "workbench_plan" || gate === "workbench.plan" || gate === "plan",
   );
@@ -310,40 +332,49 @@ export async function* runBuildLoop(
 
   const existing = await safeListFiles(deps.provider, session);
   const actionFailures: VerifyCheck[] = [];
+  const outcomes: string[] = [];
   const workspaceState: BuildAttemptState = { packageChanged: false, executedCommands: [] };
   const scaffoldStarterTemplate = async (): Promise<WorkbenchAgentChunk[]> => {
     const chunks: WorkbenchAgentChunk[] = [
-      { type: "status", phase: "scaffolding", detail: "Initialising project from starter template" },
+      { type: "status", phase: "scaffolding", detail: `Initialising ${template.label} project` },
     ];
-    for (const [path, content] of Object.entries(STARTER_TEMPLATE)) {
+    for (const [path, content] of Object.entries(template.files)) {
       const write = await safeWrite(deps.provider, session, path, content);
       if (path === "package.json") workspaceState.packageChanged = true;
       if (!write.ok) {
         actionFailures.push({ name: "files", status: "fail", detail: `${path}: ${write.error}` });
       }
     }
-    chunks.push({ type: "status", phase: "installing", detail: "npm install" });
-    const install = await safeExec(deps.provider, session, "npm install --legacy-peer-deps");
-    workspaceState.executedCommands.push("npm install --legacy-peer-deps");
-    chunks.push({ type: "command", command: "npm install", exitCode: install.exitCode, output: truncate(install.output) });
+    chunks.push({ type: "status", phase: "installing", detail: template.installCommand });
+    const install = await safeExec(deps.provider, session, template.installCommand);
+    workspaceState.executedCommands.push(template.installCommand);
+    chunks.push({ type: "command", command: template.installCommand, exitCode: install.exitCode, output: truncate(install.output) });
     if (install.exitCode !== 0) {
       actionFailures.push({
         name: "install",
         status: "fail",
-        detail: `npm install --legacy-peer-deps exit ${install.exitCode}: ${truncate(install.output, 500)}`,
-        command: "npm install --legacy-peer-deps",
+        detail: `${template.installCommand} exit ${install.exitCode}: ${truncate(install.output, 500)}`,
+        command: template.installCommand,
         exitCode: install.exitCode,
       });
+    }
+    for (const cmd of template.postInstallCommands) {
+      chunks.push({ type: "status", phase: "provisioning", detail: cmd });
+      const res = await safeExec(deps.provider, session, cmd);
+      workspaceState.executedCommands.push(cmd);
+      chunks.push({ type: "command", command: cmd, exitCode: res.exitCode, output: truncate(res.output) });
+      if (res.exitCode !== 0) {
+        outcomes.push(`Post-install \`${cmd}\` exited ${res.exitCode} (continuing).`);
+      }
     }
     return chunks;
   };
   if (scopePolicy.allowScaffold && isWorkspaceUnscaffolded(existing) && !requiresPlanApproval) {
     for (const chunk of await scaffoldStarterTemplate()) yield chunk;
   }
-  const runRollbackSnapshot = await captureWorkbenchTextSnapshot(deps.provider, session).catch(() => undefined);
+  const runRollbackCheckpoint = await captureWorkbenchRunCheckpoint(deps.provider, session).catch(() => undefined);
 
-  const system   = buildSystemPrompt();
-  const outcomes: string[] = [];
+  const system = buildSystemPrompt(template.kind);
   let feedback = "";
   let finalVerdict: Awaited<ReturnType<typeof verifyWithRetries>> | undefined;
   let finalTitle = "Workbench build";
@@ -357,6 +388,70 @@ export async function* runBuildLoop(
   } catch {
     // best-effort: missing company memory should not prevent the workspace run.
   }
+
+  // W2 (opt-in, default off): a manager creates a file-level plan, editor
+  // agents draft files in dependency waves, then the normal build loop acts as
+  // finisher/verifier. Failures fall through to the proven single-agent path.
+  if (process.env.WORKBENCH_MULTI_AGENT === "1" && scopePolicy.intent === "build") {
+    try {
+      const planContext = await buildProjectContext(deps.provider, session, template.contextFiles);
+      const plan = await planBuild({
+        objective: session.objective,
+        template,
+        projectContext: planContext,
+        sourceContext,
+      });
+      if (shouldUseMultiAgentPlan(plan.files.length)) {
+        yield { type: "status", phase: "planning", detail: `Manager planned ${plan.files.length} files` };
+        yield {
+          type: "plan",
+          steps: plan.files.map((file) => ({ kind: "file", path: file.path, summary: file.intent })),
+        };
+        const waves = planToWaves(plan.files);
+        const editFile = createWorkbenchEditFile({
+          session,
+          deps,
+          provider: deps.provider,
+          systemPrompt: system,
+          plan,
+        });
+        const { results } = await runEditorWaves({
+          waves: waves.waves,
+          files: plan.files,
+          editFile,
+          concurrency: 4,
+          onResult: () => {},
+        });
+        for (const result of results) {
+          if (result.ok) {
+            yield { type: "file", path: result.path, action: "update", bytes: result.bytes ?? 0 };
+            outcomes.push(`Editor wrote \`${result.path}\``);
+          } else {
+            outcomes.push(`Editor could not write \`${result.path}\`: ${result.detail}`);
+          }
+        }
+        const ok = results.filter((result) => result.ok).length;
+        await recordEvent(
+          session,
+          "plan",
+          "completed",
+          "Multi-agent pre-build",
+          `${ok}/${results.length} files drafted across ${waves.waves.length} waves`,
+        );
+        yield { type: "status", phase: "repairing", detail: `Finisher pass over ${ok} drafted files` };
+        feedback = `A team of editor agents drafted ${ok} files for "${plan.title}". Review them against the objective, fix any gaps or inconsistencies, wire them together, install dependencies, and start the preview. Files drafted:\n${plan.files.map((file) => `- ${file.path}: ${file.intent}`).join("\n")}`;
+      }
+    } catch (err) {
+      await recordEvent(
+        session,
+        "system",
+        "running",
+        "Multi-agent pre-build skipped",
+        err instanceof Error ? err.message : String(err),
+      ).catch(() => undefined);
+    }
+  }
+
   // RC3 (Slice 3): tell the model the enforced scope up front so it doesn't
   // plan actions the gate will block, and track failure signatures so two
   // identical failed verifications stop the loop instead of burning attempts.
@@ -376,10 +471,11 @@ export async function* runBuildLoop(
   let lastFailureSignature = "";
   const existingAttempts = await store.listWorkbenchAttempts(session.id).catch(() => []);
   const attemptOffset = existingAttempts.reduce((max, attempt) => Math.max(max, attempt.attemptNo), 0);
+  let bestFailedAttempt: { attemptNo: number; checkpointId: string; score: number } | undefined;
 
   for (let attempt = 1; attempt <= MAX_BUILD_ATTEMPTS; attempt++) {
     const durableAttemptNo = attemptOffset + attempt;
-    const context = await buildProjectContext(deps.provider, session);
+    const context = await buildProjectContext(deps.provider, session, template.contextFiles);
     const groundedContext = [context, sourceContext].filter(Boolean).join("\n\n");
     const attemptFailures: VerifyCheck[] = attempt === 1 ? [...actionFailures] : [];
     const attemptState: BuildAttemptState = {
@@ -548,9 +644,9 @@ export async function* runBuildLoop(
     });
     let verdict = scopePolicy.intent === "build"
       ? await verifyWithRetries({
-          session, provider: deps.provider,
+        session, provider: deps.provider,
           commands,
-          acceptanceSteps: deps.acceptanceSteps,
+          acceptanceSteps: deps.acceptanceSteps ?? deriveAcceptanceJourney(session.objective),
           interactionDriver: deps.interactionDriver,
           criticReviewer: deps.criticReviewer,
           heal: async (cmd) => { await safeSelfHeal(deps.provider, session, cmd); },
@@ -595,6 +691,14 @@ export async function* runBuildLoop(
 
     if (verdict.passed) break;
 
+    if (deps.provider.captureWorkspaceCheckpoint && deps.provider.restoreWorkspaceCheckpoint) {
+      const score = verdict.checks.filter((check) => check.status === "pass").length;
+      const captured = await deps.provider.captureWorkspaceCheckpoint(session, { replace: false }).catch(() => undefined);
+      if (captured && (!bestFailedAttempt || score >= bestFailedAttempt.score)) {
+        bestFailedAttempt = { attemptNo: durableAttemptNo, checkpointId: captured.id, score };
+      }
+    }
+
     // RC3 (Slice 3): smart stopping — MAX_BUILD_ATTEMPTS is a ceiling, not a
     // target. Two consecutive verifications failing with the identical check
     // signature mean another repair cycle is not justified; stop as blocked
@@ -613,7 +717,7 @@ export async function* runBuildLoop(
     }
     lastFailureSignature = failureSignature;
 
-    feedback = buildRepairFeedback(verdict.checks, outcomes);
+    feedback = buildRepairFeedback(verdict.checks, outcomes, template.kind);
     if (attempt < MAX_BUILD_ATTEMPTS) {
       yield {
         type: "status",
@@ -629,8 +733,9 @@ export async function* runBuildLoop(
     checks: [{ name: "commands", status: "fail", detail: "Build did not run" } satisfies VerifyCheck],
   };
   if (!verdict.passed) {
-    if (runRollbackSnapshot) {
-      const rollback = await restoreWorkbenchTextSnapshot(deps.provider, session, runRollbackSnapshot).catch((error: unknown) => ({
+    if (runRollbackCheckpoint) {
+      const rollback = await restoreWorkbenchRunCheckpoint(deps.provider, session, runRollbackCheckpoint).catch((error: unknown) => ({
+        mode: runRollbackCheckpoint.kind === "workspace" ? "workspace" as const : "text" as const,
         restored: [],
         removed: [],
         failed: [error instanceof Error ? error.message : String(error)],
@@ -641,9 +746,13 @@ export async function* runBuildLoop(
         rollback.failed.length ? "failed" : "completed",
         "Rolled back failed Workbench run",
         [
+          `mode=${rollback.mode === "workspace" ? "full workspace (binaries included)" : "text files only"}`,
           `restored=${rollback.restored.length}`,
           `removed=${rollback.removed.length}`,
           `failed=${rollback.failed.length}`,
+          ...(bestFailedAttempt
+            ? [`bestAttempt=${bestFailedAttempt.attemptNo} (${bestFailedAttempt.score} checks passing) restorable via POST /api/workbench/${session.id}/restore {"checkpointId":"${bestFailedAttempt.checkpointId}"}`]
+            : []),
         ].join("; "),
         undefined,
         attemptOffset + MAX_BUILD_ATTEMPTS,
@@ -654,6 +763,27 @@ export async function* runBuildLoop(
 
   const artifactSummary = await buildFinalArtifactSummary(session.id);
   const deploymentSummary = buildDeploymentPlanSummary(userMessage);
+  let designLine = "";
+  if (verdict.passed && template.kind !== "api") {
+    try {
+      const snap = await captureWorkbenchTextSnapshot(deps.provider, session);
+      const design = scoreWorkbenchDesign(Object.fromEntries(snap.files));
+      await recordEvent(
+        session,
+        "test",
+        "completed",
+        `Design quality ${design.score}/${design.max}`,
+        [...design.strengths, ...design.issues].join("; ").slice(0, 1000),
+        undefined,
+        attemptOffset + MAX_BUILD_ATTEMPTS,
+      );
+      designLine = design.passed
+        ? `**Design quality:** ${design.score}/${design.max} ✓`
+        : `**Design quality:** ${design.score}/${design.max} — ${design.issues.slice(0, 3).join("; ")}`;
+    } catch {
+      // Advisory only — never block the build on design scoring.
+    }
+  }
   // RC3 (Slice 3): the headline verdict must match the sub-checks. A pass the
   // critic never reviewed is reported as degraded, never as a clean pass.
   const verificationLine = verdict.passed
@@ -669,6 +799,7 @@ export async function* runBuildLoop(
     deploymentSummary,
     deploymentSummary ? "" : undefined,
     verificationLine,
+    designLine || undefined,
     verdict.passed ? "" : failedCheckSummary(verdict.checks),
   ].filter((line) => line !== undefined).join("\n");
   return { summary, passed: verdict.passed };

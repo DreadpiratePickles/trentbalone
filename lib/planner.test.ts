@@ -15,6 +15,7 @@ import {
   classifyTask,
   MAX_PARALLEL_WORKERS,
   plan,
+  resolveValidatedPlan,
   runCycle,
   runPlannedSubtasks,
   seatResultSchema,
@@ -416,7 +417,7 @@ describe("planner orchestrator", () => {
     expect(routeSummaries.join("\n")).not.toContain("browser via");
   });
 
-  it("does not execute an over-budget subtask plan when semantic validation is enabled", async () => {
+  it("refuses to execute when no plan (planned or deterministic) can satisfy the budget cap", async () => {
     vi.stubEnv("ORCHESTRATION_PLAN_VALIDATOR_ENABLED", "1");
     const runner: SeatRunner = {
       run: vi.fn(async (subtask) => seatResultSchema.parse({
@@ -436,8 +437,81 @@ describe("planner orchestrator", () => {
     }, runner);
 
     expect(result.status).toBe("failed");
-    expect(result.escalationReason).toContain("budget");
+    expect(result.escalationReason).toContain("invalid plan");
+    expect(result.degraded).toBe(true);
     expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  describe("resolveValidatedPlan", () => {
+    const req = { companyId: "co_1", prompt: "summarize growth and finance risks" };
+    const valid = (id: string) => subtaskSchema.parse({
+      id,
+      seat: "analyst",
+      objective: "Summarize risks",
+      dependsOn: [],
+      spec: { acceptance: ["Risks summarized"], inputsFrom: [] },
+      outputContractId: "analyst.v1",
+      toolGuidance: [],
+      boundaries: [],
+      input: { prompt: req.prompt, seat: "analyst" },
+      contextBundle: {},
+      classification: { type: "general", complexity: "standard", reversibility: "reversible" },
+      budgetCents: 50,
+    });
+    const cyclic = (id: string, dep: string) => ({ ...valid(id), dependsOn: [dep] });
+
+    it("passes the planned plan through untouched when valid", () => {
+      const planned = [valid("sub_a")];
+      const result = resolveValidatedPlan(planned, [valid("sub_fb")], req, true);
+      expect(result).toEqual({ subtasks: planned, degraded: false });
+    });
+
+    it("uses the deterministic fallback when the planned plan is invalid but the fallback is valid", () => {
+      const planned = [cyclic("sub_a", "sub_b"), cyclic("sub_b", "sub_a")];
+      const fallback = [valid("sub_fb")];
+      const result = resolveValidatedPlan(planned, fallback, req, true);
+      expect(result.degraded).toBe(true);
+      expect(result.invalidReason).toBeUndefined();
+      expect(result.subtasks).toBe(fallback);
+    });
+
+    it("refuses when even the deterministic fallback is invalid", () => {
+      const planned = [cyclic("sub_a", "sub_b"), cyclic("sub_b", "sub_a")];
+      const fallback = [cyclic("sub_fb", "ghost")];
+      const result = resolveValidatedPlan(planned, fallback, req, true);
+      expect(result.degraded).toBe(true);
+      expect(result.invalidReason).toBeTruthy();
+    });
+
+    it("passes through unchanged when the validator is disabled", () => {
+      const planned = [cyclic("sub_a", "sub_b")];
+      const result = resolveValidatedPlan(planned, [valid("sub_fb")], req, false);
+      expect(result).toEqual({ subtasks: planned, degraded: false });
+    });
+  });
+
+  it("does not falsely reject a valid deterministic plan under a generous cap", async () => {
+    vi.stubEnv("ORCHESTRATION_PLAN_VALIDATOR_ENABLED", "1");
+    const runner: SeatRunner = {
+      run: vi.fn(async (subtask) => seatResultSchema.parse({
+        seat: subtask.seat,
+        payloadRef: `artifact_${subtask.seat}`,
+        confidence: 0.9,
+        costCents: 10,
+        workRequests: [],
+      })),
+    };
+
+    const result = await runCycle({
+      companyId: "co_1",
+      cycleId: "cycle_1",
+      prompt: "summarize growth and finance risks",
+      context: { budgetCapCents: 100_000 },
+    }, runner);
+
+    expect(result.status).toBe("completed");
+    expect(result.degraded).toBe(false);
+    expect(runner.run).toHaveBeenCalled();
   });
 
   it("preserves model-planned dependency and acceptance contracts", async () => {

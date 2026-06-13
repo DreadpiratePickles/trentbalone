@@ -40,6 +40,7 @@ export type WorkbenchSessionMetadata = {
   rollbackAvailable: boolean;
   rollbackMode?: WorkbenchRollbackMode;
   rollbackDescription?: string;
+  templateId?: string;
   appSolo?: {
     agentRole: AgentRole;
     agentLabel: string;

@@ -11,6 +11,11 @@
  */
 import { PrismaSkillDraftStore } from "@/lib/self-improvement/skill-draft-store.prisma";
 import { buildSkillFrontmatter } from "@/lib/skill-foundry";
+import {
+  buildPlaybookDelta,
+  type CompanyPlaybookLog,
+} from "@/lib/self-improvement/company-playbook";
+import { getCompanyPlaybookLog } from "@/lib/self-improvement/company-playbook-log";
 import type { Company } from "@/lib/types";
 import type { Goal } from "@/lib/goal-types";
 
@@ -22,8 +27,9 @@ export async function deriveSkillDraftsFromGoalRound(input: {
   company: Company;
   goal: Goal;
   executed: ExecutedTrace[];
-}): Promise<{ draftsWritten: number }> {
-  if (!REFLECTION_ENABLED || input.executed.length === 0) return { draftsWritten: 0 };
+  playbookLog?: CompanyPlaybookLog;
+}): Promise<{ draftsWritten: number; playbookDeltas: number }> {
+  if (!REFLECTION_ENABLED || input.executed.length === 0) return { draftsWritten: 0, playbookDeltas: 0 };
 
   // Aggregate per-seat outcomes for this round.
   const bySeat = new Map<string, { passes: number; total: number; objectives: string[] }>();
@@ -74,5 +80,32 @@ export async function deriveSkillDraftsFromGoalRound(input: {
     }
   }
 
-  return { draftsWritten };
+  const playbookLog = input.playbookLog ?? getCompanyPlaybookLog();
+  let playbookDeltas = 0;
+  for (const [seat, agg] of bySeat) {
+    const delta = agg.passes > 0
+      ? buildPlaybookDelta({
+          companyId: input.company.id,
+          kind: "revise",
+          topic: `goal.${seat}`,
+          text: `Proven approach for ${seat} goal work: shape a self-contained artifact directly to the success criteria (last accepted: "${(agg.objectives[0] ?? "").slice(0, 100)}").`,
+        })
+      : agg.total > 0
+        ? buildPlaybookDelta({
+            companyId: input.company.id,
+            kind: "revise",
+            topic: `goal.${seat}.caution`,
+            text: `Every ${seat} artifact failed the critic last goal round - re-read the success criteria first and produce evidence-bearing artifacts, not prose claims.`,
+          })
+        : undefined;
+    if (!delta) continue;
+    try {
+      await playbookLog.append(delta);
+      playbookDeltas += 1;
+    } catch {
+      /* best-effort: playbook failures must never break a goal round */
+    }
+  }
+
+  return { draftsWritten, playbookDeltas };
 }

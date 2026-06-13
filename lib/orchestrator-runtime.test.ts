@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { store } from "@/lib/store";
 import {
   auditTransition,
+  buildConsolidationUserPrompt,
   buildStepHandoff,
   buildOrchestrationPlanningPrompts,
   consolidateRun,
@@ -609,6 +610,33 @@ describe("executeStepWithRuntime", () => {
     expect(result.output).toContain("Track RKLB earnings");
   });
 
+  it("captures seat-emitted riskNotes and whatIDidNotDo into the published handoff", async () => {
+    mockGateway.executeSeatModel.mockResolvedValueOnce({
+      output: {
+        summary: "Analyzed the funnel.",
+        findings: ["Drop-off at step 3"],
+        recommendations: ["Growth: simplify step 3"],
+        riskNotes: ["Sample skews enterprise"],
+        whatIDidNotDo: ["Did not segment by channel"],
+      },
+      model: "gpt-4o-mini",
+      tokens: 100,
+      costCents: 1,
+      fallback: false,
+    });
+    const company = await store.createCompany({
+      name: `Runtime Handoff Emit ${makeId("test")}`,
+      brief: { vision: "handoff population" },
+    });
+
+    const result = await executeStepWithRuntime({ step, company, previousOutputs: {}, objective: "grow signups" });
+
+    expect(result.handoff.summary).toContain("Analyzed the funnel.");
+    expect(result.handoff.nextActions).toContain("Growth: simplify step 3");
+    expect(result.handoff.risks).toContain("Sample skews enterprise");
+    expect(result.handoff.whatIDidNotDo).toContain("Did not segment by channel");
+  });
+
   it("injects the overall objective into the seat task", async () => {
     let captured: any;
     mockGateway.executeSeatModel.mockImplementationOnce(async (input: any) => {
@@ -807,6 +835,48 @@ describe("structured runtime handoffs", () => {
     expect(rendered).toContain("NOT DONE");
     expect(rendered).toContain("Growth should test LinkedIn founder-led copy.");
     expect(rendered).toContain("Did not contact prospects.");
+  });
+});
+
+describe("buildConsolidationUserPrompt", () => {
+  const plan = { objective: "Grow signups", successCriteria: ["+20% signups"], steps: [] } as any;
+
+  it("feeds seat handoff summaries, reported risks, and explicit not-done into the brief", () => {
+    const analystHandoff = buildStepHandoff(
+      { id: "s1", agentRole: "analyst" },
+      {
+        summary: "Funnel analysis done.",
+        findings: ["Drop-off at step 3."],
+        recommendations: ["Growth: simplify step 3."],
+        riskNotes: ["Sample skews enterprise."],
+        whatIDidNotDo: ["Did not segment by channel."],
+        artifactRefs: [],
+      },
+      "RAW analyst output to be ignored",
+    );
+    const steps = [
+      { id: "s1", title: "Analyze funnel", agentRole: "analyst", status: "completed", handoff: analystHandoff, output: "RAW analyst output to be ignored" },
+      { id: "s2", title: "Broken step", agentRole: "growth", status: "failed", output: "boom" },
+    ] as any;
+
+    const prompt = buildConsolidationUserPrompt(plan, steps);
+
+    expect(prompt).toContain("Funnel analysis done.");
+    expect(prompt).not.toContain("RAW analyst output to be ignored");
+    expect(prompt).toContain("Seat-reported risks:");
+    expect(prompt).toContain("- analyst: Sample skews enterprise.");
+    expect(prompt).toContain("Explicitly NOT done");
+    expect(prompt).toContain("- analyst: Did not segment by channel.");
+    expect(prompt).toContain("Failed (1):");
+  });
+
+  it("falls back to raw output for a completed step that published no handoff", () => {
+    const steps = [
+      { id: "s1", title: "Do thing", agentRole: "engineer", status: "completed", output: "plain output text" },
+    ] as any;
+    const prompt = buildConsolidationUserPrompt(plan, steps);
+    expect(prompt).toContain("plain output text");
+    expect(prompt).not.toContain("Seat-reported risks:");
   });
 });
 

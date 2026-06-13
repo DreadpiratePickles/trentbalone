@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { store } from "@/lib/store";
 import { makeId } from "@/lib/utils";
 import type { OrchestrationPlan, OrchestrationStep, StepRecord } from "@/lib/orchestrator-runtime";
+import { buildStepHandoff } from "@/lib/orchestrator-runtime";
 import {
   MAX_REPLANS,
   applyRevisedPlanTail,
+  buildReplanPlanningPrompts,
   canApplyReplan,
   buildEscalationReplanPrompt,
   reviseOrchestrationPlanTail,
@@ -263,6 +265,37 @@ describe("reviseOrchestrationPlanTail", () => {
       riskLevel: "low",
       needsApproval: true,
     });
+  });
+});
+
+describe("buildReplanPlanningPrompts", () => {
+  it("summarizes completed steps via their validated handoff, not raw output", () => {
+    const handoff = buildStepHandoff(
+      { id: "s1", agentRole: "ceo" },
+      { summary: "Scope locked: ship the checklist.", findings: [], recommendations: [], riskNotes: [], whatIDidNotDo: [], artifactRefs: [] },
+      "RAW ceo output that should not drive replanning",
+    );
+    const completed: StepRecord = {
+      ...basePlan.steps[0]!,
+      status: "completed",
+      handoff,
+      output: "RAW ceo output that should not drive replanning",
+      completedAt: new Date().toISOString(),
+    };
+    const prompt = buildReplanPlanningPrompts(
+      { id: "co1", name: "Co", brief: { vision: "v" } } as any,
+      "Ship a revised checklist",
+      "",
+      {
+        plan: basePlan,
+        completedSteps: [completed],
+        failedStep: { ...basePlan.steps[1]!, status: "failed", output: "bad" },
+        critique: { verdict: "replan", reason: "wrong shape" },
+      },
+    );
+
+    expect(prompt.user).toContain("Scope locked: ship the checklist.");
+    expect(prompt.user).not.toContain("RAW ceo output that should not drive replanning");
   });
 });
 

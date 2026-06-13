@@ -35,9 +35,10 @@ describe("runDueScheduledCycles durable engine", () => {
   });
 
   afterEach(() => {
-    process.env.RESEND_API_KEY = savedEnv.RESEND_API_KEY;
-    process.env.RESEND_FROM_EMAIL = savedEnv.RESEND_FROM_EMAIL;
-    process.env.TRENT_FOUNDER_EMAIL = savedEnv.TRENT_FOUNDER_EMAIL;
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     vi.unstubAllGlobals();
   });
 

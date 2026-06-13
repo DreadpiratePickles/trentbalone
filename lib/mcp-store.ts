@@ -11,7 +11,11 @@ import { db } from "@/lib/db";
 import { makeId } from "@/lib/utils";
 import { decryptJson, encryptJson } from "@/lib/secrets";
 
-export type McpDiscoveredTool = { name: string; description: string };
+export type McpDiscoveredTool = {
+  name: string;
+  description: string;
+  descriptionHash?: string;
+};
 
 export type McpServerRecord = {
   id: string;
@@ -59,6 +63,9 @@ function toDiscoveredTools(value: unknown): McpDiscoveredTool[] {
     .map((item) => ({
       name: typeof item.name === "string" ? item.name : "",
       description: typeof item.description === "string" ? item.description : "",
+      ...(typeof item.descriptionHash === "string" && item.descriptionHash
+        ? { descriptionHash: item.descriptionHash }
+        : {}),
     }))
     .filter((item) => item.name.length > 0);
 }

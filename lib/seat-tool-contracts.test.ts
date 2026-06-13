@@ -10,11 +10,12 @@ import {
   type SeatToolContract,
   type ToolReadiness,
 } from "@/lib/seat-tool-contracts";
-import { adapters, type ToolAdapter } from "@/lib/tools";
+import { buildAdapterRegistry, type ToolAdapter } from "@/lib/tools";
 import type { AgentEnvironmentConfig, AgentRole } from "@/lib/types";
 
 const COMPANY_ID = "co_seat_tool_contracts";
 const ROLES = AGENT_SLOTS.map((slot) => slot.role) as AgentRole[];
+const adapters = buildAdapterRegistry({ env: {} as NodeJS.ProcessEnv });
 
 function slotEnvironments(): Record<AgentRole, AgentEnvironmentConfig> {
   return Object.fromEntries(

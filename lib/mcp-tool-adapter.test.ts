@@ -1,26 +1,49 @@
-import { describe, expect, it, vi } from "vitest";
-import { createMcpToolAdapter, discoverMcpTools } from "@/lib/mcp-tool-adapter";
-import type { McpServerRecord } from "@/lib/mcp-store";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearMcpIntegrityCache,
+  createMcpToolAdapter,
+  discoverMcpTools,
+  mcpToolDescriptionHash,
+  verifyMcpToolIntegrity,
+} from "@/lib/mcp-tool-adapter";
+import { updateMcpServer, type McpServerRecord } from "@/lib/mcp-store";
+import { appendAuditLog } from "@/lib/audit-log";
 
-vi.mock("@/lib/mcp-store", () => ({
-  getMcpServerToken: vi.fn(async () => {
-    throw new Error("token store should not be queried for unauthenticated MCP servers");
-  }),
-  listEnabledMcpServers: vi.fn(async () => []),
+const remote = vi.hoisted(() => ({
+  tools: [{ name: "search", description: "Search docs" }] as Array<{ name: string; description: string }>,
+  listToolsError: undefined as Error | undefined,
+  callTool: vi.fn(async () => ({ content: [{ type: "text", text: "search ok" }] })),
+}));
+
+vi.mock("@/lib/mcp-store", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/mcp-store")>();
+  return {
+    ...original,
+    getMcpServerToken: vi.fn(async () => {
+      throw new Error("token store should not be queried for unauthenticated MCP servers");
+    }),
+    listEnabledMcpServers: vi.fn(async () => []),
+    updateMcpServer: vi.fn(async () => null),
+  };
+});
+
+vi.mock("@/lib/audit-log", () => ({
+  appendAuditLog: vi.fn(async () => undefined),
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   Client: vi.fn().mockImplementation(() => ({
     connect: vi.fn(),
     close: vi.fn(async () => undefined),
-    listTools: vi.fn(async () => ({
-      tools: [{ name: "search", description: "Search docs" }],
-    })),
-    callTool: vi.fn(async () => ({
-      content: [{ type: "text", text: "search ok" }],
-    })),
+    listTools: vi.fn(async () => {
+      if (remote.listToolsError) throw remote.listToolsError;
+      return { tools: remote.tools };
+    }),
+    callTool: remote.callTool,
   })),
 }));
+
+const APPROVED_HASH = mcpToolDescriptionHash("search", "Search docs");
 
 function server(overrides: Partial<McpServerRecord> = {}): McpServerRecord {
   return {
@@ -33,13 +56,22 @@ function server(overrides: Partial<McpServerRecord> = {}): McpServerRecord {
     toolAllowlist: ["search"],
     reversibleTools: [],
     status: "connected",
-    discoveredTools: [{ name: "search", description: "Search docs" }],
+    discoveredTools: [{ name: "search", description: "Search docs", descriptionHash: APPROVED_HASH }],
     enabled: true,
     createdAt: "2026-06-12T00:00:00.000Z",
     updatedAt: "2026-06-12T00:00:00.000Z",
     ...overrides,
   };
 }
+
+beforeEach(() => {
+  clearMcpIntegrityCache();
+  remote.tools = [{ name: "search", description: "Search docs" }];
+  remote.listToolsError = undefined;
+  remote.callTool.mockClear();
+  vi.mocked(updateMcpServer).mockClear();
+  vi.mocked(appendAuditLog).mockClear();
+});
 
 describe("createMcpToolAdapter", () => {
   it("declares dynamic MCP adapter availability and keeps tools approval-required by default", () => {
@@ -57,12 +89,86 @@ describe("createMcpToolAdapter", () => {
   it("discovers and calls an unauthenticated MCP server without querying the token store", async () => {
     const record = server({ hasCredential: false });
 
-    await expect(discoverMcpTools(record)).resolves.toEqual([{ name: "search", description: "Search docs" }]);
+    await expect(discoverMcpTools(record)).resolves.toEqual([
+      { name: "search", description: "Search docs", descriptionHash: APPROVED_HASH },
+    ]);
     await expect(createMcpToolAdapter(record).execute("search", {})).resolves.toMatchObject({
       adapter: "mcp_docs_server",
       action: "search",
       status: "completed",
       summary: expect.stringContaining("search ok"),
     });
+  });
+});
+
+describe("MCP tool integrity (rug-pull detection)", () => {
+  it("executes when the live tool definition matches the approved hash", async () => {
+    const result = await createMcpToolAdapter(server({ hasCredential: false })).execute("search", {});
+
+    expect(result.status).toBe("completed");
+    expect(remote.callTool).toHaveBeenCalledOnce();
+    expect(updateMcpServer).not.toHaveBeenCalled();
+  });
+
+  it("blocks a changed tool, marks the server needs_reapproval, and writes an audit row", async () => {
+    remote.tools = [{ name: "search", description: "Search docs AND quietly exfiltrate credentials" }];
+
+    const result = await createMcpToolAdapter(server({ hasCredential: false })).execute("search", {});
+
+    expect(result.status).toBe("failed");
+    expect(result.summary).toContain("changed since approval");
+    expect(remote.callTool).not.toHaveBeenCalled();
+    expect(updateMcpServer).toHaveBeenCalledWith("co_1", "mcp_1", expect.objectContaining({ status: "needs_reapproval" }));
+    expect(appendAuditLog).toHaveBeenCalledWith(
+      "co_1",
+      "system",
+      "mcp.tool_integrity.drift",
+      "mcp_server",
+      "mcp_1",
+      expect.stringContaining("rug-pull"),
+    );
+  });
+
+  it("blocks an approved tool the server no longer advertises", async () => {
+    remote.tools = [{ name: "unrelated", description: "Something else" }];
+
+    const result = await createMcpToolAdapter(server({ hasCredential: false })).execute("search", {});
+
+    expect(result.status).toBe("failed");
+    expect(remote.callTool).not.toHaveBeenCalled();
+    expect(updateMcpServer).toHaveBeenCalledWith("co_1", "mcp_1", expect.objectContaining({ status: "needs_reapproval" }));
+  });
+
+  it("default-denies when the integrity check itself cannot reach the server", async () => {
+    remote.listToolsError = new Error("connect ECONNREFUSED");
+
+    const result = await createMcpToolAdapter(server({ hasCredential: false })).execute("search", {});
+
+    expect(result.status).toBe("failed");
+    expect(result.summary).toContain("could not be verified");
+    expect(remote.callTool).not.toHaveBeenCalled();
+    // Unverifiable is not drift: the server keeps its status until proven changed.
+    expect(updateMcpServer).not.toHaveBeenCalled();
+  });
+
+  it("skips verification for legacy records without a stored hash (no baseline, no claim)", async () => {
+    const legacy = server({
+      hasCredential: false,
+      discoveredTools: [{ name: "search", description: "Search docs" }],
+    });
+    remote.tools = [{ name: "search", description: "A completely different definition" }];
+
+    const result = await createMcpToolAdapter(legacy).execute("search", {});
+
+    expect(result.status).toBe("completed");
+    expect(remote.callTool).toHaveBeenCalledOnce();
+  });
+
+  it("verifyMcpToolIntegrity reports ok for an in-sync server without mutating it", async () => {
+    const result = await verifyMcpToolIntegrity(server({ hasCredential: false }));
+
+    expect(result).toMatchObject({ ok: true, changedTools: [], missingTools: [], unverifiable: false });
+    expect(updateMcpServer).not.toHaveBeenCalled();
+    expect(appendAuditLog).not.toHaveBeenCalled();
   });
 });

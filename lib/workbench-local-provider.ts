@@ -171,7 +171,14 @@ function killProcessTree(child: ChildProcess): void {
     return;
   }
 
-  if (process.platform !== "win32") {
+  if (process.platform === "win32") {
+    try {
+      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }).unref();
+      return;
+    } catch {
+      // Fall back to killing only the parent process.
+    }
+  } else {
     try {
       process.kill(-child.pid, "SIGTERM");
       setTimeout(() => {
@@ -184,6 +191,50 @@ function killProcessTree(child: ChildProcess): void {
   }
 
   try { child.kill("SIGTERM"); } catch { /* already gone */ }
+}
+
+const WINDOWS_CMD_LAUNCHERS = new Set(["npm", "npx", "pnpm", "yarn", "bun", "corepack"]);
+
+function windowsShellNeeded(executable: string): boolean {
+  return process.platform === "win32" && WINDOWS_CMD_LAUNCHERS.has(executable.toLowerCase());
+}
+
+function quoteForWindowsShell(args: string[]): string[] {
+  return args.map((arg) =>
+    /[\s&|<>^()%!]/.test(arg) ? `"${arg.replaceAll('"', "")}"` : arg,
+  );
+}
+
+const CHECKPOINT_IGNORE_RE = /(^|[\\/])(node_modules|\.git|\.next|dist|build|coverage|tmp|\.cache)([\\/]|$)/;
+
+async function checkpointIncludes(root: string, src: string): Promise<boolean> {
+  const rel = path.relative(root, src);
+  if (!rel) return true;
+  if (CHECKPOINT_IGNORE_RE.test(rel)) return false;
+  try {
+    return !(await fs.lstat(src)).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+async function listCheckpointFiles(dir: string, root: string): Promise<string[]> {
+  const out: string[] = [];
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    const rel = path.relative(root, full);
+    if (CHECKPOINT_IGNORE_RE.test(rel)) continue;
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) out.push(...await listCheckpointFiles(full, root));
+    else if (entry.isFile()) out.push(rel);
+  }
+  return out;
 }
 
 async function previewCommandArgs(
@@ -258,7 +309,8 @@ async function startBackgroundCommand(
   const previewBase = `/api/workbench/${session.id}/preview/`;
   const { spawnArgs, basePath } = await previewCommandArgs(command, executable, args, cwd, previewPort, previewBase);
 
-  const child = spawn(executable, spawnArgs, {
+  const useShell = windowsShellNeeded(executable);
+  const child = spawn(executable, useShell ? quoteForWindowsShell(spawnArgs) : spawnArgs, {
     cwd,
     env: sanitizedSandboxEnv({
       ...env,
@@ -267,6 +319,7 @@ async function startBackgroundCommand(
       HOST: "127.0.0.1",
     }),
     detached: process.platform !== "win32",
+    shell: useShell,
     stdio: ["ignore", "pipe", "pipe"],
   });
   backgroundProcesses.set(session.id, { child, port: previewPort, basePath });
@@ -594,11 +647,13 @@ const localProvider: WorkbenchProviderAdapter = {
       if (isLongRunningPreviewCommand(command)) {
         return await startBackgroundCommand(session, command, executable, args, cwd, start, options?.env);
       }
-      const result = await execFileAsync(executable, args, {
+      const useShell = windowsShellNeeded(executable);
+      const result = await execFileAsync(executable, useShell ? quoteForWindowsShell(args) : args, {
         cwd,
         timeout: timeoutMs,
         env: sanitizedSandboxEnv(options?.env),
         maxBuffer: 4 * 1024 * 1024, // 4MB
+        shell: useShell,
       });
       stdout = result.stdout ?? "";
       stderr = result.stderr ?? "";
@@ -882,6 +937,47 @@ const localProvider: WorkbenchProviderAdapter = {
         providerSessionId: session.id,
       },
     };
+  },
+
+  async captureWorkspaceCheckpoint(
+    session: WorkbenchSession,
+    options?: { replace?: boolean },
+  ): Promise<{ id: string }> {
+    const workdir = await sessionWorkdir(session);
+    const sessionCheckpointRoot = path.join(WORKBENCH_ROOT, "checkpoints", session.id);
+    if (options?.replace !== false) {
+      await fs.rm(sessionCheckpointRoot, { recursive: true, force: true });
+    }
+    const id = makeId("wcp");
+    await fs.cp(workdir, path.join(sessionCheckpointRoot, id), {
+      recursive: true,
+      filter: (src) => checkpointIncludes(workdir, src),
+    });
+    return { id };
+  },
+
+  async restoreWorkspaceCheckpoint(
+    session: WorkbenchSession,
+    checkpointId: string,
+  ): Promise<{ restored: boolean; detail?: string }> {
+    const workdir = await sessionWorkdir(session);
+    const checkpointDir = path.join(WORKBENCH_ROOT, "checkpoints", session.id, checkpointId);
+    try {
+      const stat = await fs.stat(checkpointDir);
+      if (!stat.isDirectory()) return { restored: false, detail: "checkpoint is not a directory" };
+    } catch {
+      return { restored: false, detail: `checkpoint ${checkpointId} not found` };
+    }
+
+    const checkpointFiles = await listCheckpointFiles(checkpointDir, checkpointDir);
+    const currentFiles = await listCheckpointFiles(workdir, workdir);
+    const keep = new Set(checkpointFiles);
+    for (const rel of currentFiles) {
+      if (keep.has(rel)) continue;
+      await fs.rm(path.join(workdir, rel), { force: true }).catch(() => {});
+    }
+    await fs.cp(checkpointDir, workdir, { recursive: true, force: true });
+    return { restored: true };
   },
 
   async exportArtifacts(session: WorkbenchSession): Promise<WorkbenchExportResult> {

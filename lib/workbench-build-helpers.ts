@@ -108,6 +108,54 @@ export async function restoreWorkbenchTextSnapshot(
   return { restored, removed, failed };
 }
 
+export type WorkbenchRunCheckpoint =
+  | { kind: "workspace"; id: string }
+  | { kind: "text"; snapshot: WorkbenchTextSnapshot };
+
+export type WorkbenchRunRestoreResult = {
+  mode: "workspace" | "text";
+  restored: string[];
+  removed: string[];
+  failed: string[];
+};
+
+export async function captureWorkbenchRunCheckpoint(
+  provider: WorkbenchProviderAdapter,
+  session: WorkbenchSession,
+): Promise<WorkbenchRunCheckpoint | undefined> {
+  if (provider.captureWorkspaceCheckpoint && provider.restoreWorkspaceCheckpoint) {
+    try {
+      const { id } = await provider.captureWorkspaceCheckpoint(session);
+      return { kind: "workspace", id };
+    } catch (err) {
+      await recordEvent(session, "system", "failed", "Workspace checkpoint capture failed; falling back to text snapshot", errorText(err));
+    }
+  }
+  return { kind: "text", snapshot: await captureWorkbenchTextSnapshot(provider, session) };
+}
+
+export async function restoreWorkbenchRunCheckpoint(
+  provider: WorkbenchProviderAdapter,
+  session: WorkbenchSession,
+  checkpoint: WorkbenchRunCheckpoint,
+): Promise<WorkbenchRunRestoreResult> {
+  if (checkpoint.kind === "workspace") {
+    try {
+      const result = await provider.restoreWorkspaceCheckpoint!(session, checkpoint.id);
+      return {
+        mode: "workspace",
+        restored: result.restored ? ["workspace"] : [],
+        removed: [],
+        failed: result.restored ? [] : [result.detail ?? "workspace restore failed"],
+      };
+    } catch (err) {
+      return { mode: "workspace", restored: [], removed: [], failed: [errorText(err)] };
+    }
+  }
+  const result = await restoreWorkbenchTextSnapshot(provider, session, checkpoint.snapshot);
+  return { mode: "text", ...result };
+}
+
 export async function safeStartPreview(provider: WorkbenchProviderAdapter, session: WorkbenchSession, cmd: string) {
   try {
     if (provider.startPreview) {

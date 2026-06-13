@@ -23,6 +23,7 @@ import { callJson, callText, MODELS, MAX_TOKENS } from "@/lib/ai-client";
 import { runSeatAgent, type SeatLoopResumeSeed } from "@/lib/seat-agent-loop";
 import type { WorkRequest } from "@/lib/planner";
 import { getSeatManifest } from "@/lib/seat-manifest";
+import { SLOT_CONTRACTS } from "@/lib/agent-catalog";
 import { routeToolsForStep } from "@/lib/semantic-router";
 import { getDegradedTools } from "@/lib/tool-health-cache";
 import { getRuntimeEvalOverrides } from "@/lib/runtime-eval-overrides";
@@ -31,6 +32,8 @@ import { buildCompanySkillPrelude, buildCustomSkillPrelude } from "@/lib/agent-s
 import { getMcpAdaptersForCompany } from "@/lib/mcp-tool-adapter";
 import { InMemorySkillDraftStore, type SkillDraftStore } from "@/lib/skill-foundry";
 import { PrismaSkillDraftStore } from "@/lib/self-improvement/skill-draft-store.prisma";
+import { foldPlaybook, renderPlaybookBlock } from "@/lib/self-improvement/company-playbook";
+import { getCompanyPlaybookLog } from "@/lib/self-improvement/company-playbook-log";
 import { formatPlanValidationErrors, validateOrchestrationPlan } from "@/lib/plan-validator";
 import { buildGroundedSourceContext } from "@/lib/source-grounding";
 import { seatOutputSchemas } from "@/lib/seat-output-schemas";
@@ -157,10 +160,27 @@ const optionalStringSchema = z.preprocess(
   z.string().optional(),
 );
 
+const rubricScoreSchema = z.preprocess(
+  (value) => typeof value === "string" ? Number(value) : value,
+  z.number().int().min(0).max(3),
+);
+
+const critiqueScoresSchema = z.object({
+  completeness: rubricScoreSchema,
+  correctness: rubricScoreSchema,
+  safety: rubricScoreSchema,
+  followsSpec: rubricScoreSchema,
+});
+
 const critiqueSchema = z.object({
   verdict: z.enum(["pass", "retry", "replan", "escalate"]),
   reason: requiredStringSchema,
   improvement: optionalStringSchema,
+  scores: critiqueScoresSchema.optional(),
+  scoreRationale: z.preprocess(
+    (value) => value == null ? undefined : value,
+    z.record(z.string(), z.string()).optional(),
+  ),
 });
 
 type RawOrchestrationPlan = z.infer<typeof planSchema>;
@@ -870,21 +890,79 @@ export function buildOrchestrationPlanningPrompts(
   return { system, user };
 }
 
+export function criticRubricEnabled(): boolean {
+  return process.env.CRITIC_RUBRIC_ENABLED === "1";
+}
+
+const RUBRIC_DIMENSIONS = [
+  "completeness - 0: absent or off-topic; 1: partial, major gaps; 2: adequate, covers the expected output; 3: exemplary, nothing material missing.",
+  "correctness - 0: factually wrong or broken; 1: notable errors; 2: sound with minor nits; 3: verifiably correct.",
+  "safety - 0: violates an approval gate or leaks secrets; 1: risky claims or ungated side effects; 2: respects gates with minor ambiguity; 3: clearly safe and gate-aware.",
+  "followsSpec - 0: ignores the acceptance checklist; 1: misses most bullets; 2: meets the checklist; 3: meets it with evidence cited per bullet.",
+];
+
+function rubricChecklist(step: OrchestrationStep): string[] {
+  const acceptance = step.spec?.acceptance?.length
+    ? step.spec.acceptance
+    : [`Expected output satisfied: ${step.expectedOutput || step.title}`];
+  const seatMetrics = SLOT_CONTRACTS[step.agentRole]?.successMetrics ?? [];
+  return [
+    "Acceptance checklist (drives followsSpec):",
+    ...acceptance.map((bullet) => `- ${bullet}`),
+    ...(seatMetrics.length
+      ? [
+          `Seat quality bar for ${step.agentRole} (from its slot contract - weigh into completeness/correctness):`,
+          ...seatMetrics.map((metric) => `- ${metric}`),
+        ]
+      : []),
+  ];
+}
+
+function applyRubricGuard(critique: OrchestrationCritique): OrchestrationCritique {
+  const scores = critique.scores;
+  if (!scores) return critique;
+  let guarded = critique.verdict;
+  if (scores.safety < 2) guarded = "escalate";
+  else if (scores.followsSpec < 2) guarded = critique.verdict === "replan" ? "replan" : "retry";
+  else if (critique.verdict === "pass" && (scores.completeness < 2 || scores.correctness < 2)) guarded = "retry";
+  if (guarded === critique.verdict) return critique;
+  return { ...critique, verdict: guarded, reason: `[rubric guard: scores require ${guarded}] ${critique.reason}` };
+}
+
 export async function critiqueStepOutput(
   step: OrchestrationStep,
   output: string,
   visibility?: { companyId?: string; runId?: string },
+  upstreamHandoffs?: StepHandoff[],
 ): Promise<OrchestrationCritique> {
-  const system = [
-    "You are Trent's quality supervisor. Review the output of an agent step against its expected output.",
-    "Return JSON: { verdict: 'pass'|'retry'|'replan'|'escalate', reason, improvement? }.",
-    "Use 'pass' for sufficient work, 'retry' for fixable gaps in the same step, 'replan' when the plan shape is wrong and remaining steps must change, 'escalate' for unsafe/uncertain outputs needing founder review.",
-    "Grounding rules (RC1): if the output claims required documents were unavailable while the step context contains a SOURCE COVERAGE block listing them as Available, return 'retry'. If the output claims to have audited/read a source that coverage lists as Missing, return 'retry'. Document-grounded claims with zero citations to source doc ids are a gap, not a pass.",
-    "Be terse and direct.",
-  ].join("\n");
+  const rubricMode = criticRubricEnabled();
+  const upstreamAsks = (upstreamHandoffs ?? [])
+    .flatMap((handoff) => handoff.nextActions.map((action) => `- ${handoff.seat}: ${action}`));
+  const system = rubricMode
+    ? [
+        "You are Trent's quality supervisor. Review the output of an agent step against its expected output.",
+        "First score each rubric dimension independently on 0-3 using these anchors:",
+        ...RUBRIC_DIMENSIONS.map((line) => `- ${line}`),
+        "Only after scoring, derive the verdict. Scores are authoritative: safety<2 forces 'escalate', followsSpec<2 forces 'retry' (or 'replan' if the plan shape is wrong), and a 'pass' requires completeness>=2 and correctness>=2 - a guard enforces this in code.",
+        "Return JSON: { scores: { completeness, correctness, safety, followsSpec }, scoreRationale: { <dimension>: <one line> }, verdict: 'pass'|'retry'|'replan'|'escalate', reason, improvement? }.",
+        "Use 'pass' for sufficient work, 'retry' for fixable gaps in the same step, 'replan' when the plan shape is wrong and remaining steps must change, 'escalate' for unsafe/uncertain outputs needing founder review.",
+        "Grounding rules (RC1): if the output claims required documents were unavailable while the step context contains a SOURCE COVERAGE block listing them as Available, score followsSpec at most 1. If the output claims to have audited/read a source that coverage lists as Missing, score correctness at most 1. Document-grounded claims with zero citations to source doc ids are a gap, not a pass.",
+        "Be terse and direct.",
+      ].join("\n")
+    : [
+        "You are Trent's quality supervisor. Review the output of an agent step against its expected output.",
+        "Return JSON: { verdict: 'pass'|'retry'|'replan'|'escalate', reason, improvement? }.",
+        "Use 'pass' for sufficient work, 'retry' for fixable gaps in the same step, 'replan' when the plan shape is wrong and remaining steps must change, 'escalate' for unsafe/uncertain outputs needing founder review.",
+        "Grounding rules (RC1): if the output claims required documents were unavailable while the step context contains a SOURCE COVERAGE block listing them as Available, return 'retry'. If the output claims to have audited/read a source that coverage lists as Missing, return 'retry'. Document-grounded claims with zero citations to source doc ids are a gap, not a pass.",
+        "Be terse and direct.",
+      ].join("\n");
   const user = [
     `Step: ${step.title} (role=${step.agentRole}, risk=${step.riskLevel})`,
     `Expected: ${step.expectedOutput}`,
+    ...(rubricMode ? ["", ...rubricChecklist(step)] : []),
+    upstreamAsks.length
+      ? `\nUpstream agents asked this step to act on these - flag if the output ignored them${rubricMode ? " (counts against followsSpec)" : " (return 'retry')"}:\n${upstreamAsks.join("\n")}`
+      : "",
     "",
     `Output:\n${output.slice(0, 2400)}`,
   ].join("\n");
@@ -898,7 +976,7 @@ export async function critiqueStepOutput(
       MAX_TOKENS.PLANNING,
       { createCompletion: getRuntimeEvalOverrides()?.orchestration?.createCompletion },
     );
-    return result.data;
+    return applyRubricGuard(result.data);
   } catch (err) {
     if (isNotConfiguredError(err)) {
       return { verdict: "pass", reason: "supervisor offline — auto-pass." };
@@ -918,13 +996,38 @@ export async function critiqueStepOutput(
   }
 }
 
+export function buildConsolidationUserPrompt(
+  plan: OrchestrationPlan,
+  steps: StepRecord[],
+  contentApprovalPacket?: string | null,
+): string {
+  const completed = steps.filter((step) => step.status === "completed");
+  const failed = steps.filter((step) => step.status === "failed");
+  const seatRisks = completed.flatMap((step) =>
+    (step.handoff?.risks ?? []).map((risk) => `- ${step.agentRole}: ${risk}`),
+  );
+  const seatNotDone = completed.flatMap((step) =>
+    (step.handoff?.whatIDidNotDo ?? []).map((item) => `- ${step.agentRole}: ${item}`),
+  );
+  return [
+    `Objective: ${plan.objective}`,
+    `Success criteria: ${plan.successCriteria.join("; ")}`,
+    "",
+    `Completed (${completed.length}):`,
+    ...completed.map((step) => `- ${step.title}: ${(step.handoff?.summary ?? step.output ?? "").slice(0, 300)}`),
+    "",
+    seatRisks.length ? `Seat-reported risks:\n${seatRisks.join("\n")}` : "",
+    seatNotDone.length ? `Explicitly NOT done (close the loop or flag):\n${seatNotDone.join("\n")}` : "",
+    failed.length ? `Failed (${failed.length}):\n${failed.map((step) => `- ${step.title}`).join("\n")}` : "",
+    contentApprovalPacket ? `\nContent/social/ads approval packet to preserve exactly:\n${contentApprovalPacket}` : "",
+  ].filter(Boolean).join("\n");
+}
+
 export async function consolidateRun(
   plan: OrchestrationPlan,
   steps: StepRecord[],
   visibility?: { companyId?: string; runId?: string },
 ): Promise<string> {
-  const completed = steps.filter((step) => step.status === "completed");
-  const failed = steps.filter((step) => step.status === "failed");
   const contentApprovalPacket = buildContentMissionApprovalPacket(plan, steps);
   const system = [
     "You are the consolidator. Write a final brief that a founder can read in 60 seconds and act on.",
@@ -934,16 +1037,7 @@ export async function consolidateRun(
     "  RISKS / BLOCKERS — bullets, or 'none'.",
     "  ↗ NEXT ACTION — a single direct ask.",
   ].join("\n");
-  const user = [
-    `Objective: ${plan.objective}`,
-    `Success criteria: ${plan.successCriteria.join("; ")}`,
-    "",
-    `Completed (${completed.length}):`,
-    ...completed.map((step) => `- ${step.title}: ${step.output?.slice(0, 300) ?? ""}`),
-    "",
-    failed.length ? `Failed (${failed.length}):\n${failed.map((step) => `- ${step.title}`).join("\n")}` : "",
-    contentApprovalPacket ? `\nContent/social/ads approval packet to preserve exactly:\n${contentApprovalPacket}` : "",
-  ].filter(Boolean).join("\n");
+  const user = buildConsolidationUserPrompt(plan, steps, contentApprovalPacket);
 
   const result = await callTextWithFallback(
     SPECIALIST_MODEL,
@@ -1296,6 +1390,13 @@ export async function executeStepWithRuntime(input: StepExecutionInput): Promise
     if (prelude) {
       systemPrompt = `${prelude}\n\n${runtime.systemPrompt}`;
       skillApplied = applied;
+    }
+    const playbookBlock = await getCompanyPlaybookLog()
+      .list(company.id)
+      .then((entries) => renderPlaybookBlock(foldPlaybook(entries)))
+      .catch(() => "");
+    if (playbookBlock) {
+      systemPrompt = `${playbookBlock}\n\n${systemPrompt}`;
     }
   }
   void skillApplied; // recorded on the trace once live trace derivation (Slice 2) lands

@@ -107,7 +107,13 @@ function unavailableAdapter(name: string, scopes: string[], approvalWords: strin
   };
 }
 
-export const adapters: ToolAdapter[] = [
+export type AdapterRegistryOptions = {
+  env?: NodeJS.ProcessEnv;
+};
+
+export function buildAdapterRegistry(options: AdapterRegistryOptions = {}): ToolAdapter[] {
+  const env = options.env ?? process.env;
+  return [
   {
     name: "GitHub",
     scopes: ["repo:read", "issues:write", "pull_requests:write", "github:read", "github:issue", "github:branch_scaffold"],
@@ -422,9 +428,9 @@ export const adapters: ToolAdapter[] = [
       };
     },
   },
-  new GitNexusVaultIndexAdapter(),
+  new GitNexusVaultIndexAdapter({ enabled: env.GITNEXUS_VAULT_ENABLED === "1" }),
   ...sandboxToolAdapters,
-  createResendEmailAdapter(),
+  createResendEmailAdapter({ env }),
   mockedAdapter("Anthropic", ["llm:primary", "model_telemetry"], []),
   mockedAdapter("AWS Bedrock", ["llm:fallback", "model_routing"], []),
   mockedAdapter("OpenAI", ["llm", "video_generation"], []),
@@ -434,20 +440,23 @@ export const adapters: ToolAdapter[] = [
   mockedAdapter("Hunter.io", ["email_verification", "deliverability"], []),
   mockedAdapter("Meta Ads", ["draft_campaign", "launch_requires_approval"], ["launch", "spend", "budget"], { spendsMoneyOnExecute: true, estimatedCents: 500, approvalExpiryHours: 12 }),
   mockedAdapter("Meta Pixel/CAPI", ["conversion_events", "attribution"], ["send", "identify"]),
-  createStripeReadAdapter(),
+  createStripeReadAdapter({ env }),
   mockedAdapter("Google OAuth/Gmail", ["auth", "gmail_draft", "send_requires_approval"], ["send"]),
   mockedAdapter("Slack", ["notifications", "workspace_updates"], ["post"]),
-  createXSocialAdapter(),
+  createXSocialAdapter({ env }),
   unavailableAdapter("Late.dev", ["social_schedule", "multi_platform_posting"], ["publish", "post"]),
   mockedAdapter("Browserbase", ["cloud_browser", "screenshots", "extraction"], ["submit", "purchase", "login"]),
   mockedAdapter("ScreenshotOne", ["automated_screenshots"], []),
   mockedAdapter("Render", ["hosting", "deploy_requires_approval"], ["deploy", "rollback"]),
   mockedAdapter("Neon", ["postgres", "database_provisioning"], ["delete", "rotate"]),
   mockedAdapter("Expo", ["mobile_builds", "eas_distribution"], ["submit", "publish"]),
-  createSentryReadAdapter(),
-  createPostHogReadAdapter(),
+  createSentryReadAdapter({ env }),
+  createPostHogReadAdapter({ env }),
   mockedAdapter("IPinfo", ["ip_geolocation", "enrichment"], [])
-];
+  ];
+}
+
+export const adapters: ToolAdapter[] = buildAdapterRegistry();
 
 export const DEFAULT_APPROVAL_EXPIRY_HOURS = 48;
 

@@ -293,6 +293,10 @@ function cacheKeyForSeatModel(input: SeatModelExecutionInput) {
   });
 }
 
+const HANDOFF_FIELD_GUIDANCE =
+  "riskNotes: risks/caveats the next agent or founder must weigh (or []). " +
+  "whatIDidNotDo: work you deliberately did NOT do so a dependent can pick it up instead of assuming it is done (or []).";
+
 function buildSeatUserPrompt(input: SeatModelExecutionInput) {
   const ctx = input.subtask.contextBundle as Record<string, unknown>;
   const companyName = (ctx.company as { name?: string } | undefined)?.name ?? input.companyId;
@@ -324,13 +328,15 @@ function buildSeatUserPrompt(input: SeatModelExecutionInput) {
     lines.push(
       "Respond as JSON. Either call a tool OR finish:",
       '{ "toolCall": { "name": string, "action": string }, "summary": null } — to invoke a tool,',
-      'OR { "toolCall": null, "summary": string, "findings": [], "recommendations": [], "workRequests": [] } — when done.',
+      'OR { "toolCall": null, "summary": string, "findings": [], "recommendations": [], "riskNotes": [], "whatIDidNotDo": [], "workRequests": [] } — when done.',
       "workRequests format: [{capability: string, input: object|null}] — use to delegate to another agent.",
+      HANDOFF_FIELD_GUIDANCE,
     );
   } else {
     lines.push(
-      "Respond as JSON with keys: summary, findings, recommendations, workRequests.",
+      "Respond as JSON with keys: summary, findings, recommendations, riskNotes, whatIDidNotDo, workRequests.",
       "workRequests format: [{capability: string, input: object|null}] — use to delegate to another agent.",
+      HANDOFF_FIELD_GUIDANCE,
     );
   }
 

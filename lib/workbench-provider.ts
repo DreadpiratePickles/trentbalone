@@ -161,6 +161,21 @@ export interface WorkbenchProviderAdapter {
   /** Persist provider-native snapshot metadata when available. */
   snapshot?(session: WorkbenchSession): Promise<WorkbenchSandboxSnapshot>;
 
+  /**
+   * Capture a restorable workspace checkpoint covering binaries and nested
+   * directories, while preserving excluded dependency/cache directories.
+   *
+   * Providers that implement both checkpoint methods can advertise and perform
+   * full-workspace rollback instead of text-files-only repair snapshots.
+   */
+  captureWorkspaceCheckpoint?(session: WorkbenchSession, options?: { replace?: boolean }): Promise<{ id: string }>;
+
+  /** Restore the workspace to a previously captured checkpoint. */
+  restoreWorkspaceCheckpoint?(
+    session: WorkbenchSession,
+    checkpointId: string,
+  ): Promise<{ restored: boolean; detail?: string }>;
+
   /** Export build outputs and logs as an artifact bundle. */
   exportArtifacts?(session: WorkbenchSession): Promise<WorkbenchExportResult>;
 
