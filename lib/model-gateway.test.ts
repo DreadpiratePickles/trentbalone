@@ -88,6 +88,56 @@ describe("model gateway policy", () => {
     expect(result.costCents).toBeGreaterThanOrEqual(0);
   });
 
+  it("includes tool-specific instructions in the seat model prompt", async () => {
+    let userPrompt = "";
+    const createChatCompletion = async (input: { messages: Array<{ role: string; content: string }> }) => {
+      userPrompt = input.messages.find((message) => message.role === "user")?.content ?? "";
+      return {
+        choices: [{ message: { content: JSON.stringify({ summary: "ready" }) } }],
+        usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+      };
+    };
+
+    await executeSeatModel({
+      companyId: "co_1",
+      modelPolicy: {
+        planner: "p",
+        specialist: "s",
+        critic: "c",
+        workbench: { planner: "wp", executor: "we", apply: "wa", critic: "wc" },
+        routing: { preferredProvider: "openai", allowedProviders: ["openai"] },
+      },
+      subtask: {
+        id: "sub_workbench",
+        seat: "engineer",
+        objective: "Use Workbench",
+        outputContractId: "engineer.v1",
+        toolGuidance: ["workbench:session"],
+        boundaries: [],
+        input: {},
+        contextBundle: {},
+        classification: { type: "engineer", complexity: "standard", reversibility: "reversible" },
+        budgetCents: 10,
+      },
+      systemPrompt: "engineer system prompt",
+      toolLoopContext: {
+        step: 1,
+        maxSteps: 15,
+        toolHistory: [],
+        availableTools: ["workbench:session"],
+        toolInstructions: [
+          "Use toolCall.name \"workbench:session\" and a JSON action with \"writeFiles\" and \"command\".",
+        ],
+      },
+      createChatCompletion,
+    });
+
+    expect(userPrompt).toContain("Tool-specific instructions");
+    expect(userPrompt).toContain("workbench:session");
+    expect(userPrompt).toContain('"writeFiles"');
+    expect(userPrompt).toContain('"command"');
+  });
+
   it("returns an explicit configuration error when OpenAI is not configured", async () => {
     const saved = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;

@@ -118,6 +118,48 @@ describe("runSeatAgent workbench execution", () => {
     expect(result.output?.summary).toContain("tests passed");
   });
 
+  it("teaches the engineer the workbench:session JSON action contract", async () => {
+    let capturedInstructions: string[] = [];
+    mockExecuteSeatModel.mockImplementationOnce(async (input: { toolLoopContext?: { toolInstructions?: string[] } }) => {
+      capturedInstructions = input.toolLoopContext?.toolInstructions ?? [];
+      return {
+        output: {
+          toolCall: null,
+          summary: "I have the Workbench contract.",
+          findings: [],
+          recommendations: [],
+          workRequests: [],
+        },
+        model: "gpt-4o-mini",
+        tokens: 20,
+        costCents: 1,
+        fallback: false,
+      };
+    });
+
+    const sandboxAdapter = createWorkbenchSandboxToolAdapter({
+      env: { E2B_API_KEY: "e2b_secret" },
+      createSessionFn: vi.fn(async () => fakeWorkbenchSession()),
+      getProviderFn: vi.fn(() => fakeWorkbenchProvider()),
+    });
+    const { runtime, adapters } = makeRuntime(["Workbench Sandbox", "workbench:session"], [sandboxAdapter]);
+
+    await runSeatAgent({
+      companyId: "co_1",
+      runtime,
+      subtask: makeSubtask(),
+      systemPrompt: runtime.systemPrompt,
+      adapters,
+    });
+
+    const text = capturedInstructions.join("\n");
+    expect(text).toContain("workbench:session");
+    expect(text).toContain('"writeFiles"');
+    expect(text).toContain('"command"');
+    expect(text).toContain('"package.json"');
+    expect(text).toContain("Do not use natural language actions");
+  });
+
   it("gives engineer and analyst seats an adaptive 15-step loop when tools keep making progress", async () => {
     const progressAdapter: ToolAdapter = {
       name: "Workbench Sandbox",

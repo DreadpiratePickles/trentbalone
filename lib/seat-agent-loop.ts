@@ -206,6 +206,7 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
   const contracts = buildRuntimeSeatContracts(input.subtask.seat, activeEnvironment, registry);
   const seatContracts = contractsForSeat(contracts, input.subtask.seat);
   const availableTools = [...buildAdvertisedToolSet(contracts, input.subtask.seat)];
+  const toolInstructions = buildToolInstructions(availableTools);
 
   const seed = input.resumeSeed;
   const toolCalls: ToolCallRecord[] = seed
@@ -280,6 +281,7 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
           result,
         })),
         availableTools,
+        toolInstructions,
       },
     });
     tokens += seatResult.tokens;
@@ -549,6 +551,24 @@ function defaultToolLoopSteps(seat: Subtask["seat"]) {
   return seat === "engineer" || seat === "analyst"
     ? EXTENDED_TOOL_LOOP_STEPS
     : DEFAULT_TOOL_LOOP_STEPS;
+}
+
+function buildToolInstructions(availableTools: string[]): string[] {
+  const normalized = new Set(availableTools.map((tool) => tool.toLowerCase()));
+  const instructions: string[] = [];
+  if (
+    normalized.has("workbench sandbox")
+    || normalized.has("workbench:session")
+    || normalized.has("sandbox:exec")
+  ) {
+    instructions.push([
+      "For Workbench Sandbox code-writing work, use toolCall.name \"workbench:session\".",
+      "toolCall.action must be a JSON string with keys \"kind\":\"workbench:session\", \"objective\", \"writeFiles\", and \"command\".",
+      "Example action: {\"kind\":\"workbench:session\",\"objective\":\"write and test proof\",\"writeFiles\":[{\"path\":\"package.json\",\"content\":\"{\\\"scripts\\\":{\\\"test\\\":\\\"node test.js\\\"},\\\"type\\\":\\\"module\\\"}\"},{\"path\":\"test.js\",\"content\":\"console.log('ok')\\n\"}],\"command\":\"npm test\"}.",
+      "Do not use natural language actions such as \"start\", \"create\", or \"run\" for workbench:session; they will be rejected.",
+    ].join(" "));
+  }
+  return instructions;
 }
 
 function normalizeTurnOutput(output: unknown): SeatTurnOutput {

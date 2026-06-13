@@ -75,6 +75,7 @@ export type ToolLoopContext = {
   maxSteps: number;
   toolHistory: ToolLoopTurn[];
   availableTools: string[];
+  toolInstructions?: string[];
 };
 
 export type SeatModelExecutionInput = {
@@ -317,6 +318,12 @@ function buildSeatUserPrompt(input: SeatModelExecutionInput) {
       `Available tools: ${loop.availableTools.join(", ") || "none"}`,
       `Tool-use step ${loop.step} of ${loop.maxSteps}.`,
     );
+    if (loop.toolInstructions?.length) {
+      lines.push(
+        "Tool-specific instructions:",
+        ...loop.toolInstructions.map((instruction) => `- ${instruction}`),
+      );
+    }
     if (loop.toolHistory.length > 0) {
       lines.push(
         "Prior tool results (use these in your answer):",
