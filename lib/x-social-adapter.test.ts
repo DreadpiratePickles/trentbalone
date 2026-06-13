@@ -6,7 +6,7 @@ describe("X social adapter", () => {
     const adapter = createXSocialAdapter({ env: {}, fetchImpl: vi.fn() });
 
     await expect(adapter.healthCheck()).resolves.toBe("needs_credentials");
-    expect(adapter.availability).toBe("unavailable");
+    expect(adapter.availability).toBe("real");
 
     const result = await adapter.execute("publish", { text: "Launch day" });
     expect(result.status).toBe("failed");

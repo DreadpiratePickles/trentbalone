@@ -22,12 +22,10 @@ const APPROVAL_ACTION_RE = /\b(publish|post|tweet|send|reply)\b/i;
 export function createXSocialAdapter(options: XSocialAdapterOptions = {}): ToolAdapter {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
-  const configured = Boolean(xUserAccessToken(env));
-
   return {
     name: "X",
     scopes: ["x:post:create", "x:tweet:publish", "social:publish"],
-    availability: configured ? "real" : "unavailable",
+    availability: "real",
     async healthCheck() {
       return xUserAccessToken(env) ? "connected" : "needs_credentials";
     },
