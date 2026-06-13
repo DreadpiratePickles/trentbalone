@@ -12,6 +12,7 @@ import { createStripeReadAdapter } from "@/lib/stripe-read-adapter";
 import { createSentryReadAdapter } from "@/lib/sentry-read-adapter";
 import { createPostHogReadAdapter } from "@/lib/posthog-read-adapter";
 import { createXSocialAdapter } from "@/lib/x-social-adapter";
+import { createAttioCrmAdapter } from "@/lib/attio-crm-adapter";
 
 export type ToolAdapter = {
   name: string;
@@ -444,6 +445,7 @@ export function buildAdapterRegistry(options: AdapterRegistryOptions = {}): Tool
   mockedAdapter("Google OAuth/Gmail", ["auth", "gmail_draft", "send_requires_approval"], ["send"]),
   mockedAdapter("Slack", ["notifications", "workspace_updates"], ["post"]),
   createXSocialAdapter({ env }),
+  createAttioCrmAdapter({ env }),
   unavailableAdapter("Late.dev", ["social_schedule", "multi_platform_posting"], ["publish", "post"]),
   mockedAdapter("Browserbase", ["cloud_browser", "screenshots", "extraction"], ["submit", "purchase", "login"]),
   mockedAdapter("ScreenshotOne", ["automated_screenshots"], []),

@@ -7,6 +7,7 @@ import { createStripeReadAdapter } from "@/lib/stripe-read-adapter";
 import { createSentryReadAdapter } from "@/lib/sentry-read-adapter";
 import { createPostHogReadAdapter } from "@/lib/posthog-read-adapter";
 import { createXSocialAdapter } from "@/lib/x-social-adapter";
+import { createAttioCrmAdapter } from "@/lib/attio-crm-adapter";
 
 describe("integration health", () => {
   it("declares availability for every registered adapter", () => {
@@ -185,6 +186,7 @@ describe("integration health", () => {
       createSentryReadAdapter({ env: {} }),
       createPostHogReadAdapter({ env: {} }),
       createXSocialAdapter({ env: {} }),
+      createAttioCrmAdapter({ env: {} }),
     ];
 
     for (const adapter of emptyEnvAdapters) {
@@ -222,6 +224,15 @@ describe("integration health", () => {
     expect(x?.availability).not.toBe("test_only");
     expect(x?.requiresApproval("publish post")).toBe(true);
     expect(late?.availability).toBe("unavailable");
+  });
+
+  it("registers Attio CRM as a real read-only sales adapter", async () => {
+    const attio = adapters.find((adapter) => adapter.name === "Attio CRM");
+
+    expect(attio?.scopes).toContain("crm:read");
+    expect(attio?.availability).toBe("real");
+    expect(attio?.requiresApproval("read pipeline")).toBe(false);
+    expect(attio?.requiresApproval("update opportunity")).toBe(true);
   });
 
   it("does not expose Postmark as a mocked production-capable adapter", async () => {

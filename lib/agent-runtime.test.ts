@@ -65,7 +65,8 @@ describe("Agent Plug runtime", () => {
     }
 
     const environment = buildSlotEnvironment(company.id, "sales");
-    expect(environment.tools).toEqual(expect.arrayContaining(["crm:read_unavailable", "Email"]));
+    expect(environment.tools).toEqual(expect.arrayContaining(["crm:read", "Email"]));
+    expect(environment.tools).not.toContain("crm:read_unavailable");
     expect(environment.tools).not.toContain("browser:mock");
   });
 

@@ -2138,7 +2138,7 @@ export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "
     skills: CRITIC_ESCALATION_AUDITOR_SKILLS
   },
   sales: {
-    tools: withSteelTools(["Email", "crm:read_unavailable", "crm:update_draft", "email:draft", "documents:write", "prospects:research"]),
+    tools: withSteelTools(["Email", "crm:read", "crm:update_draft", "email:draft", "documents:write", "prospects:research"]),
     approvalRequiredFor: withSteelApprovalGates(["gmail.send", "crm.write", "prospect.outbound", "contract.commitment", "pricing.exception"]),
     budgetCentsPerRun: 225,
     maxRuntimeSeconds: 600,

@@ -188,6 +188,20 @@ describe("seat-tool contracts", () => {
     expect(ungated, `Ungated write-capable tools:${formatRows(ungated)}`).toEqual([]);
   });
 
+  it("sales CRM read is backed by the real Attio adapter", () => {
+    const salesContracts = contractsForSeat(buildContracts(), "sales");
+
+    expect(salesContracts.map((contract) => contract.tool)).not.toContain("crm:read_unavailable");
+    expect(salesContracts.find((contract) => contract.tool === "crm:read")).toMatchObject({
+      binding: "adapter_scope",
+      resolvedAdapter: "Attio CRM",
+      readiness: "needs_credentials",
+      advertised: true,
+      approvalRequired: false,
+      writeCapable: false,
+    });
+  });
+
   it("internal actions that mutate Trent state are write-capable and approval-gated", () => {
     const contracts = buildContracts();
     const mutatingInternalTools = new Set([

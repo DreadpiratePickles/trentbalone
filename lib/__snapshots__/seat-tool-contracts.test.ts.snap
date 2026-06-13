@@ -156,7 +156,7 @@ growth | vault:write | adapter_scope | Vault Memory | mocked | advertised | appr
 sales | Email | adapter_name | Email | needs_credentials | advertised | approval | write
 sales | Steel Browser | adapter_name | Steel Browser | needs_credentials | advertised | approval | write
 sales | Vault Memory | adapter_name | Vault Memory | mocked | advertised | approval | write
-sales | crm:read_unavailable | unavailable_marker | - | unavailable | advertised | no_approval | read
+sales | crm:read | adapter_scope | Attio CRM | needs_credentials | advertised | no_approval | read
 sales | crm:update_draft | internal_action | - | internal | advertised | approval | write
 sales | documents:write | internal_action | - | internal | advertised | approval | write
 sales | email:draft | internal_action | - | internal | advertised | approval | write
