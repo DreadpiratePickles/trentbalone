@@ -10,7 +10,7 @@ import { runWikiIndexRefresh } from "@/lib/trench-wiki-indexer";
 export const QUEUE_NAME = "trent-autonomy-queue";
 const DEFAULT_JOB_TIMEOUT_MS = 1000 * 60 * 10;
 
-export type QueueJobName = "scheduled_cycle_sweep" | "company_scheduled_cycle" | "recurring_task_materialization" | "workbench_session_sweep" | "run_subtask" | "orchestration_step" | "wiki_index_refresh" | "platform_action" | "content_performance_ingest";
+export type QueueJobName = "scheduled_cycle_sweep" | "company_scheduled_cycle" | "recurring_task_materialization" | "workbench_session_sweep" | "run_subtask" | "orchestration_step" | "wiki_index_refresh" | "platform_action" | "content_performance_ingest" | "weekly_capability_sweep";
 
 type ScheduledCycleSweepPayload = {
   jobRunId: string;
@@ -77,6 +77,14 @@ type ContentPerformanceIngestPayload = {
   delayMs?: number;
 };
 
+type WeeklyCapabilitySweepPayload = {
+  jobRunId: string;
+  companyId: string;
+  trigger: JobRun["trigger"];
+  timeoutMs?: number;
+  delayMs?: number;
+};
+
 type OrchestrationStepPayload = {
   jobRunId: string;
   companyId: string;
@@ -96,7 +104,8 @@ type QueueJobPayload =
   | OrchestrationStepPayload
   | WikiIndexRefreshPayload
   | PlatformActionPayload
-  | ContentPerformanceIngestPayload;
+  | ContentPerformanceIngestPayload
+  | WeeklyCapabilitySweepPayload;
 
 type QueueAddFunction = (type: QueueJobName, data: QueueJobPayload) => Promise<void>;
 const MAX_PLATFORM_ACTION_RETRIES = 3;
@@ -601,6 +610,49 @@ export async function processJobData(type: QueueJobName, data: QueueJobPayload) 
     return;
   }
 
+  if (type === "weekly_capability_sweep") {
+    const { companyId } = data as WeeklyCapabilitySweepPayload;
+    try {
+      const { runWeeklySeatCapabilityGateSweep } = await import("@/lib/seat-capability-sweep") as typeof import("@/lib/seat-capability-sweep");
+      const result = await withTimeout(
+        runWeeklySeatCapabilityGateSweep({ companyId }),
+        jobTimeoutMs(data),
+        jobRunId
+      );
+      if ((await store.getJobRun(jobRunId))?.status === "cancelled") return;
+      const current = await store.getJobRun(jobRunId);
+      await updateJobRunWithEvent(jobRunId, {
+        status: "completed",
+        completedAt: nowIso(),
+        resultCount: result.recorded,
+        summary: `Completed weekly capability sweep with ${result.recorded} decision${result.recorded === 1 ? "" : "s"} recorded and ${result.skipped} seat${result.skipped === 1 ? "" : "s"} skipped.`,
+        metadata: {
+          ...(current?.metadata ?? {}),
+          result,
+          completedCapabilitySweepAt: nowIso(),
+        },
+      });
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : "Unknown capability sweep error";
+      const wasCancelled = (await store.getJobRun(jobRunId))?.status === "cancelled";
+      if (wasCancelled) return;
+      const current = await store.getJobRun(jobRunId);
+      await updateJobRunWithEvent(jobRunId, {
+        status: "failed",
+        completedAt: nowIso(),
+        error: errMsg,
+        summary: "Weekly capability sweep failed.",
+        metadata: {
+          ...(current?.metadata ?? {}),
+          failedCapabilitySweepAt: nowIso(),
+          error: errMsg,
+        },
+      });
+      throw error;
+    }
+    return;
+  }
+
   throw new Error(`Unknown job type: ${String(type)}`);
 }
 
@@ -835,6 +887,37 @@ export async function enqueueWikiIndexRefresh(
     summary: job.summary,
     at: nowIso(),
     jobRun: job
+  });
+
+  return job;
+}
+
+export async function enqueueWeeklyCapabilitySweep(
+  companyId: string,
+  trigger: JobRun["trigger"] = "system"
+) {
+  const job = await store.createJobRun({
+    type: "weekly_capability_sweep",
+    status: "running",
+    companyId,
+    trigger,
+    summary: "Running weekly seat capability gate sweep.",
+    resultCount: 0,
+    metadata: { at: nowIso(), cadence: "weekly" },
+  });
+
+  await addBullJobOrMarkFailed("weekly_capability_sweep", {
+    jobRunId: job.id,
+    companyId,
+    trigger,
+  });
+  emitJobEvent({
+    jobRunId: job.id,
+    companyId,
+    status: "queued",
+    summary: job.summary,
+    at: nowIso(),
+    jobRun: job,
   });
 
   return job;

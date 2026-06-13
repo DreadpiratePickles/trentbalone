@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { store } from "@/lib/store";
 import { makeId } from "@/lib/utils";
+import { recordSeatEvalMeasurement } from "@/lib/seat-capability-sweep";
 
 const { mockRunCompanyCycle, mockLaunchOrchestration } = vi.hoisted(() => ({
   mockRunCompanyCycle: vi.fn(),
@@ -15,7 +16,7 @@ vi.mock("@/lib/orchestrator", () => ({
   launchOrchestration: mockLaunchOrchestration,
 }));
 
-import { runDueScheduledCycles } from "@/lib/scheduler";
+import { runDueScheduledCycles, runDueWeeklyCapabilityGateSweeps } from "@/lib/scheduler";
 
 describe("runDueScheduledCycles durable engine", () => {
   const savedEnv = {
@@ -124,5 +125,33 @@ describe("runDueScheduledCycles durable engine", () => {
         summary: expect.stringContaining("email_nightly"),
       }),
     ]));
+  });
+
+  it("runs a due weekly capability gate sweep from measured seat eval scores", async () => {
+    const company = await store.createCompany({
+      name: `Weekly Capability ${makeId("test")}`,
+      brief: { vision: "Promote only measured seats" },
+      cycleFrequency: "manual",
+    });
+    await recordSeatEvalMeasurement({
+      companyId: company.id,
+      role: "engineer",
+      score: 96,
+      criticFlagRate: 0,
+      evaluatedAt: "2026-06-12T00:00:00.000Z",
+    });
+
+    const jobs = await runDueWeeklyCapabilityGateSweeps("2026-06-13T00:00:00.000Z", [company.id]);
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.type).toBe("weekly_capability_sweep");
+    expect(jobs[0]?.status).toBe("completed");
+    expect(jobs[0]?.resultCount).toBe(1);
+    expect(jobs[0]?.metadata.result).toMatchObject({ recorded: 1, skipped: 8 });
+    const audits = await store.listAuditLogs(company.id);
+    expect(audits.some((audit) =>
+      audit.action === "agent.capability_gate" &&
+      audit.summary.includes("engineer promoted to autonomous")
+    )).toBe(true);
   });
 });

@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { Subtask } from "@/lib/planner";
 
-const { mockWorkbenchSessionSweep, mockProcessSubtaskJob, mockLaunchOrchestration, mockExecuteQueuedPlatformAction, mockExecuteContentPerformanceFeedbackJob } = vi.hoisted(() => ({
+const { mockWorkbenchSessionSweep, mockProcessSubtaskJob, mockLaunchOrchestration, mockExecuteQueuedPlatformAction, mockExecuteContentPerformanceFeedbackJob, mockRunWeeklySeatCapabilityGateSweep } = vi.hoisted(() => ({
   mockWorkbenchSessionSweep: vi.fn(),
   mockProcessSubtaskJob: vi.fn(),
   mockLaunchOrchestration: vi.fn(),
   mockExecuteQueuedPlatformAction: vi.fn(),
   mockExecuteContentPerformanceFeedbackJob: vi.fn(),
+  mockRunWeeklySeatCapabilityGateSweep: vi.fn(),
 }));
 
 vi.mock("@/lib/workbench-orchestrator", () => ({
@@ -24,9 +25,12 @@ vi.mock("@/lib/platform-action-runner", () => ({
 vi.mock("@/lib/content/performance-feedback", () => ({
   executeContentPerformanceFeedbackJob: mockExecuteContentPerformanceFeedbackJob,
 }));
+vi.mock("@/lib/seat-capability-sweep", () => ({
+  runWeeklySeatCapabilityGateSweep: mockRunWeeklySeatCapabilityGateSweep,
+}));
 
 const { processJobData } = await import("@/lib/queue");
-const { enqueueCompanyCycle, enqueueSubtaskRun, requeueRunningSubtaskJobs, queueJobIdForData } = await import("@/lib/queue");
+const { enqueueCompanyCycle, enqueueSubtaskRun, enqueueWeeklyCapabilitySweep, requeueRunningSubtaskJobs, queueJobIdForData } = await import("@/lib/queue");
 const { store } = await import("@/lib/store");
 
 async function createQueueCompany(name: string) {
@@ -304,6 +308,37 @@ describe("processJobData — content_performance_ingest", () => {
       socialSnapshots: 1,
       adOptimizationRuns: 1,
     });
+  });
+});
+
+describe("processJobData — weekly_capability_sweep", () => {
+  afterEach(() => { vi.clearAllMocks(); });
+
+  it("runs the weekly capability gate sweep through the durable worker path", async () => {
+    const company = await createQueueCompany("Queued Capability Sweep Co");
+    mockRunWeeklySeatCapabilityGateSweep.mockResolvedValue({
+      companyId: company.id,
+      evaluatedAt: "2026-06-13T02:30:00.000Z",
+      recorded: 1,
+      skipped: 8,
+      results: [
+        { role: "engineer", status: "recorded", reason: "score crossed threshold", score: 96, qualityLabel: "autonomous", action: "promote" },
+      ],
+    });
+    const jobRun = await enqueueWeeklyCapabilitySweep(company.id, "system");
+
+    await processJobData("weekly_capability_sweep", {
+      jobRunId: jobRun.id,
+      companyId: company.id,
+      trigger: "system",
+    });
+
+    const updated = await store.getJobRun(jobRun.id);
+    expect(mockRunWeeklySeatCapabilityGateSweep).toHaveBeenCalledWith({ companyId: company.id });
+    expect(updated?.status).toBe("completed");
+    expect(updated?.resultCount).toBe(1);
+    expect(updated?.summary).toContain("1 decision");
+    expect(updated?.metadata.result).toMatchObject({ recorded: 1, skipped: 8 });
   });
 });
 
