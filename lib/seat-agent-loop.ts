@@ -481,6 +481,14 @@ async function executeNamedToolCall(input: {
 }): Promise<ToolCallRecord | undefined> {
   const contract = contractForTool(input.contracts, input.name);
   if (contract?.binding === "internal_action") {
+    if (contract.approvalRequired && !input.approvalGranted) {
+      return {
+        adapter: contract.tool,
+        action: input.action,
+        status: "needs_approval",
+        summary: `Internal action "${contract.tool}" requires approval before execution.`,
+      };
+    }
     return runInternalAction(contract.tool, input.action, {
       companyId: input.companyId,
       actor: input.seat,

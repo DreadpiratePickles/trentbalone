@@ -344,6 +344,7 @@ describe("runSeatAgent", () => {
       }),
       systemPrompt: runtime.systemPrompt,
       adapters,
+      approvalGranted: true,
     });
 
     expect(capturedAvailableTools[0]).toContain("tasks:create");
@@ -353,6 +354,53 @@ describe("runSeatAgent", () => {
         action: "Create a follow-up task",
         status: "completed",
         summary: expect.stringContaining("Created task"),
+      }),
+    ]);
+  });
+
+  it("pauses before executing a write-capable internal action without approval", async () => {
+    mockExecuteSeatModel
+      .mockResolvedValueOnce({
+        output: { toolCall: { name: "tasks:create", action: "Create a follow-up task" } },
+        model: "gpt-4o-mini",
+        tokens: 20,
+        costCents: 1,
+        fallback: false,
+      })
+      .mockResolvedValueOnce({
+        output: {
+          toolCall: null,
+          summary: "Task was created internally",
+          findings: [],
+          recommendations: [],
+          workRequests: [],
+        },
+        model: "gpt-4o-mini",
+        tokens: 20,
+        costCents: 1,
+        fallback: false,
+      });
+
+    const { runtime, adapters } = makeRuntime(["tasks:create"]);
+    const result = await runSeatAgent({
+      companyId: "co_1",
+      runtime,
+      subtask: makeSubtask({
+        seat: "ceo",
+        objective: "Create a follow-up task",
+        toolGuidance: ["tasks:create"],
+      }),
+      systemPrompt: runtime.systemPrompt,
+      adapters,
+    });
+
+    expect(result.pausedForApproval).toBe(true);
+    expect(result.toolCalls).toEqual([
+      expect.objectContaining({
+        adapter: "tasks:create",
+        action: "Create a follow-up task",
+        status: "needs_approval",
+        summary: expect.stringContaining("requires approval"),
       }),
     ]);
   });

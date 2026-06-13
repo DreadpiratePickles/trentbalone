@@ -28,6 +28,11 @@ type InternalActionHandler = (action: string, ctx: Required<Pick<InternalActionC
   actor: AgentRole | "system";
 }) => Promise<ToolCallRecord>;
 
+export type InternalActionCapability = {
+  writeCapable: boolean;
+  approvalRequired: boolean;
+};
+
 const HANDLERS = {
   "memory:read": readMemory,
   "tasks:create": createTask,
@@ -49,7 +54,24 @@ const HANDLERS = {
   "prospects:research": researchProspects,
 } satisfies Record<string, InternalActionHandler>;
 
+const READ_ACTIONS = new Set([
+  "memory:read",
+  "usage:read",
+  "billing:read",
+  "goals:read",
+  "support:inbound_email",
+]);
+
 export const INTERNAL_ACTIONS: ReadonlySet<string> = new Set(Object.keys(HANDLERS));
+
+export function internalActionCapability(tool: string): InternalActionCapability | undefined {
+  if (!INTERNAL_ACTIONS.has(tool)) return undefined;
+  const writeCapable = !READ_ACTIONS.has(tool);
+  return {
+    writeCapable,
+    approvalRequired: writeCapable,
+  };
+}
 
 export async function runInternalAction(
   tool: string,

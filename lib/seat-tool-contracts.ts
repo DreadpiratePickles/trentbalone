@@ -1,7 +1,7 @@
 import type { AgentEnvironmentConfig, AgentRole } from "@/lib/types";
 import { adapters as defaultAdapters, type ToolAdapter } from "@/lib/tools";
 import { AGENT_SLOTS, buildSlotEnvironment } from "@/lib/agent-catalog";
-import { INTERNAL_ACTIONS } from "@/lib/internal-actions";
+import { INTERNAL_ACTIONS, internalActionCapability } from "@/lib/internal-actions";
 
 export type ToolBinding =
   | "adapter_name"
@@ -203,7 +203,8 @@ const SAMPLE_MUTATING_ACTIONS = [
 ];
 
 function isWriteCapable(tool: string, binding: ToolBinding | null, adapter?: ToolAdapter): boolean {
-  if (!binding || binding === "internal_action" || binding === "unavailable_marker" || binding === "mcp_dynamic") return false;
+  if (!binding || binding === "unavailable_marker" || binding === "mcp_dynamic") return false;
+  if (binding === "internal_action") return Boolean(internalActionCapability(tool)?.writeCapable);
   if (binding === "adapter_scope") {
     const searchableTool = searchableToolText(tool);
     if (SAFE_SCOPE_RE.test(searchableTool) && !MUTATING_TOOL_RE.test(searchableTool)) return false;
@@ -213,6 +214,8 @@ function isWriteCapable(tool: string, binding: ToolBinding | null, adapter?: Too
 }
 
 function isApprovalRequired(tool: string, environment: AgentEnvironmentConfig, adapter?: ToolAdapter) {
+  const internalCapability = internalActionCapability(tool);
+  if (internalCapability?.writeCapable) return internalCapability.approvalRequired;
   if (environment.approvalRequiredFor.some((gate) => gateMatchesTool(gate, tool))) return true;
   return Boolean(adapter && SAMPLE_MUTATING_ACTIONS.some((action) => adapter.requiresApproval(action)));
 }

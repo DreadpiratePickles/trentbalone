@@ -188,6 +188,38 @@ describe("seat-tool contracts", () => {
     expect(ungated, `Ungated write-capable tools:${formatRows(ungated)}`).toEqual([]);
   });
 
+  it("internal actions that mutate Trent state are write-capable and approval-gated", () => {
+    const contracts = buildContracts();
+    const mutatingInternalTools = new Set([
+      "tasks:create",
+      "tasks:block",
+      "reports:create",
+      "documents:write",
+      "approvals:create",
+      "approvals:request",
+      "audit:create",
+      "goals:update",
+      "email:draft",
+      "social:draft",
+      "ads:draft",
+      "crm:update_draft",
+      "prospects:research",
+    ]);
+    const mismatches = contracts
+      .filter((contract) => contract.binding === "internal_action" && mutatingInternalTools.has(contract.tool))
+      .filter((contract) => !contract.writeCapable || !contract.approvalRequired)
+      .map((contract) => [
+        `${contract.seat} -> ${contract.tool}`,
+        `writeCapable=${contract.writeCapable}`,
+        `approvalRequired=${contract.approvalRequired}`,
+      ].join(" "));
+
+    expect(
+      mismatches,
+      `Mutating internal actions were not truthfully marked/gated:${formatRows(mismatches)}`,
+    ).toEqual([]);
+  });
+
   it("unavailable markers never report connected", async () => {
     const contracts = buildContracts();
     const unavailableContracts = contracts.filter((contract) => contract.binding === "unavailable_marker");
