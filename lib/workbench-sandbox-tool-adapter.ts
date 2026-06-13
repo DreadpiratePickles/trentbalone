@@ -1,5 +1,6 @@
 import type { ToolAdapter } from "@/lib/tools";
 import type { ToolCallRecord, WorkbenchSession } from "@/lib/types";
+import { resolveWorkbenchProviderCredentialEnv } from "@/lib/credential-boundary";
 import { createWorkbenchSession, type WorkbenchCreateInput } from "@/lib/workbench";
 import { getWorkbenchProvider } from "@/lib/workbench-provider";
 import type { WorkbenchProviderAdapter } from "@/lib/workbench-provider";
@@ -10,6 +11,7 @@ export type WorkbenchSandboxToolAdapterOptions = {
   env?: EnvLike;
   createSessionFn?: (input: WorkbenchCreateInput) => Promise<WorkbenchSession>;
   getProviderFn?: (name?: string) => WorkbenchProviderAdapter;
+  resolveCredentialEnvFn?: typeof resolveWorkbenchProviderCredentialEnv;
 };
 
 type WorkbenchSessionToolAction = {
@@ -35,15 +37,18 @@ export function createWorkbenchSandboxToolAdapter(options: WorkbenchSandboxToolA
   const env = options.env ?? process.env;
   const createSessionFn = options.createSessionFn ?? createWorkbenchSession;
   const getProviderFn = options.getProviderFn ?? getWorkbenchProvider;
-  const realProvider = hasRealSandboxProvider(env);
+  const resolveCredentialEnvFn = options.resolveCredentialEnvFn ?? resolveWorkbenchProviderCredentialEnv;
+  const realProvider = hasPotentialRealSandboxProvider(env);
   const availability = realProvider ? "real" : env.NODE_ENV === "production" ? "unavailable" : "test_only";
 
   return {
     name: "Workbench Sandbox",
     scopes: ["sandbox:exec", "workbench:session", "tests:run", "code:execute"],
     availability,
-    async healthCheck() {
-      if (realProvider) return "connected";
+    async healthCheck(companyId?: string) {
+      const readiness = await sandboxProviderHealth(env, companyId, resolveCredentialEnvFn);
+      if (readiness === "connected") return "connected";
+      if (readiness === "needs_credentials") return "needs_credentials";
       return env.NODE_ENV === "production" ? "needs_credentials" : "mocked";
     },
     estimateCost() {
@@ -53,7 +58,9 @@ export function createWorkbenchSandboxToolAdapter(options: WorkbenchSandboxToolA
       return APPROVAL_ACTION_RE.test(action);
     },
     async execute(action, payload) {
-      if (!hasRealSandboxProvider(env) && env.NODE_ENV === "production") {
+      const companyId = typeof payload.companyId === "string" && payload.companyId.trim() ? payload.companyId.trim() : undefined;
+      const readiness = await sandboxProviderHealth(env, companyId, resolveCredentialEnvFn);
+      if (readiness === "needs_credentials" && env.NODE_ENV === "production") {
         return failed(action, "Workbench Sandbox is not configured. Set DAYTONA_API_KEY or E2B_API_KEY before agents can execute code in production.");
       }
       const sessionAction = parseWorkbenchSessionToolAction(action);
@@ -84,7 +91,6 @@ export function createWorkbenchSandboxToolAdapter(options: WorkbenchSandboxToolA
         return failed(action, `Sandbox command is not allowlisted. Supported actions include run tests, run typecheck, run build, lint, pwd, ls, find, and cat package.json/README.md.`);
       }
 
-      const companyId = typeof payload.companyId === "string" && payload.companyId.trim() ? payload.companyId.trim() : undefined;
       if (!companyId) {
         return failed(action, "Workbench Sandbox execution requires payload.companyId.");
       }
@@ -255,13 +261,57 @@ export function resolveSandboxExecCommand(action: string): string | undefined {
   return undefined;
 }
 
-function hasRealSandboxProvider(env: EnvLike) {
-  const configuredProvider = env.WORKBENCH_DEFAULT_PROVIDER?.trim();
+type SandboxProviderName = "e2b" | "daytona" | "railway" | "mock_local";
+type SandboxCredentialResolver = typeof resolveWorkbenchProviderCredentialEnv;
+
+function explicitSandboxProvider(env: EnvLike): string | undefined {
+  return env.WORKBENCH_DEFAULT_PROVIDER?.trim().toLowerCase() || undefined;
+}
+
+function hasPotentialRealSandboxProvider(env: EnvLike) {
+  const provider = explicitSandboxProvider(env);
   return Boolean(
-    env.DAYTONA_API_KEY ||
-    env.E2B_API_KEY ||
-    (configuredProvider && configuredProvider !== "mock_local"),
+    env.DAYTONA_API_KEY
+    || env.E2B_API_KEY
+    || env.RAILWAY_ENVIRONMENT
+    || provider === "railway"
+    || provider === "daytona"
+    || provider === "e2b",
   );
+}
+
+async function sandboxProviderHealth(
+  env: EnvLike,
+  companyId: string | undefined,
+  resolveCredentialEnvFn: SandboxCredentialResolver,
+): Promise<"connected" | "needs_credentials" | "mocked"> {
+  const provider = explicitSandboxProvider(env);
+  if (provider === "railway" || (!provider && env.RAILWAY_ENVIRONMENT)) return "connected";
+  if (provider === "e2b" || provider === "daytona") {
+    return await hasCredentialsForProvider(provider, env, companyId, resolveCredentialEnvFn)
+      ? "connected"
+      : "needs_credentials";
+  }
+  if (provider && provider !== "mock_local") return "needs_credentials";
+  if (env.E2B_API_KEY || env.DAYTONA_API_KEY) return "connected";
+  return env.NODE_ENV === "production" ? "needs_credentials" : "mocked";
+}
+
+async function hasCredentialsForProvider(
+  provider: Extract<SandboxProviderName, "e2b" | "daytona">,
+  env: EnvLike,
+  companyId: string | undefined,
+  resolveCredentialEnvFn: SandboxCredentialResolver,
+) {
+  if (provider === "e2b" && env.E2B_API_KEY) return true;
+  if (provider === "daytona" && env.DAYTONA_API_KEY) return true;
+  if (!companyId) return false;
+  try {
+    const credentials = await resolveCredentialEnvFn(companyId, provider);
+    return credentials.source !== "missing";
+  } catch {
+    return false;
+  }
 }
 
 function timeoutForCommand(command: string) {

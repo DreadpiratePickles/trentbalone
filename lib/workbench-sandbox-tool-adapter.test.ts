@@ -19,6 +19,25 @@ describe("Workbench sandbox tool adapter", () => {
     expect(result.summary).toContain("DAYTONA_API_KEY");
   });
 
+  it("does not report connected for an explicit Daytona provider without credentials", async () => {
+    const provider = fakeProvider({ stdout: "should not run", exitCode: 0 });
+    const adapter = createWorkbenchSandboxToolAdapter({
+      env: { NODE_ENV: "production", WORKBENCH_DEFAULT_PROVIDER: "daytona" },
+      createSessionFn: vi.fn(async () => fakeSession()),
+      getProviderFn: vi.fn(() => provider),
+      resolveCredentialEnvFn: vi.fn(async () => ({ source: "missing" as const, env: {} })),
+    });
+
+    expect(adapter.availability).toBe("real");
+    await expect(adapter.healthCheck("co_missing_daytona")).resolves.toBe("needs_credentials");
+
+    const result = await adapter.execute("run tests", { companyId: "co_missing_daytona" });
+
+    expect(result.status).toBe("failed");
+    expect(result.summary).toContain("DAYTONA_API_KEY");
+    expect(provider.start).not.toHaveBeenCalled();
+  });
+
   it("opens a workbench session and executes an allowed test command", async () => {
     const session = fakeSession();
     const createSessionFn = vi.fn(async () => session);
