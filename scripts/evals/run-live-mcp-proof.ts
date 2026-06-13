@@ -1,8 +1,5 @@
 import fs from "node:fs";
 import { loadAllowedEvalEnvFile } from "@/lib/eval-env-file";
-import { createMcpServer, updateMcpServer } from "@/lib/mcp-store";
-import { createMcpToolAdapter, discoverMcpTools } from "@/lib/mcp-tool-adapter";
-import { store } from "@/lib/store";
 import { normalizeMcpTransport, type McpTransport } from "@/lib/mcp-transport";
 
 type Args = {
@@ -28,10 +25,18 @@ type ProofOutput = {
   failures: string[];
 };
 
+type McpProofDeps = {
+  createMcpServer: typeof import("@/lib/mcp-store").createMcpServer;
+  updateMcpServer: typeof import("@/lib/mcp-store").updateMcpServer;
+  createMcpToolAdapter: typeof import("@/lib/mcp-tool-adapter").createMcpToolAdapter;
+  discoverMcpTools: typeof import("@/lib/mcp-tool-adapter").discoverMcpTools;
+  store: typeof import("@/lib/store").store;
+};
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const loadedEnvKeys = args.envFile ? loadEnvFile(args.envFile) : [];
-  const output = await runLiveMcpProof(args, loadedEnvKeys);
+  const output = await runLiveMcpProof(args, loadedEnvKeys, await loadMcpProofDeps());
   const serialized = `${JSON.stringify(output, null, 2)}\n`;
   if (args.outFile) {
     fs.mkdirSync(dirname(args.outFile), { recursive: true });
@@ -41,7 +46,16 @@ async function main() {
   process.exitCode = output.passed ? 0 : 1;
 }
 
-async function runLiveMcpProof(args: Args, loadedEnvKeys: string[]): Promise<ProofOutput> {
+async function loadMcpProofDeps(): Promise<McpProofDeps> {
+  const [{ createMcpServer, updateMcpServer }, { createMcpToolAdapter, discoverMcpTools }, { store }] = await Promise.all([
+    import("@/lib/mcp-store"),
+    import("@/lib/mcp-tool-adapter"),
+    import("@/lib/store"),
+  ]);
+  return { createMcpServer, updateMcpServer, createMcpToolAdapter, discoverMcpTools, store };
+}
+
+async function runLiveMcpProof(args: Args, loadedEnvKeys: string[], deps: McpProofDeps): Promise<ProofOutput> {
   const failures: string[] = [];
   const serverUrl = args.serverUrl ?? process.env.MCP_TEST_SERVER_URL ?? "https://mcp.stripe.com";
   const transport = inferTransport(serverUrl);
@@ -53,14 +67,14 @@ async function runLiveMcpProof(args: Args, loadedEnvKeys: string[]): Promise<Pro
   }
   if (!token) throw new Error("MCP proof token validation failed unexpectedly.");
   if (serverUrl === "stdio://sentry") {
-    return runSentryStdioProof({ args, loadedEnvKeys, serverUrl, transport, token });
+    return runSentryStdioProof({ args, loadedEnvKeys, serverUrl, transport, token, deps });
   }
 
-  const company = await store.createCompany({
+  const company = await deps.store.createCompany({
     name: `Live MCP Proof ${new Date().toISOString()}`,
     brief: { vision: "Verify a real MCP server can be discovered and called through Trent's adapter spine." },
   });
-  let server = await createMcpServer({
+  let server = await deps.createMcpServer({
     companyId: company.id,
     name: args.serverName,
     url: serverUrl,
@@ -68,20 +82,20 @@ async function runLiveMcpProof(args: Args, loadedEnvKeys: string[]): Promise<Pro
     token,
   });
 
-  const tools = await discoverMcpTools(server);
+  const tools = await deps.discoverMcpTools(server);
   const discoveredTools = tools.map((tool) => tool.name);
   for (const required of ["stripe_api_search", "stripe_api_read"]) {
     if (!discoveredTools.includes(required)) failures.push(`Stripe MCP tool missing: ${required}`);
   }
 
-  server = await updateMcpServer(company.id, server.id, {
+  server = await deps.updateMcpServer(company.id, server.id, {
     discoveredTools: tools,
     status: "connected",
     lastError: null,
     toolAllowlist: ["stripe_api_search", "stripe_api_read"],
     reversibleTools: [],
   }) ?? server;
-  const approvalAdapter = createMcpToolAdapter(server);
+  const approvalAdapter = deps.createMcpToolAdapter(server);
   const readAction = `stripe_api_read ${JSON.stringify({
     stripe_api_operation_id: "GetBalance",
     parameters: {},
@@ -89,10 +103,10 @@ async function runLiveMcpProof(args: Args, loadedEnvKeys: string[]): Promise<Pro
   const defaultApprovalRequired = approvalAdapter.requiresApproval(readAction);
   if (!defaultApprovalRequired) failures.push("MCP read tool did not default to approval-required before reversible policy was set.");
 
-  server = await updateMcpServer(company.id, server.id, {
+  server = await deps.updateMcpServer(company.id, server.id, {
     reversibleTools: ["stripe_api_search", "stripe_api_read"],
   }) ?? server;
-  const adapter = createMcpToolAdapter(server);
+  const adapter = deps.createMcpToolAdapter(server);
   const search = await adapter.execute(`stripe_api_search ${JSON.stringify({ query: "balance" })}`, {});
   const read = await adapter.execute(readAction, {});
   if (search.status !== "completed") failures.push(`Stripe MCP search failed: ${search.summary}`);
@@ -121,13 +135,14 @@ async function runSentryStdioProof(input: {
   serverUrl: string;
   transport: McpTransport;
   token: string;
+  deps: McpProofDeps;
 }): Promise<ProofOutput> {
   const failures: string[] = [];
-  const company = await store.createCompany({
+  const company = await input.deps.store.createCompany({
     name: `Live Sentry MCP Proof ${new Date().toISOString()}`,
     brief: { vision: "Verify Sentry MCP can be discovered and called through Trent's stdio preset." },
   });
-  let server = await createMcpServer({
+  let server = await input.deps.createMcpServer({
     companyId: company.id,
     name: input.args.serverName,
     url: input.serverUrl,
@@ -135,25 +150,25 @@ async function runSentryStdioProof(input: {
     token: input.token,
   });
 
-  const tools = await discoverMcpTools(server);
+  const tools = await input.deps.discoverMcpTools(server);
   const discoveredTools = tools.map((tool) => tool.name);
   if (!discoveredTools.includes("whoami")) failures.push("Sentry MCP tool missing: whoami");
 
-  server = await updateMcpServer(company.id, server.id, {
+  server = await input.deps.updateMcpServer(company.id, server.id, {
     discoveredTools: tools,
     status: "connected",
     lastError: null,
     toolAllowlist: ["whoami"],
     reversibleTools: [],
   }) ?? server;
-  const approvalAdapter = createMcpToolAdapter(server);
+  const approvalAdapter = input.deps.createMcpToolAdapter(server);
   const defaultApprovalRequired = approvalAdapter.requiresApproval("whoami");
   if (!defaultApprovalRequired) failures.push("Sentry MCP whoami did not default to approval-required.");
 
-  server = await updateMcpServer(company.id, server.id, {
+  server = await input.deps.updateMcpServer(company.id, server.id, {
     reversibleTools: ["whoami"],
   }) ?? server;
-  const adapter = createMcpToolAdapter(server);
+  const adapter = input.deps.createMcpToolAdapter(server);
   const read = await adapter.execute("whoami", {});
   if (read.status !== "completed") failures.push(`Sentry MCP whoami failed: ${read.summary}`);
 
