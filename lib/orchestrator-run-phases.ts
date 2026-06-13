@@ -337,7 +337,7 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
       }
     }
     if (effectiveCritique.verdict === "replan" || effectiveCritique.verdict === "escalate") {
-      if (shouldCompleteToolBackedCriticInfrastructureFailure(step, effectiveCritique)) {
+      if (shouldCompleteAfterCriticInfrastructureFailure(step, effectiveCritique)) {
         step.status = "completed";
         step.completedAt = nowIso();
         step.output = [
@@ -480,14 +480,15 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
   }
 }
 
-function shouldCompleteToolBackedCriticInfrastructureFailure(
+function shouldCompleteAfterCriticInfrastructureFailure(
   step: StepRecord,
   critique: { verdict: string; reason?: string },
 ) {
   if (critique.verdict !== "escalate") return false;
   if (!/critic LLM call failed|schema validation|failed schema/i.test(critique.reason ?? "")) return false;
   if (!step.output?.trim()) return false;
-  return (step.toolCalls ?? []).some((call) => call.status === "completed");
+  if (step.riskLevel === "high") return false;
+  return true;
 }
 
 export async function processConsolidatePhase(run: OrchestrationRun, company: Company): Promise<void> {

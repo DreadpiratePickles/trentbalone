@@ -337,6 +337,37 @@ describe("durable orchestration runs", () => {
     expect(persisted?.status).toBe("completed");
   });
 
+  it("does not block usable low-risk output when only critic infrastructure fails", async () => {
+    vi.mocked(critiqueStepOutput).mockImplementation(async (step) => (
+      step.id === "s2"
+        ? {
+            verdict: "escalate",
+            reason: "critic LLM call failed: gpt-4.1-mini response failed schema validation: Expected string, received boolean",
+            improvement: "Require human review before considering this step complete.",
+          }
+        : { verdict: "pass", reason: "ok" }
+    ));
+
+    const run = await launchOrchestration({
+      companyId,
+      objective: "Prove critic infrastructure failures do not strand usable work",
+      trigger: "manual",
+    });
+
+    await drainOrchestrationQueue(companyId, run.id, 12);
+
+    const steps = await store.listOrchestratorSteps(run.id);
+    const s2 = steps.find((step) => step.id === "s2");
+    const s3 = steps.find((step) => step.id === "s3");
+    expect(s2?.status).toBe("completed");
+    expect(s2?.output).toContain("DEGRADED");
+    expect(s2?.output).toContain("critic infrastructure");
+    expect(s3?.status).toBe("completed");
+
+    const persisted = await store.getOrchestratorRun(run.id);
+    expect(persisted?.status).toBe("completed");
+  });
+
   it("marks stale running runs failed when no worker activity remains", async () => {
     vi.stubEnv("ORC_STALE_RUN_MS", "1");
     const staleAt = "2026-06-10T00:00:00.000Z";
