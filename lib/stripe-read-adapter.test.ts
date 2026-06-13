@@ -6,7 +6,7 @@ describe("Stripe read adapter", () => {
     const adapter = createStripeReadAdapter({ env: {}, fetchImpl: vi.fn() });
 
     await expect(adapter.healthCheck()).resolves.toBe("needs_credentials");
-    expect(adapter.availability).toBe("unavailable");
+    expect(adapter.availability).toBe("real");
 
     const result = await adapter.execute("read_snapshot", {});
     expect(result.status).toBe("failed");
@@ -61,7 +61,7 @@ describe("Stripe read adapter", () => {
     const adapter = createStripeReadAdapter({ env: { STRIPE_SECRET_KEY: "sk_bad\u0441" }, fetchImpl });
 
     await expect(adapter.healthCheck()).resolves.toBe("needs_credentials");
-    expect(adapter.availability).toBe("unavailable");
+    expect(adapter.availability).toBe("real");
     const result = await adapter.execute("read_snapshot", {});
 
     expect(fetchImpl).not.toHaveBeenCalled();

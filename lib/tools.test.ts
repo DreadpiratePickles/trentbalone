@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { saveGitHubConnection } from "@/lib/github";
 import { adapters, integrationHealth } from "@/lib/tools";
 import { store } from "@/lib/store";
+import { createResendEmailAdapter } from "@/lib/resend-email-adapter";
+import { createStripeReadAdapter } from "@/lib/stripe-read-adapter";
+import { createSentryReadAdapter } from "@/lib/sentry-read-adapter";
+import { createPostHogReadAdapter } from "@/lib/posthog-read-adapter";
+import { createXSocialAdapter } from "@/lib/x-social-adapter";
 
 describe("integration health", () => {
   it("declares availability for every registered adapter", () => {
@@ -171,6 +176,24 @@ describe("integration health", () => {
       text: "Here is the update.",
     });
     expect(result?.summary).not.toMatch(/mocked/i);
+  });
+
+  it("keeps implemented-but-uncredentialed adapters real with needs_credentials health", async () => {
+    const emptyEnvAdapters = [
+      createResendEmailAdapter({ env: {} }),
+      createStripeReadAdapter({ env: {} }),
+      createSentryReadAdapter({ env: {} }),
+      createPostHogReadAdapter({ env: {} }),
+      createXSocialAdapter({ env: {} }),
+    ];
+
+    for (const adapter of emptyEnvAdapters) {
+      const registered = adapters.find((item) => item.name === adapter.name);
+
+      expect(registered?.availability, `${adapter.name} should be a real adapter in the global registry`).toBe("real");
+      expect(adapter.availability, `${adapter.name} should be implemented even before credentials are configured`).toBe("real");
+      expect(await adapter.healthCheck(), `${adapter.name} should ask for credentials instead of disappearing`).toBe("needs_credentials");
+    }
   });
 
   it("registers Sentry as a real read-only adapter instead of mocked diagnostics", async () => {

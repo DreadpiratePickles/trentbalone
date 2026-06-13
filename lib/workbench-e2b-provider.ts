@@ -80,14 +80,6 @@ const e2bProvider: WorkbenchProviderAdapter = {
 
     sandboxes.set(session.id, sb);
 
-    if (session.repoUrl) {
-      const branch = session.branchName ? `--branch ${session.branchName} ` : "";
-      await sb.commands.run(
-        `git clone --depth=1 ${branch}${session.repoUrl} ${DEFAULT_WORKDIR}`,
-        { timeoutMs: DEFAULT_EXEC_TIMEOUT_MS }
-      );
-    }
-
     await store.addWorkbenchEvent({
       companyId: session.companyId,
       sessionId: session.id,

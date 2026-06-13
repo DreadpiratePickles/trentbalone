@@ -54,10 +54,33 @@ describe("planner-model (§1 P1-1 model-based decomposition)", () => {
     mockCallJsonWithRepair.mockResolvedValue({
       data: {
         subtasks: [
-          { seat: "growth", objective: "Draft a 3-channel launch experiment brief", toolGuidance: ["draft only"], boundaries: ["no sends"], budgetCents: 40 },
-          { seat: "growth", objective: "duplicate scope that must be dropped", budgetCents: 40 },
-          { seat: "wizard", objective: "not a real seat — must be dropped", budgetCents: 40 },
-          { seat: "content", objective: "Write launch announcement copy variants", budgetCents: 9999 },
+          {
+            seat: "growth",
+            objective: "Draft a 3-channel launch experiment brief",
+            toolGuidance: ["draft only"],
+            boundaries: ["no sends"],
+            budgetCents: 40,
+            spec: { acceptance: ["Experiment brief names channels, hypotheses, and approval gates"], inputsFrom: [] },
+          },
+          {
+            seat: "growth",
+            objective: "duplicate scope that must be dropped",
+            budgetCents: 40,
+            spec: { acceptance: ["This duplicate should be ignored"], inputsFrom: [] },
+          },
+          {
+            seat: "wizard",
+            objective: "not a real seat — must be dropped",
+            budgetCents: 40,
+            spec: { acceptance: ["Invalid seat ignored"], inputsFrom: [] },
+          },
+          {
+            seat: "content",
+            objective: "Write launch announcement copy variants",
+            dependsOn: ["growth"],
+            budgetCents: 9999,
+            spec: { acceptance: ["Announcement variants reflect the launch experiment hypotheses"], inputsFrom: ["growth"] },
+          },
         ],
       },
       tokens: 100,
@@ -69,11 +92,46 @@ describe("planner-model (§1 P1-1 model-based decomposition)", () => {
     expect(out!.map((s) => s.seat)).toEqual(["growth", "content"]);
     expect(out!.find((s) => s.seat === "content")!.budgetCents).toBe(100); // clamped to ceiling
     expect(out!.find((s) => s.seat === "growth")!.toolGuidance).toEqual(["draft only"]);
+    expect(out!.find((s) => s.seat === "content")!.dependsOn).toEqual(["growth"]);
+    expect(out!.find((s) => s.seat === "content")!.spec).toEqual({
+      acceptance: ["Announcement variants reflect the launch experiment hypotheses"],
+      inputsFrom: ["growth"],
+    });
+  });
+
+  it("drops model subtasks that lack concrete acceptance criteria", async () => {
+    mockCallJsonWithRepair.mockResolvedValue({
+      data: {
+        subtasks: [
+          { seat: "engineer", objective: "Implement the import flow", budgetCents: 50 },
+          {
+            seat: "analyst",
+            objective: "Verify imported app renders with Playwright evidence",
+            budgetCents: 30,
+            spec: { acceptance: ["Screenshot and console evidence are attached to the run"], inputsFrom: [] },
+          },
+        ],
+      },
+      tokens: 100,
+      repaired: false,
+    });
+
+    const out = await modelDecompose({ prompt: "import and verify an app", classification: STANDARD });
+
+    expect(out).not.toBeNull();
+    expect(out!.map((s) => s.seat)).toEqual(["analyst"]);
   });
 
   it("always routes an escalation seat for irreversible work the model omitted", async () => {
     mockCallJsonWithRepair.mockResolvedValue({
-      data: { subtasks: [{ seat: "engineer", objective: "Prepare the deploy PR for review", budgetCents: 50 }] },
+      data: {
+        subtasks: [{
+          seat: "engineer",
+          objective: "Prepare the deploy PR for review",
+          budgetCents: 50,
+          spec: { acceptance: ["Deploy PR is prepared without merging or deploying"], inputsFrom: [] },
+        }],
+      },
       tokens: 100,
       repaired: false,
     });
@@ -89,7 +147,14 @@ describe("planner-model (§1 P1-1 model-based decomposition)", () => {
 
   it("returns null when the model yields zero usable seats", async () => {
     mockCallJsonWithRepair.mockResolvedValue({
-      data: { subtasks: [{ seat: "wizard", objective: "all invalid seats here", budgetCents: 40 }] },
+      data: {
+        subtasks: [{
+          seat: "wizard",
+          objective: "all invalid seats here",
+          budgetCents: 40,
+          spec: { acceptance: ["Invalid seat ignored"], inputsFrom: [] },
+        }],
+      },
       tokens: 10,
       repaired: false,
     });

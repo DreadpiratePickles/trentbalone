@@ -38,9 +38,10 @@ export function defaultWorkbenchMetadata(input?: {
   allowedHosts?: string[];
   metadata?: Partial<WorkbenchSessionMetadata>;
 }): WorkbenchSession["metadata"] {
+  const allowedHosts = uniqueHosts(input?.allowedHosts ?? []);
   return {
-    networkPolicy: input?.allowedHosts?.length ? "allowlist" : "deny_all",
-    allowedHosts: input?.allowedHosts ?? [],
+    networkPolicy: allowedHosts.length ? "allowlist" : "deny_all",
+    allowedHosts,
     maxRuntimeSeconds: 30 * 60,
     maxCostCents: 250,
     approvalRequiredFor: DEFAULT_WORKBENCH_APPROVAL_GATES,
@@ -62,6 +63,10 @@ export function resolveWorkbenchSessionProvider(provider?: WorkbenchProvider): W
 export async function createWorkbenchSession(input: WorkbenchCreateInput): Promise<WorkbenchSession> {
   const timestamp = nowIso();
   const provider = resolveWorkbenchSessionProvider(input.provider);
+  const allowedHosts = uniqueHosts([
+    ...(input.allowedHosts ?? []),
+    ...hostsForRepoUrl(input.repoUrl),
+  ]);
   const session = await store.createWorkbenchSession({
     companyId: input.companyId,
     taskId: input.taskId,
@@ -75,7 +80,7 @@ export async function createWorkbenchSession(input: WorkbenchCreateInput): Promi
     workdir: `/workspaces/${input.companyId}/${timestamp.slice(0, 10)}`,
     previewUrl: undefined,
     storageKey: `workbench/${input.companyId}/${timestamp}`,
-    metadata: defaultWorkbenchMetadata({ allowedHosts: input.allowedHosts, metadata: input.metadata })
+    metadata: defaultWorkbenchMetadata({ allowedHosts, metadata: input.metadata })
   });
 
   await store.addWorkbenchEvent({
@@ -104,6 +109,26 @@ export async function createWorkbenchSession(input: WorkbenchCreateInput): Promi
   }
 
   return session;
+}
+
+function hostsForRepoUrl(repoUrl?: string): string[] {
+  if (!repoUrl?.trim()) return [];
+  const trimmed = repoUrl.trim();
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.hostname ? [parsed.hostname.toLowerCase()] : [];
+  } catch {
+    const sshHost = trimmed.match(/^[\w.-]+@([^:/]+)[:/]/)?.[1];
+    return sshHost ? [sshHost.toLowerCase()] : [];
+  }
+}
+
+function uniqueHosts(hosts: string[]): string[] {
+  return Array.from(new Set(
+    hosts
+      .map((host) => host.trim().toLowerCase())
+      .filter(Boolean)
+  ));
 }
 
 export async function captureWorkbenchArtifact(input: {

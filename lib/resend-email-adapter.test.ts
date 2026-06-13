@@ -26,7 +26,7 @@ describe("Resend email adapter", () => {
     });
 
     await expect(adapter.healthCheck()).resolves.toBe("needs_credentials");
-    expect(adapter.availability).toBe("unavailable");
+    expect(adapter.availability).toBe("real");
 
     const result = await adapter.execute("send", {
       approvalId: "approval_1",

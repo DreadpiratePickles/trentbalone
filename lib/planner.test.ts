@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockAppendAuditLog, mockAssertSpendAvailable } = vi.hoisted(() => ({
+const { mockAppendAuditLog, mockAssertSpendAvailable, mockCallJsonWithRepair } = vi.hoisted(() => ({
   mockAppendAuditLog: vi.fn(),
   mockAssertSpendAvailable: vi.fn(),
+  mockCallJsonWithRepair: vi.fn(),
 }));
 
 vi.mock("@/lib/audit-log", () => ({ appendAuditLog: mockAppendAuditLog }));
 vi.mock("@/lib/spend", () => ({ assertSpendAvailable: mockAssertSpendAvailable }));
+vi.mock("@/lib/llm-json", () => ({ callJsonWithRepair: mockCallJsonWithRepair }));
 
 import {
   authorizeWorkRequest,
@@ -24,6 +26,7 @@ describe("planner orchestrator", () => {
   beforeEach(() => {
     mockAppendAuditLog.mockReset();
     mockAssertSpendAvailable.mockReset();
+    mockCallJsonWithRepair.mockReset();
     mockAssertSpendAvailable.mockResolvedValue({});
   });
 
@@ -111,6 +114,61 @@ describe("planner orchestrator", () => {
     expect(results).toHaveLength(subtasks.length);
     expect(started).toEqual(subtasks.map((subtask) => subtask.id));
     expect(maxActive).toBeLessThanOrEqual(MAX_PARALLEL_WORKERS);
+  });
+
+  it("waits for dependency subtasks before launching dependent work", async () => {
+    const completed = new Set<string>();
+    const started: string[] = [];
+    const subtasks = [
+      subtaskSchema.parse({
+        id: "subtask_engineer",
+        seat: "engineer",
+        objective: "Import existing app into Workbench",
+        outputContractId: "engineer.v1",
+        dependsOn: [],
+        spec: { acceptance: ["App files imported"], inputsFrom: [] },
+        input: {},
+        contextBundle: {},
+        classification: { type: "general", complexity: "standard", reversibility: "reversible" },
+        budgetCents: 1,
+      }),
+      subtaskSchema.parse({
+        id: "subtask_analyst",
+        seat: "analyst",
+        objective: "Verify imported app with Playwright evidence",
+        outputContractId: "analyst.v1",
+        dependsOn: ["subtask_engineer"],
+        spec: { acceptance: ["Screenshot evidence attached"], inputsFrom: ["subtask_engineer"] },
+        input: {},
+        contextBundle: {},
+        classification: { type: "general", complexity: "standard", reversibility: "reversible" },
+        budgetCents: 1,
+      }),
+    ];
+    const runner: SeatRunner = {
+      run: vi.fn(async (subtask) => {
+        started.push(subtask.id);
+        if (subtask.id === "subtask_analyst" && !completed.has("subtask_engineer")) {
+          throw new Error("analyst started before engineer dependency completed");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        completed.add(subtask.id);
+        return {
+          seat: subtask.seat,
+          payloadRef: `artifact_${subtask.id}`,
+          confidence: 0.9,
+          costCents: 10,
+        };
+      }),
+    };
+
+    const results = await runPlannedSubtasks(subtasks, runner);
+
+    expect(results.map((result) => result.error ?? result.payloadRef)).toEqual([
+      "artifact_subtask_engineer",
+      "artifact_subtask_analyst",
+    ]);
+    expect(started).toEqual(["subtask_engineer", "subtask_analyst"]);
   });
 
   it("preserves sibling results when one planned subtask fails", async () => {
@@ -380,5 +438,48 @@ describe("planner orchestrator", () => {
     expect(result.status).toBe("failed");
     expect(result.escalationReason).toContain("budget");
     expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it("preserves model-planned dependency and acceptance contracts", async () => {
+    vi.stubEnv("PLANNER_MODEL_ENABLED", "1");
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    mockCallJsonWithRepair.mockResolvedValue({
+      data: {
+        subtasks: [
+          {
+            seat: "engineer",
+            objective: "Import the existing app before the Workbench agent starts",
+            budgetCents: 50,
+            spec: { acceptance: ["Files are present in the workspace before the agent is enqueued"], inputsFrom: [] },
+          },
+          {
+            seat: "analyst",
+            objective: "Verify the imported app renders with Playwright evidence",
+            dependsOn: ["engineer"],
+            budgetCents: 30,
+            spec: { acceptance: ["Screenshot, console log, and trace evidence are attached"], inputsFrom: ["engineer"] },
+          },
+        ],
+      },
+      tokens: 100,
+      repaired: false,
+    });
+
+    const subtasks = await plan({
+      companyId: "co_1",
+      prompt: "import this existing app and verify it renders",
+    }, "cycle_1");
+
+    const engineer = subtasks.find((subtask) => subtask.seat === "engineer");
+    const analyst = subtasks.find((subtask) => subtask.seat === "analyst");
+
+    expect(engineer).toBeDefined();
+    expect(analyst).toBeDefined();
+    expect(analyst!.dependsOn).toEqual([engineer!.id]);
+    expect(analyst!.spec).toEqual({
+      acceptance: ["Screenshot, console log, and trace evidence are attached"],
+      inputsFrom: [engineer!.id],
+    });
+    expect(engineer!.spec.acceptance).toEqual(["Files are present in the workspace before the agent is enqueued"]);
   });
 });

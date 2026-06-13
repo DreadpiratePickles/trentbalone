@@ -28,12 +28,10 @@ const WRITE_ACTION_RE = /\b(resolve|assign|delete|archive|mute|ignore|update|cre
 export function createSentryReadAdapter(options: SentryReadAdapterOptions = {}): ToolAdapter {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
-  const configured = Boolean(sentryToken(env));
-
   return {
     name: "Sentry",
     scopes: ["sentry:issues:read", "sentry:errors:read", "sentry:project:read"],
-    availability: configured ? "real" : "unavailable",
+    availability: "real",
     async healthCheck() {
       const token = sentryToken(env);
       if (!token) return "needs_credentials";

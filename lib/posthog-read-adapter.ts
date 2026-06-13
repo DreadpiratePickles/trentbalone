@@ -17,12 +17,10 @@ const WRITE_ACTION_RE = /\b(capture|create|delete|update|patch|identify|alias|fl
 export function createPostHogReadAdapter(options: PostHogReadAdapterOptions = {}): ToolAdapter {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
-  const configured = Boolean(posthogToken(env) && posthogProjectId(env));
-
   return {
     name: "PostHog",
     scopes: ["posthog:events:read", "posthog:metrics:read", "analytics:read"],
-    availability: configured ? "real" : "unavailable",
+    availability: "real",
     async healthCheck() {
       return posthogToken(env) && posthogProjectId(env) ? "connected" : "needs_credentials";
     },

@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { runProcessWithTimeout } from "@/lib/process-watchdog";
+import { loadAllowedEvalEnvFile } from "@/lib/eval-env-file";
 import type { WorkbenchProvider } from "@/lib/types";
 
 type Args = {
@@ -264,19 +264,7 @@ function parseArgs(argv: string[]): Args {
 }
 
 function loadEnvFile(path: string): string[] {
-  const loaded: string[] = [];
-  const content = fs.readFileSync(path, "utf8");
-  for (const line of content.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const match = trimmed.match(/^([A-Z0-9_]+)\s*(?:=|:)\s*(.+)$/);
-    if (!match) continue;
-    const [, key, rawValue] = match;
-    if (!isAllowedEvalEnvKey(key)) continue;
-    process.env[key] = rawValue.trim();
-    loaded.push(key);
-  }
-  return loaded;
+  return loadAllowedEvalEnvFile(path, isAllowedEvalEnvKey);
 }
 
 function isAllowedEvalEnvKey(key: string) {

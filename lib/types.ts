@@ -173,7 +173,7 @@ export type TaskStatus = "draft" | "queued" | "running" | "waiting_approval" | "
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 export type IntegrationStatus = "mocked" | "connected" | "needs_credentials";
 export type JobRunStatus = "running" | "completed" | "failed" | "cancelled";
-export type JobRunType = "scheduled_cycle_sweep" | "company_scheduled_cycle" | "recurring_task_materialization" | "weekly_report" | "morning_briefing" | "workbench_session_sweep" | "run_subtask" | "orchestration_step" | "wiki_index_refresh" | "supervision_action" | "plug_install" | "platform_action" | "content_performance_ingest";
+export type JobRunType = "scheduled_cycle_sweep" | "company_scheduled_cycle" | "recurring_task_materialization" | "weekly_report" | "morning_briefing" | "workbench_session_sweep" | "run_subtask" | "orchestration_step" | "wiki_index_refresh" | "supervision_action" | "plug_install" | "platform_action" | "content_performance_ingest" | "weekly_capability_sweep";
 export type ArtifactType =
   | "board_pdf"
   | "xlsx_report"

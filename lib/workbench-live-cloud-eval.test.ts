@@ -108,7 +108,7 @@ describe("runCloudWorkbenchBuildProof", () => {
     const provider = fakeProvider(calls, {
       start: vi.fn(async () => {
         calls.push("start");
-        await new Promise(() => undefined);
+        return new Promise<never>(() => undefined);
       }),
     });
 
@@ -122,6 +122,34 @@ describe("runCloudWorkbenchBuildProof", () => {
     expect(result.passed).toBe(false);
     expect(result.failures.join("\n")).toContain("Timed out starting daytona sandbox");
     expect(calls).toEqual(["start", "stop"]);
+  });
+
+  it("bounds slow snapshot/export provider operations and still stops the sandbox", async () => {
+    const calls: string[] = [];
+    const provider = fakeProvider(calls, {
+      snapshot: vi.fn(async () => {
+        calls.push("snapshot");
+        return new Promise<never>(() => undefined);
+      }),
+      exportArtifacts: vi.fn(async () => {
+        calls.push("export");
+        return new Promise<never>(() => undefined);
+      }),
+    });
+
+    const result = await runCloudWorkbenchBuildProof({
+      session: session(),
+      provider,
+      previewPort: 3000,
+      providerOperationTimeoutMs: 5,
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.failures).toEqual(expect.arrayContaining([
+      "Timed out daytona snapshot after 5ms",
+      "Timed out daytona export after 5ms",
+    ]));
+    expect(calls.at(-1)).toBe("stop");
   });
 });
 

@@ -6,7 +6,7 @@ describe("Sentry read adapter", () => {
     const adapter = createSentryReadAdapter({ env: {}, fetchImpl: vi.fn() });
 
     await expect(adapter.healthCheck()).resolves.toBe("needs_credentials");
-    expect(adapter.availability).toBe("unavailable");
+    expect(adapter.availability).toBe("real");
 
     const result = await adapter.execute("read_issues", {});
     expect(result.status).toBe("failed");

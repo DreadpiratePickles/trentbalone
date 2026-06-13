@@ -4,6 +4,7 @@ import { nowIso } from "@/lib/utils";
 import { nextRunFromSchedule } from "@/lib/schedule-grammar";
 import { deliverMorningBriefingEmail } from "@/lib/morning-briefing-email";
 import { buildMorningOutcomeSnapshot } from "@/lib/morning-outcome-snapshot";
+import { runWeeklySeatCapabilityGateSweep } from "@/lib/seat-capability-sweep";
 
 export { parseSchedule, nextRunFromSchedule as nextRunFromGrammar } from "@/lib/schedule-grammar";
 
@@ -95,6 +96,8 @@ export async function runDueScheduledCycles(atIso = nowIso(), companyIds?: strin
     }
   }
 
+  await runDueWeeklyCapabilityGateSweeps(atIso, companyIds);
+
   const results = [];
   for (const company of dueCompanies) {
     await materializeDueRecurringTasks(company.id, atIso);
@@ -117,6 +120,66 @@ export async function runDueScheduledCycles(atIso = nowIso(), companyIds?: strin
     }
   }
   return results;
+}
+
+export async function runDueWeeklyCapabilityGateSweeps(atIso = nowIso(), companyIds?: string[]) {
+  const companies = await store.listCompanies();
+  const activeCompanies = companies
+    .filter((company) => company.status === "active")
+    .filter((company) => !companyIds || companyIds.includes(company.id));
+  const results = [];
+
+  for (const company of activeCompanies) {
+    if (!await isWeeklyCapabilitySweepDue(company.id, atIso)) continue;
+    const job = await store.createJobRun({
+      type: "weekly_capability_sweep",
+      status: "running",
+      companyId: company.id,
+      trigger: "system",
+      summary: "Running weekly seat capability gate sweep.",
+      resultCount: 0,
+      metadata: { at: atIso, cadence: "weekly" },
+    });
+    try {
+      const result = await runWeeklySeatCapabilityGateSweep({ companyId: company.id, atIso });
+      const updated = await store.updateJobRun(job.id, {
+        status: "completed",
+        completedAt: nowIso(),
+        resultCount: result.recorded,
+        summary: `Completed weekly capability sweep with ${result.recorded} decision${result.recorded === 1 ? "" : "s"} recorded and ${result.skipped} seat${result.skipped === 1 ? "" : "s"} skipped.`,
+        metadata: {
+          ...job.metadata,
+          result,
+          completedCapabilitySweepAt: nowIso(),
+        },
+      });
+      results.push(updated);
+    } catch (error) {
+      const updated = await store.updateJobRun(job.id, {
+        status: "failed",
+        completedAt: nowIso(),
+        error: error instanceof Error ? error.message : "Unknown capability sweep error",
+        summary: "Weekly capability sweep failed.",
+        metadata: {
+          ...job.metadata,
+          failedCapabilitySweepAt: nowIso(),
+        },
+      });
+      results.push(updated);
+    }
+  }
+
+  return results;
+}
+
+async function isWeeklyCapabilitySweepDue(companyId: string, atIso: string): Promise<boolean> {
+  const atMs = new Date(atIso).getTime();
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
+  const recent = (await store.listJobRuns(companyId))
+    .filter((job) => job.type === "weekly_capability_sweep")
+    .filter((job) => job.status === "completed" || job.status === "running")
+    .some((job) => atMs - new Date(job.startedAt).getTime() < weekMs);
+  return !recent;
 }
 
 function buildOperatingCycleObjective(trigger: "manual" | "scheduled"): string {

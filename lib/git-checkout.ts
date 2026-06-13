@@ -122,7 +122,8 @@ export async function checkoutRepository(
     const credentialHint = Object.keys(authEnv).length || !provider
       ? ""
       : ` Configure ${provider} credentials for this company if the repository is private.`;
-    throw new Error(`Git clone failed with code ${cloneRes.exitCode}: ${cloneRes.stderr}${credentialHint}`);
+    const detail = commandFailureDetail(cloneRes);
+    throw new Error(`Git clone failed with code ${cloneRes.exitCode}: ${detail}${credentialHint}`);
   }
 
   // 2. Checkout the desired branch if specified
@@ -133,8 +134,16 @@ export async function checkoutRepository(
       // Fallback: try creating the branch locally
       const createBranchRes = await adapter.exec(session, `git checkout -b ${branch}`, execOptions);
       if (createBranchRes.exitCode !== 0) {
-        throw new Error(`Git checkout for branch ${branch} failed: ${createBranchRes.stderr}`);
+        throw new Error(`Git checkout for branch ${branch} failed: ${commandFailureDetail(createBranchRes)}`);
       }
     }
   }
+}
+
+function commandFailureDetail(result: { stdout?: string; stderr?: string }): string {
+  return [result.stderr, result.stdout]
+    .map((part) => part?.trim())
+    .filter(Boolean)
+    .join("\n")
+    || "no command output";
 }

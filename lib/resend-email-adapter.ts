@@ -35,8 +35,6 @@ const APPROVAL_ACTIONS = ["send", "reply", "broadcast"];
 export function createResendEmailAdapter(options: ResendEmailAdapterOptions = {}): ToolAdapter {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
-  const token = resendToken(env);
-
   return {
     name: "Email",
     scopes: [
@@ -45,7 +43,7 @@ export function createResendEmailAdapter(options: ResendEmailAdapterOptions = {}
       "resend:inbound_email",
       "email:send_requires_approval",
     ],
-    availability: token ? "real" : "unavailable",
+    availability: "real",
     spendsMoneyOnExecute: true,
     async healthCheck() {
       return resendToken(env) ? "connected" : "needs_credentials";

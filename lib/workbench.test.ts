@@ -89,6 +89,23 @@ describe("cloud workbench foundation", () => {
     expect(events.some((e) => e.title === "Execution plan pending")).toBe(true);
   });
 
+  it("auto-allowlists the repository host when a session starts from GitHub", async () => {
+    const company = await store.createCompany({
+      name: uniqueCompanyName("GitHub Import Co"),
+      brief: { vision: "test" }
+    });
+
+    const session = await createWorkbenchSession({
+      companyId: company.id,
+      objective: "Import an existing private GitHub project",
+      repoUrl: "https://github.com/example/private-app.git",
+      enqueue: false
+    });
+
+    expect(session.metadata.networkPolicy).toBe("allowlist");
+    expect(session.metadata.allowedHosts).toContain("github.com");
+  });
+
   it("stores app-solo attribution metadata on the workbench session", async () => {
     const company = await store.createCompany({
       name: uniqueCompanyName("App Solo Attribution Co"),

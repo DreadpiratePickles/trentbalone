@@ -36,13 +36,10 @@ const WRITE_ACTION_RE = /\b(charge|refund|withdraw|payout|transfer|create|delete
 export function createStripeReadAdapter(options: StripeReadAdapterOptions = {}): ToolAdapter {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
-  const token = stripeSecret(env);
-  const configured = Boolean(token && isHttpHeaderValueSafe(token));
-
   return {
     name: "Stripe",
     scopes: ["stripe:balance:read", "stripe:subscriptions:read", "stripe:mrr:read"],
-    availability: configured ? "real" : "unavailable",
+    availability: "real",
     async healthCheck() {
       const secret = stripeSecret(env);
       return secret && isHttpHeaderValueSafe(secret) ? "connected" : "needs_credentials";

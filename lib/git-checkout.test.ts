@@ -174,6 +174,25 @@ describe("git-checkout orchestration", () => {
     expect(injectedEnvs).toHaveLength(0);
   });
 
+  it("includes stdout diagnostics when git clone fails without stderr", async () => {
+    mockAdapter.exec = async (sess, cmd) => {
+      executedCommands.push(cmd);
+      if (cmd.startsWith("git clone")) {
+        return {
+          stdout: "fatal: unable to access repository: Could not resolve host: github.com",
+          stderr: "",
+          exitCode: 128,
+          durationMs: 1,
+        };
+      }
+      return { stdout: "", stderr: "", exitCode: 0, durationMs: 1 };
+    };
+
+    await expect(checkoutRepository(mockSession, mockAdapter)).rejects.toThrow(
+      "Could not resolve host: github.com",
+    );
+  });
+
   it("falls back to git checkout -b when git checkout fails", async () => {
     await saveGitHubConnection(companyId, {
       token: "ghp_mock_token",
