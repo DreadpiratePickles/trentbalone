@@ -43,8 +43,10 @@ describe("Resend email adapter", () => {
 
   it("accepts RESEND_AUTH_TOKEN and gates sends on approval", async () => {
     const adapter = createResendEmailAdapter({
-      env: { RESEND_AUTH_TOKEN: "re_test" },
-      fetchImpl: vi.fn(),
+      env: { RESEND_AUTH_TOKEN: "re_test", RESEND_FROM_EMAIL: "Trent <hello@trent.test>" },
+      fetchImpl: vi.fn(async () => new Response(JSON.stringify({
+        data: [{ name: "trent.test", status: "verified" }],
+      }), { status: 200 })),
     });
 
     expect(adapter.availability).toBe("real");
@@ -59,6 +61,51 @@ describe("Resend email adapter", () => {
     });
 
     expect(result.status).toBe("needs_approval");
+  });
+
+  it("validates the Resend token during health checks instead of trusting env presence", async () => {
+    const acceptedFetch = vi.fn(async () => new Response(JSON.stringify({
+      data: [{ name: "let-trent.uk", status: "verified" }],
+    }), { status: 200 }));
+    const accepted = createResendEmailAdapter({
+      env: {
+        RESEND_AUTH_TOKEN: "re_valid",
+        RESEND_FROM_DOMAIN: "let-trent.uk",
+      },
+      fetchImpl: acceptedFetch,
+    });
+
+    await expect(accepted.healthCheck()).resolves.toBe("connected");
+    expect(acceptedFetch).toHaveBeenCalledWith("https://api.resend.com/domains", expect.objectContaining({
+      method: "GET",
+      headers: expect.objectContaining({ Authorization: "Bearer re_valid" }),
+    }));
+
+    const rejectedFetch = vi.fn(async () => new Response(JSON.stringify({ message: "Unauthorized" }), { status: 401 }));
+    const rejected = createResendEmailAdapter({
+      env: {
+        RESEND_AUTH_TOKEN: "re_expired",
+        RESEND_FROM_DOMAIN: "let-trent.uk",
+      },
+      fetchImpl: rejectedFetch,
+    });
+
+    await expect(rejected.healthCheck()).resolves.toBe("needs_credentials");
+  });
+
+  it("accepts a verified parent Resend domain for a configured sender subdomain", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      data: [{ name: "let-trent.uk", status: "verified" }],
+    }), { status: 200 }));
+    const adapter = createResendEmailAdapter({
+      env: {
+        RESEND_AUTH_TOKEN: "re_valid",
+        RESEND_FROM_DOMAIN: "send.let-trent.uk",
+      },
+      fetchImpl,
+    });
+
+    await expect(adapter.healthCheck()).resolves.toBe("connected");
   });
 
   it("sends approved email through the Resend API without leaking credentials", async () => {

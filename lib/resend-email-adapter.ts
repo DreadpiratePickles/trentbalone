@@ -1,4 +1,5 @@
 import { Webhook } from "svix";
+import { isHttpHeaderValueSafe, malformedCredentialSummary } from "@/lib/http-credential";
 import type { ToolAdapter } from "@/lib/tools";
 import type { Document, ToolCallRecord } from "@/lib/types";
 
@@ -30,6 +31,7 @@ type DocumentStore = {
 };
 
 const RESEND_EMAIL_ENDPOINT = "https://api.resend.com/emails";
+const RESEND_DOMAINS_ENDPOINT = "https://api.resend.com/domains";
 const APPROVAL_ACTIONS = ["send", "reply", "broadcast"];
 
 export function createResendEmailAdapter(options: ResendEmailAdapterOptions = {}): ToolAdapter {
@@ -46,7 +48,30 @@ export function createResendEmailAdapter(options: ResendEmailAdapterOptions = {}
     availability: "real",
     spendsMoneyOnExecute: true,
     async healthCheck() {
-      return resendToken(env) ? "connected" : "needs_credentials";
+      const apiKey = resendToken(env);
+      const senderDomain = resendSenderDomain(env);
+      if (!apiKey || !senderDomain || !isHttpHeaderValueSafe(apiKey)) return "needs_credentials";
+      try {
+        const response = await fetchImpl(RESEND_DOMAINS_ENDPOINT, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            Accept: "application/json",
+          },
+        });
+        if (!response.ok) return "needs_credentials";
+        const data = await readJson(response);
+        const domains = Array.isArray(data?.data) ? data.data : [];
+        if (!domains.length) return "connected";
+        const matched = domains.find((domain) => {
+          const record = asRecord(domain);
+          return typeof record.name === "string" && resendDomainMatchesSender(senderDomain, record.name);
+        });
+        const status = typeof asRecord(matched).status === "string" ? String(asRecord(matched).status).toLowerCase() : "";
+        return matched && (!status || status === "verified") ? "connected" : "needs_credentials";
+      } catch {
+        return "needs_credentials";
+      }
     },
     estimateCost() {
       return 1;
@@ -58,6 +83,9 @@ export function createResendEmailAdapter(options: ResendEmailAdapterOptions = {}
       const apiKey = resendToken(env);
       if (!apiKey) {
         return failed(action, "Email is not configured. Set RESEND_AUTH_TOKEN or RESEND_API_KEY before agents can send real email.");
+      }
+      if (!isHttpHeaderValueSafe(apiKey)) {
+        return failed(action, malformedCredentialSummary("Resend API key"));
       }
       if (this.requiresApproval(action) && typeof payload.approvalId !== "string") {
         return {
@@ -124,6 +152,25 @@ export function resendFromAddress(env: EnvLike = process.env): string | undefine
   if (explicit) return explicit;
   const domain = firstNonEmpty(env.RESEND_FROM_DOMAIN, env.TRENT_EMAIL_DOMAIN, env.TRENT_PLATFORM_DOMAIN, env.BASE_DOMAIN);
   return domain ? `Trent <hello@${domain}>` : undefined;
+}
+
+function resendSenderDomain(env: EnvLike = process.env): string | undefined {
+  const configuredDomain = firstNonEmpty(
+    env.RESEND_FROM_DOMAIN,
+    env.RESEND_INBOUND_DOMAIN,
+    env.TRENT_EMAIL_DOMAIN,
+    env.TRENT_PLATFORM_DOMAIN,
+    env.BASE_DOMAIN,
+  );
+  if (configuredDomain) return configuredDomain.toLowerCase();
+  const from = resendFromAddress(env);
+  const parsed = from ? parseEmailAddress(from) : undefined;
+  return parsed?.domain;
+}
+
+function resendDomainMatchesSender(senderDomain: string, verifiedDomain: string): boolean {
+  const normalizedVerified = verifiedDomain.toLowerCase();
+  return senderDomain === normalizedVerified || senderDomain.endsWith(`.${normalizedVerified}`);
 }
 
 export function verifyResendWebhookSignature(input: {
