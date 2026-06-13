@@ -1,5 +1,6 @@
 import type { ToolAdapter } from "@/lib/tools";
 import type { ToolCallRecord } from "@/lib/types";
+import { isHttpHeaderValueSafe, malformedCredentialSummary } from "@/lib/http-credential";
 
 type EnvLike = Pick<NodeJS.ProcessEnv, string>;
 type FetchLike = typeof fetch;
@@ -17,6 +18,7 @@ export type XTweetPayloadInput = {
 };
 
 const X_CREATE_POST_URL = "https://api.x.com/2/tweets";
+const X_USER_ME_URL = "https://api.x.com/2/users/me";
 const APPROVAL_ACTION_RE = /\b(publish|post|tweet|send|reply)\b/i;
 
 export function createXSocialAdapter(options: XSocialAdapterOptions = {}): ToolAdapter {
@@ -27,7 +29,20 @@ export function createXSocialAdapter(options: XSocialAdapterOptions = {}): ToolA
     scopes: ["x:post:create", "x:tweet:publish", "social:publish"],
     availability: "real",
     async healthCheck() {
-      return xUserAccessToken(env) ? "connected" : "needs_credentials";
+      const token = xUserAccessToken(env);
+      if (!token || !isHttpHeaderValueSafe(token)) return "needs_credentials";
+      try {
+        const response = await fetchImpl(X_USER_ME_URL, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/json",
+          },
+        });
+        return response.ok ? "connected" : "needs_credentials";
+      } catch {
+        return "needs_credentials";
+      }
     },
     estimateCost() {
       return 0;
@@ -39,6 +54,9 @@ export function createXSocialAdapter(options: XSocialAdapterOptions = {}): ToolA
       const token = xUserAccessToken(env);
       if (!token) {
         return failed(action, "X is not configured. Set X_USER_ACCESS_TOKEN from an OAuth 2.0 user-context flow before agents can publish real posts.");
+      }
+      if (!isHttpHeaderValueSafe(token)) {
+        return failed(action, malformedCredentialSummary("X user access token"));
       }
       if (this.requiresApproval(action) && typeof payload.approvalId !== "string") {
         return {

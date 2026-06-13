@@ -45,6 +45,30 @@ describe("X social adapter", () => {
     expect(result.summary).not.toContain("xox_user_secret");
   });
 
+  it("validates the user token during health checks instead of trusting env presence", async () => {
+    const acceptedFetch = vi.fn(async () => new Response(JSON.stringify({
+      data: { id: "user_1", username: "trent" },
+    }), { status: 200 }));
+    const accepted = createXSocialAdapter({
+      env: { X_USER_ACCESS_TOKEN: "xox_user_secret" },
+      fetchImpl: acceptedFetch,
+    });
+
+    await expect(accepted.healthCheck()).resolves.toBe("connected");
+    expect(acceptedFetch).toHaveBeenCalledWith("https://api.x.com/2/users/me", expect.objectContaining({
+      method: "GET",
+      headers: expect.objectContaining({ Authorization: "Bearer xox_user_secret" }),
+    }));
+
+    const rejectedFetch = vi.fn(async () => new Response(JSON.stringify({ title: "Unauthorized" }), { status: 401 }));
+    const rejected = createXSocialAdapter({
+      env: { X_USER_ACCESS_TOKEN: "expired_secret" },
+      fetchImpl: rejectedFetch,
+    });
+
+    await expect(rejected.healthCheck()).resolves.toBe("needs_credentials");
+  });
+
   it("validates tweet text length before attempting the external call", async () => {
     const fetchImpl = vi.fn();
     const adapter = createXSocialAdapter({
