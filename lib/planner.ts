@@ -186,13 +186,15 @@ export async function plan(request: CycleRequest, cycleId: string): Promise<Pars
     const specs = await modelDecompose({ prompt: request.prompt, classification }).catch(() => null);
     if (specs && specs.length > 0) {
       logger.info({ cycleId, classification, count: specs.length }, "[planner] planned model-based subtasks");
+      const idBySeat = new Map<AgentRole, string>();
+      for (const spec of specs) idBySeat.set(spec.seat, makeId("subtask"));
       return specs.map((spec) =>
         subtaskSchema.parse({
-          id: makeId("subtask"),
+          id: idBySeat.get(spec.seat),
           seat: spec.seat,
           objective: spec.objective,
-          dependsOn: [],
-          spec: buildSubtaskSpec(spec.objective),
+          dependsOn: resolveSeatRefs(spec.dependsOn, idBySeat),
+          spec: resolveModelSubtaskSpec(spec.spec, spec.dependsOn, idBySeat),
           outputContractId: `${spec.seat}.v1`,
           toolGuidance: spec.toolGuidance,
           boundaries: spec.boundaries,
@@ -223,6 +225,25 @@ export async function plan(request: CycleRequest, cycleId: string): Promise<Pars
       budgetCents: budgetForSeat(seat),
     })
   );
+}
+
+function resolveSeatRefs(refs: AgentRole[], idBySeat: Map<AgentRole, string>): string[] {
+  return uniqueStrings(refs.map((ref) => idBySeat.get(ref)).filter((ref): ref is string => Boolean(ref)));
+}
+
+function resolveModelSubtaskSpec(spec: SubtaskSpec, dependsOn: AgentRole[], idBySeat: Map<AgentRole, string>): SubtaskSpec {
+  const mappedInputs = spec.inputsFrom.map((ref) => {
+    const seat = ref as AgentRole;
+    return idBySeat.get(seat) ?? ref;
+  });
+  return {
+    acceptance: spec.acceptance,
+    inputsFrom: uniqueStrings([...resolveSeatRefs(dependsOn, idBySeat), ...mappedInputs]),
+  };
+}
+
+function uniqueStrings(items: string[]): string[] {
+  return [...new Set(items)];
 }
 
 function validateSubtasksBeforeExecution(subtasks: ParsedSubtask[], request: CycleRequest): void {
@@ -352,29 +373,84 @@ export async function authorizeWorkRequest(req: WorkRequest): Promise<string | n
 }
 
 export async function runPlannedSubtasks(subtasks: Subtask[], runner: SeatRunner): Promise<SeatResult[]> {
-  const results: SeatResult[] = [];
-  for (let index = 0; index < subtasks.length; index += MAX_PARALLEL_WORKERS) {
-    const batch = subtasks.slice(index, index + MAX_PARALLEL_WORKERS);
-    const settled = await Promise.allSettled(batch.map((subtask) => runner.run(subtask)));
-    settled.forEach((result, batchIndex) => {
+  const byId = new Map(subtasks.map((subtask, index) => [subtask.id, { subtask, index }]));
+  const pending = new Set(subtasks.map((subtask) => subtask.id));
+  const completed = new Set<string>();
+  const failed = new Set<string>();
+  const results = new Array<SeatResult | undefined>(subtasks.length);
+
+  while (pending.size > 0) {
+    const blocked = subtasks.filter((subtask) =>
+      pending.has(subtask.id) && (subtask.dependsOn ?? []).some((dep) => failed.has(dep) || !byId.has(dep)),
+    );
+    for (const subtask of blocked) {
+      const failedDeps = (subtask.dependsOn ?? []).filter((dep) => failed.has(dep) || !byId.has(dep));
+      const message = `Dependency failed or is missing: ${failedDeps.join(", ")}`;
+      markFailedSubtask(subtask, message, results, byId, failed, pending);
+    }
+
+    const ready = subtasks
+      .filter((subtask) =>
+        pending.has(subtask.id)
+        && (subtask.dependsOn ?? []).every((dep) => completed.has(dep)),
+      )
+      .slice(0, MAX_PARALLEL_WORKERS);
+
+    if (ready.length === 0) {
+      for (const id of [...pending]) {
+        const node = byId.get(id);
+        if (!node) continue;
+        markFailedSubtask(node.subtask, "Dependency cycle prevented this subtask from running", results, byId, failed, pending);
+      }
+      break;
+    }
+
+    const settled = await Promise.allSettled(ready.map((subtask) => runner.run(subtask)));
+    settled.forEach((result, index) => {
+      const subtask = ready[index];
+      const node = byId.get(subtask.id);
+      if (!node) return;
+      pending.delete(subtask.id);
       if (result.status === "fulfilled") {
-        results.push(seatResultSchema.parse(result.value));
+        results[node.index] = seatResultSchema.parse(result.value);
+        completed.add(subtask.id);
         return;
       }
-      const subtask = batch[batchIndex];
       const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
       logger.error({ seat: subtask.seat, subtaskId: subtask.id, err: message }, "[planner] seat failed");
-      results.push(seatResultSchema.parse({
-        seat: subtask.seat,
-        payloadRef: "",
-        confidence: 0,
-        costCents: 0,
-        workRequests: [],
-        error: message,
-      }));
+      results[node.index] = failedSeatResult(subtask, message);
+      failed.add(subtask.id);
     });
   }
-  return results;
+
+  return results.filter((result): result is SeatResult => Boolean(result));
+}
+
+function markFailedSubtask(
+  subtask: Subtask,
+  message: string,
+  results: Array<SeatResult | undefined>,
+  byId: Map<string, { subtask: Subtask; index: number }>,
+  failed: Set<string>,
+  pending: Set<string>,
+): void {
+  const node = byId.get(subtask.id);
+  if (!node) return;
+  logger.error({ seat: subtask.seat, subtaskId: subtask.id, err: message }, "[planner] seat skipped");
+  results[node.index] = failedSeatResult(subtask, message);
+  failed.add(subtask.id);
+  pending.delete(subtask.id);
+}
+
+function failedSeatResult(subtask: Subtask, message: string): SeatResult {
+  return seatResultSchema.parse({
+    seat: subtask.seat,
+    payloadRef: "",
+    confidence: 0,
+    costCents: 0,
+    workRequests: [],
+    error: message,
+  });
 }
 
 async function runDynamicWorkRequests(input: {

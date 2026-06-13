@@ -23,7 +23,7 @@
  */
 import { z } from "zod";
 import type { AgentRole } from "@/lib/types";
-import type { TaskClassification } from "@/lib/planner";
+import type { SubtaskSpec, TaskClassification } from "@/lib/planner";
 import { callJsonWithRepair } from "@/lib/llm-json";
 import { MODELS, MAX_TOKENS } from "@/lib/ai-client";
 import { logger } from "@/lib/logger";
@@ -42,6 +42,8 @@ const MAX_SUBTASKS = 9;
 export interface ModeledSubtaskSpec {
   seat: AgentRole;
   objective: string;
+  dependsOn: AgentRole[];
+  spec: SubtaskSpec;
   toolGuidance: string[];
   boundaries: string[];
   budgetCents: number;
@@ -65,6 +67,11 @@ const modelOutputSchema = z.object({
       z.object({
         seat: z.string(),
         objective: z.string().min(8),
+        dependsOn: z.array(z.string()).default([]),
+        spec: z.object({
+          acceptance: z.array(z.string().min(1)).min(1),
+          inputsFrom: z.array(z.string()).default([]),
+        }),
         toolGuidance: z.array(z.string()).default([]),
         boundaries: z.array(z.string()).default([]),
         budgetCents: z.number().optional(),
@@ -101,7 +108,7 @@ export async function modelDecompose(input: {
     "Every subtask MUST have a concrete, verifiable deliverable. Vague delegation is the #1 multi-agent failure (duplicate work, gaps).",
     "Scale effort to complexity — do not over-spawn.",
     "Any irreversible/external action (send, publish, charge, deploy, merge, delete) must include the 'escalation' seat to prepare an approval card; all other seats DRAFT ONLY.",
-    "Each subtask fields: seat, objective (specific + measurable), toolGuidance[], boundaries[], budgetCents (10–100).",
+    "Each subtask fields: seat, objective (specific + measurable), dependsOn[] (seat names from this same response), spec.acceptance[] (concrete pass criteria), spec.inputsFrom[] (seat names or source refs), toolGuidance[], boundaries[], budgetCents (10–100).",
   ].join("\n");
 
   const user = [
@@ -111,7 +118,7 @@ export async function modelDecompose(input: {
     `EFFORT: ${effortHint(input.classification)}`,
     input.context ? `\nCURRENT OPERATING STATE:\n${input.context.slice(0, 1800)}` : "",
     "",
-    'Return ONLY JSON: { "subtasks": [ { "seat", "objective", "toolGuidance", "boundaries", "budgetCents" } ] }.',
+    'Return ONLY JSON: { "subtasks": [ { "seat", "objective", "dependsOn", "spec": { "acceptance", "inputsFrom" }, "toolGuidance", "boundaries", "budgetCents" } ] }.',
     "Use only the listed seat names.",
   ]
     .filter(Boolean)
@@ -132,10 +139,14 @@ export async function modelDecompose(input: {
       const seat = raw.seat as AgentRole;
       if (!VALID_SEATS.includes(seat)) continue; // drop hallucinated seats
       if (seen.has(seat)) continue; // one subtask per seat — dedupe scope (anti-overlap)
+      const spec = normalizeModelSpec(raw.spec);
+      if (!spec) continue; // vague subtasks fail closed instead of becoming generic work
       seen.add(seat);
       specs.push({
         seat,
         objective: raw.objective.trim(),
+        dependsOn: normalizeSeatRefs(raw.dependsOn),
+        spec,
         toolGuidance: raw.toolGuidance ?? [],
         boundaries: raw.boundaries ?? [],
         budgetCents: clampBudget(raw.budgetCents),
@@ -150,10 +161,24 @@ export async function modelDecompose(input: {
       specs.push({
         seat: "escalation",
         objective: `Prepare an approval card for the irreversible action in: ${input.prompt}`,
+        dependsOn: [],
+        spec: {
+          acceptance: ["Approval card lists irreversible action, owner, risk, rollback, and required founder decision."],
+          inputsFrom: [],
+        },
         toolGuidance: ["prepare approval card; do not execute external action"],
         boundaries: ["irreversible action requires human approval"],
         budgetCents: 20,
       });
+    }
+
+    const includedSeats = new Set(specs.map((spec) => spec.seat));
+    for (const spec of specs) {
+      spec.dependsOn = spec.dependsOn.filter((dep) => dep !== spec.seat && includedSeats.has(dep));
+      spec.spec = {
+        acceptance: spec.spec.acceptance,
+        inputsFrom: spec.spec.inputsFrom.filter((ref) => !VALID_SEATS.includes(ref as AgentRole) || includedSeats.has(ref as AgentRole)),
+      };
     }
 
     logger.info({ count: specs.length, seats: specs.map((s) => s.seat) }, "[planner-model] model-based subtasks");
@@ -165,4 +190,25 @@ export async function modelDecompose(input: {
     );
     return null;
   }
+}
+
+function normalizeModelSpec(raw: unknown): SubtaskSpec | null {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as { acceptance?: unknown; inputsFrom?: unknown };
+  const acceptance = Array.isArray(record.acceptance)
+    ? record.acceptance.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean)
+    : [];
+  if (acceptance.length === 0) return null;
+  const inputsFrom = Array.isArray(record.inputsFrom)
+    ? record.inputsFrom.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean)
+    : [];
+  return { acceptance, inputsFrom };
+}
+
+function normalizeSeatRefs(raw: unknown): AgentRole[] {
+  if (!Array.isArray(raw)) return [];
+  const refs = raw
+    .map((item) => typeof item === "string" ? item.trim() : "")
+    .filter((item): item is AgentRole => VALID_SEATS.includes(item as AgentRole));
+  return [...new Set(refs)];
 }
