@@ -337,6 +337,28 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
       }
     }
     if (effectiveCritique.verdict === "replan" || effectiveCritique.verdict === "escalate") {
+      if (shouldCompleteToolBackedCriticInfrastructureFailure(step, effectiveCritique)) {
+        step.status = "completed";
+        step.completedAt = nowIso();
+        step.output = [
+          step.output ?? "",
+          "",
+          `DEGRADED: critic infrastructure failed after completed tool-backed work (${effectiveCritique.reason}). Founder review recommended, but the completed tool evidence remains usable for downstream steps.`,
+        ].join("\n");
+        step.seatLoopState = undefined;
+        if (step.taskId) await store.updateTask(step.taskId, { status: "completed" }).catch(() => undefined);
+        await persistStep(run, step);
+        await persistSeatRegistryMemory({
+          companyId: run.companyId,
+          runId: run.id,
+          step,
+        }).catch(() => undefined);
+        await emitPersistedOrcEvent(run, { kind: "step_output", runId: run.id, at: nowIso(), step });
+        await emitPersistedOrcEvent(run, { kind: "step_critic", runId: run.id, at: nowIso(), step });
+        await emitPersistedOrcEvent(run, { kind: "step_end", runId: run.id, at: nowIso(), step });
+        await enqueueReadyOrchestrationSteps(run);
+        return;
+      }
       const recalled = await recallRelevantMemory(company.id, run.objective, { k: 5, tokenBudget: 1200 });
       const completedSteps = run.steps.filter((item) => item.status === "completed");
       const proposedReplan = run.plan
@@ -456,6 +478,16 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
     await emitPersistedOrcEvent(run, { kind: "step_end", runId: run.id, at: nowIso(), step });
     await enqueueReadyOrchestrationSteps(run);
   }
+}
+
+function shouldCompleteToolBackedCriticInfrastructureFailure(
+  step: StepRecord,
+  critique: { verdict: string; reason?: string },
+) {
+  if (critique.verdict !== "escalate") return false;
+  if (!/critic LLM call failed|schema validation|failed schema/i.test(critique.reason ?? "")) return false;
+  if (!step.output?.trim()) return false;
+  return (step.toolCalls ?? []).some((call) => call.status === "completed");
 }
 
 export async function processConsolidatePhase(run: OrchestrationRun, company: Company): Promise<void> {

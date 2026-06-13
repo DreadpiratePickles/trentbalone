@@ -116,7 +116,7 @@ vi.mock("@/lib/orchestrator-runtime", async (importOriginal) => {
 const { processJobData } = await import("@/lib/queue");
 const { requeueRunningOrchestrationJobs } = await import("@/lib/queue");
 const { launchOrchestration, approveStep, getOrchestrationRun } = await import("@/lib/orchestrator");
-const { critiqueStepOutput, generateOrchestrationPlan } = await import("@/lib/orchestrator-runtime");
+const { critiqueStepOutput, executeStepWithRuntime, generateOrchestrationPlan } = await import("@/lib/orchestrator-runtime");
 
 async function drainOrchestrationQueue(companyId: string, runId: string, maxJobs = 20) {
   for (let i = 0; i < maxJobs; i += 1) {
@@ -245,6 +245,96 @@ describe("durable orchestration runs", () => {
     const persisted = await store.getOrchestratorRun(run.id);
     expect(persisted?.status).toBe("completed");
     expect(persisted?.summary).toContain("Run consolidated");
+  });
+
+  it("does not block completed tool-backed work when the critic schema fails", async () => {
+    vi.mocked(executeStepWithRuntime).mockImplementation(async ({ step }) => {
+      executionCounts.set(step.id, (executionCounts.get(step.id) ?? 0) + 1);
+      return {
+        output: step.id === "s2"
+          ? "Created a Workbench Sandbox session workbench_1, ran npm test with exit code 0, and captured diff evidence."
+          : `output:${step.id}`,
+        handoff: {
+          contractVersion: "v1",
+          stepId: step.id,
+          seat: step.agentRole,
+          summary: step.id === "s2"
+            ? "Workbench Sandbox completed with npm test exit code 0 and diff evidence."
+            : `output:${step.id}`,
+          keyPoints: [],
+          nextActions: [],
+          risks: [],
+          whatIDidNotDo: [],
+          artifactRefs: [],
+        },
+        model: "test-model",
+        tokens: 5,
+        costCents: 1,
+        toolCalls: step.id === "s2"
+          ? [{
+              adapter: "Workbench Sandbox",
+              action: "{\"kind\":\"workbench:session\",\"writeFiles\":[{\"path\":\"package.json\",\"content\":\"{}\"}],\"command\":\"npm test\"}",
+              status: "completed",
+              summary: "Workbench Sandbox session workbench_1 wrote package.json. Ran `npm test` with exit code 0. Diff: diff --git a/package.json b/package.json",
+            }]
+          : [],
+        workRequests: [],
+        execution: {
+          id: makeId("exec"),
+          companyId: "company",
+          cycleId: "cycle",
+          agentRole: step.agentRole,
+          input: step.expectedOutput,
+          output: step.id === "s2"
+            ? "Created a Workbench Sandbox session workbench_1, ran npm test with exit code 0, and captured diff evidence."
+            : `output:${step.id}`,
+          toolCalls: step.id === "s2"
+            ? [{
+                adapter: "Workbench Sandbox",
+                action: "{\"kind\":\"workbench:session\",\"writeFiles\":[{\"path\":\"package.json\",\"content\":\"{}\"}],\"command\":\"npm test\"}",
+                status: "completed",
+                summary: "Workbench Sandbox session workbench_1 wrote package.json. Ran `npm test` with exit code 0. Diff: diff --git a/package.json b/package.json",
+              }]
+            : [],
+          status: "completed",
+          model: "test-model",
+          tokens: 5,
+          costCents: 1,
+          summary: `output:${step.id}`,
+          durationMs: 1,
+          createdAt: new Date().toISOString(),
+        },
+      };
+    });
+    vi.mocked(critiqueStepOutput).mockImplementation(async (step) => (
+      step.id === "s2"
+        ? {
+            verdict: "escalate",
+            reason: "critic LLM call failed: gpt-4.1-mini response failed schema validation: Expected string, received boolean",
+            improvement: "Require human review before considering this step complete.",
+          }
+        : { verdict: "pass", reason: "ok" }
+    ));
+
+    const run = await launchOrchestration({
+      companyId,
+      objective: "Prove engineer Workbench execution with critic schema failure",
+      trigger: "manual",
+    });
+
+    await drainOrchestrationQueue(companyId, run.id, 12);
+
+    const steps = await store.listOrchestratorSteps(run.id);
+    const s2 = steps.find((step) => step.id === "s2");
+    const s3 = steps.find((step) => step.id === "s3");
+    expect(s2?.status).toBe("completed");
+    expect(s2?.output).toContain("DEGRADED");
+    expect(s2?.output).toContain("critic infrastructure");
+    expect(s3?.status).toBe("completed");
+    expect(executionCounts.get("s3")).toBe(1);
+
+    const persisted = await store.getOrchestratorRun(run.id);
+    expect(persisted?.status).toBe("completed");
   });
 
   it("marks stale running runs failed when no worker activity remains", async () => {
