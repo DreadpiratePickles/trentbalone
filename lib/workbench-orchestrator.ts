@@ -83,6 +83,13 @@ export async function stopWorkbenchSession(
 
   try {
     const provider = getWorkbenchProvider(session.provider);
+    const checkpoint = await store.getWorkbenchCheckpoint(session.id).catch(() => undefined);
+    if (checkpoint?.providerSessionId && provider.restore) {
+      const handle = await provider.restore(session, checkpointToHandle(checkpoint));
+      if (handle) {
+        await persistSandboxHandle(checkpoint, handle, session);
+      }
+    }
     await provider.stop(session);
   } catch (err) {
     console.error(`[Orchestrator] provider.stop failed for ${sessionId}:`, err);

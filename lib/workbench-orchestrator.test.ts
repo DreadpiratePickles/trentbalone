@@ -86,6 +86,69 @@ describe("stopWorkbenchSession", () => {
   it("is a no-op for an unknown session id", async () => {
     await expect(stopWorkbenchSession("ghost-id", "error")).resolves.toBeUndefined();
   });
+
+  it("restores a checkpointed sandbox before stopping after a process restart", async () => {
+    const { vi } = await import("vitest");
+    const providerModule = await import("@/lib/workbench-provider");
+    const session = await makeSession();
+    await store.upsertWorkbenchCheckpoint({
+      companyId: session.companyId,
+      sessionId: session.id,
+      provider: "mock_local",
+      providerSessionId: "persisted-sandbox",
+      workdir: "/tmp/trent-persisted-workdir",
+      previewUrl: "http://localhost:4100",
+      activePort: 4100,
+      fileTreeHash: "tree-old",
+      latestVerification: { passed: true },
+      sandboxExpiresAt: "2026-06-05T23:00:00.000Z",
+    });
+    const restore = vi.fn().mockResolvedValue({
+      provider: "mock_local",
+      providerSessionId: "persisted-sandbox",
+      workdir: "/tmp/trent-persisted-workdir",
+      previewMode: "local_port",
+      providerUrl: "http://localhost:4100",
+      expiresAt: "2026-06-05T23:00:00.000Z",
+    });
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const mockProvider = {
+      name: "mock_local",
+      start: vi.fn(),
+      restore,
+      stop,
+      exec: vi.fn(),
+      readFile: vi.fn(),
+      writeFile: vi.fn(),
+      listFiles: vi.fn(),
+      runTests: vi.fn(),
+      screenshot: vi.fn(),
+      getPreviewUrl: vi.fn(),
+      captureArtifact: vi.fn(),
+    };
+    const spy = vi.spyOn(providerModule, "getWorkbenchProvider").mockReturnValue(mockProvider as never);
+
+    try {
+      await stopWorkbenchSession(session.id, "idle");
+
+      expect(restore).toHaveBeenCalledWith(
+        expect.objectContaining({ id: session.id }),
+        expect.objectContaining({
+          provider: "mock_local",
+          providerSessionId: "persisted-sandbox",
+          workdir: "/tmp/trent-persisted-workdir",
+          previewMode: "local_port",
+          providerUrl: "http://localhost:4100",
+          expiresAt: "2026-06-05T23:00:00.000Z",
+        })
+      );
+      expect(stop).toHaveBeenCalledWith(expect.objectContaining({ id: session.id }));
+      const updated = await store.getWorkbenchSession(session.id);
+      expect(updated?.status).toBe("completed");
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe("workbenchSessionSweep", () => {
