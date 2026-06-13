@@ -16,20 +16,20 @@ export function recommendSeatForObjective(objective: string): SeatRouteRecommend
 
   if (/\b(fincept|ghostfolio|portfolio|holdings|market risk|risk report|finance|billing|ledger|runway|spend|refund|budget|cfo)\b/.test(text)) {
     if (/\bfincept\b/.test(text)) {
-      return { role: "finance", tool: "Fincept Terminal", reason: "Fincept Terminal market and finance analysis is granted to Finance." };
+      return { role: "finance", tool: "Stripe", reason: "Fincept Terminal is not installed as a verified sandbox app; Finance should use real billing, usage, and Stripe evidence." };
     }
     if (/\bghostfolio|holdings|fire|portfolio\b/.test(text)) {
-      return { role: "finance", tool: "Ghostfolio", reason: "Portfolio, holdings, wealth, or FIRE work belongs to Finance." };
+      return { role: "finance", tool: "Stripe", reason: "Ghostfolio is not installed as a verified sandbox app; portfolio or finance work belongs to Finance using available real financial evidence." };
     }
-    return { role: "finance", tool: "Fincept Terminal", reason: "Finance analysis, market-risk, budget, and ledger work belongs to Finance." };
+    return { role: "finance", tool: "Stripe", reason: "Finance analysis, market-risk, budget, and ledger work belongs to Finance using billing, usage, and Stripe evidence." };
   }
 
   if (/\b(hyperframes|launch video|motion creative|video creative|render video)\b/.test(text)) {
-    return { role: "growth", tool: "HyperFrames", reason: "HyperFrames video creation is granted to Growth / Marketing." };
+    return { role: "growth", tool: "documents:write", reason: "HyperFrames is not installed as a verified rendering app; Growth should draft the campaign creative brief and route build work to Workbench if needed." };
   }
 
   if (/\b(open generative ai|image generate|video generate|lip[- ]?sync|cinema workflow|creative generation)\b/.test(text)) {
-    return { role: "growth", tool: "Open Generative AI", reason: "Generative campaign creative is granted to Growth / Marketing." };
+    return { role: "growth", tool: "documents:write", reason: "Open Generative AI is not installed as a verified creative app; Growth should draft the creative brief and approval plan with available tools." };
   }
 
   if (/\b(support|ticket|customer issue|customer reply|angry customer|escalate.*customer|customer escalation)\b/.test(text)) {

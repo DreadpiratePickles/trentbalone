@@ -12,7 +12,7 @@ import type { WorkbenchAgentChunk } from "@/lib/workbench-agent";
 describe("launchAppSoloRun", () => {
   it("creates a workbench session, streams the agent run, and returns the refreshed session", async () => {
     const growth = getAppSoloAgents().find((agent) => agent.role === "growth")!;
-    const hyperframes = growth.apps.find((app) => app.id === "hyperframes")!;
+    const steel = growth.apps.find((app) => app.id === "steel-browser")!;
     const chunks: WorkbenchAgentChunk[] = [];
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const finalSession = session({ id: "ws_1", previewUrl: "http://localhost:4100", status: "completed" });
@@ -38,8 +38,8 @@ describe("launchAppSoloRun", () => {
     const result = await launchAppSoloRun({
       companyId: "co_1",
       agent: growth,
-      app: hyperframes,
-      objective: "Create a launch video frame set.",
+      app: steel,
+      objective: "Research launch positioning evidence.",
       fetcher,
       onChunk: (chunk) => chunks.push(chunk),
     });
@@ -66,9 +66,9 @@ describe("launchAppSoloRun", () => {
         appSolo: {
           agentRole: "growth",
           agentLabel: growth.label,
-          appId: hyperframes.id,
-          appName: hyperframes.name,
-          appScopes: hyperframes.scopes,
+          appId: steel.id,
+          appName: steel.name,
+          appScopes: steel.scopes,
           deliverables: growth.deliverables,
           approvalGates: growth.approvalGates,
           mode: growth.mode,
@@ -76,11 +76,11 @@ describe("launchAppSoloRun", () => {
       },
     });
     expect(createBody).not.toHaveProperty("provider");
-    expect(createBody.objective).toContain("[app-solo] Growth / Marketing / HyperFrames");
+    expect(createBody.objective).toContain("[app-solo] Growth / Marketing / Steel Browser");
     const runBody = JSON.parse(String(calls[1].init?.body));
-    expect(runBody.content).toContain("[app-solo] Growth / Marketing / HyperFrames");
-    expect(runBody.content).toContain("Sandbox app: HyperFrames");
-    expect(runBody.content).toContain("Create a launch video frame set.");
+    expect(runBody.content).toContain("[app-solo] Growth / Marketing / Steel Browser");
+    expect(runBody.content).toContain("Sandbox app: Steel Browser");
+    expect(runBody.content).toContain("Research launch positioning evidence.");
     expect(runBody.content).toContain("Agent communication contract:");
     expect(runBody.content).toContain("Required evidence: verification, preview, artifacts, commands");
     expect(runBody.content).toContain("Verification required:");

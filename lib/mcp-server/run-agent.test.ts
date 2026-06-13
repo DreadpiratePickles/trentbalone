@@ -73,8 +73,8 @@ describe("trent_run_agent", () => {
     expect(deps.launchTeam).not.toHaveBeenCalled();
   });
 
-  it("lets MCP callers choose the App-Solo app for the selected seat", async () => {
-    const session = { id: "workbench_hyperframes", companyId: ctx.companyId, status: "queued" };
+  it("lets MCP callers choose a verified App-Solo app for the selected seat", async () => {
+    const session = { id: "workbench_steel", companyId: ctx.companyId, status: "queued" };
     const deps = {
       createSession: vi.fn().mockResolvedValue(session),
       runAgent: vi.fn(() => completedAgent()),
@@ -86,25 +86,25 @@ describe("trent_run_agent", () => {
     const result = await runAgentHandler(ctx, {
       objective: "Create launch motion boards",
       role: "growth",
-      appId: "hyperframes",
+      appId: "steel-browser",
       engine: "solo",
     }, deps);
 
     expect(result).toMatchObject({
       engine: "solo",
-      runId: "workbench_hyperframes",
+      runId: "workbench_steel",
       agentRole: "growth",
-      app: "HyperFrames",
-      appId: "hyperframes",
+      app: "Steel Browser",
+      appId: "steel-browser",
     });
     expect(deps.createSession).toHaveBeenCalledWith(expect.objectContaining({
-      objective: expect.stringContaining("[app-solo] Growth / Marketing / HyperFrames"),
+      objective: expect.stringContaining("[app-solo] Growth / Marketing / Steel Browser"),
       metadata: {
         appSolo: expect.objectContaining({
           agentRole: "growth",
-          appId: "hyperframes",
-          appName: "HyperFrames",
-          appScopes: expect.arrayContaining(["hyperframes:render"]),
+          appId: "steel-browser",
+          appName: "Steel Browser",
+          appScopes: expect.arrayContaining(["steel:screenshot"]),
         }),
       },
     }));

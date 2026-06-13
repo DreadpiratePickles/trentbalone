@@ -92,25 +92,23 @@ describe("Agent Plug runtime", () => {
     expect(support.tools).not.toContain("support:read_mock");
   });
 
-  it("grants HyperFrames video creation only to the growth seat", async () => {
+  it("does not grant unverified growth sandbox apps by default", async () => {
     const [company] = await store.listCompanies();
     const growth = buildSlotEnvironment(company.id, "growth");
     const engineer = buildSlotEnvironment(company.id, "engineer");
 
-    expect(growth.tools).toEqual(expect.arrayContaining([
+    expect(growth.tools).toEqual(expect.arrayContaining(["documents:write", "Email", "X", "PostHog"]));
+    expect(growth.tools).not.toEqual(expect.arrayContaining([
       "HyperFrames",
-      "hyperframes:create",
-      "hyperframes:render",
       "Open Generative AI",
+      "hyperframes:create",
       "open_gen_ai:image_generate",
-      "open_gen_ai:video_generate",
     ]));
-    expect(growth.skills).toEqual(expect.arrayContaining(["hyperframes", "hyperframes-cli"]));
-    expect(growth.approvalRequiredFor).toEqual(expect.arrayContaining([
+    expect(growth.skills ?? []).not.toContain("hyperframes");
+    expect(growth.skills ?? []).not.toContain("hyperframes-cli");
+    expect(growth.approvalRequiredFor).not.toEqual(expect.arrayContaining([
       "hyperframes.publish",
-      "hyperframes.external_upload",
       "open_gen_ai.publish",
-      "open_gen_ai.ads_launch",
     ]));
 
     expect(engineer.tools).not.toContain("HyperFrames");
@@ -118,33 +116,21 @@ describe("Agent Plug runtime", () => {
     expect(engineer.skills ?? []).not.toContain("hyperframes");
   });
 
-  it("grants Fincept Terminal sandbox capabilities only to the finance seat", async () => {
+  it("does not grant unverified finance sandbox apps by default", async () => {
     const [company] = await store.listCompanies();
     const finance = buildSlotEnvironment(company.id, "finance");
     const growth = buildSlotEnvironment(company.id, "growth");
 
-    expect(finance.tools).toEqual(expect.arrayContaining([
+    expect(finance.tools).toEqual(expect.arrayContaining(["Stripe", "usage:read", "approvals:request", "billing:read"]));
+    expect(finance.tools).not.toEqual(expect.arrayContaining([
       "Fincept Terminal",
-      "fincept:launch_sandbox",
-      "fincept:market_research",
-      "fincept:portfolio_analysis",
-      "fincept:risk_report",
-    ]));
-    expect(finance.tools).toEqual(expect.arrayContaining([
       "Ghostfolio",
+      "fincept:launch_sandbox",
       "ghostfolio:launch_sandbox",
-      "ghostfolio:portfolio_overview",
-      "ghostfolio:holdings_import",
-      "ghostfolio:allocation_report",
-      "ghostfolio:fire_projection",
     ]));
-    expect(finance.approvalRequiredFor).toEqual(expect.arrayContaining([
+    expect(finance.approvalRequiredFor).not.toEqual(expect.arrayContaining([
       "fincept.live_trade",
-      "fincept.broker_connect",
-      "fincept.real_money_order",
       "ghostfolio.live_sync",
-      "ghostfolio.broker_import",
-      "ghostfolio.real_account_connect",
     ]));
 
     expect(growth.tools).not.toContain("Fincept Terminal");
@@ -286,7 +272,7 @@ describe("Agent Plug runtime", () => {
     expect(runtime.staticPrompt).toContain("Skill: finance-billing-ops");
     expect(runtime.staticPrompt).toContain("Skill: cfo-advisor");
     expect(runtime.staticPrompt).toContain("Skill: cost-budget-check");
-    expect(runtime.systemPrompt).toContain("Ghostfolio");
+    expect(runtime.systemPrompt).not.toContain("Ghostfolio");
   });
 
   it("loads Design / Content Studio skill instructions into the default content runtime", async () => {
@@ -469,23 +455,23 @@ describe("Agent Plug runtime", () => {
     expect(runtime.dynamicPrompt).toContain("Granted skills: gtm-operating-cadence");
   });
 
-  it("loads HyperFrames skill instructions into the default growth runtime", async () => {
+  it("loads GTM skill instructions into the default growth runtime", async () => {
     clearAgentRuntimeCache();
     const company = await store.createCompany({
-      name: "HyperFrames Growth Co",
-      brief: { vision: "Create launch videos" },
+      name: "GTM Growth Co",
+      brief: { vision: "Create launch experiments" },
     });
 
     const runtime = await getAgentRuntime(company.id, "growth");
 
-    expect(runtime.staticPrompt).toContain("Skill: hyperframes");
-    expect(runtime.staticPrompt).toContain("Skill: hyperframes-cli");
+    expect(runtime.staticPrompt).not.toContain("Skill: hyperframes");
+    expect(runtime.staticPrompt).not.toContain("Skill: hyperframes-cli");
     expect(runtime.staticPrompt).toContain("Skill: gtm-product-led-growth");
     expect(runtime.staticPrompt).toContain("Skill: positioning-messaging");
     expect(runtime.staticPrompt).toContain("Skill: ads");
     expect(runtime.staticPrompt).toContain("Skill: email-sequence");
     expect(runtime.staticPrompt).toContain("Skill: gtm-strategy");
-    expect(runtime.systemPrompt).toContain("HyperFrames");
+    expect(runtime.systemPrompt).not.toContain("HyperFrames");
   });
 
   it("persists a plugged profile separately from agent description text", async () => {

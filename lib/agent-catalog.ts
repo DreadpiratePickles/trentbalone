@@ -1874,16 +1874,6 @@ const VAULT_MEMORY_APPROVAL_GATES = [
   "gitnexus.analyze",
   "gitnexus.clean",
 ];
-const HYPERFRAMES_GROWTH_TOOLS = [
-  "HyperFrames",
-  "hyperframes:create",
-  "hyperframes:catalog",
-  "hyperframes:preview",
-  "hyperframes:lint",
-  "hyperframes:inspect",
-  "hyperframes:render",
-];
-const HYPERFRAMES_GROWTH_SKILLS = ["hyperframes", "hyperframes-cli"];
 const GROWTH_MARKETING_SKILLS = [
   "gtm-product-led-growth",
   "positioning-messaging",
@@ -1892,63 +1882,7 @@ const GROWTH_MARKETING_SKILLS = [
   "gtm-strategy",
 ];
 const GROWTH_RUNTIME_SKILLS = [
-  ...HYPERFRAMES_GROWTH_SKILLS,
   ...GROWTH_MARKETING_SKILLS,
-];
-const HYPERFRAMES_APPROVAL_GATES = [
-  "hyperframes.publish",
-  "hyperframes.external_upload",
-  "hyperframes.social_post",
-  "hyperframes.ads_launch",
-];
-const OPEN_GENERATIVE_AI_GROWTH_TOOLS = [
-  "Open Generative AI",
-  "open_gen_ai:launch_sandbox",
-  "open_gen_ai:image_generate",
-  "open_gen_ai:video_generate",
-  "open_gen_ai:lip_sync",
-  "open_gen_ai:cinema_workflow",
-  "open_gen_ai:asset_export",
-];
-const OPEN_GENERATIVE_AI_APPROVAL_GATES = [
-  "open_gen_ai.publish",
-  "open_gen_ai.external_upload",
-  "open_gen_ai.ads_launch",
-  "open_gen_ai.policy_sensitive_creative",
-  "open_gen_ai.private_asset_upload",
-];
-const FINCEPT_FINANCE_TOOLS = [
-  "Fincept Terminal",
-  "fincept:launch_sandbox",
-  "fincept:market_research",
-  "fincept:portfolio_analysis",
-  "fincept:risk_report",
-  "fincept:economic_data",
-  "fincept:paper_trading",
-];
-const FINCEPT_APPROVAL_GATES = [
-  "fincept.live_trade",
-  "fincept.broker_connect",
-  "fincept.real_money_order",
-  "fincept.credential_export",
-  "fincept.payout",
-];
-const GHOSTFOLIO_FINANCE_TOOLS = [
-  "Ghostfolio",
-  "ghostfolio:launch_sandbox",
-  "ghostfolio:portfolio_overview",
-  "ghostfolio:holdings_import",
-  "ghostfolio:allocation_report",
-  "ghostfolio:performance_report",
-  "ghostfolio:risk_insights",
-  "ghostfolio:fire_projection",
-];
-const GHOSTFOLIO_APPROVAL_GATES = [
-  "ghostfolio.live_sync",
-  "ghostfolio.broker_import",
-  "ghostfolio.real_account_connect",
-  "ghostfolio.private_holdings_import",
-  "ghostfolio.portfolio_delete",
 ];
 const FINANCE_LEDGER_SKILLS = [
   "variance-analysis",
@@ -2040,38 +1974,6 @@ function withSteelApprovalGates(gates: string[]) {
   return [...gates, ...STEEL_APPROVAL_GATES, ...VAULT_MEMORY_APPROVAL_GATES];
 }
 
-function withGrowthHyperFramesTools(tools: string[]) {
-  return [...tools, ...HYPERFRAMES_GROWTH_TOOLS];
-}
-
-function withGrowthHyperFramesApprovalGates(gates: string[]) {
-  return [...gates, ...HYPERFRAMES_APPROVAL_GATES];
-}
-
-function withGrowthOpenGenerativeAiTools(tools: string[]) {
-  return [...tools, ...OPEN_GENERATIVE_AI_GROWTH_TOOLS];
-}
-
-function withGrowthOpenGenerativeAiApprovalGates(gates: string[]) {
-  return [...gates, ...OPEN_GENERATIVE_AI_APPROVAL_GATES];
-}
-
-function withFinanceFinceptTools(tools: string[]) {
-  return [...tools, ...FINCEPT_FINANCE_TOOLS];
-}
-
-function withFinanceFinceptApprovalGates(gates: string[]) {
-  return [...gates, ...FINCEPT_APPROVAL_GATES];
-}
-
-function withFinanceGhostfolioTools(tools: string[]) {
-  return [...tools, ...GHOSTFOLIO_FINANCE_TOOLS];
-}
-
-function withFinanceGhostfolioApprovalGates(gates: string[]) {
-  return [...gates, ...GHOSTFOLIO_APPROVAL_GATES];
-}
-
 export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "memoryNamespace">> = {
   ceo: {
     tools: withSteelTools(["memory:read", "tasks:create", "reports:create", "approvals:request", "Email", "Stripe", "PostHog", "Sentry"]),
@@ -2090,8 +1992,8 @@ export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "
     skills: ENGINEER_RUNTIME_SKILLS
   },
   growth: {
-    tools: withGrowthOpenGenerativeAiTools(withGrowthHyperFramesTools(withSteelTools(["documents:write", "Email", "X", "PostHog", "email:draft", "social:draft", "ads:draft", "analytics:read"]))),
-    approvalRequiredFor: withGrowthOpenGenerativeAiApprovalGates(withGrowthHyperFramesApprovalGates(withSteelApprovalGates(["gmail.send", "social.publish", "ads.launch", "ads.spend", "prospect.outbound"]))),
+    tools: withSteelTools(["documents:write", "Email", "X", "PostHog", "email:draft", "social:draft", "ads:draft", "analytics:read"]),
+    approvalRequiredFor: withSteelApprovalGates(["gmail.send", "social.publish", "ads.launch", "ads.spend", "prospect.outbound"]),
     budgetCentsPerRun: 250,
     maxRuntimeSeconds: 600,
     outputContract: ["experiment", "audience", "channel", "measurement", "approval_requests"],
@@ -2122,8 +2024,8 @@ export const SLOT_ENVIRONMENTS: Record<AgentRole, Omit<AgentEnvironmentConfig, "
     skills: RESEARCH_ANALYST_LENS_SKILLS
   },
   finance: {
-    tools: withFinanceGhostfolioTools(withFinanceFinceptTools(withSteelTools(["Stripe", "usage:read", "approvals:request", "billing:read"]))),
-    approvalRequiredFor: withFinanceGhostfolioApprovalGates(withFinanceFinceptApprovalGates(withSteelApprovalGates(["charge", "refund", "subscription.change", "budget.increase", "payout"]))),
+    tools: withSteelTools(["Stripe", "usage:read", "approvals:request", "billing:read"]),
+    approvalRequiredFor: withSteelApprovalGates(["charge", "refund", "subscription.change", "budget.increase", "payout"]),
     budgetCentsPerRun: 125,
     maxRuntimeSeconds: 420,
     outputContract: ["spend_summary", "risk_flags", "approval_requests"],

@@ -67,7 +67,7 @@ describe("trent_get_run — workbench App-Solo polling", () => {
         id: "ws_app_solo",
         appSolo: {
           agentRole: "growth",
-          appName: "HyperFrames",
+          appName: "Steel Browser",
         },
       },
       evidenceSummary: {
@@ -92,7 +92,7 @@ describe("trent_get_run — workbench App-Solo polling", () => {
       productReview: {
         status: "needs_attention",
         deliverables: ["campaign draft"],
-        approvalGates: ["hyperframes.publish"],
+        approvalGates: ["steel.login"],
         reviewSignals: {
           verification: "failing",
           preview: "captured",
@@ -187,9 +187,9 @@ describe("trent_list_app_solo_options", () => {
           defaultAppId: "steel-browser",
           apps: expect.arrayContaining([
             expect.objectContaining({
-              id: "hyperframes",
-              name: "HyperFrames",
-              scopes: expect.arrayContaining(["hyperframes:render"]),
+              id: "steel-browser",
+              name: "Steel Browser",
+              scopes: expect.arrayContaining(["steel:screenshot"]),
             }),
           ]),
         }),
@@ -197,9 +197,9 @@ describe("trent_list_app_solo_options", () => {
           role: "finance",
           apps: expect.arrayContaining([
             expect.objectContaining({
-              id: "ghostfolio",
-              name: "Ghostfolio",
-              scopes: expect.arrayContaining(["ghostfolio:portfolio_overview"]),
+              id: "steel-browser",
+              name: "Steel Browser",
+              scopes: expect.arrayContaining(["steel:screenshot"]),
             }),
           ]),
         }),
@@ -259,7 +259,7 @@ function session(overrides: Partial<WorkbenchSession>): WorkbenchSession {
     messageCount: 0,
     status: overrides.status ?? "running",
     provider: "mock_local",
-    objective: "[app-solo] Growth / Marketing / HyperFrames",
+    objective: "[app-solo] Growth / Marketing / Steel Browser",
     previewUrl: overrides.previewUrl,
     costCents: 0,
     createdAt: "2026-06-11T00:00:00.000Z",
@@ -274,11 +274,11 @@ function session(overrides: Partial<WorkbenchSession>): WorkbenchSession {
       appSolo: {
         agentRole: "growth",
         agentLabel: "Growth / Marketing",
-        appId: "hyperframes",
-        appName: "HyperFrames",
-        appScopes: ["hyperframes:render"],
+        appId: "steel-browser",
+        appName: "Steel Browser",
+        appScopes: ["steel:scrape", "steel:screenshot", "steel:pdf", "steel:sessions"],
         deliverables: ["campaign draft"],
-        approvalGates: ["hyperframes.publish"],
+        approvalGates: ["steel.login"],
         mode: "design",
       },
     },

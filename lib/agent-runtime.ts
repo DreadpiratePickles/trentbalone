@@ -39,7 +39,6 @@ type CachedAgentRuntime = {
 
 const runtimeCache = new Map<string, CachedAgentRuntime>();
 let runtimeHits = 0;
-const GROWTH_REQUIRED_SKILLS = ["hyperframes", "hyperframes-cli"];
 
 function uniqueStable(values: string[]): string[] {
   return Array.from(new Set(values));
@@ -75,7 +74,6 @@ export async function getAgentRuntime(companyId: string, role: AgentRole): Promi
   const capabilityGateDecision = await loadLatestSeatCapabilityGateDecision(companyId, role).catch(() => undefined);
   const environment = applySeatCapabilityGate(baseEnvironment, capabilityGateDecision);
   const grantedSkills = uniqueStable([
-    ...(role === "growth" ? GROWTH_REQUIRED_SKILLS : []),
     ...(environment.skills ?? profile?.skills ?? []),
   ]);
   const skillInstructionBlocks = grantedSkills.length > 0

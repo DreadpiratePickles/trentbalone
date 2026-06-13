@@ -21,8 +21,9 @@ describe("CEO chat routing prompt", () => {
     expect(prompt).toContain("CEO runtime prompt");
     expect(prompt).toContain("CEO routing dossier");
     expect(prompt).toContain("HyperFrames");
-    expect(prompt).toContain("Fincept Terminal");
+    expect(prompt).toContain("HyperFrames is not installed as a verified rendering app");
+    expect(prompt).not.toContain("Fincept Terminal");
     expect(prompt).toContain("Steel Browser");
-    expect(prompt).toContain("Recommended route for this owner message: growth via HyperFrames");
+    expect(prompt).toContain("Recommended route for this owner message: growth via documents:write");
   });
 });

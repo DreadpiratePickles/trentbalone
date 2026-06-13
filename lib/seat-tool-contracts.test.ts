@@ -264,6 +264,24 @@ describe("seat-tool contracts", () => {
     expect(falseGreen, `Test-only adapters advertised as connected:${formatRows(falseGreen)}`).toEqual([]);
   });
 
+  it("does not advertise unverified sandbox app adapters as default seat tools", () => {
+    const contracts = buildContracts();
+    const unverifiedSandboxApps = new Set([
+      "Fincept Terminal",
+      "Ghostfolio",
+      "HyperFrames",
+      "Open Generative AI",
+    ]);
+    const advertised = contracts
+      .filter((contract) => unverifiedSandboxApps.has(contract.resolvedAdapter ?? contract.tool))
+      .map((contract) => `${contract.seat} -> ${contract.tool} (${contract.readiness})`);
+
+    expect(
+      advertised,
+      `Unverified sandbox apps must not appear in default seat tools:${formatRows(advertised)}`,
+    ).toEqual([]);
+  });
+
   it("runtime availableTools === contract.advertised set", () => {
     const contracts = buildContracts();
     const mismatches = ROLES.flatMap((role) => {

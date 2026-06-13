@@ -99,31 +99,30 @@ describe("app-solo registry", () => {
     ]);
   });
 
-  it("maps sandbox apps to only the agents that own them", () => {
+  it("only lists installed and verified sandbox apps", () => {
     const agents = getAppSoloAgents();
     const growth = agents.find((agent) => agent.role === "growth");
     const finance = agents.find((agent) => agent.role === "finance");
     const engineer = agents.find((agent) => agent.role === "engineer");
 
-    expect(growth?.apps.map((app) => app.name)).toEqual(["Steel Browser", "HyperFrames", "Open Generative AI"]);
-    expect(finance?.apps.map((app) => app.name)).toEqual(["Steel Browser", "Fincept Terminal", "Ghostfolio"]);
+    expect(growth?.apps.map((app) => app.name)).toEqual(["Steel Browser"]);
+    expect(finance?.apps.map((app) => app.name)).toEqual(["Steel Browser"]);
     expect(engineer?.apps.map((app) => app.name)).toEqual(["Steel Browser"]);
   });
 
   it("builds a workbench objective with app-solo context and approval gates", () => {
-    const finance = getAppSoloAgents().find((agent) => agent.role === "finance");
-    const fincept = finance?.apps.find((app) => app.name === "Fincept Terminal");
-    const ghostfolio = finance?.apps.find((app) => app.name === "Ghostfolio");
+    const finance = getAppSoloAgents().find((agent) => agent.role === "finance")!;
+    const steel = finance.apps.find((app) => app.name === "Steel Browser")!;
 
-    const objective = buildAppSoloObjective(finance!, fincept!, "Review NVDA concentration risk.");
+    const objective = buildAppSoloObjective(finance, steel, "Review NVDA concentration risk.");
 
-    expect(objective).toContain("[app-solo] Finance / Fincept Terminal");
+    expect(objective).toContain("[app-solo] Finance / Steel Browser");
     expect(objective).toContain("Review NVDA concentration risk.");
-    expect(objective).toContain("fincept.live_trade");
-    expect(objective).toContain("App scopes: fincept:");
+    expect(objective).not.toContain("fincept.live_trade");
+    expect(objective).not.toContain("ghostfolio:");
+    expect(objective).toContain("App scopes: steel:");
     expect(objective).toContain("Required evidence: verification, preview, artifacts, commands");
     expect(objective).toContain("Verification required:");
     expect(objective).toContain("Call out not-done work");
-    expect(ghostfolio?.scopes).toEqual(expect.arrayContaining(["ghostfolio:portfolio_overview"]));
   });
 });

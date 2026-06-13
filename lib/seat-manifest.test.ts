@@ -47,14 +47,14 @@ describe("seat manifests", () => {
     const prompt = buildSeatSystemPrompt("growth");
 
     expect(prompt).toContain("Tool details.");
-    expect(prompt).toContain("hyperframes_create:");
+    expect(prompt).toContain("ads_draft:");
     expect(prompt).toContain("auth=none");
-    expect(prompt).toContain("mode=sandbox");
+    expect(prompt).toContain("mode=draft");
     expect(prompt).toContain("approval=false");
     expect(prompt).toContain("reversibility=reversible");
     expect(prompt).toContain("actions=read, draft, request_approval");
     expect(prompt).toContain("context=companyBrief, icp, offer");
-    expect(prompt).toContain("audit=sandbox/pii:none/artifact:true");
+    expect(prompt).toContain("audit=draft/pii:none/artifact:true");
   });
 
   it("exposes a CEO-readable dossier with exact usage, tools, and context boundaries", () => {

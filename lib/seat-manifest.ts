@@ -141,12 +141,6 @@ export const SEAT_MANIFESTS: Record<AgentRole, SeatManifest> = {
       "ads_draft",
       "email_draft",
       "social_draft",
-      "hyperframes_create",
-      "hyperframes_render",
-      "open_gen_ai_image_generate",
-      "open_gen_ai_video_generate",
-      "open_gen_ai_lip_sync",
-      "open_gen_ai_cinema_workflow",
     ],
   }),
   content: seat("content", "Content Operator", "sonnet", "supervised", {
@@ -183,10 +177,6 @@ export const SEAT_MANIFESTS: Record<AgentRole, SeatManifest> = {
       "stripe_draft",
       "approvals_request",
       "audit_create",
-      "fincept_launch_sandbox",
-      "fincept_market_research",
-      "fincept_portfolio_analysis",
-      "fincept_risk_report",
     ],
   }),
   analyst: seat("analyst", "Research / Analyst", "sonnet", "supervised", {

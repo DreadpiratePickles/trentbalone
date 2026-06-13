@@ -133,7 +133,7 @@ describe("MCP App-Solo protocol flow", () => {
         expect.objectContaining({
           role: "growth",
           apps: expect.arrayContaining([
-            expect.objectContaining({ id: "hyperframes", scopes: expect.arrayContaining(["hyperframes:render"]) }),
+            expect.objectContaining({ id: "steel-browser", scopes: expect.arrayContaining(["steel:screenshot"]) }),
           ]),
         }),
       ]),
@@ -142,13 +142,13 @@ describe("MCP App-Solo protocol flow", () => {
     const launch = await callTool("trent_run_agent", {
       objective: "Create launch motion boards",
       role: "growth",
-      appId: "hyperframes",
+      appId: "steel-browser",
       engine: "solo",
     });
     expect(launch).toMatchObject({
       engine: "solo",
       runId: "ws_hyperframes",
-      appId: "hyperframes",
+      appId: "steel-browser",
       nextCall: {
         tool: "trent_get_run",
         arguments: { runId: "ws_hyperframes" },
@@ -161,8 +161,8 @@ describe("MCP App-Solo protocol flow", () => {
       run: {
         id: "ws_hyperframes",
         appSolo: {
-          appId: "hyperframes",
-          appName: "HyperFrames",
+          appId: "steel-browser",
+          appName: "Steel Browser",
         },
       },
       evidenceSummary: {
@@ -190,8 +190,8 @@ describe("MCP App-Solo protocol flow", () => {
     expect(mockCreateWorkbenchSession).toHaveBeenCalledWith(expect.objectContaining({
       metadata: {
         appSolo: expect.objectContaining({
-          appId: "hyperframes",
-          appScopes: expect.arrayContaining(["hyperframes:render"]),
+          appId: "steel-browser",
+          appScopes: expect.arrayContaining(["steel:screenshot"]),
         }),
       },
     }));
@@ -306,7 +306,7 @@ function session(overrides: Partial<WorkbenchSession>): WorkbenchSession {
     messageCount: 0,
     status: overrides.status ?? "running",
     provider: "mock_local",
-    objective: "[app-solo] Growth / Marketing / HyperFrames",
+    objective: "[app-solo] Growth / Marketing / Steel Browser",
     previewUrl: overrides.previewUrl,
     costCents: 0,
     createdAt: "2026-06-11T00:00:00.000Z",
@@ -321,11 +321,11 @@ function session(overrides: Partial<WorkbenchSession>): WorkbenchSession {
       appSolo: {
         agentRole: "growth",
         agentLabel: "Growth / Marketing",
-        appId: "hyperframes",
-        appName: "HyperFrames",
-        appScopes: ["hyperframes:render"],
+        appId: "steel-browser",
+        appName: "Steel Browser",
+        appScopes: ["steel:scrape", "steel:screenshot", "steel:pdf", "steel:sessions"],
         deliverables: ["campaign draft"],
-        approvalGates: ["hyperframes.publish"],
+        approvalGates: ["steel.login"],
         mode: "design",
       },
     },

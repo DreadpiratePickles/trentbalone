@@ -10,11 +10,11 @@ describe("agent routing context", () => {
 
     expect(context).toContain("CEO routing dossier");
     expect(context).toContain("Growth / Marketing");
-    expect(context).toContain("HyperFrames");
-    expect(context).toContain("Open Generative AI");
+    expect(context).not.toContain("HyperFrames");
+    expect(context).not.toContain("Open Generative AI");
     expect(context).toContain("Finance");
-    expect(context).toContain("Fincept Terminal");
-    expect(context).toContain("Ghostfolio");
+    expect(context).not.toContain("Fincept Terminal");
+    expect(context).not.toContain("Ghostfolio");
     expect(context).toContain("Research / Analyst");
     expect(context).toContain("Steel Browser");
     expect(context).toContain("approval gates:");
@@ -25,12 +25,12 @@ describe("agent routing context", () => {
     {
       objective: "Use Fincept Terminal to research market risk and produce a portfolio risk report.",
       role: "finance",
-      tool: "Fincept Terminal",
+      tool: "Stripe",
     },
     {
       objective: "Create a HyperFrames launch video for the pricing experiment.",
       role: "growth",
-      tool: "HyperFrames",
+      tool: "documents:write",
     },
     {
       objective: "Use Steel to research competitor websites and capture screenshots.",

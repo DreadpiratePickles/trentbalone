@@ -90,26 +90,11 @@ escalation | tasks:block | internal_action | - | internal | advertised | approva
 escalation | vault:graph | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
 escalation | vault:read | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
 escalation | vault:write | adapter_scope | Vault Memory | mocked | advertised | approval | write
-finance | Fincept Terminal | adapter_name | Fincept Terminal | mocked | advertised | approval | write
-finance | Ghostfolio | adapter_name | Ghostfolio | mocked | advertised | approval | write
 finance | Steel Browser | adapter_name | Steel Browser | needs_credentials | advertised | approval | write
 finance | Stripe | adapter_name | Stripe | needs_credentials | advertised | approval | write
 finance | Vault Memory | adapter_name | Vault Memory | mocked | advertised | approval | write
 finance | approvals:request | internal_action | - | internal | advertised | approval | write
 finance | billing:read | internal_action | - | internal | advertised | no_approval | read
-finance | fincept:economic_data | adapter_scope | Fincept Terminal | mocked | advertised | no_approval | read
-finance | fincept:launch_sandbox | adapter_scope | Fincept Terminal | mocked | advertised | approval | write
-finance | fincept:market_research | adapter_scope | Fincept Terminal | mocked | advertised | no_approval | read
-finance | fincept:paper_trading | adapter_scope | Fincept Terminal | mocked | advertised | no_approval | read
-finance | fincept:portfolio_analysis | adapter_scope | Fincept Terminal | mocked | advertised | no_approval | read
-finance | fincept:risk_report | adapter_scope | Fincept Terminal | mocked | advertised | no_approval | read
-finance | ghostfolio:allocation_report | adapter_scope | Ghostfolio | mocked | advertised | no_approval | read
-finance | ghostfolio:fire_projection | adapter_scope | Ghostfolio | mocked | advertised | no_approval | read
-finance | ghostfolio:holdings_import | adapter_scope | Ghostfolio | mocked | advertised | approval | write
-finance | ghostfolio:launch_sandbox | adapter_scope | Ghostfolio | mocked | advertised | approval | write
-finance | ghostfolio:performance_report | adapter_scope | Ghostfolio | mocked | advertised | no_approval | read
-finance | ghostfolio:portfolio_overview | adapter_scope | Ghostfolio | mocked | advertised | no_approval | read
-finance | ghostfolio:risk_insights | adapter_scope | Ghostfolio | mocked | advertised | no_approval | read
 finance | gitnexus:context | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
 finance | gitnexus:search | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
 finance | steel:pdf | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
@@ -121,8 +106,6 @@ finance | vault:graph | adapter_scope | Vault Memory | mocked | advertised | no_
 finance | vault:read | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
 finance | vault:write | adapter_scope | Vault Memory | mocked | advertised | approval | write
 growth | Email | adapter_name | Email | needs_credentials | advertised | approval | write
-growth | HyperFrames | adapter_name | HyperFrames | mocked | advertised | approval | write
-growth | Open Generative AI | adapter_name | Open Generative AI | mocked | advertised | approval | write
 growth | PostHog | adapter_name | PostHog | needs_credentials | advertised | approval | write
 growth | Steel Browser | adapter_name | Steel Browser | needs_credentials | advertised | approval | write
 growth | Vault Memory | adapter_name | Vault Memory | mocked | advertised | approval | write
@@ -133,18 +116,6 @@ growth | documents:write | internal_action | - | internal | advertised | approva
 growth | email:draft | internal_action | - | internal | advertised | approval | write
 growth | gitnexus:context | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
 growth | gitnexus:search | adapter_scope | Vault Memory | mocked | advertised | no_approval | read
-growth | hyperframes:catalog | adapter_scope | HyperFrames | mocked | advertised | no_approval | read
-growth | hyperframes:create | adapter_scope | HyperFrames | mocked | advertised | approval | write
-growth | hyperframes:inspect | adapter_scope | HyperFrames | mocked | advertised | no_approval | read
-growth | hyperframes:lint | adapter_scope | HyperFrames | mocked | advertised | no_approval | read
-growth | hyperframes:preview | adapter_scope | HyperFrames | mocked | advertised | no_approval | read
-growth | hyperframes:render | adapter_scope | HyperFrames | mocked | advertised | approval | write
-growth | open_gen_ai:asset_export | adapter_scope | Open Generative AI | mocked | advertised | approval | write
-growth | open_gen_ai:cinema_workflow | adapter_scope | Open Generative AI | mocked | advertised | no_approval | read
-growth | open_gen_ai:image_generate | adapter_scope | Open Generative AI | mocked | advertised | approval | write
-growth | open_gen_ai:launch_sandbox | adapter_scope | Open Generative AI | mocked | advertised | approval | write
-growth | open_gen_ai:lip_sync | adapter_scope | Open Generative AI | mocked | advertised | approval | write
-growth | open_gen_ai:video_generate | adapter_scope | Open Generative AI | mocked | advertised | approval | write
 growth | social:draft | internal_action | - | internal | advertised | approval | write
 growth | steel:pdf | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
 growth | steel:scrape | adapter_scope | Steel Browser | needs_credentials | advertised | no_approval | read
