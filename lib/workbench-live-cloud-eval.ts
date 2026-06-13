@@ -45,17 +45,20 @@ export type CloudWorkbenchProofProgressEvent = {
 const PREVIEW_COMMAND = "npm run dev -- --host 0.0.0.0";
 const DEFAULT_PREVIEW_PORT = 3000;
 const DEFAULT_START_TIMEOUT_MS = 1000 * 60 * 4;
+const DEFAULT_PROVIDER_OPERATION_TIMEOUT_MS = 1000 * 60 * 3;
 
 export async function runCloudWorkbenchBuildProof(input: {
   session: WorkbenchSession;
   provider: WorkbenchProviderAdapter;
   previewPort?: number;
   startTimeoutMs?: number;
+  providerOperationTimeoutMs?: number;
   onProgress?: (event: CloudWorkbenchProofProgressEvent) => void;
 }): Promise<CloudWorkbenchProofResult> {
   const { session, provider } = input;
   const previewPort = input.previewPort ?? DEFAULT_PREVIEW_PORT;
   const startTimeoutMs = input.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
+  const providerOperationTimeoutMs = input.providerOperationTimeoutMs ?? DEFAULT_PROVIDER_OPERATION_TIMEOUT_MS;
   const commandResults: CloudWorkbenchCommandResult[] = [];
   const artifacts: string[] = [];
   const failures: string[] = [];
@@ -122,26 +125,50 @@ export async function runCloudWorkbenchBuildProof(input: {
     }
 
     if (provider.snapshot) progress({ stage: "snapshot", status: "running", message: "Capturing sandbox snapshot" });
-    const snapshot = await provider.snapshot?.(session);
+    const snapshot = provider.snapshot
+      ? await withTimeout(
+          provider.snapshot(session),
+          providerOperationTimeoutMs,
+          `Timed out ${provider.name} snapshot after ${providerOperationTimeoutMs}ms`,
+        ).catch((err) => {
+          failures.push(err instanceof Error ? err.message : String(err));
+          progress({ stage: "snapshot", status: "failed", message: err instanceof Error ? err.message : String(err) });
+          return undefined;
+        })
+      : undefined;
     if (snapshot) {
       artifacts.push(snapshotArtifact(snapshot));
       progress({ stage: "snapshot", status: "completed", message: snapshot.id });
-    } else {
+    } else if (!provider.snapshot) {
       progress({ stage: "snapshot", status: "skipped", message: `${provider.name} does not implement snapshot` });
     }
     if (provider.exportArtifacts) progress({ stage: "export", status: "running", message: "Exporting sandbox artifacts" });
-    const exported = await provider.exportArtifacts?.(session);
+    const exported = provider.exportArtifacts
+      ? await withTimeout(
+          provider.exportArtifacts(session),
+          providerOperationTimeoutMs,
+          `Timed out ${provider.name} export after ${providerOperationTimeoutMs}ms`,
+        ).catch((err) => {
+          failures.push(err instanceof Error ? err.message : String(err));
+          progress({ stage: "export", status: "failed", message: err instanceof Error ? err.message : String(err) });
+          return undefined;
+        })
+      : undefined;
     if (exported?.artifact) {
       artifacts.push(`export:${exported.artifact.id}`);
       progress({ stage: "export", status: "completed", message: exported.artifact.id });
-    } else {
+    } else if (!provider.exportArtifacts) {
       progress({ stage: "export", status: "skipped", message: `${provider.name} does not implement exportArtifacts` });
     }
   } catch (err) {
     failures.push(err instanceof Error ? err.message : String(err));
   } finally {
     progress({ stage: "stop", status: "running", message: `Stopping ${provider.name} sandbox` });
-    await provider.stop(session).then(() => {
+    await withTimeout(
+      provider.stop(session),
+      providerOperationTimeoutMs,
+      `Timed out stopping ${provider.name} sandbox after ${providerOperationTimeoutMs}ms`,
+    ).then(() => {
       progress({ stage: "stop", status: "completed", message: `Stopped ${provider.name} sandbox` });
     }).catch((err) => {
       progress({ stage: "stop", status: "failed", message: err instanceof Error ? err.message : String(err) });
