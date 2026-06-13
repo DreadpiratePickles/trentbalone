@@ -1,4 +1,5 @@
 import { AGENT_SLOTS, SLOT_CONTRACTS, SLOT_ENVIRONMENTS } from "@/lib/agent-catalog";
+import type { SeatToolContract, ToolReadiness } from "@/lib/seat-tool-contracts";
 import type { AgentRole, WorkbenchAgentMode } from "@/lib/types";
 
 export type WorkbenchAgentToolStatus = "real" | "unavailable" | "test_only";
@@ -6,6 +7,9 @@ export type WorkbenchAgentToolStatus = "real" | "unavailable" | "test_only";
 export type WorkbenchAgentTool = {
   name: string;
   status: WorkbenchAgentToolStatus;
+  readiness: ToolReadiness;
+  approvalRequired: boolean;
+  writeCapable: boolean;
   reason?: string;
 };
 
@@ -41,40 +45,27 @@ const APP_LABEL_TOOLS = new Set([
   "Ghostfolio",
 ]);
 
-const REAL_TOOL_PREFIXES = [
-  "approvals:",
-  "audit:",
-  "documents:",
-  "github:",
-  "memory:",
-  "reports:",
-  "tasks:",
-  "usage:",
-  "vault:",
-  "gitnexus:",
-];
-
-const UNCONFIGURED_PROVIDER_PREFIXES = [
-  "steel:",
-  "hyperframes:",
-  "open_gen_ai:",
-  "fincept:",
-  "ghostfolio:",
-];
-
 export function getWorkbenchAgents(): WorkbenchAgent[] {
+  return buildWorkbenchAgentsFromContracts(fallbackWorkbenchAgentContracts());
+}
+
+export function buildWorkbenchAgentsFromContracts(contracts: SeatToolContract[]): WorkbenchAgent[] {
   return AGENT_SLOTS.map((slot) => {
     const contract = SLOT_CONTRACTS[slot.role];
     const environment = SLOT_ENVIRONMENTS[slot.role];
+    const tools = contracts
+      .filter((toolContract) => toolContract.seat === slot.role)
+      .filter((toolContract) => toolContract.advertised)
+      .filter((toolContract) => !APP_LABEL_TOOLS.has(toolContract.tool))
+      .map((toolContract) => toolFromContract(toolContract));
+
     return {
       role: slot.role,
       label: slot.label,
       defaultName: slot.defaultName,
       mission: contract.mission,
       skills: environment.skills ?? [],
-      tools: unique(environment.tools)
-        .filter((tool) => !APP_LABEL_TOOLS.has(tool))
-        .map((tool) => classifyWorkbenchAgentTool(tool)),
+      tools: uniqueTools(tools),
       deliverables: contract.deliverables,
       approvalGates: environment.approvalRequiredFor,
       mode: MODE_BY_ROLE[slot.role],
@@ -99,28 +90,82 @@ export function buildWorkbenchAgentObjective(agent: WorkbenchAgent, objective: s
 }
 
 export function summarizeWorkbenchAgentTools(agent: WorkbenchAgent): string[] {
-  return agent.tools.map((tool) => `${tool.name} [${tool.status}]`);
+  return agent.tools.map((tool) => {
+    const flags = [
+      tool.status,
+      tool.readiness,
+      tool.approvalRequired ? "approval-required" : null,
+      tool.writeCapable ? "write-capable" : null,
+    ].filter(Boolean);
+    return `${tool.name} [${flags.join("; ")}]`;
+  });
 }
 
-function classifyWorkbenchAgentTool(name: string): WorkbenchAgentTool {
-  if (name.includes("_mock") || name.endsWith(":mock") || name.includes(":mock_") || name === "tests:mock") {
-    return { name, status: "test_only", reason: "test/dev-only placeholder" };
-  }
-  if (UNCONFIGURED_PROVIDER_PREFIXES.some((prefix) => name.startsWith(prefix))) {
-    return { name, status: "unavailable", reason: "provider integration not configured" };
-  }
-  if (REAL_TOOL_PREFIXES.some((prefix) => name.startsWith(prefix))) {
-    return { name, status: "real" };
-  }
-  return { name, status: "unavailable", reason: "tool adapter not configured" };
+function fallbackWorkbenchAgentContracts(): SeatToolContract[] {
+  return AGENT_SLOTS.flatMap((slot) => {
+    const environment = SLOT_ENVIRONMENTS[slot.role];
+    return unique(environment.tools).map((tool) => ({
+      seat: slot.role,
+      tool,
+      binding: null,
+      resolvedAdapter: null,
+      readiness: "unavailable" as const,
+      advertised: true,
+      approvalRequired: false,
+      writeCapable: false,
+      notes: "Server tool contract not loaded.",
+    }));
+  });
+}
+
+function toolFromContract(contract: SeatToolContract): WorkbenchAgentTool {
+  const status = statusFromReadiness(contract.readiness);
+  return {
+    name: contract.tool,
+    status,
+    readiness: contract.readiness,
+    approvalRequired: contract.approvalRequired,
+    writeCapable: contract.writeCapable,
+    reason: reasonForContract(contract, status),
+  };
+}
+
+function statusFromReadiness(readiness: ToolReadiness): WorkbenchAgentToolStatus {
+  if (readiness === "mocked") return "test_only";
+  if (readiness === "connected" || readiness === "internal") return "real";
+  return "unavailable";
+}
+
+function reasonForContract(contract: SeatToolContract, status: WorkbenchAgentToolStatus): string | undefined {
+  if (contract.notes) return contract.notes;
+  if (status === "test_only") return "test/dev-only placeholder";
+  if (contract.readiness === "needs_credentials") return "needs provider credentials";
+  if (contract.binding === null) return "tool adapter not configured";
+  if (contract.readiness === "unavailable") return "provider integration not configured";
+  return undefined;
 }
 
 function formatToolsForPrompt(tools: WorkbenchAgentTool[]): string {
   if (!tools.length) return "none";
   return tools.map((tool) => {
-    const reason = tool.reason ? `; ${tool.reason}` : "";
-    return `${tool.name} (${tool.status}${reason})`;
+    const flags = [
+      tool.status,
+      `readiness=${tool.readiness}`,
+      tool.approvalRequired ? "approval-required" : null,
+      tool.writeCapable ? "write-capable" : null,
+      tool.reason ?? null,
+    ].filter(Boolean);
+    return `${tool.name} (${flags.join("; ")})`;
   }).join(", ");
+}
+
+function uniqueTools(items: WorkbenchAgentTool[]): WorkbenchAgentTool[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.name)) return false;
+    seen.add(item.name);
+    return true;
+  });
 }
 
 function unique(items: string[]): string[] {

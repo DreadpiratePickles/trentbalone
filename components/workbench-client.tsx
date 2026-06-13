@@ -99,7 +99,7 @@ const MODE_TONE: Record<AgentMode, "pulse" | "ember" | "mist"> = { build: "pulse
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function WorkbenchClient({ companyId }: { companyId: string }) {
+export function WorkbenchClient({ companyId, agents: initialAgents }: { companyId: string; agents?: WorkbenchAgent[] }) {
   const searchParams = useSearchParams();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -120,7 +120,7 @@ export function WorkbenchClient({ companyId }: { companyId: string }) {
   const [uploading, setUploading] = useState(false);
   const [uploadNotice, setUploadNotice] = useState("");
   const [surfaceMode, setSurfaceMode] = useState<WorkbenchSurfaceMode>(() => surfaceModeFromQuery(searchParams.get("mode")));
-  const agents = useMemo(() => getWorkbenchAgents(), []);
+  const agents = useMemo(() => initialAgents?.length ? initialAgents : getWorkbenchAgents(), [initialAgents]);
   const [selectedAgentRole, setSelectedAgentRole] = useState<WorkbenchAgent["role"]>("engineer");
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.role === selectedAgentRole) ?? agents[0],
