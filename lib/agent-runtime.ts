@@ -14,6 +14,7 @@ import { buildSeatSystemPrompt } from "@/lib/seat-manifest";
 import { SEAT_MANIFESTS } from "@/lib/seat-manifest";
 import { buildOperatingStateBundle } from "@/lib/operating-state";
 import { providerReadinessSnapshot } from "@/lib/provider-readiness";
+import { buildSeatRegistryRecall } from "@/lib/seat-memory-registries";
 import {
   applySeatCapabilityGate,
   buildSeatCapabilityGatePrompt,
@@ -192,6 +193,8 @@ async function buildMemoryPlanBlock(
     })
     .slice(0, 6);
 
+  const registryRecall = await buildSeatRegistryRecall(companyId, role).catch(() => "");
+
   return [
     "MEMORY PLAN",
     `Namespace: ${manifestPlan.namespaceTemplate.replace("{companyId}", companyId)}`,
@@ -202,6 +205,7 @@ async function buildMemoryPlanBlock(
           ...relevant.map((doc) => `- [${doc.id}] ${doc.title}: ${doc.content.slice(0, 240)}`),
         ].join("\n")
       : "Recalled memory: none",
+    ...(registryRecall ? [registryRecall] : []),
     `writesOnFinish: ${writeKeys.join(", ") || "none"}`,
   ].join("\n");
 }

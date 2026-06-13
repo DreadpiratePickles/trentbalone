@@ -14,6 +14,7 @@ export async function buildMorningOutcomeSnapshot(input: {
   const pendingApprovals = input.approvals.filter((approval) => approval.status === "pending").length;
   const readiness = providerReadinessSnapshot(env);
   const billing = readiness.find((item) => item.key === "billing");
+  const analytics = readiness.find((item) => item.key === "analytics");
 
   return [
     "OUTCOME SNAPSHOT",
@@ -24,6 +25,7 @@ export async function buildMorningOutcomeSnapshot(input: {
     `- pending approvals: ${pendingApprovals}`,
     `- goals: ${activeGoals.length} active${activeGoals.length ? ` (${activeGoals.map((goal) => goal.objective).slice(0, 3).join("; ")})` : ""}`,
     `- Stripe billing: ${statusLabel(billing?.status)}`,
+    `- PostHog analytics: ${statusLabel(analytics?.status)}`,
     `- Sentry errors: ${env.SENTRY_AUTH_TOKEN || env.SENTRY_API_TOKEN ? "connected" : "not configured"}`,
   ];
 }

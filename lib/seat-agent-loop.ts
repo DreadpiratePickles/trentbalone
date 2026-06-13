@@ -12,6 +12,7 @@ import {
   type SeatToolContract,
   type ToolReadiness,
 } from "@/lib/seat-tool-contracts";
+import { guardSeatOutputClaims } from "@/lib/seat-output-claim-guard";
 import type { AgentEnvironmentConfig, AgentRole, ToolCallRecord } from "@/lib/types";
 
 export type SeatLoopPendingToolCall = {
@@ -289,14 +290,18 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
     const turn = normalizeTurnOutput(seatResult.output);
     if (isFinalOutput(turn)) {
       return {
-        output: {
-          summary: turn.summary,
-          findings: turn.findings ?? [],
-          recommendations: turn.recommendations ?? [],
-          riskNotes: turn.riskNotes ?? [],
-          whatIDidNotDo: turn.whatIDidNotDo ?? [],
-          workRequests: turn.workRequests ?? [],
-        },
+        output: guardSeatOutputClaims({
+          output: {
+            summary: turn.summary,
+            findings: turn.findings ?? [],
+            recommendations: turn.recommendations ?? [],
+            riskNotes: turn.riskNotes ?? [],
+            whatIDidNotDo: turn.whatIDidNotDo ?? [],
+            workRequests: turn.workRequests ?? [],
+          },
+          contracts: seatContracts,
+          toolCalls,
+        }).output,
         toolCalls,
         tokens,
         costCents,
@@ -330,14 +335,18 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
         continue;
       }
       return {
-        output: {
-          summary: typeof turn.summary === "string" ? turn.summary : "Model returned an invalid tool-use turn.",
-          findings: turn.findings ?? [],
-          recommendations: turn.recommendations ?? [],
-          riskNotes: turn.riskNotes ?? [],
-          whatIDidNotDo: turn.whatIDidNotDo ?? [],
-          workRequests: turn.workRequests ?? [],
-        },
+        output: guardSeatOutputClaims({
+          output: {
+            summary: typeof turn.summary === "string" ? turn.summary : "Model returned an invalid tool-use turn.",
+            findings: turn.findings ?? [],
+            recommendations: turn.recommendations ?? [],
+            riskNotes: turn.riskNotes ?? [],
+            whatIDidNotDo: turn.whatIDidNotDo ?? [],
+            workRequests: turn.workRequests ?? [],
+          },
+          contracts: seatContracts,
+          toolCalls,
+        }).output,
         toolCalls,
         tokens,
         costCents,
