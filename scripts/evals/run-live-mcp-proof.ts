@@ -3,6 +3,7 @@ import { loadAllowedEvalEnvFile } from "@/lib/eval-env-file";
 import { createMcpServer, updateMcpServer } from "@/lib/mcp-store";
 import { createMcpToolAdapter, discoverMcpTools } from "@/lib/mcp-tool-adapter";
 import { store } from "@/lib/store";
+import { normalizeMcpTransport, type McpTransport } from "@/lib/mcp-transport";
 
 type Args = {
   envFile?: string;
@@ -43,11 +44,16 @@ async function main() {
 async function runLiveMcpProof(args: Args, loadedEnvKeys: string[]): Promise<ProofOutput> {
   const failures: string[] = [];
   const serverUrl = args.serverUrl ?? process.env.MCP_TEST_SERVER_URL ?? "https://mcp.stripe.com";
-  const token = process.env.MCP_TEST_SERVER_TOKEN ?? process.env.STRIPE_SECRET_KEY;
+  const transport = inferTransport(serverUrl);
+  const token = providerToken(serverUrl);
   if (!process.env.DATABASE_URL) failures.push("DATABASE_URL is required to seed the MCP server record.");
-  if (!token) failures.push("MCP_TEST_SERVER_TOKEN or STRIPE_SECRET_KEY is required.");
+  if (!token) failures.push("MCP_TEST_SERVER_TOKEN, STRIPE_SECRET_KEY, or SENTRY_ACCESS_TOKEN is required.");
   if (failures.length) {
     return { passed: false, serverName: args.serverName, serverUrl, loadedEnvKeys, failures };
+  }
+  if (!token) throw new Error("MCP proof token validation failed unexpectedly.");
+  if (serverUrl === "stdio://sentry") {
+    return runSentryStdioProof({ args, loadedEnvKeys, serverUrl, transport, token });
   }
 
   const company = await store.createCompany({
@@ -58,7 +64,7 @@ async function runLiveMcpProof(args: Args, loadedEnvKeys: string[]): Promise<Pro
     companyId: company.id,
     name: args.serverName,
     url: serverUrl,
-    transport: "http",
+    transport,
     token,
   });
 
@@ -109,6 +115,64 @@ async function runLiveMcpProof(args: Args, loadedEnvKeys: string[]): Promise<Pro
   };
 }
 
+async function runSentryStdioProof(input: {
+  args: Args;
+  loadedEnvKeys: string[];
+  serverUrl: string;
+  transport: McpTransport;
+  token: string;
+}): Promise<ProofOutput> {
+  const failures: string[] = [];
+  const company = await store.createCompany({
+    name: `Live Sentry MCP Proof ${new Date().toISOString()}`,
+    brief: { vision: "Verify Sentry MCP can be discovered and called through Trent's stdio preset." },
+  });
+  let server = await createMcpServer({
+    companyId: company.id,
+    name: input.args.serverName,
+    url: input.serverUrl,
+    transport: input.transport,
+    token: input.token,
+  });
+
+  const tools = await discoverMcpTools(server);
+  const discoveredTools = tools.map((tool) => tool.name);
+  if (!discoveredTools.includes("whoami")) failures.push("Sentry MCP tool missing: whoami");
+
+  server = await updateMcpServer(company.id, server.id, {
+    discoveredTools: tools,
+    status: "connected",
+    lastError: null,
+    toolAllowlist: ["whoami"],
+    reversibleTools: [],
+  }) ?? server;
+  const approvalAdapter = createMcpToolAdapter(server);
+  const defaultApprovalRequired = approvalAdapter.requiresApproval("whoami");
+  if (!defaultApprovalRequired) failures.push("Sentry MCP whoami did not default to approval-required.");
+
+  server = await updateMcpServer(company.id, server.id, {
+    reversibleTools: ["whoami"],
+  }) ?? server;
+  const adapter = createMcpToolAdapter(server);
+  const read = await adapter.execute("whoami", {});
+  if (read.status !== "completed") failures.push(`Sentry MCP whoami failed: ${read.summary}`);
+
+  return {
+    passed: failures.length === 0,
+    serverName: input.args.serverName,
+    serverUrl: input.serverUrl,
+    companyId: company.id,
+    serverId: server.id,
+    loadedEnvKeys: input.loadedEnvKeys,
+    discoveredToolCount: tools.length,
+    discoveredTools: discoveredTools.slice(0, 20),
+    defaultApprovalRequired,
+    readStatus: read.status,
+    readPreview: read.status === "completed" ? "Sentry whoami completed; response intentionally omitted." : read.summary.slice(0, 500),
+    failures,
+  };
+}
+
 function parseArgs(argv: string[]): Args {
   const args: Args = { serverName: "Stripe" };
   for (let i = 0; i < argv.length; i++) {
@@ -154,7 +218,25 @@ function loadEnvFile(path: string): string[] {
     "MCP_TEST_SERVER_URL",
     "MCP_TEST_SERVER_TOKEN",
     "STRIPE_SECRET_KEY",
+    "SENTRY_AUTH_TOKEN",
+    "SENTRY_ACCESS_TOKEN",
+    "SENTRY_MCP_TOKEN",
   ].includes(key));
+}
+
+function inferTransport(serverUrl: string): McpTransport {
+  if (serverUrl.startsWith("stdio://")) return "stdio";
+  return normalizeMcpTransport(process.env.MCP_TEST_SERVER_TRANSPORT) ?? "http";
+}
+
+function providerToken(serverUrl: string): string | undefined {
+  if (serverUrl === "stdio://sentry") {
+    return process.env.SENTRY_AUTH_TOKEN
+      ?? process.env.SENTRY_ACCESS_TOKEN
+      ?? process.env.SENTRY_MCP_TOKEN
+      ?? process.env.MCP_TEST_SERVER_TOKEN;
+  }
+  return process.env.MCP_TEST_SERVER_TOKEN ?? process.env.STRIPE_SECRET_KEY;
 }
 
 function dirname(path: string) {
@@ -167,7 +249,7 @@ function printHelp() {
     "Usage: tsx scripts/evals/run-live-mcp-proof.ts [--env-file PATH] [--out PATH]",
     "",
     "Seeds a real MCP server record, discovers tools, verifies default approval,",
-    "and executes read-only Stripe MCP calls through Trent's MCP ToolAdapter.",
+    "and executes read-only Stripe or Sentry MCP calls through Trent's MCP ToolAdapter.",
   ].join("\n"));
 }
 

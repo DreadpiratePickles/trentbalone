@@ -10,6 +10,7 @@
 import { db } from "@/lib/db";
 import { makeId } from "@/lib/utils";
 import { decryptJson, encryptJson } from "@/lib/secrets";
+import { normalizeMcpTransport, type McpTransport } from "@/lib/mcp-transport";
 
 export type McpDiscoveredTool = {
   name: string;
@@ -22,7 +23,7 @@ export type McpServerRecord = {
   companyId: string;
   name: string;
   url: string;
-  transport: "http" | "sse";
+  transport: McpTransport;
   hasCredential: boolean;
   toolAllowlist: string[];
   reversibleTools: string[];
@@ -76,7 +77,7 @@ function fromRow(row: Row): McpServerRecord {
     companyId: row.companyId,
     name: row.name,
     url: row.url,
-    transport: row.transport === "sse" ? "sse" : "http",
+    transport: normalizeMcpTransport(row.transport) ?? "http",
     hasCredential: Boolean(row.credentialRef),
     toolAllowlist: toStringArray(row.toolAllowlist),
     reversibleTools: toStringArray(row.reversibleTools),
@@ -122,7 +123,7 @@ export async function createMcpServer(input: {
   companyId: string;
   name: string;
   url: string;
-  transport?: "http" | "sse";
+  transport?: McpTransport;
   token?: string;
   toolAllowlist?: string[];
   reversibleTools?: string[];
@@ -151,7 +152,7 @@ export async function updateMcpServer(
   patch: Partial<{
     name: string;
     url: string;
-    transport: "http" | "sse";
+    transport: McpTransport;
     token: string;
     toolAllowlist: string[];
     reversibleTools: string[];

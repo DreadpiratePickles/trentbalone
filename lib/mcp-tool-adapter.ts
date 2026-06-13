@@ -14,12 +14,16 @@
  * access, so the approval/audit spine is what makes this safe to offer.
  */
 import { createHash } from "crypto";
+import { existsSync } from "fs";
+import { join } from "path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { ToolAdapter } from "@/lib/tools";
 import type { ToolCallRecord } from "@/lib/types";
 import { appendAuditLog } from "@/lib/audit-log";
+import { isAllowedStdioMcpUrl } from "@/lib/mcp-transport";
 import {
   getMcpServerToken,
   listEnabledMcpServers,
@@ -31,6 +35,7 @@ import {
 const MCP_CLIENT_INFO = { name: "trent-ai-cofounder", version: "1.0.0" };
 const MCP_CALL_TIMEOUT_MS = 30_000;
 const MCP_INTEGRITY_CACHE_TTL_MS = 60_000;
+const SENTRY_STDIO_SKILLS = "inspect,docs";
 
 export function mcpAdapterName(serverName: string): string {
   const slug = serverName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -59,8 +64,22 @@ export function parseMcpAction(action: string): { tool: string; args: Record<str
 
 async function connectMcpClient(server: McpServerRecord): Promise<Client> {
   const token = server.hasCredential ? await getMcpServerToken(server.companyId, server.id) : undefined;
-  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   const client = new Client(MCP_CLIENT_INFO);
+  if (server.transport === "stdio") {
+    if (!isAllowedStdioMcpUrl(server.url)) {
+      throw new Error("unsupported stdio MCP preset");
+    }
+    if (!token) {
+      throw new Error("Sentry stdio MCP requires an encrypted token");
+    }
+    await client.connect(new StdioClientTransport({
+      ...sentryMcpStdioCommand(),
+      env: { ...stringProcessEnv(), SENTRY_ACCESS_TOKEN: token },
+    }));
+    return client;
+  }
+
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   const url = new URL(server.url);
   if (server.transport === "sse") {
     await client.connect(new SSEClientTransport(url, { requestInit: { headers } }));
@@ -68,6 +87,20 @@ async function connectMcpClient(server: McpServerRecord): Promise<Client> {
   }
   await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers } }));
   return client;
+}
+
+function stringProcessEnv(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+}
+
+function sentryMcpStdioCommand(): { command: string; args: string[] } {
+  const localEntrypoint = join(process.cwd(), "node_modules", "@sentry", "mcp-server", "dist", "index.js");
+  if (existsSync(localEntrypoint)) {
+    return { command: process.execPath, args: [localEntrypoint, `--skills=${SENTRY_STDIO_SKILLS}`] };
+  }
+  return { command: "sentry-mcp", args: [`--skills=${SENTRY_STDIO_SKILLS}`] };
 }
 
 export function mcpToolDescriptionHash(name: string, description: string): string {

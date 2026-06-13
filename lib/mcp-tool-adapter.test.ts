@@ -6,13 +6,19 @@ import {
   mcpToolDescriptionHash,
   verifyMcpToolIntegrity,
 } from "@/lib/mcp-tool-adapter";
-import { updateMcpServer, type McpServerRecord } from "@/lib/mcp-store";
+import { getMcpServerToken, updateMcpServer, type McpServerRecord } from "@/lib/mcp-store";
 import { appendAuditLog } from "@/lib/audit-log";
 
 const remote = vi.hoisted(() => ({
   tools: [{ name: "search", description: "Search docs" }] as Array<{ name: string; description: string }>,
   listToolsError: undefined as Error | undefined,
   callTool: vi.fn(async () => ({ content: [{ type: "text", text: "search ok" }] })),
+}));
+
+const transports = vi.hoisted(() => ({
+  http: vi.fn((url: URL, init?: unknown) => ({ kind: "http", url, init })),
+  sse: vi.fn((url: URL, init?: unknown) => ({ kind: "sse", url, init })),
+  stdio: vi.fn((config: unknown) => ({ kind: "stdio", config })),
 }));
 
 vi.mock("@/lib/mcp-store", async (importOriginal) => {
@@ -43,6 +49,18 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   })),
 }));
 
+vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+  StreamableHTTPClientTransport: transports.http,
+}));
+
+vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
+  SSEClientTransport: transports.sse,
+}));
+
+vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+  StdioClientTransport: transports.stdio,
+}));
+
 const APPROVED_HASH = mcpToolDescriptionHash("search", "Search docs");
 
 function server(overrides: Partial<McpServerRecord> = {}): McpServerRecord {
@@ -69,6 +87,13 @@ beforeEach(() => {
   remote.tools = [{ name: "search", description: "Search docs" }];
   remote.listToolsError = undefined;
   remote.callTool.mockClear();
+  transports.http.mockClear();
+  transports.sse.mockClear();
+  transports.stdio.mockClear();
+  vi.mocked(getMcpServerToken).mockReset();
+  vi.mocked(getMcpServerToken).mockImplementation(async () => {
+    throw new Error("token store should not be queried for unauthenticated MCP servers");
+  });
   vi.mocked(updateMcpServer).mockClear();
   vi.mocked(appendAuditLog).mockClear();
 });
@@ -98,6 +123,43 @@ describe("createMcpToolAdapter", () => {
       status: "completed",
       summary: expect.stringContaining("search ok"),
     });
+  });
+
+  it("connects allowlisted Sentry stdio servers without putting the token in argv", async () => {
+    vi.mocked(getMcpServerToken).mockResolvedValue("sentry-token");
+
+    await expect(discoverMcpTools(server({
+      name: "Sentry",
+      url: "stdio://sentry",
+      transport: "stdio" as McpServerRecord["transport"],
+      hasCredential: true,
+    }))).resolves.toEqual([
+      { name: "search", description: "Search docs", descriptionHash: APPROVED_HASH },
+    ]);
+
+    expect(transports.stdio).toHaveBeenCalledOnce();
+    const config = transports.stdio.mock.calls[0]?.[0] as { command?: string; args?: string[]; env?: Record<string, string> };
+    expect(config.command).toBeTruthy();
+    expect(config.args).toContain("--skills=inspect,docs");
+    expect(config.env?.SENTRY_ACCESS_TOKEN).toBe("sentry-token");
+    expect(JSON.stringify({ command: config.command, args: config.args ?? [] })).not.toContain("sentry-token");
+    expect(transports.http).not.toHaveBeenCalled();
+    expect(transports.sse).not.toHaveBeenCalled();
+  });
+
+  it("rejects arbitrary stdio MCP targets instead of spawning user-controlled commands", async () => {
+    vi.mocked(getMcpServerToken).mockResolvedValue("secret");
+
+    await expect(discoverMcpTools(server({
+      name: "Evil",
+      url: "stdio://evil",
+      transport: "stdio" as McpServerRecord["transport"],
+      hasCredential: true,
+    }))).rejects.toThrow(/unsupported stdio MCP preset/i);
+
+    expect(transports.stdio).not.toHaveBeenCalled();
+    expect(transports.http).not.toHaveBeenCalled();
+    expect(transports.sse).not.toHaveBeenCalled();
   });
 });
 

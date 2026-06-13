@@ -2,10 +2,10 @@
 
 /**
  * MCP Servers panel (§3.3) — the "Add MCP server" card in Integrations.
- * A client connects a remote MCP endpoint (URL + auth token, stored encrypted);
- * Trent discovers its tools and exposes them to the seats through the adapter
- * registry. EVERY MCP tool defaults to requires-approval until the client
- * explicitly marks it reversible.
+ * A client connects a remote MCP endpoint or approved local MCP preset (URL +
+ * auth token, stored encrypted); Trent discovers its tools and exposes them to
+ * the seats through the adapter registry. EVERY MCP tool defaults to
+ * requires-approval until the client explicitly marks it reversible.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -14,7 +14,7 @@ type McpServer = {
   id: string;
   name: string;
   url: string;
-  transport: "http" | "sse";
+  transport: McpTransport;
   hasCredential: boolean;
   toolAllowlist: string[];
   reversibleTools: string[];
@@ -24,7 +24,9 @@ type McpServer = {
   enabled: boolean;
 };
 
-const emptyDraft = { name: "", url: "", transport: "http" as "http" | "sse", token: "" };
+type McpTransport = "http" | "sse" | "stdio";
+
+const emptyDraft = { name: "", url: "", transport: "http" as McpTransport, token: "" };
 
 export function McpServersPanel({ companyId }: { companyId: string }) {
   const [servers, setServers] = useState<McpServer[]>([]);
@@ -108,9 +110,9 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
         <div>
           <div style={{ fontWeight: 600, fontSize: 16, color: "var(--bone)" }}>MCP servers</div>
           <div style={{ fontSize: 12, color: "var(--haze)", marginTop: 4, lineHeight: 1.5, maxWidth: 560 }}>
-            Connect any remote Model Context Protocol server (your CRM, helpdesk, data warehouse…)
-            and Trent&apos;s agents can act in it. Every MCP tool requires founder approval until you
-            explicitly mark it reversible.
+            Connect a remote Model Context Protocol server or approved local preset (your CRM,
+            helpdesk, data warehouse…) and Trent&apos;s agents can act in it. Every MCP tool requires
+            founder approval until you explicitly mark it reversible.
           </div>
         </div>
         <button
@@ -137,16 +139,24 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
               className="input"
               data-testid="mcp-transport-select"
               value={draft.transport}
-              onChange={(e) => setDraft({ ...draft, transport: e.target.value === "sse" ? "sse" : "http" })}
+              onChange={(e) => {
+                const transport = (e.target.value === "sse" || e.target.value === "stdio" ? e.target.value : "http") as McpTransport;
+                setDraft({
+                  ...draft,
+                  transport,
+                  url: transport === "stdio" && !draft.url.trim() ? "stdio://sentry" : draft.url,
+                });
+              }}
             >
               <option value="http">Streamable HTTP</option>
               <option value="sse">SSE (legacy)</option>
+              <option value="stdio">Sentry local MCP (stdio preset)</option>
             </select>
           </div>
           <input
             className="input"
             data-testid="mcp-url-input"
-            placeholder="Server URL — https://mcp.example.com/mcp"
+            placeholder={draft.transport === "stdio" ? "Preset URL — stdio://sentry" : "Server URL — https://mcp.example.com/mcp"}
             value={draft.url}
             onChange={(e) => setDraft({ ...draft, url: e.target.value })}
           />

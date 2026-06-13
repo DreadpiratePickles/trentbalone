@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser, unauthorized, forbidden, requireRoleForRequest } from "@/lib/session";
 import { deleteMcpServer, updateMcpServer, type McpDiscoveredTool } from "@/lib/mcp-store";
+import { normalizeMcpTransport, validateMcpServerTarget } from "@/lib/mcp-transport";
 
 /** PATCH /api/companies/:id/mcp-servers/:serverId — edit allowlist/policy/credentials. */
 export async function PATCH(
@@ -27,8 +28,20 @@ export async function PATCH(
 
   const patch: Parameters<typeof updateMcpServer>[2] = {};
   if (typeof body.name === "string" && body.name.trim()) patch.name = body.name.trim();
-  if (typeof body.url === "string" && body.url.trim()) patch.url = body.url.trim();
-  if (body.transport === "sse" || body.transport === "http") patch.transport = body.transport;
+  const requestedTransport = typeof body.transport === "string" ? normalizeMcpTransport(body.transport) : undefined;
+  if (body.transport !== undefined && !requestedTransport) {
+    return NextResponse.json({ error: "unsupported MCP transport" }, { status: 400 });
+  }
+  if (typeof body.url === "string" && body.url.trim()) {
+    const target = validateMcpServerTarget({ url: body.url.trim(), transport: requestedTransport });
+    if (!target.ok) return NextResponse.json({ error: target.error }, { status: 400 });
+    patch.url = target.url;
+    patch.transport = target.transport;
+  } else if (requestedTransport === "stdio") {
+    return NextResponse.json({ error: "unsupported stdio MCP preset" }, { status: 400 });
+  } else if (requestedTransport) {
+    patch.transport = requestedTransport;
+  }
   if (typeof body.token === "string") patch.token = body.token.trim();
   const allow = toStringArray(body.toolAllowlist);
   if (allow) patch.toolAllowlist = allow;
