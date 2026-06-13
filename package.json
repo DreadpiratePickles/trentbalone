@@ -20,6 +20,7 @@
     "workbench:eval:suite": "tsx scripts/evals/run-live-cloud-workbench.ts --suite --integration --threshold 0.8",
     "workbench:eval:smoke": "tsx scripts/evals/run-live-cloud-workbench.ts --suite --smoke --threshold 0.8",
     "providers:proof": "tsx scripts/evals/run-live-provider-proofs.ts",
+    "github:import:proof": "tsx scripts/evals/run-live-github-import-proof.ts",
     "mcp:proof": "tsx scripts/evals/run-live-mcp-proof.ts",
     "orc:eval": "tsx scripts/evals/run-orchestration-eval.ts --integration --threshold 0.9",
     "orc:eval:smoke": "tsx scripts/evals/run-orchestration-eval.ts --smoke --threshold 0.9",

@@ -70,6 +70,23 @@ describe("e2b workbench provider safety", () => {
     }));
   });
 
+  it("does not clone repoUrl during sandbox start because imports need company-scoped git credentials", async () => {
+    vi.clearAllMocks();
+    mockResolveWorkbenchProviderCredentialEnv.mockResolvedValue({
+      source: "company",
+      env: { E2B_API_KEY: "tenant_e2b_key" },
+    });
+    mockRun.mockResolvedValue({ stdout: "ok", stderr: "", exitCode: 0 });
+    const current = { ...session("ws_e2b_repo_start"), repoUrl: "https://github.com/private/repo.git" };
+
+    await e2bProvider.start(current);
+
+    expect(mockRun).not.toHaveBeenCalledWith(
+      expect.stringContaining("git clone"),
+      expect.anything(),
+    );
+  });
+
   it("restores a persisted E2B sandbox id instead of creating a new sandbox", async () => {
     vi.clearAllMocks();
     mockResolveWorkbenchProviderCredentialEnv.mockResolvedValue({
