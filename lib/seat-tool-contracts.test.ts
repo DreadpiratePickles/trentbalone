@@ -141,6 +141,25 @@ describe("seat-tool contracts", () => {
     expect(contracts.find((contract) => contract.tool === "Stub Tool")?.readiness).toBe("mocked");
   });
 
+  it("does not bind MCP-looking strings unless the MCP registry backs them", () => {
+    const env = slotEnvironments();
+    env.ceo = { ...env.ceo, tools: ["mcp_ghost_server"] };
+
+    const contracts = buildSeatToolContracts({
+      slotEnvironments: env,
+      adapters: [],
+      internalActions: new Set(),
+      mcpToolNames: new Set(),
+      healthByAdapter: new Map(),
+    });
+
+    expect(contracts.find((contract) => contract.tool === "mcp_ghost_server")).toMatchObject({
+      binding: null,
+      readiness: "unavailable",
+      advertised: false,
+    });
+  });
+
   it("internal actions all have an executor", async () => {
     const contracts = buildContracts();
     const internal = contracts.filter((contract) => contract.binding === "internal_action");

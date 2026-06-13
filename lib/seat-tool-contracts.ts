@@ -79,17 +79,22 @@ export function buildAdvertisedToolSet(contracts: SeatToolContract[], seat: Agen
 }
 
 export async function resolveSeatToolContracts(companyId?: string): Promise<SeatToolContract[]> {
+  const mcpAdapters = companyId
+    ? await import("@/lib/mcp-tool-adapter")
+        .then((module) => module.getMcpAdaptersForCompany(companyId))
+        .catch(() => [])
+    : [];
+  const adapters = [...defaultAdapters, ...mcpAdapters];
   const healthByAdapter = new Map<ToolAdapter["name"], ToolReadiness>();
-  await Promise.all(defaultAdapters.map(async (adapter) => {
+  await Promise.all(adapters.map(async (adapter) => {
     healthByAdapter.set(adapter.name, readinessFromAdapterHealth(adapter, await adapter.healthCheck(companyId)));
   }));
+  const mcpToolNames = mcpToolNamesForAdapters(mcpAdapters);
   return buildSeatToolContracts({
-    slotEnvironments: Object.fromEntries(
-      AGENT_SLOTS.map((slot) => [slot.role, buildSlotEnvironment(companyId ?? "company", slot.role)]),
-    ) as Record<AgentRole, AgentEnvironmentConfig>,
-    adapters: defaultAdapters,
+    slotEnvironments: slotEnvironmentsWithMcpTools(companyId ?? "company", [...mcpAdapters.map((adapter) => adapter.name)]),
+    adapters,
     internalActions: INTERNAL_ACTIONS,
-    mcpToolNames: new Set(),
+    mcpToolNames,
     healthByAdapter,
   });
 }
@@ -143,8 +148,8 @@ function bindingForTool(tool: string, deps: NormalizedDeps): {
   const scoped = deps.adapterByScope.get(normalized);
   if (scoped) return { kind: "adapter_scope", adapter: scoped };
 
-  if (deps.mcpToolNames.has(normalized) || normalized.startsWith("mcp:") || normalized.startsWith("mcp_")) {
-    return { kind: "mcp_dynamic", notes: "Resolved from connected MCP tool registry at runtime." };
+  if (deps.mcpToolNames.has(normalized)) {
+    return { kind: "mcp_dynamic", notes: "Resolved from the connected MCP tool registry at runtime." };
   }
 
   if (normalized.endsWith("_unavailable") || normalized.includes("_unavailable:") || normalized.includes(":read_unavailable")) {
@@ -161,7 +166,7 @@ function readinessForBinding(
 ): ToolReadiness {
   if (binding === "internal_action") return "internal";
   if (binding === "unavailable_marker" || binding === null) return "unavailable";
-  if (binding === "mcp_dynamic") return "connected";
+  if (binding === "mcp_dynamic") return healthByAdapter.get("mcp_dynamic") ?? "needs_credentials";
   if (!adapter) return "unavailable";
   if (adapter.availability === "unavailable") return "unavailable";
   if (adapter.availability === "test_only") return "mocked";
@@ -231,4 +236,27 @@ function lowerSet(values: ReadonlySet<string>) {
 
 function searchableToolText(tool: string) {
   return key(tool).replace(/[:._-]+/g, " ");
+}
+
+function slotEnvironmentsWithMcpTools(companyId: string, mcpAdapterNames: string[]): Record<AgentRole, AgentEnvironmentConfig> {
+  return Object.fromEntries(
+    AGENT_SLOTS.map((slot) => {
+      const environment = buildSlotEnvironment(companyId, slot.role);
+      return [
+        slot.role,
+        mcpAdapterNames.length
+          ? { ...environment, tools: [...environment.tools, ...mcpAdapterNames] }
+          : environment,
+      ];
+    }),
+  ) as Record<AgentRole, AgentEnvironmentConfig>;
+}
+
+function mcpToolNamesForAdapters(adapters: ToolAdapter[]): Set<string> {
+  return new Set(
+    adapters
+      .filter((adapter) => adapter.name.startsWith("mcp_"))
+      .flatMap((adapter) => [adapter.name, ...adapter.scopes])
+      .map(key),
+  );
 }
