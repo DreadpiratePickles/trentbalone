@@ -1,15 +1,17 @@
 import type { ToolAdapter } from "@/lib/tools";
-import type { ToolCallRecord, WorkbenchSession } from "@/lib/types";
+import type { ToolCallRecord, WorkbenchCheckpoint, WorkbenchSession } from "@/lib/types";
 import { resolveWorkbenchProviderCredentialEnv } from "@/lib/credential-boundary";
 import { createWorkbenchSession, type WorkbenchCreateInput } from "@/lib/workbench";
 import { getWorkbenchProvider } from "@/lib/workbench-provider";
 import type { WorkbenchProviderAdapter } from "@/lib/workbench-provider";
+import { store } from "@/lib/store";
 
 type EnvLike = Pick<NodeJS.ProcessEnv, string>;
 
 export type WorkbenchSandboxToolAdapterOptions = {
   env?: EnvLike;
   createSessionFn?: (input: WorkbenchCreateInput) => Promise<WorkbenchSession>;
+  upsertCheckpointFn?: (input: Omit<WorkbenchCheckpoint, "id" | "updatedAt">) => Promise<WorkbenchCheckpoint | undefined>;
   getProviderFn?: (name?: string) => WorkbenchProviderAdapter;
   resolveCredentialEnvFn?: typeof resolveWorkbenchProviderCredentialEnv;
 };
@@ -36,6 +38,10 @@ const SAFE_DIRECT_COMMANDS = [
 export function createWorkbenchSandboxToolAdapter(options: WorkbenchSandboxToolAdapterOptions = {}): ToolAdapter {
   const env = options.env ?? process.env;
   const createSessionFn = options.createSessionFn ?? createWorkbenchSession;
+  const upsertCheckpointFn = options.upsertCheckpointFn
+    ?? (typeof store.upsertWorkbenchCheckpoint === "function"
+      ? store.upsertWorkbenchCheckpoint.bind(store)
+      : async () => undefined);
   const getProviderFn = options.getProviderFn ?? getWorkbenchProvider;
   const resolveCredentialEnvFn = options.resolveCredentialEnvFn ?? resolveWorkbenchProviderCredentialEnv;
   const realProvider = hasPotentialRealSandboxProvider(env);
@@ -80,6 +86,7 @@ export function createWorkbenchSandboxToolAdapter(options: WorkbenchSandboxToolA
           sessionAction,
           payload,
           createSessionFn,
+          upsertCheckpointFn,
           getProviderFn,
         });
       }
@@ -105,8 +112,8 @@ export function createWorkbenchSandboxToolAdapter(options: WorkbenchSandboxToolA
           enqueue: false,
         });
         const provider = getProviderFn(session.provider);
-        await provider.start(session);
-        const result = await provider.exec(session, command, { timeoutMs: timeoutForCommand(command) });
+        const activeSession = await startAndPersistWorkbenchSession(session, provider, upsertCheckpointFn);
+        const result = await provider.exec(activeSession, command, { timeoutMs: timeoutForCommand(command) });
         const status = result.exitCode === 0 ? "completed" : "failed";
         const output = [result.stdout, result.stderr].filter(Boolean).join("\n").slice(0, 1200);
         return {
@@ -138,6 +145,7 @@ async function executeWorkbenchSessionAction(input: {
   sessionAction: WorkbenchSessionToolAction;
   payload: Record<string, unknown>;
   createSessionFn: (input: WorkbenchCreateInput) => Promise<WorkbenchSession>;
+  upsertCheckpointFn: (input: Omit<WorkbenchCheckpoint, "id" | "updatedAt">) => Promise<WorkbenchCheckpoint | undefined>;
   getProviderFn: (name?: string) => WorkbenchProviderAdapter;
 }): Promise<ToolCallRecord> {
   const companyId = typeof input.payload.companyId === "string" && input.payload.companyId.trim()
@@ -165,14 +173,14 @@ async function executeWorkbenchSessionAction(input: {
       enqueue: false,
     });
     const provider = input.getProviderFn(session.provider);
-    await provider.start(session);
-    const before = provider.snapshot ? await provider.snapshot(session).catch(() => undefined) : undefined;
+    const activeSession = await startAndPersistWorkbenchSession(session, provider, input.upsertCheckpointFn);
+    const before = provider.snapshot ? await provider.snapshot(activeSession).catch(() => undefined) : undefined;
     for (const file of input.sessionAction.writeFiles) {
-      await provider.writeFile(session, file.path, file.content);
+      await provider.writeFile(activeSession, file.path, file.content);
     }
-    const result = await provider.exec(session, command, { timeoutMs: timeoutForCommand(command) });
+    const result = await provider.exec(activeSession, command, { timeoutMs: timeoutForCommand(command) });
     const diff = provider.diffSinceCheckpoint
-      ? await provider.diffSinceCheckpoint(session, before?.fileTreeHash ?? before?.id).catch(() => undefined)
+      ? await provider.diffSinceCheckpoint(activeSession, before?.fileTreeHash ?? before?.id).catch(() => undefined)
       : undefined;
     const status = result.exitCode === 0 ? "completed" : "failed";
     const changedPaths = diff?.changedPaths.length
@@ -195,6 +203,29 @@ async function executeWorkbenchSessionAction(input: {
   } catch (error) {
     return failed(input.action, `Workbench Sandbox session execution failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+async function startAndPersistWorkbenchSession(
+  session: WorkbenchSession,
+  provider: WorkbenchProviderAdapter,
+  upsertCheckpointFn: (input: Omit<WorkbenchCheckpoint, "id" | "updatedAt">) => Promise<WorkbenchCheckpoint | undefined>,
+): Promise<WorkbenchSession> {
+  const handle = await provider.start(session);
+  if (!handle) return session;
+  const checkpoint = await upsertCheckpointFn({
+    companyId: session.companyId,
+    sessionId: session.id,
+    provider: handle.provider ?? session.provider,
+    providerSessionId: handle.providerSessionId,
+    workdir: handle.workdir,
+    previewUrl: handle.providerUrl,
+    sandboxExpiresAt: handle.expiresAt,
+  }).catch(() => undefined);
+  return {
+    ...session,
+    workdir: checkpoint?.workdir ?? handle.workdir ?? session.workdir,
+    previewUrl: checkpoint?.previewUrl ?? handle.providerUrl ?? session.previewUrl,
+  };
 }
 
 function parseWorkbenchSessionToolAction(action: string): WorkbenchSessionToolAction | undefined {

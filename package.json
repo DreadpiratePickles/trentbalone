@@ -22,6 +22,7 @@
     "providers:proof": "tsx scripts/evals/run-live-provider-proofs.ts",
     "github:import:proof": "tsx scripts/evals/run-live-github-import-proof.ts",
     "mcp:proof": "tsx scripts/evals/run-live-mcp-proof.ts",
+    "orc:workbench-proof": "tsx scripts/evals/run-orchestration-workbench-proof.ts",
     "orc:eval": "tsx scripts/evals/run-orchestration-eval.ts --integration --threshold 0.9",
     "orc:eval:smoke": "tsx scripts/evals/run-orchestration-eval.ts --smoke --threshold 0.9",
     "orc:bakeoff": "tsx scripts/evals/run-orchestration-bakeoff.ts",

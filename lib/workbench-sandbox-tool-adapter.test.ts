@@ -115,6 +115,48 @@ describe("Workbench sandbox tool adapter", () => {
     expect(result.summary).toContain("diff --git");
   });
 
+  it("persists the provider handle checkpoint before executing a workbench session action", async () => {
+    const session = fakeSession();
+    const createSessionFn = vi.fn(async () => session);
+    const upsertCheckpointFn = vi.fn(async (input) => ({
+      id: "wbcheckpoint_1",
+      updatedAt: "2026-06-13T00:00:00.000Z",
+      ...input,
+    }));
+    const provider = fakeProvider({ stdout: "1 passed", exitCode: 0 });
+    provider.start = vi.fn(async () => ({
+      provider: "daytona" as const,
+      providerSessionId: "daytona_live_1",
+      workdir: "/home/daytona/trent-workbench",
+      previewMode: "provider_url" as const,
+    }));
+    const adapter = createWorkbenchSandboxToolAdapter({
+      env: { DAYTONA_API_KEY: "daytona_secret" },
+      createSessionFn,
+      upsertCheckpointFn,
+      getProviderFn: vi.fn(() => provider),
+    });
+
+    const result = await adapter.execute(JSON.stringify({
+      kind: "workbench:session",
+      writeFiles: [{ path: "test.js", content: "console.log('ok')\n" }],
+      command: "npm test",
+    }), { companyId: "co_1" });
+
+    expect(upsertCheckpointFn).toHaveBeenCalledWith(expect.objectContaining({
+      companyId: session.companyId,
+      sessionId: session.id,
+      providerSessionId: "daytona_live_1",
+      workdir: "/home/daytona/trent-workbench",
+    }));
+    expect(provider.writeFile).toHaveBeenCalledWith(
+      expect.objectContaining({ workdir: "/home/daytona/trent-workbench" }),
+      "test.js",
+      "console.log('ok')\n",
+    );
+    expect(result.status).toBe("completed");
+  });
+
   it("requires approval for side-effecting shell actions", async () => {
     const provider = fakeProvider({ stdout: "", exitCode: 0 });
     const adapter = createWorkbenchSandboxToolAdapter({
