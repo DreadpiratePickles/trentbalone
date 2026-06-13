@@ -79,7 +79,7 @@ describe("runDueScheduledCycles durable engine", () => {
     expect(results).toEqual([expect.objectContaining({ id: "orc_scheduled", cycleId: "cycle_scheduled" })]);
   });
 
-  it("runs the nightly durable cycle and sends the configured founder morning briefing", async () => {
+  it("launches the nightly durable cycle without emailing before the run completes", async () => {
     process.env.RESEND_API_KEY = "re_test_secret";
     process.env.RESEND_FROM_EMAIL = "Trent <admin@let-trent.uk>";
     process.env.TRENT_FOUNDER_EMAIL = "admin@let-trent.uk";
@@ -116,15 +116,10 @@ describe("runDueScheduledCycles durable engine", () => {
       fullTeam: true,
       cycleKind: "scheduled",
     }));
-    expect(fetchImpl).toHaveBeenCalledWith("https://api.resend.com/emails", expect.objectContaining({
-      method: "POST",
-    }));
+    expect(fetchImpl).not.toHaveBeenCalled();
     const audits = await store.listAuditLogs(company.id);
-    expect(audits).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        action: "morning_briefing.email_sent",
-        summary: expect.stringContaining("email_nightly"),
-      }),
+    expect(audits).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "morning_briefing.email_sent" }),
     ]));
   });
 

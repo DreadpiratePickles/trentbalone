@@ -212,6 +212,30 @@ describe("Agent Plug runtime", () => {
     expect(runtime.dynamicPrompt).toContain("last_ceo_run");
   });
 
+  it("refreshes cached runtimes when new memory is written between cycles", async () => {
+    clearAgentRuntimeCache();
+    const company = await store.createCompany({
+      name: "Memory Refresh Runtime Co",
+      brief: { vision: "Make the next cycle learn from the previous one" },
+    });
+
+    const first = await getAgentRuntime(company.id, "ceo");
+    expect(first.dynamicPrompt).not.toContain("Retention pricing was chosen");
+
+    await store.createDocument({
+      companyId: company.id,
+      type: "agent_note",
+      title: "CEO decision journal: pricing",
+      content: "Prior CEO decision: Retention pricing was chosen after signups stalled.",
+      source: "ceo-decision-journal:previous-cycle",
+      memoryTier: "semantic",
+    });
+
+    const second = await getAgentRuntime(company.id, "ceo");
+
+    expect(second.dynamicPrompt).toContain("Retention pricing was chosen");
+  });
+
   it("recalls specialist registries so a later cycle can build on prior experiments", async () => {
     clearAgentRuntimeCache();
     const company = await store.createCompany({

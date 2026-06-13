@@ -30,6 +30,7 @@ import { recallRelevantMemory } from "@/lib/semantic-router";
 import { buildOperatingStateBundle } from "@/lib/operating-state";
 import { persistCeoDecisionJournal } from "@/lib/ceo-decision-journal";
 import { persistSeatRegistryMemory } from "@/lib/seat-memory-registries";
+import { assembleMorningBriefing } from "@/lib/scheduler";
 import { recordHandoff, type HandoffEvent } from "@/lib/planner";
 import { handleStepCritique, type OrchestrationRun } from "@/lib/orchestrator";
 import { cacheOrchestrationRun } from "@/lib/orchestrator-cache";
@@ -638,6 +639,18 @@ export async function processConsolidatePhase(run: OrchestrationRun, company: Co
       lastCycleAt: completedAt,
       nextCycleAt: nextCycleAtFromCompleted(company.cycleFrequency, completedAt),
     }).catch(() => {});
+    if (shouldAssembleNightlyBriefing(run, company, cycleRecord.startedAt)) {
+      await assembleMorningBriefing(run.companyId).catch((error) =>
+        store.addAudit(
+          run.companyId,
+          "system",
+          "morning_briefing.failed",
+          "cycle",
+          cycleRecord.id,
+          `Morning briefing failed after scheduled cycle completion: ${error instanceof Error ? error.message : String(error)}`,
+        ).catch(() => undefined),
+      );
+    }
   }
 
   await auditTransition(
@@ -680,4 +693,14 @@ function nextCycleAtFromCompleted(
   const date = new Date(fromIso);
   date.setDate(date.getDate() + (frequency === "daily" ? 1 : 7));
   return date.toISOString();
+}
+
+function shouldAssembleNightlyBriefing(
+  run: OrchestrationRun,
+  company: Company,
+  cycleStartedAt: string,
+): boolean {
+  if (run.trigger !== "scheduled") return false;
+  if (company.nightlyRunHour === undefined) return false;
+  return new Date(cycleStartedAt).getUTCHours() === company.nightlyRunHour;
 }

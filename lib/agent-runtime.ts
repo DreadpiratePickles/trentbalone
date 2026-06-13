@@ -32,7 +32,12 @@ export type AgentRuntime = {
   systemPrompt: string;
 };
 
-const runtimeCache = new Map<string, AgentRuntime>();
+type CachedAgentRuntime = {
+  runtime: AgentRuntime;
+  freshnessFingerprint: string;
+};
+
+const runtimeCache = new Map<string, CachedAgentRuntime>();
 let runtimeHits = 0;
 const GROWTH_REQUIRED_SKILLS = ["hyperframes", "hyperframes-cli"];
 
@@ -54,10 +59,11 @@ export function getAgentRuntimeCacheStats() {
 
 export async function getAgentRuntime(companyId: string, role: AgentRole): Promise<AgentRuntime> {
   const cacheKey = `${companyId}:${role}`;
+  const freshnessFingerprint = await buildRuntimeFreshnessFingerprint(companyId);
   const cached = runtimeCache.get(cacheKey);
-  if (cached) {
+  if (cached && cached.freshnessFingerprint === freshnessFingerprint) {
     runtimeHits++;
-    return cached;
+    return cached.runtime;
   }
 
   const assignment = await store.getAgentPlugAssignment(companyId, role);
@@ -141,9 +147,23 @@ export async function getAgentRuntime(companyId: string, role: AgentRole): Promi
     dynamicPrompt,
     systemPrompt: [staticPrompt, dynamicPrompt].join("\n\n")
   };
-  runtimeCache.set(cacheKey, runtime);
+  runtimeCache.set(cacheKey, { runtime, freshnessFingerprint });
   logger.debug({ agentRole: role, profileId: profile?.id ?? null, toolCount: environment.tools.length }, "agent.runtime_built");
   return runtime;
+}
+
+async function buildRuntimeFreshnessFingerprint(companyId: string): Promise<string> {
+  const documents = await store.listDocuments(companyId).catch(() => []);
+  return documents
+    .map((doc) => [
+      doc.id,
+      doc.version ?? 0,
+      doc.memoryTier ?? "",
+      doc.validFrom ?? "",
+      doc.validTo ?? "",
+    ].join(":"))
+    .sort()
+    .join("|");
 }
 
 async function buildMemoryPlanBlock(

@@ -110,14 +110,6 @@ export async function runDueScheduledCycles(atIso = nowIso(), companyIds?: strin
       cycleKind: "scheduled",
     });
     results.push(run);
-    // Assemble morning briefing after nightly autonomous runs
-    if (isNightlyRunDue(company, atIso)) {
-      try {
-        await assembleMorningBriefing(company.id);
-      } catch {
-        // briefing failure must not block cycle completion
-      }
-    }
   }
   return results;
 }
