@@ -13,6 +13,7 @@ export type NavIconName =
   | "shield"
   | "plug"
   | "settings"
+  | "radar"
   | "list";
 
 export type NavItemConfig = {
@@ -40,6 +41,7 @@ export const NAV_GROUPS: NavGroupConfig[] = [
       { label: "queue", slug: "queue", icon: "inbox", keywords: ["tasks", "backlog", "work"] },
       { label: "missions", slug: "missions", icon: "cycle", keywords: ["agent missions", "campaigns"] },
       { label: "cycles", slug: "cycles", icon: "cycle", keywords: ["runs", "history", "operating"] },
+      { label: "ops", slug: "ops", icon: "radar", keywords: ["operations", "control tower", "evidence", "trust", "diagnostics", "provenance"] },
     ],
   },
   {

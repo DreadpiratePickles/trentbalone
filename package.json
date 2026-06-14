@@ -27,6 +27,7 @@
     "orc:eval:smoke": "tsx scripts/evals/run-orchestration-eval.ts --smoke --threshold 0.9",
     "orc:bakeoff": "tsx scripts/evals/run-orchestration-bakeoff.ts",
     "orc:truth-proof": "tsx scripts/evals/run-orchestrator-truth-proof.ts",
+    "ops:ui-proof": "tsx scripts/evals/run-ops-ui-proof.ts",
     "workbench:soak": "tsx scripts/evals/run-workbench-soak.ts",
     "agent-plug:eval:e2e": "tsx scripts/evals/run-agent-plug-e2e.ts",
     "test:redis": "vitest run lib/queue.redis.test.ts --pool=forks --poolOptions.forks.singleFork=true",

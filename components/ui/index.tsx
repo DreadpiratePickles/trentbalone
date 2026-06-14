@@ -537,6 +537,7 @@ export const I = {
   list: (p: IconProps) => <svg viewBox="0 0 24 24" fill="none" width={16} height={16} {...p}><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>,
   chevR: (p: IconProps) => <svg viewBox="0 0 24 24" fill="none" width={14} height={14} {...p}><path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>,
   external: (p: IconProps) => <svg viewBox="0 0 24 24" fill="none" width={14} height={14} {...p}><path d="M14 4h6v6M10 14L20 4M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  radar: (p: IconProps) => <svg viewBox="0 0 24 24" fill="none" width={16} height={16} {...p}><path d="M12 12L19 5M12 3a9 9 0 1 0 9 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/><path d="M12 7.5a4.5 4.5 0 1 0 4.5 4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/></svg>,
 };
 
 // ── Page header ────────────────────────────────────────────────────────

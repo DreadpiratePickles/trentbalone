@@ -14,6 +14,7 @@ describe("NAV_GROUPS", () => {
       "queue",
       "missions",
       "cycles",
+      "ops",
       "workbench",
       "trenchpad",
       "mcp",
