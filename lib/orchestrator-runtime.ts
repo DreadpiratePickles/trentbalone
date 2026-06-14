@@ -39,6 +39,7 @@ import { buildGroundedSourceContext } from "@/lib/source-grounding";
 import { seatOutputSchemas } from "@/lib/seat-output-schemas";
 import { logger } from "@/lib/logger";
 import { callCriticJsonWithRepair, logCriticRepairTelemetry } from "@/lib/orchestrator-critic-repair";
+import { getCompanyAutonomySettings } from "@/lib/autonomy-settings";
 
 /**
  * Skill reuse (OpenSpace): inject a company's live distilled skills into the seat
@@ -1450,6 +1451,7 @@ export async function executeStepWithRuntime(input: StepExecutionInput): Promise
     approvalGranted: input.approvalGranted,
     resumeSeed: input.resumeSeed,
     executeSeatModelFn: getRuntimeEvalOverrides()?.orchestration?.executeSeatModelFn,
+    autonomy: { settings: getCompanyAutonomySettings(company) },
   });
 
   if (agentResult.pausedForApproval) {

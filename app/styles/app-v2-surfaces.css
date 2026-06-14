@@ -285,3 +285,14 @@
     transition-duration: .001ms !important;
   }
 }
+
+/* ─── Autonomy Control Plane ─────────────────────────────────── */
+.autonomy-panel { display: flex; flex-direction: column; gap: 8px; }
+.autonomy-modes { display: flex; gap: 6px; }
+.autonomy-mode { flex: 1; text-transform: capitalize; font-family: var(--mono); font-size: 12px; padding: 7px 10px; border: 1px solid var(--slate); border-radius: var(--r-sm); background: var(--ink); color: var(--mist); cursor: pointer; }
+.autonomy-mode--active { color: var(--bone); border-color: var(--pulse); box-shadow: inset 0 0 0 1px rgba(110,231,183,.35); }
+.autonomy-risk { font-size: 12px; color: var(--mist); margin: 2px 0 6px; line-height: 1.45; }
+.autonomy-toggle { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--bone); }
+.autonomy-num { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--haze); text-transform: uppercase; letter-spacing: .04em; }
+.autonomy-num input { font-family: var(--mono); }
+.autonomy-meta { display: flex; gap: 12px; font-size: 10px; color: var(--haze); margin-top: 4px; }

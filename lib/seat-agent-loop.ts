@@ -13,7 +13,13 @@ import {
   type ToolReadiness,
 } from "@/lib/seat-tool-contracts";
 import { guardSeatOutputClaims } from "@/lib/seat-output-claim-guard";
-import type { AgentEnvironmentConfig, AgentRole, ToolCallRecord } from "@/lib/types";
+import { evaluateAutonomyGate } from "@/lib/orchestrator-autonomy-gate";
+import type { AgentEnvironmentConfig, AgentRole, CompanyAutonomySettings, ToolCallRecord } from "@/lib/types";
+
+type AutonomySeatContext = {
+  settings: CompanyAutonomySettings;
+  runContext?: "scheduled" | "manual" | "debug";
+};
 
 export type SeatLoopPendingToolCall = {
   name: string;
@@ -56,6 +62,12 @@ export type SeatAgentInput = {
   /** Injectable for tests; defaults to the global adapter registry. */
   adapters?: ToolAdapter[];
   executeSeatModelFn?: typeof executeSeatModel;
+  /**
+   * Autonomy Control Plane enforcement. When provided, connected write-capable
+   * tools are gated by company mode (manual/supervised/autonomous) BEFORE they
+   * run. Absent → no autonomy gating (unchanged legacy behavior).
+   */
+  autonomy?: AutonomySeatContext;
 };
 
 type SeatTurnOutput = {
@@ -230,6 +242,7 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
       registry,
       environment: activeEnvironment,
       contracts: seatContracts,
+      autonomy: input.autonomy,
     });
     if (!record) {
       toolCalls.push({
@@ -367,6 +380,7 @@ export async function runSeatAgent(input: SeatAgentInput): Promise<SeatAgentResu
       registry,
       environment: activeEnvironment,
       contracts: seatContracts,
+      autonomy: input.autonomy,
     });
     if (!record) {
       toolCalls.push({
@@ -489,8 +503,23 @@ async function executeNamedToolCall(input: {
   registry: ToolAdapter[];
   environment: AgentEnvironmentConfig;
   contracts: SeatToolContract[];
+  autonomy?: AutonomySeatContext;
 }): Promise<ToolCallRecord | undefined> {
   const contract = contractForTool(input.contracts, input.name);
+
+  // Autonomy Control Plane enforcement (server-side). When a company autonomy
+  // posture is supplied and the action is not already approval-granted, gate the
+  // tool by company mode before it runs. A non-proceed decision returns a
+  // needs_approval / blocked record the existing approval + critic machinery
+  // handles — the policy reason is preserved in the run evidence.
+  if (input.autonomy && contract && !input.approvalGranted) {
+    const gate = evaluateAutonomyGate(
+      { settings: input.autonomy.settings, seat: input.seat, contract, runContext: input.autonomy.runContext },
+      input.action,
+    );
+    if (!gate.proceed) return gate.record;
+  }
+
   if (contract?.binding === "internal_action") {
     if (contract.approvalRequired && !input.approvalGranted) {
       return {

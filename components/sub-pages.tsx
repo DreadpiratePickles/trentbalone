@@ -29,6 +29,7 @@ import { GbrainSettingsPanel } from "@/components/gbrain-settings-panel";
 import { TaskRowActions } from "@/components/task-row-actions";
 import { CompanyMemoryUploadButton } from "@/components/company-memory-upload";
 import { McpServersPanel } from "@/components/mcp-servers-panel";
+import { AutonomyControlPanel } from "@/components/autonomy-control-panel";
 import {
   PageHeader,
   Pill,
@@ -2033,6 +2034,9 @@ export function SettingsPageClient({ companyId }: { companyId: string }) {
                 <option value="autonomous_with_approvals">autonomous with approvals — runs freely, escalates edge cases</option>
                 <option value="autonomous_within_limits">autonomous within limits — self-governing inside budget caps</option>
               </select>
+            </SettingsField>
+            <SettingsField label="autonomy control plane">
+              <AutonomyControlPanel companyId={companyId} />
             </SettingsField>
             <SettingsField label="nightly run window">
               <select

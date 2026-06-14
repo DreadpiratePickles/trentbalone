@@ -22,6 +22,27 @@ export type {
   AgentMissionEventKind,
 } from "./agent-mission-types";
 export type AutonomyLevel = "review_only" | "assisted" | "autonomous_with_approvals" | "autonomous_within_limits";
+
+/**
+ * Company autonomy control plane (Autonomy Control Plane). Decides how much Trent
+ * may do without founder approval. Enforced server-side at the tool-execution
+ * boundary by lib/autonomy-policy.ts — NOT a UI-only toggle.
+ */
+export type CompanyAutonomyMode = "manual" | "supervised" | "autonomous";
+
+export type CompanyAutonomySettings = {
+  mode: CompanyAutonomyMode;
+  reversibleToolsAllowed: boolean;
+  approvalRequiredForExternalWrites: boolean;
+  approvalRequiredForSpend: boolean;
+  dailySpendLimitCents: number;
+  maxAutonomousToolCallsPerRun: number;
+  allowlistedToolScopes: string[];
+  blockedToolScopes: string[];
+  updatedAt: string;
+  updatedByUserId?: string;
+};
+
 export type CompanyStatus = "active" | "paused" | "archived";
 export type CycleFrequency = "manual" | "daily" | "weekly";
 export type AgentRole =
@@ -263,6 +284,8 @@ export type CompanyBrief = {
   successMetrics: string;
   /** Control plane model-tier overrides keyed by Trent agent role. */
   modelTierByRole?: Partial<Record<AgentRole, string>>;
+  /** Company autonomy control-plane settings (stored here to avoid schema churn). */
+  autonomy?: CompanyAutonomySettings;
   /** Public page — editable narrative sections */
   publicShipped?: string;
   publicLearning?: string;
