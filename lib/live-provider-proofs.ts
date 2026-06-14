@@ -1,4 +1,5 @@
 import { isHttpHeaderValueSafe, malformedCredentialSummary } from "@/lib/http-credential";
+import { refreshXAccessToken, xRefreshConfigured } from "@/lib/x-oauth";
 
 type EnvLike = Pick<NodeJS.ProcessEnv, string>;
 type FetchLike = typeof fetch;
@@ -278,19 +279,49 @@ export function liveProviderProofDefinitions(): ProofDefinition[] {
       key: "x",
       label: "X social",
       requiredEnv: ["X_USER_ACCESS_TOKEN"],
-      recovery: "Configure X_USER_ACCESS_TOKEN with OAuth2 user-context permissions.",
-      isConfigured: (env) => Boolean(firstNonEmpty(env.X_USER_ACCESS_TOKEN, env.TWITTER_USER_ACCESS_TOKEN)),
+      recovery: "Configure X_USER_ACCESS_TOKEN, or X_CLIENT_ID/X_CLIENT_SECRET/X_REFRESH_TOKEN for OAuth2 refresh.",
+      // Configured when we have a static token OR can mint one via OAuth2 refresh.
+      isConfigured: (env) =>
+        Boolean(firstNonEmpty(env.X_USER_ACCESS_TOKEN, env.TWITTER_USER_ACCESS_TOKEN)) || xRefreshConfigured(env),
       async run({ env, fetchImpl }) {
-        const token = bearerToken(firstNonEmpty(env.X_USER_ACCESS_TOKEN, env.TWITTER_USER_ACCESS_TOKEN), "X user access token");
-        if ("error" in token) return token.error;
-        const response = await fetchJson(fetchImpl, "https://api.x.com/2/users/me", {
-          method: "GET",
-          headers: {
-            Authorization: token.header,
-            Accept: "application/json",
-          },
-        });
-        if (!response.ok) return failed(response, "X user-context credential check failed.");
+        const meCheck = (accessToken: string) =>
+          fetchJson(fetchImpl, "https://api.x.com/2/users/me", {
+            method: "GET",
+            headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+          });
+
+        let accessToken = firstNonEmpty(env.X_USER_ACCESS_TOKEN, env.TWITTER_USER_ACCESS_TOKEN);
+        let refreshed = false;
+        // Try the static user-context token first if present and well-formed.
+        let response = accessToken && isHttpHeaderValueSafe(accessToken) ? await meCheck(accessToken) : undefined;
+
+        // X access tokens expire (~2h) and refresh tokens rotate. If the static token is
+        // missing/expired but refresh credentials exist, mint a fresh one and retry.
+        if ((!response || !response.ok) && xRefreshConfigured(env)) {
+          try {
+            const refresh = await refreshXAccessToken(env, fetchImpl);
+            accessToken = refresh.accessToken;
+            refreshed = true;
+            response = await meCheck(accessToken);
+          } catch (error) {
+            return {
+              status: "failed",
+              error: error instanceof Error ? error.message : String(error),
+              recovery: "X OAuth2 refresh failed — re-authorize the app and update X_REFRESH_TOKEN (needs offline.access).",
+            };
+          }
+        }
+
+        if (!accessToken) {
+          return {
+            status: "failed",
+            error: "No X user-context token and no refresh credentials configured.",
+            recovery: "Set X_USER_ACCESS_TOKEN, or X_CLIENT_ID/X_CLIENT_SECRET/X_REFRESH_TOKEN.",
+          };
+        }
+        if (!response || !response.ok) {
+          return failed(response ?? { status: 0, body: undefined }, "X user-context credential check failed.");
+        }
         const data = asRecord(asRecord(response.body)?.data);
         return {
           status: "passed",
@@ -298,6 +329,7 @@ export function liveProviderProofDefinitions(): ProofDefinition[] {
           evidence: {
             username: typeof data?.username === "string" ? data.username : undefined,
             userIdPresent: typeof data?.id === "string",
+            tokenRefreshed: refreshed,
           },
         };
       },

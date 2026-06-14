@@ -6,7 +6,7 @@
  */
 
 import OpenAI from "openai";
-import { MODELS } from "@/lib/ai-client";
+import { MODELS, modelChatTuning } from "@/lib/ai-client";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -157,8 +157,7 @@ export async function fastApply(original: string, lazyEdit: string): Promise<str
 
   const response = await client.chat.completions.create({
     model: APPLY_MODEL,
-    temperature: 0,
-    max_tokens: 8192,
+    ...modelChatTuning(APPLY_MODEL, 8192, 0),
     messages: [
       {
         role: "system",

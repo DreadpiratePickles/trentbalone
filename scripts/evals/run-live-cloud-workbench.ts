@@ -180,6 +180,10 @@ async function runWorker(args: Args) {
     } : undefined,
     artifacts: proof.artifacts,
     failures: proof.failures,
+    warnings: proof.warnings,
+    degradedArtifacts: proof.degradedArtifacts,
+    interactionPassed: proof.interactionPassed,
+    interactionTranscript: proof.interactionTranscript,
     loadedEnvKeys,
   };
 

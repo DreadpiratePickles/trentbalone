@@ -15,6 +15,8 @@ export type CloudWorkbenchSoakRunResult = {
   httpStatus?: number;
   screenshotStorageKey?: string;
   failures: string[];
+  warnings: string[];
+  degradedArtifacts: boolean;
 };
 
 export type CloudWorkbenchFailureCluster = {
@@ -29,6 +31,8 @@ export type CloudWorkbenchSoakResult = {
   passCount: number;
   failCount: number;
   passRate: number;
+  /** Runs where the build passed but artifact snapshot/export was degraded (non-fatal). */
+  degradedRunCount: number;
   screenshotStorageKeys: string[];
   failureClusters: CloudWorkbenchFailureCluster[];
   results: CloudWorkbenchSoakRunResult[];
@@ -65,6 +69,7 @@ export async function runCloudWorkbenchSoak(input: {
   const passCount = results.filter((result) => result.passed).length;
   const failCount = results.length - passCount;
   const passRate = results.length === 0 ? 0 : passCount / results.length;
+  const degradedRunCount = results.filter((result) => result.degradedArtifacts).length;
 
   return {
     passed: passRate >= threshold,
@@ -73,6 +78,7 @@ export async function runCloudWorkbenchSoak(input: {
     passCount,
     failCount,
     passRate,
+    degradedRunCount,
     screenshotStorageKeys: results
       .map((result) => result.screenshotStorageKey)
       .filter((key): key is string => Boolean(key)),
@@ -91,6 +97,8 @@ function summarizeRun(runIndex: number, proof: CloudWorkbenchProofResult): Cloud
     httpStatus: proof.httpStatus,
     screenshotStorageKey: proof.screenshotStorageKey,
     failures: proof.failures,
+    warnings: proof.warnings ?? [],
+    degradedArtifacts: proof.degradedArtifacts ?? false,
   };
 }
 

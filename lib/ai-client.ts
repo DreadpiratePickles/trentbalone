@@ -134,6 +134,24 @@ type ProviderChatOutput = {
   };
 };
 
+/**
+ * Newer OpenAI models (gpt-5*, o1/o3/o4) require `max_completion_tokens` instead of
+ * `max_tokens` and reject a non-default `temperature`. Build the correct per-model
+ * request tuning so seat calls don't 400 with "Unsupported parameter".
+ */
+export function modelChatTuning(
+  model: string,
+  maxTokens: number,
+  temperature?: number,
+): Record<string, unknown> {
+  if (/^(gpt-5|o1|o3|o4)/i.test(model)) {
+    return { max_completion_tokens: maxTokens };
+  }
+  const tuning: Record<string, unknown> = { max_tokens: maxTokens };
+  if (typeof temperature === "number") tuning.temperature = temperature;
+  return tuning;
+}
+
 /** OpenAI-compatible chat completion for a routed provider. */
 export async function createProviderChatCompletion(
   provider: ModelProvider,
@@ -141,9 +159,10 @@ export async function createProviderChatCompletion(
 ): Promise<ProviderChatOutput> {
   if (provider === "anthropic") return anthropicChatCompletion(input);
   const client = openAiCompatibleClient(provider);
+  const { temperature, max_tokens: _maxTokens, ...rest } = input as ProviderChatInput & { temperature?: number; max_tokens?: number };
   return client.chat.completions.create({
-    ...input,
-    max_tokens: MAX_TOKENS.JSON,
+    ...rest,
+    ...modelChatTuning(input.model, MAX_TOKENS.JSON, temperature),
   }) as Promise<ProviderChatOutput>;
 }
 
@@ -309,10 +328,9 @@ export async function callJson<T>(
     }
     const completion = await createAIClient().chat.completions.create({
       model,
-      temperature:     0.2,
-      max_tokens:      maxTokens,
       response_format: { type: "json_object" },
       messages,
+      ...modelChatTuning(model, maxTokens, 0.2),
     });
     content     = completion.choices[0]?.message.content ?? null;
     totalTokens = completion.usage?.total_tokens ?? 0;
@@ -354,12 +372,11 @@ export async function callText(
   }
   const completion = await createAIClient().chat.completions.create({
     model,
-    temperature: 0.4,
-    max_tokens:  maxTokens,
     messages: [
       { role: "system", content: system },
       { role: "user",   content: user },
     ],
+    ...modelChatTuning(model, maxTokens, 0.4),
   });
   const text = completion.choices[0]?.message.content?.trim();
   if (!text) throw new Error(`${model} returned empty text`);
@@ -390,11 +407,10 @@ export async function* streamOpenAiCompatibleChat(
   const client = openAiCompatibleClient(provider);
   const stream = await client.chat.completions.create({
     model: input.model,
-    temperature: input.temperature,
-    max_tokens: input.maxTokens,
     stream: true,
     stream_options: provider === "openai" ? { include_usage: true } : undefined,
     messages: input.messages as OpenAI.Chat.ChatCompletionMessageParam[],
+    ...modelChatTuning(input.model, input.maxTokens, input.temperature),
   });
 
   for await (const chunk of stream) {

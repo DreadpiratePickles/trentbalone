@@ -20,6 +20,8 @@ vi.mock("@/lib/ai-client", () => ({
   createAIClient: () => mockClient,
   MAX_TOKENS: { CHAT: 1000, PLANNING: 1000, PROSE: 1000 },
   MODELS: { DEFAULT: "test-default", STRONG: "test-strong" },
+  modelChatTuning: (_model: string, maxTokens: number, temperature?: number) =>
+    typeof temperature === "number" ? { max_tokens: maxTokens, temperature } : { max_tokens: maxTokens },
 }));
 
 describe("ceoChatResponse schema tolerance", () => {

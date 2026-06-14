@@ -1,6 +1,12 @@
 import type { WorkbenchSession } from "@/lib/types";
 import { store } from "@/lib/store";
 import { nowIso } from "@/lib/utils";
+import {
+  verifyInteractions,
+  createPlaywrightInteractionDriver,
+  type AcceptanceStep,
+  type InteractionDriver,
+} from "@/lib/workbench-interaction-verify";
 import type {
   WorkbenchExecResult,
   WorkbenchPreviewInspection,
@@ -31,11 +37,19 @@ export type CloudWorkbenchProofResult = {
   testResult?: WorkbenchTestResult;
   artifacts: string[];
   failures: string[];
+  /** Non-fatal issues (e.g. artifact-durability timeouts) that do NOT fail the build. */
+  warnings: string[];
+  /** True when snapshot/export could not be durably captured but the build itself passed. */
+  degradedArtifacts: boolean;
+  /** Whether a real click/type interaction mutated the rendered app (anti-Potemkin). */
+  interactionPassed?: boolean;
+  /** Human-readable transcript of the interaction steps. */
+  interactionTranscript?: string;
 };
 
 export type CloudWorkbenchProofProgressEvent = {
-  stage: "start" | "scaffold" | "command" | "test" | "preview" | "inspect" | "snapshot" | "export" | "stop";
-  status: "running" | "completed" | "failed" | "skipped";
+  stage: "start" | "scaffold" | "command" | "test" | "preview" | "inspect" | "interaction" | "snapshot" | "export" | "stop";
+  status: "running" | "completed" | "failed" | "skipped" | "degraded";
   message?: string;
   command?: string;
   exitCode?: number;
@@ -53,18 +67,32 @@ export async function runCloudWorkbenchBuildProof(input: {
   previewPort?: number;
   startTimeoutMs?: number;
   providerOperationTimeoutMs?: number;
+  /** How many times to attempt each artifact-durability op (snapshot/export). Default 2. */
+  artifactOperationAttempts?: number;
+  /** Interaction steps to run against the live preview. Defaults to a click-and-assert. */
+  interactionSteps?: AcceptanceStep[];
+  /** Factory for the interaction driver; defaults to a real Playwright driver. */
+  interactionDriverFactory?: (previewUrl: string) => InteractionDriver;
+  /** Override the scaffolded app (e.g. a marketing landing page instead of Cloud Notes). */
+  scaffoldFiles?: Record<string, string>;
   onProgress?: (event: CloudWorkbenchProofProgressEvent) => void;
 }): Promise<CloudWorkbenchProofResult> {
   const { session, provider } = input;
   const previewPort = input.previewPort ?? DEFAULT_PREVIEW_PORT;
   const startTimeoutMs = input.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
   const providerOperationTimeoutMs = input.providerOperationTimeoutMs ?? DEFAULT_PROVIDER_OPERATION_TIMEOUT_MS;
+  const artifactOperationAttempts = Math.max(1, input.artifactOperationAttempts ?? 2);
+  const interactionSteps = input.interactionSteps ?? DEFAULT_INTERACTION_STEPS;
+  const interactionDriverFactory = input.interactionDriverFactory ?? createPlaywrightInteractionDriver;
   const commandResults: CloudWorkbenchCommandResult[] = [];
   const artifacts: string[] = [];
   const failures: string[] = [];
+  const warnings: string[] = [];
   let testResult: WorkbenchTestResult | undefined;
   let inspection: WorkbenchPreviewInspection | undefined;
   let previewUrl: string | undefined;
+  let interactionPassed: boolean | undefined;
+  let interactionTranscript: string | undefined;
   const progress = (event: CloudWorkbenchProofProgressEvent) => input.onProgress?.(event);
 
   try {
@@ -78,7 +106,7 @@ export async function runCloudWorkbenchBuildProof(input: {
     progress({ stage: "start", status: "completed", message: `Started ${provider.name} sandbox` });
 
     progress({ stage: "scaffold", status: "running", message: "Writing cloud proof starter app" });
-    await scaffoldCloudProofApp(session, provider);
+    await scaffoldCloudProofApp(session, provider, input.scaffoldFiles);
     progress({ stage: "scaffold", status: "completed", message: "Cloud proof starter app written" });
 
     for (const command of ["npm install", "npm run typecheck", "npm run build"]) {
@@ -124,41 +152,64 @@ export async function runCloudWorkbenchBuildProof(input: {
       failures.push(...previewFailures(inspection));
     }
 
+    // Interaction check: click/type like a user and assert the DOM actually reacts.
+    // A live URL that renders but does nothing (Potemkin UI) must fail the build.
+    if (previewUrl && previewFailures(inspection ?? blankInspection(previewUrl)).length === 0) {
+      progress({ stage: "interaction", status: "running", message: `Interacting with ${previewUrl}` });
+      const interaction = await verifyInteractions({
+        previewUrl,
+        steps: interactionSteps,
+        driver: interactionDriverFactory(previewUrl),
+      }).catch((err) => ({
+        passed: false,
+        detail: err instanceof Error ? err.message : String(err),
+        failures: [],
+        transcript: `interaction error: ${err instanceof Error ? err.message : String(err)}`,
+        consoleLogs: [],
+        networkLogs: [],
+      }));
+      interactionPassed = interaction.passed;
+      interactionTranscript = interaction.transcript;
+      progress({ stage: "interaction", status: interaction.passed ? "completed" : "failed", message: interaction.detail });
+      if (!interaction.passed) {
+        failures.push(`interaction failed: ${interaction.detail}`);
+      }
+    }
+
     if (provider.snapshot) progress({ stage: "snapshot", status: "running", message: "Capturing sandbox snapshot" });
     const snapshot = provider.snapshot
-      ? await withTimeout(
-          provider.snapshot(session),
-          providerOperationTimeoutMs,
-          `Timed out ${provider.name} snapshot after ${providerOperationTimeoutMs}ms`,
-        ).catch((err) => {
-          failures.push(err instanceof Error ? err.message : String(err));
-          progress({ stage: "snapshot", status: "failed", message: err instanceof Error ? err.message : String(err) });
-          return undefined;
+      ? await resilientArtifactOperation(provider.snapshot.bind(provider), session, {
+          timeoutMs: providerOperationTimeoutMs,
+          attempts: artifactOperationAttempts,
+          label: `${provider.name} snapshot`,
         })
-      : undefined;
-    if (snapshot) {
-      artifacts.push(snapshotArtifact(snapshot));
-      progress({ stage: "snapshot", status: "completed", message: snapshot.id });
+      : { value: undefined, warning: undefined };
+    if (snapshot.value) {
+      artifacts.push(snapshotArtifact(snapshot.value));
+      progress({ stage: "snapshot", status: "completed", message: snapshot.value.id });
     } else if (!provider.snapshot) {
       progress({ stage: "snapshot", status: "skipped", message: `${provider.name} does not implement snapshot` });
+    } else if (snapshot.warning) {
+      // Artifact durability is not build correctness — record as a non-fatal warning, never a failure.
+      warnings.push(snapshot.warning);
+      progress({ stage: "snapshot", status: "degraded", message: snapshot.warning });
     }
     if (provider.exportArtifacts) progress({ stage: "export", status: "running", message: "Exporting sandbox artifacts" });
     const exported = provider.exportArtifacts
-      ? await withTimeout(
-          provider.exportArtifacts(session),
-          providerOperationTimeoutMs,
-          `Timed out ${provider.name} export after ${providerOperationTimeoutMs}ms`,
-        ).catch((err) => {
-          failures.push(err instanceof Error ? err.message : String(err));
-          progress({ stage: "export", status: "failed", message: err instanceof Error ? err.message : String(err) });
-          return undefined;
+      ? await resilientArtifactOperation(provider.exportArtifacts.bind(provider), session, {
+          timeoutMs: providerOperationTimeoutMs,
+          attempts: artifactOperationAttempts,
+          label: `${provider.name} export`,
         })
-      : undefined;
-    if (exported?.artifact) {
-      artifacts.push(`export:${exported.artifact.id}`);
-      progress({ stage: "export", status: "completed", message: exported.artifact.id });
+      : { value: undefined, warning: undefined };
+    if (exported.value?.artifact) {
+      artifacts.push(`export:${exported.value.artifact.id}`);
+      progress({ stage: "export", status: "completed", message: exported.value.artifact.id });
     } else if (!provider.exportArtifacts) {
       progress({ stage: "export", status: "skipped", message: `${provider.name} does not implement exportArtifacts` });
+    } else if (exported.warning) {
+      warnings.push(exported.warning);
+      progress({ stage: "export", status: "degraded", message: exported.warning });
     }
   } catch (err) {
     failures.push(err instanceof Error ? err.message : String(err));
@@ -189,7 +240,66 @@ export async function runCloudWorkbenchBuildProof(input: {
     testResult,
     artifacts,
     failures,
+    warnings,
+    degradedArtifacts: warnings.length > 0,
+    interactionPassed,
+    interactionTranscript,
   };
+}
+
+/**
+ * Click the Save button and assert the notes list actually grows — proves the
+ * scaffolded app is interactive, not a static render.
+ */
+const DEFAULT_INTERACTION_STEPS: AcceptanceStep[] = [
+  { action: "click first visible button", expect: "list contains 'Saved note'" },
+];
+
+function blankInspection(previewUrl: string): WorkbenchPreviewInspection {
+  return {
+    url: previewUrl,
+    httpStatus: undefined,
+    screenshot: { dataUri: "", width: 0, height: 0, storageKey: "" },
+    domText: "",
+    visibleElements: 0,
+    consoleErrors: [],
+    pageErrors: [],
+  };
+}
+
+/**
+ * Runs an artifact-durability operation (snapshot/export) with bounded retries and
+ * backoff. Returns the value on success, or a single human-readable warning string on
+ * exhaustion. These operations are deliberately treated as non-fatal: a slow provider
+ * snapshot/export must never count as a build failure (the run-13 soak pattern).
+ */
+async function resilientArtifactOperation<T>(
+  op: (session: WorkbenchSession) => Promise<T>,
+  session: WorkbenchSession,
+  options: { timeoutMs: number; attempts: number; label: string },
+): Promise<{ value?: T; warning?: string }> {
+  const { timeoutMs, attempts, label } = options;
+  let lastError = "";
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const value = await withTimeout(
+        op(session),
+        timeoutMs,
+        `Timed out ${label} after ${timeoutMs}ms`,
+      );
+      return { value };
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      if (attempt < attempts) {
+        await delay(Math.min(2_000, timeoutMs) * attempt);
+      }
+    }
+  }
+  return { warning: lastError };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function persistStartedSandbox(
@@ -237,8 +347,9 @@ async function withTimeout<T>(
 async function scaffoldCloudProofApp(
   session: WorkbenchSession,
   provider: WorkbenchProviderAdapter,
+  overrideFiles?: Record<string, string>,
 ): Promise<void> {
-  const files = cloudProofAppFiles();
+  const files = overrideFiles ?? cloudProofAppFiles();
   const dirs = Array.from(new Set(
     Object.keys(files)
       .map((path) => path.split("/").slice(0, -1).join("/"))
@@ -330,18 +441,33 @@ function cloudProofAppFiles(): Record<string, string> {
       ")",
     ].join("\n"),
     "src/App.tsx": [
-      "import { createSeedNotes } from './notes'",
+      "import { useState } from 'react'",
+      "import { createSeedNotes, type Note } from './notes'",
       "",
       "export default function App() {",
-      "  const notes = createSeedNotes()",
+      "  const [notes, setNotes] = useState<Note[]>(() => createSeedNotes())",
+      "  const [draft, setDraft] = useState('')",
+      "",
+      "  function saveNote() {",
+      "    const title = draft.trim() || `Saved note ${notes.length + 1}`",
+      "    setNotes((prev) => [...prev, { id: `note_${prev.length + 1}`, title }])",
+      "    setDraft('')",
+      "  }",
+      "",
       "  return (",
       '    <main className="shell">',
       '      <section className="hero">',
       "        <p>Trent cloud workbench proof</p>",
       "        <h1>Cloud Notes</h1>",
-      "        <button>Save note</button>",
+      "        <input",
+      '          aria-label="note title"',
+      '          placeholder="Note title"',
+      "          value={draft}",
+      "          onChange={(event) => setDraft(event.target.value)}",
+      "        />",
+      "        <button onClick={saveNote}>Save note</button>",
       "      </section>",
-      '      <section aria-label="Seed notes">',
+      '      <section aria-label="Notes">',
       "        {notes.map((note) => <article key={note.id}>{note.title}</article>)}",
       "      </section>",
       "    </main>",

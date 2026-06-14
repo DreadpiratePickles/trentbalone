@@ -1,6 +1,7 @@
 import type { ToolAdapter } from "@/lib/tools";
 import type { ToolCallRecord } from "@/lib/types";
 import { isHttpHeaderValueSafe, malformedCredentialSummary } from "@/lib/http-credential";
+import { refreshXAccessToken, xRefreshConfigured, type XRefreshResult } from "@/lib/x-oauth";
 
 type EnvLike = Pick<NodeJS.ProcessEnv, string>;
 type FetchLike = typeof fetch;
@@ -8,6 +9,8 @@ type FetchLike = typeof fetch;
 export type XSocialAdapterOptions = {
   env?: EnvLike;
   fetchImpl?: FetchLike;
+  /** Called with rotated tokens after a successful OAuth2 refresh (persist them). */
+  onRefresh?: (tokens: XRefreshResult) => void;
 };
 
 export type XTweetPayloadInput = {
@@ -24,21 +27,51 @@ const APPROVAL_ACTION_RE = /\b(publish|post|tweet|send|reply)\b/i;
 export function createXSocialAdapter(options: XSocialAdapterOptions = {}): ToolAdapter {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
+  // Per-adapter cache of a refreshed access token (X tokens expire ~2h).
+  let cached: { token: string; expiresAt: number } | undefined;
+
+  async function refreshToken(): Promise<string | undefined> {
+    if (!xRefreshConfigured(env)) return undefined;
+    try {
+      const refreshed = await refreshXAccessToken(env, fetchImpl);
+      cached = { token: refreshed.accessToken, expiresAt: Date.now() + (refreshed.expiresIn ?? 7200) * 1000 };
+      options.onRefresh?.(refreshed);
+      return refreshed.accessToken;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Resolve a usable user-context token: cached → static → freshly refreshed. */
+  async function resolveToken(forceRefresh = false): Promise<string | undefined> {
+    if (!forceRefresh && cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
+    if (forceRefresh) return refreshToken();
+    const staticToken = xUserAccessToken(env);
+    if (staticToken && isHttpHeaderValueSafe(staticToken)) return staticToken;
+    return refreshToken();
+  }
+
   return {
     name: "X",
     scopes: ["x:post:create", "x:tweet:publish", "social:publish"],
     availability: "real",
     async healthCheck() {
-      const token = xUserAccessToken(env);
+      let token = await resolveToken();
       if (!token || !isHttpHeaderValueSafe(token)) return "needs_credentials";
       try {
-        const response = await fetchImpl(X_USER_ME_URL, {
+        let response = await fetchImpl(X_USER_ME_URL, {
           method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: "application/json",
-          },
+          headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
         });
+        // A 401 on a static token can be cured by an OAuth2 refresh.
+        if (!response.ok && response.status === 401 && xRefreshConfigured(env)) {
+          token = await resolveToken(true);
+          if (!token) return "needs_credentials";
+          response = await fetchImpl(X_USER_ME_URL, {
+            method: "GET",
+            headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+          });
+        }
         return response.ok ? "connected" : "needs_credentials";
       } catch {
         return "needs_credentials";
@@ -51,9 +84,9 @@ export function createXSocialAdapter(options: XSocialAdapterOptions = {}): ToolA
       return APPROVAL_ACTION_RE.test(action);
     },
     async execute(action, payload) {
-      const token = xUserAccessToken(env);
+      let token = await resolveToken();
       if (!token) {
-        return failed(action, "X is not configured. Set X_USER_ACCESS_TOKEN from an OAuth 2.0 user-context flow before agents can publish real posts.");
+        return failed(action, "X is not configured. Set X_USER_ACCESS_TOKEN (or X_CLIENT_ID/X_CLIENT_SECRET/X_REFRESH_TOKEN for OAuth2 refresh) before agents can publish real posts.");
       }
       if (!isHttpHeaderValueSafe(token)) {
         return failed(action, malformedCredentialSummary("X user access token"));
@@ -71,16 +104,26 @@ export function createXSocialAdapter(options: XSocialAdapterOptions = {}): ToolA
       const validation = validateTweetPayload(tweet);
       if (validation) return failed(action, validation);
 
+      const post = (bearer: string) => fetchImpl(X_CREATE_POST_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${bearer}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(tweet),
+      });
+
       try {
-        const response = await fetchImpl(X_CREATE_POST_URL, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify(tweet),
-        });
+        let response = await post(token);
+        // Refresh-and-retry once if the token had expired.
+        if (!response.ok && response.status === 401 && xRefreshConfigured(env)) {
+          const refreshedToken = await resolveToken(true);
+          if (refreshedToken) {
+            token = refreshedToken;
+            response = await post(token);
+          }
+        }
         const body = await response.json().catch(() => ({}));
         if (!response.ok) {
           return failed(action, `X rejected post (${response.status}): ${xErrorMessage(body)}`);

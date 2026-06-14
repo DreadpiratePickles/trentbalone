@@ -8,7 +8,7 @@ import {
 } from "@/lib/agent-routing-context";
 import { inferArtifactRequest } from "@/lib/artifacts";
 import type { AgentRole, CeoArtifactRequest, CeoMessage, CeoSuggestion, Company, Cycle, Document, Report, Task } from "@/lib/types";
-import { MODELS, MAX_TOKENS, createAIClient } from "@/lib/ai-client";
+import { MODELS, MAX_TOKENS, createAIClient, modelChatTuning } from "@/lib/ai-client";
 import { callJsonWithRepair } from "@/lib/llm-json";
 import { buildOperatingStateBundle } from "@/lib/operating-state";
 import {
@@ -151,12 +151,11 @@ export async function executeAgentRole(
     const completion = await withRetries(() =>
       createAIClient().chat.completions.create({
         model,
-        temperature: 0.5,
-        max_tokens: MAX_TOKENS.PROSE,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt }
-        ]
+        ],
+        ...modelChatTuning(model, MAX_TOKENS.PROSE, 0.5),
       })
     );
 
@@ -263,10 +262,9 @@ export async function ceoChatResponse(
     const completion = await withRetries(() =>
       createAIClient().chat.completions.create({
         model: MODELS.DEFAULT,
-        temperature: 0.4,
-        max_tokens: MAX_TOKENS.CHAT,
         response_format: { type: "json_object" },
-        messages
+        messages,
+        ...modelChatTuning(MODELS.DEFAULT, MAX_TOKENS.CHAT, 0.4),
       })
     );
 
@@ -355,9 +353,8 @@ export async function generalChatResponse(
     const completion = await withRetries(() =>
       createAIClient().chat.completions.create({
         model: MODELS.DEFAULT,
-        temperature: 0.5,
-        max_tokens: MAX_TOKENS.CHAT,
-        messages
+        messages,
+        ...modelChatTuning(MODELS.DEFAULT, MAX_TOKENS.CHAT, 0.5),
       })
     );
 

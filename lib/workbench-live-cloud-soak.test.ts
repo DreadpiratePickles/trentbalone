@@ -33,6 +33,34 @@ describe("runCloudWorkbenchSoak", () => {
     ]);
     expect(result.results.map((item) => item.runIndex)).toEqual([1, 2, 3, 4]);
   });
+
+  it("counts build-passed runs with degraded artifact durability without failing them", async () => {
+    const proofs = [
+      proof({ sessionId: "ws_1", passed: true, screenshotStorageKey: "screens/ws_1.png" }),
+      proof({
+        sessionId: "ws_2",
+        passed: true,
+        screenshotStorageKey: "screens/ws_2.png",
+        warnings: ["Timed out daytona snapshot after 180000ms"],
+      }),
+    ];
+    const runProof = vi.fn(async () => proofs.shift()!);
+
+    const result = await runCloudWorkbenchSoak({
+      runs: 2,
+      threshold: 0.9,
+      createSession: async (runIndex) => session(`ws_${runIndex}`),
+      getProvider: () => provider(),
+      runProof,
+    });
+
+    // The degraded run still built and served — it must NOT drag the pass rate down.
+    expect(result.passed).toBe(true);
+    expect(result.passCount).toBe(2);
+    expect(result.failCount).toBe(0);
+    expect(result.degradedRunCount).toBe(1);
+    expect(result.results[1].degradedArtifacts).toBe(true);
+  });
 });
 
 function proof(input: {
@@ -40,7 +68,9 @@ function proof(input: {
   passed: boolean;
   screenshotStorageKey?: string;
   failures?: string[];
+  warnings?: string[];
 }) {
+  const warnings = input.warnings ?? [];
   return {
     passed: input.passed,
     provider: "daytona",
@@ -53,6 +83,8 @@ function proof(input: {
     commandResults: [],
     artifacts: [],
     failures: input.failures ?? [],
+    warnings,
+    degradedArtifacts: warnings.length > 0,
   };
 }
 

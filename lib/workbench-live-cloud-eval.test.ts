@@ -5,6 +5,12 @@ import type {
   WorkbenchScreenshotResult,
 } from "@/lib/workbench-provider";
 import { runCloudWorkbenchBuildProof } from "@/lib/workbench-live-cloud-eval";
+import {
+  passingInteractionDriver,
+  type InteractionDriver,
+} from "@/lib/workbench-interaction-verify";
+
+const passingDriverFactory = () => passingInteractionDriver();
 
 describe("runCloudWorkbenchBuildProof", () => {
   it("scaffolds, installs, verifies, previews, inspects, exports, and stops the cloud sandbox", async () => {
@@ -16,10 +22,12 @@ describe("runCloudWorkbenchBuildProof", () => {
       session: session(),
       provider,
       previewPort: 3000,
+      interactionDriverFactory: passingDriverFactory,
       onProgress: (event) => progress.push(`${event.stage}:${event.status}`),
     });
 
     expect(result.passed).toBe(true);
+    expect(result.interactionPassed).toBe(true);
     expect(result.provider).toBe("daytona");
     expect(result.previewUrl).toBe("https://preview.example");
     expect(result.httpStatus).toBe(200);
@@ -69,6 +77,8 @@ describe("runCloudWorkbenchBuildProof", () => {
       "preview:completed",
       "inspect:running",
       "inspect:completed",
+      "interaction:running",
+      "interaction:completed",
       "snapshot:running",
       "snapshot:completed",
       "export:running",
@@ -124,7 +134,7 @@ describe("runCloudWorkbenchBuildProof", () => {
     expect(calls).toEqual(["start", "stop"]);
   });
 
-  it("bounds slow snapshot/export provider operations and still stops the sandbox", async () => {
+  it("treats slow snapshot/export as non-fatal degraded artifacts and still stops the sandbox", async () => {
     const calls: string[] = [];
     const provider = fakeProvider(calls, {
       snapshot: vi.fn(async () => {
@@ -142,13 +152,46 @@ describe("runCloudWorkbenchBuildProof", () => {
       provider,
       previewPort: 3000,
       providerOperationTimeoutMs: 5,
+      artifactOperationAttempts: 1,
+      interactionDriverFactory: passingDriverFactory,
     });
 
-    expect(result.passed).toBe(false);
-    expect(result.failures).toEqual(expect.arrayContaining([
+    // Snapshot/export are artifact-durability operations, not build correctness.
+    // A timeout there must NOT fail an otherwise-green build (the run-13 soak pattern).
+    expect(result.passed).toBe(true);
+    expect(result.failures).toEqual([]);
+    expect(result.degradedArtifacts).toBe(true);
+    expect(result.warnings).toEqual(expect.arrayContaining([
       "Timed out daytona snapshot after 5ms",
       "Timed out daytona export after 5ms",
     ]));
+    expect(calls.at(-1)).toBe("stop");
+  });
+
+  it("fails the build when the preview renders but does not respond to interaction (Potemkin UI)", async () => {
+    const calls: string[] = [];
+    const provider = fakeProvider(calls);
+    const deadDriver: InteractionDriver = {
+      async performStep(step) {
+        return {
+          ok: false,
+          detail: `${step.action}; list length stayed 0; no network call fired; page did not respond`,
+          consoleLogs: [],
+          networkLogs: [],
+        };
+      },
+    };
+
+    const result = await runCloudWorkbenchBuildProof({
+      session: session(),
+      provider,
+      previewPort: 3000,
+      interactionDriverFactory: () => deadDriver,
+    });
+
+    expect(result.interactionPassed).toBe(false);
+    expect(result.passed).toBe(false);
+    expect(result.failures.join("\n")).toContain("interaction failed");
     expect(calls.at(-1)).toBe("stop");
   });
 });

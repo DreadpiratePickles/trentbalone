@@ -32,7 +32,13 @@
     "worker": "tsx lib/worker.ts",
     "worker:health": "tsx scripts/worker-health.ts",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev"
+    "prisma:migrate": "prisma migrate dev",
+    "x:refresh:proof": "tsx scripts/evals/run-live-x-refresh-proof.ts",
+    "capability:proof": "tsx scripts/evals/run-live-capability-gate-proof.ts",
+    "worker:env": "tsx scripts/dev/worker-with-env.ts",
+    "acceptance:cycle": "tsx scripts/evals/run-live-acceptance-cycle.ts",
+    "briefing:proof": "tsx scripts/evals/run-morning-briefing-proof.ts",
+    "compounding:proof": "tsx scripts/evals/run-live-compounding-proof.ts"
   },
   "dependencies": {
     "@daytona/sdk": "^0.183.0",

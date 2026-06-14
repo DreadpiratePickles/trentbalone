@@ -69,6 +69,53 @@ describe("X social adapter", () => {
     await expect(rejected.healthCheck()).resolves.toBe("needs_credentials");
   });
 
+  it("mints a user-context token via OAuth2 refresh when no static token is set", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith("/oauth2/token")) {
+        return new Response(JSON.stringify({ access_token: "fresh_at", refresh_token: "rot_rt", expires_in: 7200 }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: { id: "user_1", username: "LiveWops" } }), { status: 200 });
+    });
+    const onRefresh = vi.fn();
+    const adapter = createXSocialAdapter({
+      env: { X_CLIENT_ID: "cid", X_CLIENT_SECRET: "sec", X_REFRESH_TOKEN: "rt" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      onRefresh,
+    });
+
+    await expect(adapter.healthCheck()).resolves.toBe("connected");
+    expect(onRefresh).toHaveBeenCalledWith(expect.objectContaining({ accessToken: "fresh_at", refreshToken: "rot_rt" }));
+    // users/me must be called with the freshly minted bearer.
+    expect(fetchImpl).toHaveBeenCalledWith("https://api.x.com/2/users/me", expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: "Bearer fresh_at" }),
+    }));
+  });
+
+  it("refreshes and retries a publish when the static token has expired (401)", async () => {
+    let postAttempts = 0;
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith("/oauth2/token")) {
+        return new Response(JSON.stringify({ access_token: "fresh_at", expires_in: 7200 }), { status: 200 });
+      }
+      if (target.endsWith("/2/tweets")) {
+        postAttempts += 1;
+        if (postAttempts === 1) return new Response(JSON.stringify({ title: "Unauthorized" }), { status: 401 });
+        return new Response(JSON.stringify({ data: { id: "1999", text: "hi" } }), { status: 201 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+    const adapter = createXSocialAdapter({
+      env: { X_USER_ACCESS_TOKEN: "expired", X_CLIENT_ID: "cid", X_CLIENT_SECRET: "sec", X_REFRESH_TOKEN: "rt" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const result = await adapter.execute("publish", { approvalId: "approval_1", text: "hi" });
+    expect(result.status).toBe("completed");
+    expect(postAttempts).toBe(2);
+  });
+
   it("validates tweet text length before attempting the external call", async () => {
     const fetchImpl = vi.fn();
     const adapter = createXSocialAdapter({
