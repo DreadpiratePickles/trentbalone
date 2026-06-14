@@ -141,6 +141,15 @@ export type OrchestrationRun = {
   fullTeam?: boolean;
   /** Structural replans applied so far (capped by MAX_REPLANS). */
   replanCount?: number;
+  /**
+   * Durable run-truth reconciliation metadata (lib/orchestrator-run-reconcile).
+   * Present on snapshots loaded from persistence when the run row's status was
+   * reconciled against durable trace/step evidence. Absent on live in-flight
+   * runs that need no reconciliation.
+   */
+  reconciled?: boolean;
+  reconciledFrom?: "run" | "trace" | "steps";
+  staleSnapshotDetected?: boolean;
 };
 
 export type StepCritiqueResult =

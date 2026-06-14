@@ -1,4 +1,9 @@
 import type { AgentRole, OrchestratorEvent, OrchestratorRun, OrchestratorStep } from "@/lib/types";
+import {
+  reconcileRunStatus,
+  type OrchestratorRunStatusValue,
+  type RunReconcileSource,
+} from "@/lib/orchestrator-run-reconcile";
 
 export type OrchestratorReplayTimelineItem = {
   id: string;
@@ -40,6 +45,10 @@ export type OrchestratorTraceReplay = {
   companyId: string;
   objective: string;
   status: OrchestratorRun["status"];
+  /** True when `status` was reconciled from durable trace/step evidence. */
+  reconciled: boolean;
+  reconciledFrom: RunReconcileSource;
+  staleSnapshotDetected: boolean;
   trigger: OrchestratorRun["trigger"];
   budgetCents: number;
   costCents: number;
@@ -75,11 +84,23 @@ export function buildOrchestratorTraceReplay(input: {
   const artifactRefs = uniq(timeline.flatMap((item) => extractRefs(item.payload, ["artifactId", "artifactIds", "artifacts"])));
   const errors = timeline.filter((item) => /failed|error/i.test(`${item.kind} ${item.status ?? ""} ${item.detail ?? ""}`));
 
+  // Reconcile the run status against durable evidence so the trace and the older
+  // snapshot endpoint report ONE truth — a stale persisted "planning" no longer
+  // disagrees with a trace whose terminal run event proves the run finished.
+  const reconciliation = reconcileRunStatus({
+    persistedStatus: input.run.status,
+    steps: input.steps,
+    events: input.events,
+  });
+
   return {
     runId: input.run.id,
     companyId: input.run.companyId,
     objective: input.run.objective,
-    status: input.run.status,
+    status: reconciliation.status as OrchestratorRunStatusValue,
+    reconciled: reconciliation.reconciled,
+    reconciledFrom: reconciliation.reconciledFrom,
+    staleSnapshotDetected: reconciliation.staleSnapshotDetected,
     trigger: input.run.trigger,
     budgetCents: input.run.budgetCents,
     costCents: input.run.costCents || stepCost,

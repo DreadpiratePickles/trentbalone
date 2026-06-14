@@ -3,8 +3,44 @@ import {
   buildRecordedHandoffEvent,
   buildSeatToolApprovalRequest,
   hasFatalOrchestrationOutcome,
+  shouldCompleteAfterCriticInfrastructureFailure,
 } from "@/lib/orchestrator-run-phases";
 import { SeatLoopAwaitingApprovalError, type StepRecord } from "@/lib/orchestrator-runtime";
+
+describe("shouldCompleteAfterCriticInfrastructureFailure (critic-failure safety policy)", () => {
+  const infraFailure = {
+    verdict: "escalate",
+    reason: "critic LLM call failed: gpt-4.1-mini response failed schema validation: Expected string, received boolean",
+  };
+
+  it("completes a low-risk step with usable output when only the critic infra failed", () => {
+    expect(shouldCompleteAfterCriticInfrastructureFailure(
+      { output: "Real, usable tool-backed output.", riskLevel: "low" },
+      infraFailure,
+    )).toBe(true);
+  });
+
+  it("does NOT auto-complete a high-risk step even when the critic infra failed", () => {
+    expect(shouldCompleteAfterCriticInfrastructureFailure(
+      { output: "Output exists but the action is dangerous.", riskLevel: "high" },
+      infraFailure,
+    )).toBe(false);
+  });
+
+  it("does NOT auto-complete when there is no usable output", () => {
+    expect(shouldCompleteAfterCriticInfrastructureFailure(
+      { output: "   ", riskLevel: "low" },
+      infraFailure,
+    )).toBe(false);
+  });
+
+  it("does NOT treat a genuine escalate judgment (not an infra failure) as auto-completable", () => {
+    expect(shouldCompleteAfterCriticInfrastructureFailure(
+      { output: "Output.", riskLevel: "low" },
+      { verdict: "escalate", reason: "This step leaks customer PII and must not ship." },
+    )).toBe(false);
+  });
+});
 
 describe("hasFatalOrchestrationOutcome", () => {
   it("treats blocked and awaiting-approval steps as unresolved fatal outcomes", () => {

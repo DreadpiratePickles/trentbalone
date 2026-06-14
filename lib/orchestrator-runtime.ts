@@ -38,6 +38,7 @@ import { formatPlanValidationErrors, validateOrchestrationPlan } from "@/lib/pla
 import { buildGroundedSourceContext } from "@/lib/source-grounding";
 import { seatOutputSchemas } from "@/lib/seat-output-schemas";
 import { logger } from "@/lib/logger";
+import { callCriticJsonWithRepair, logCriticRepairTelemetry } from "@/lib/orchestrator-critic-repair";
 
 /**
  * Skill reuse (OpenSpace): inject a company's live distilled skills into the seat
@@ -150,13 +151,22 @@ const planSchema = z.object({
   blockers: stringListSchema.default([]),
 });
 
+// Critic JSON robustness (§ critic repair): coerce the safe, unambiguous type
+// mismatches the critic model commonly emits — a boolean/number where a string
+// is expected — instead of failing the whole verdict. `reason: true` becomes
+// "true". Genuinely malformed output still falls through to the repair retry.
+function coerceScalarToString(value: unknown): unknown {
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  return value;
+}
+
 const requiredStringSchema = z.preprocess(
-  (value) => value == null ? "No supervisor reason provided." : value,
+  (value) => value == null ? "No supervisor reason provided." : coerceScalarToString(value),
   z.string(),
 );
 
 const optionalStringSchema = z.preprocess(
-  (value) => value == null ? undefined : value,
+  (value) => value == null ? undefined : coerceScalarToString(value),
   z.string().optional(),
 );
 
@@ -968,14 +978,19 @@ export async function critiqueStepOutput(
   ].join("\n");
 
   try {
-    const result = await callJson<OrchestrationCritique>(
-      CRITIC_MODEL,
+    // Robust parse: simple type mismatches are coerced by the schema; anything
+    // it can't fix gets ONE repair retry with telemetry. A real infra failure is
+    // rethrown to the catch below so the existing degradation path is preserved.
+    const result = await callCriticJsonWithRepair<OrchestrationCritique>({
+      model: CRITIC_MODEL,
       system,
       user,
-      critiqueSchema,
-      MAX_TOKENS.PLANNING,
-      { createCompletion: getRuntimeEvalOverrides()?.orchestration?.createCompletion },
-    );
+      schema: critiqueSchema,
+      maxTokens: MAX_TOKENS.PLANNING,
+      createCompletion: getRuntimeEvalOverrides()?.orchestration?.createCompletion,
+      onTelemetry: logCriticRepairTelemetry,
+      meta: { companyId: visibility?.companyId, runId: visibility?.runId },
+    });
     return applyRubricGuard(result.data);
   } catch (err) {
     if (isNotConfiguredError(err)) {

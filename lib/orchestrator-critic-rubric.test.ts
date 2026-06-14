@@ -170,6 +170,31 @@ describe("critic rubric mode (CRITIC_RUBRIC_ENABLED)", () => {
     expect(captured.user).not.toContain("Upstream agents asked");
   });
 
+  it("coerces a boolean reason to a string instead of failing the verdict", async () => {
+    vi.stubEnv("CRITIC_RUBRIC_ENABLED", "");
+    const { critiqueStepOutput } = await import("@/lib/orchestrator-runtime");
+    // The critic model returned `reason: true` (boolean) — a common schema slip.
+    captured.reply = { verdict: "pass", reason: true };
+
+    const critique = await critiqueStepOutput(step(), "All good.");
+
+    expect(critique.verdict).toBe("pass");
+    expect(critique.reason).toBe("true");
+  });
+
+  it("treats an unknown verdict the schema cannot coerce as a clear critic failure (escalate)", async () => {
+    vi.stubEnv("CRITIC_RUBRIC_ENABLED", "");
+    const { critiqueStepOutput } = await import("@/lib/orchestrator-runtime");
+    // `maybe` is not a valid verdict; coercion can't fix it and the repair retry
+    // (same mock) fails too — the critic must surface a clear escalate, never a pass.
+    captured.reply = { verdict: "maybe", reason: "unsure" };
+
+    const critique = await critiqueStepOutput(step(), "Ambiguous output.");
+
+    expect(critique.verdict).toBe("escalate");
+    expect(critique.reason).toContain("critic LLM call failed");
+  });
+
   it("falls back to the expected-output bullet when a step has no spec contract", async () => {
     vi.stubEnv("CRITIC_RUBRIC_ENABLED", "1");
     const { critiqueStepOutput } = await import("@/lib/orchestrator-runtime");

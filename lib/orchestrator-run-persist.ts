@@ -5,29 +5,77 @@ import type { OrchestrationCritique, OrchestrationPlan, SeatLoopResumeState, Ste
 import type { OrchestrationRun } from "@/lib/orchestrator";
 import { cacheOrchestrationRun } from "@/lib/orchestrator-cache";
 import { stepSatisfiesDependency } from "@/lib/orchestrator-step-outcome";
+import {
+  TERMINAL_RUN_STATUSES,
+  reconcileRunStatus,
+  type OrchestratorRunStatusValue,
+} from "@/lib/orchestrator-run-reconcile";
 
 export async function hydrateOrchestrationRun(runId: string): Promise<OrchestrationRun | undefined> {
   const persisted = await store.getOrchestratorRun(runId).catch(() => undefined);
   if (!persisted) return undefined;
   const steps = await store.listOrchestratorSteps(runId).catch(() => []);
+  const events = await store.listOrchestratorEvents(runId).catch(() => []);
   const plan = await readPersistedPlan(runId);
+  const stepRecords = steps.map(fromPersistedStep);
+
+  // Durable run-truth reconciliation: a persisted "planning"/"running" status can
+  // be stale because the engine's final `updateOrchestratorRun(...status...)` is
+  // best-effort. Derive the truthful status from durable trace/step evidence so
+  // the snapshot never reports planning for a run the trace shows as finished.
+  const reconciliation = reconcileRunStatus({
+    persistedStatus: persisted.status,
+    steps: stepRecords,
+    events,
+  });
+
   const run: OrchestrationRun = {
     id: persisted.id,
     companyId: persisted.companyId,
     objective: persisted.objective,
-    status: persisted.status,
+    status: reconciliation.status,
     plan,
-    steps: steps.map(fromPersistedStep),
+    steps: stepRecords,
     summary: persisted.summary,
     startedAt: persisted.startedAt,
-    completedAt: persisted.completedAt,
+    completedAt: persisted.completedAt ?? terminalCompletedAt(reconciliation.status, events),
     trigger: persisted.trigger,
     cycleId: persisted.cycleId,
     fullTeam: plan?.steps.length ? plan.steps.length > 4 : false,
     replanCount: persisted.replanCount,
+    reconciled: reconciliation.reconciled,
+    reconciledFrom: reconciliation.reconciledFrom,
+    staleSnapshotDetected: reconciliation.staleSnapshotDetected,
   };
   cacheOrchestrationRun(run);
+
+  // Self-heal: when a real terminal run EVENT proves the run finished but the row
+  // is stale, durably correct the persisted status so the inconsistency does not
+  // recur on every read. Best-effort and guarded to terminal states only (we
+  // never write back awaiting_approval, which a resuming worker still owns).
+  if (
+    reconciliation.staleSnapshotDetected
+    && reconciliation.reconciledFrom === "trace"
+    && TERMINAL_RUN_STATUSES.has(reconciliation.status)
+  ) {
+    await store.updateOrchestratorRun(run.id, {
+      status: reconciliation.status,
+      completedAt: run.completedAt,
+    }).catch(() => undefined);
+  }
+
   return run;
+}
+
+/** Timestamp of the terminal run event, used to backfill a missing completedAt. */
+function terminalCompletedAt(
+  status: OrchestratorRunStatusValue,
+  events: Array<{ kind: string; createdAt?: string }>,
+): string | undefined {
+  if (!TERMINAL_RUN_STATUSES.has(status)) return undefined;
+  const terminalKinds = new Set(["run_done", "run_failed", "run_cancelled"]);
+  const terminal = [...events].reverse().find((evt) => terminalKinds.has(evt.kind));
+  return terminal?.createdAt;
 }
 
 export function buildCompletedOutputs(steps: StepRecord[]): Record<string, string> {

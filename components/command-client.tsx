@@ -30,6 +30,7 @@ import {
   type ActivityStep,
 } from "@/components/agent-activity";
 import { OrchestratorTraceDrawer } from "@/components/orchestrator-trace-drawer";
+import { isPollTerminalRunStatus } from "@/lib/orchestrator-run-reconcile";
 import { McpToolVisibilityPanel } from "@/components/mcp-tool-visibility-panel";
 import type { Artifact, CeoMessage, CeoSuggestion } from "@/lib/types";
 import type { CeoChatMode } from "@/lib/ceo-chat-mode";
@@ -205,7 +206,9 @@ export function CommandClient({ companyId }: { companyId: string }) {
     await new Promise<void>((resolve) => {
       const transcript = createOrchestrationTranscript(runId);
       const activityState = createOrchestrationActivityState(runId);
-      const TERMINAL = new Set(["awaiting_approval", "completed", "failed", "cancelled"]);
+      // Poll-terminal = the shared run-truth set (terminal OR paused-for-approval).
+      // awaiting_approval is paused, NOT lost contact, so the watchdog must stop on
+      // it too — sourced from isPollTerminalRunStatus so there is one definition.
       const SILENCE_MS = 45_000;
       const POLL_MS = 3_000;
       const POLL_LIMIT = 200; // ~10 minutes of polling before giving up
@@ -261,9 +264,21 @@ export function CommandClient({ companyId }: { companyId: string }) {
           try {
             const res = await fetch(`/api/companies/${companyId}/orchestrate?runId=${encodeURIComponent(runId)}`);
             if (res.ok) {
-              const data = await res.json() as { run?: { status?: string; summary?: string } };
+              const data = await res.json() as {
+                run?: { status?: string; summary?: string; reconciled?: boolean; staleSnapshotDetected?: boolean; reconciledFrom?: string };
+              };
               const status = data.run?.status;
-              if (status && TERMINAL.has(status)) {
+              // Dev/test diagnostic: when the snapshot was reconciled from durable
+              // trace/step state, the persisted run row disagreed with the truth.
+              // Surface it to logs only — never confuse the founder in the UI.
+              if (data.run?.staleSnapshotDetected && process.env.NODE_ENV !== "production") {
+                console.debug("[orchestrate] reconciled stale run snapshot", {
+                  runId,
+                  status,
+                  reconciledFrom: data.run.reconciledFrom,
+                });
+              }
+              if (isPollTerminalRunStatus(status)) {
                 const summary = data.run?.summary;
                 const headline = status === "completed" ? "Run completed. Saved CEO report:" : `Run ${status}.`;
                 transcript.lines.push("", headline, ...(summary ? ["", summary] : []));

@@ -480,8 +480,14 @@ export async function processExecuteStepPhase(run: OrchestrationRun, company: Co
   }
 }
 
-function shouldCompleteAfterCriticInfrastructureFailure(
-  step: StepRecord,
+/**
+ * A critic INFRASTRUCTURE failure (LLM/schema error, not a real "escalate"
+ * judgment) must not strand completed, usable, low-risk work — but it must NEVER
+ * auto-complete a high-risk step or a step with no usable output. Those still
+ * route to genuine escalation/review. Exported for direct safety-policy tests.
+ */
+export function shouldCompleteAfterCriticInfrastructureFailure(
+  step: Pick<StepRecord, "output" | "riskLevel">,
   critique: { verdict: string; reason?: string },
 ) {
   if (critique.verdict !== "escalate") return false;

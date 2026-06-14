@@ -38,3 +38,5 @@ dump.rdb
 public/downloads/*.zip
 artifacts/
 cursor-docs/
+
+.lab/

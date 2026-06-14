@@ -4,6 +4,11 @@ import type { VerifyCheck } from "@/lib/workbench-verify";
 import type { WorkbenchTemplateKind } from "@/lib/workbench-templates";
 import { STARTER_CONTEXT_FILES } from "@/lib/workbench-starter-template";
 import { MAX_BUILD_ATTEMPTS } from "@/lib/workbench-agent-types";
+import { renderRepoMap, type RepoFile } from "@/lib/workbench-repo-map";
+
+/** Cap on source files read to build the repo map (keeps remote providers cheap). */
+const REPO_MAP_MAX_FILES = 120;
+const CODE_FILE_RE = /\.(tsx?|jsx?|mjs|cjs)$/i;
 
 const INTRO =
   "You are Trent's autonomous build agent — an exceptional senior software developer who " +
@@ -124,14 +129,41 @@ export async function buildProjectContext(
 
     const tree = files.slice(0, 60).map((f) => (f.isDir ? `📁 ${f.path}/` : `  ${f.path}`)).join("\n");
 
+    // Read code files once (bounded) and cache them — reused for both the repo
+    // map and the full key-file contents below so we never read a file twice.
+    const cache = new Map<string, string>();
+    const codePaths = files
+      .filter((f) => !f.isDir && CODE_FILE_RE.test(f.path) && !f.path.includes("node_modules"))
+      .slice(0, REPO_MAP_MAX_FILES)
+      .map((f) => f.path);
+    for (const path of codePaths) {
+      try {
+        const content = await provider.readFile(session, path);
+        if (content) cache.set(path, content);
+      } catch { /* skip unreadable file */ }
+    }
+
+    // Relevance-ranked skeleton (path → exported symbols) so the model can edit
+    // files it has never seen the full contents of, instead of editing blind.
+    const repoFiles: RepoFile[] = [...cache].map(([path, content]) => ({ path, content }));
+    const repoMap = repoFiles.length
+      ? renderRepoMap(repoFiles, { seeds: [...contextFiles], tokenBudget: 1200 })
+      : "";
+
+    // Full contents of the files in play (cache hit, else fetch — covers css/config).
     const keyContents: string[] = [];
     for (const path of contextFiles) {
       try {
-        const content = await provider.readFile(session, path);
-        if (content) keyContents.push(`\`\`\`${path}\n${content.slice(0, 2000)}\n\`\`\``);
+        const content = cache.get(path) ?? (await provider.readFile(session, path));
+        if (content) keyContents.push(`\`\`\`${path}\n${content.slice(0, 4000)}\n\`\`\``);
       } catch { /* file may not exist */ }
     }
-    return [`File tree:\n${tree}`, ...keyContents].join("\n\n");
+
+    return [
+      `File tree:\n${tree}`,
+      repoMap ? `Repo map (exported symbols, most-relevant first):\n${repoMap}` : "",
+      ...keyContents,
+    ].filter(Boolean).join("\n\n");
   } catch {
     return "";
   }
