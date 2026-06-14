@@ -6,7 +6,7 @@ export default async function WorkbenchPage({ params }: { params: Promise<{ id: 
   const { id } = await params;
   const agents = await resolveWorkbenchAgentsForCompany(id);
   return (
-    <AppShell companyId={id}>
+    <AppShell companyId={id} wide>
       <WorkbenchClient companyId={id} agents={agents} />
     </AppShell>
   );

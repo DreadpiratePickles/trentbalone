@@ -5,12 +5,12 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  min-height: 61px;
-  padding: 13px 40px;
+  min-height: 64px;
+  padding: 14px var(--stage-pad-x, 40px);
   border-bottom: 1px solid var(--line-1);
-  background: rgba(10,10,15,.84);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: rgba(10,10,15,.72);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
 .app-shell-grid[data-mobile="true"] .tbar {

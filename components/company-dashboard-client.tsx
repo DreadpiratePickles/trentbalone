@@ -120,6 +120,14 @@ export function CompanyDashboardClient({ companyId }: { companyId: string }) {
 
   return (
     <div>
+      <ConsoleHero
+        companyId={companyId}
+        companyName={company.name}
+        running={running}
+        onRunCycle={runCycle}
+        pendingApprovals={pendingApprovals.length}
+      />
+
       <PageHeader
         eyebrow="company console"
         title={company.name}
@@ -268,6 +276,103 @@ export function CompanyDashboardClient({ companyId }: { companyId: string }) {
           {/* Stats */}
           <StatsCard company={company} tasks={data.tasks} />
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Console Hero (centered prompt composition) ─────────────────────────
+
+function ConsoleHero({
+  companyId,
+  companyName,
+  running,
+  onRunCycle,
+  pendingApprovals,
+}: {
+  companyId: string;
+  companyName: string;
+  running: boolean;
+  onRunCycle: () => void;
+  pendingApprovals: number;
+}) {
+  const router = useRouter();
+  const [prompt, setPrompt] = useState("");
+
+  const greeting = (() => {
+    const hour = new Date().getHours();
+    if (hour < 12) return "good morning";
+    if (hour < 17) return "good afternoon";
+    return "good evening";
+  })();
+
+  function submit() {
+    const q = prompt.trim();
+    const base = `/companies/${companyId}/command`;
+    const href = q ? `${base}?q=${encodeURIComponent(q)}` : base;
+    router.push(href as Parameters<typeof router.push>[0]);
+  }
+
+  return (
+    <div className="stage-hero">
+      <span className="stage-hero-eyebrow">{greeting} · {companyName}</span>
+      <h1 className="stage-hero-title">What should Trent ship next?</h1>
+      <p className="stage-hero-sub">
+        Describe an objective and Trent&apos;s agents will plan it — or kick off the next operating cycle.
+      </p>
+
+      <form
+        className="stage-prompt"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <I.sparkle width={16} height={16} style={{ color: "var(--haze)", flexShrink: 0 }} />
+        <input
+          className="stage-prompt-input"
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          placeholder="e.g. draft the launch announcement and a pricing experiment…"
+          aria-label="Tell Trent what to work on"
+        />
+        <button type="submit" className="stage-prompt-go">
+          <I.sparkle width={13} height={13} /> ask trent
+        </button>
+      </form>
+
+      <div className="stage-hero-actions">
+        <button
+          className="btn btn-pulse btn-mono"
+          onClick={onRunCycle}
+          disabled={running}
+          style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+        >
+          {running ? <Spinner /> : <I.play width={13} height={13} />}
+          {running ? "running…" : "run cycle"}
+        </button>
+        <button
+          className="btn btn-secondary btn-mono"
+          onClick={() => router.push(`/companies/${companyId}/approvals` as Parameters<typeof router.push>[0])}
+          style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+        >
+          <I.diamond width={13} height={13} /> approvals
+          {pendingApprovals > 0 && (
+            <span
+              className="mono"
+              style={{ fontSize: 9, background: "var(--ember)", color: "#1A0A05", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}
+            >
+              {pendingApprovals}
+            </span>
+          )}
+        </button>
+        <button
+          className="btn btn-ghost btn-mono"
+          onClick={() => router.push(`/companies/${companyId}/workbench` as Parameters<typeof router.push>[0])}
+          style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+        >
+          <I.building width={13} height={13} /> workbench
+        </button>
       </div>
     </div>
   );

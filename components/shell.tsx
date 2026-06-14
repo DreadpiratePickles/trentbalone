@@ -10,9 +10,11 @@ import { ConsoleMark, I } from "@/components/ui";
 type AppShellProps = {
   children: ReactNode;
   companyId?: string;
+  /** Full-bleed stage for editor/workspace pages (workbench, trenchpad). */
+  wide?: boolean;
 };
 
-export function AppShell({ children, companyId }: AppShellProps) {
+export function AppShell({ children, companyId, wide }: AppShellProps) {
   const [companies, setCompanies] = useState<ShellCompany[]>([]);
   const [company, setCompany] = useState<ShellCompany | null>(null);
   const [isMobile, setIsMobile] = useState(false);
@@ -160,7 +162,7 @@ export function AppShell({ children, companyId }: AppShellProps) {
           onToggleKillSwitch={toggleKillSwitch}
         />
         <TrialBanner company={company} />
-        <main className="app-main">{children}</main>
+        <main className="app-main" data-wide={wide ? "true" : undefined}>{children}</main>
       </div>
       <CommandPalette
         open={paletteOpen}

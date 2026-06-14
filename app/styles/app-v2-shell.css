@@ -11,6 +11,19 @@
   --focus-ring: 0 0 0 3px rgba(110,231,183,.18);
   --pulse-tint: rgba(110,231,183,.08);
   --ember-tint: rgba(251,146,60,.08);
+
+  /* ── Workspace stage + restrained elevation (modern refresh) ── */
+  --rail-w: 240px;
+  --stage-max: 1120px;
+  --stage-narrow: 760px;
+  --stage-pad-x: clamp(24px, 4vw, 56px);
+  --stage-pad-top: clamp(28px, 3vw, 44px);
+  --panel-radius: 14px;
+  --panel-bg: var(--surface-1);
+  /* crisp single-layer elevation — calm, not "marketing card" */
+  --elev-1: inset 0 1px 0 rgba(255,255,255,.03), 0 1px 2px rgba(0,0,0,.4);
+  --elev-2: inset 0 1px 0 rgba(255,255,255,.04), 0 10px 30px -14px rgba(0,0,0,.62);
+
   background: var(--obsidian);
   color: var(--bone);
 }
@@ -45,12 +58,34 @@
 
 .app-main {
   flex: 1;
-  padding: 32px 40px 80px;
+  padding: var(--stage-pad-top) var(--stage-pad-x) 96px;
   position: relative;
+}
+
+/* Centered stage: default pages breathe in a bounded column.
+   Most page clients render a single root element, so centering its
+   direct children gives a calm, a competing platform-like open canvas. */
+.app-main > * {
+  max-width: var(--stage-max);
+  margin-inline: auto;
+}
+
+/* Full-bleed escape hatch for editor/workspace surfaces (workbench, trenchpad). */
+.app-main[data-wide="true"] {
+  padding: 24px clamp(16px, 2vw, 28px) 64px;
+}
+
+.app-main[data-wide="true"] > * {
+  max-width: none;
+  margin-inline: 0;
 }
 
 .app-shell-grid[data-mobile="true"] .app-main {
   padding: 20px 16px 80px;
+}
+
+.app-shell-grid[data-mobile="true"] .app-main > * {
+  max-width: none;
 }
 
 .nav-mobile-scrim {
@@ -93,7 +128,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 4px 8px 18px;
+  padding: 6px 10px 18px;
 }
 
 .nav-logo .mono {
@@ -129,10 +164,16 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px;
-  border: 1px solid var(--line-1);
-  border-radius: 8px;
-  background: var(--surface-2);
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: rgba(255,255,255,.018);
+  transition: background .15s ease, border-color .15s ease;
+}
+
+.nav-company-button:hover {
+  background: rgba(255,255,255,.04);
+  border-color: var(--line-1);
 }
 
 .nav-company-mark,
@@ -250,8 +291,8 @@
 
 .nav-groups {
   display: grid;
-  gap: 8px;
-  margin-top: 18px;
+  gap: 12px;
+  margin-top: 16px;
 }
 
 .nav-section {
@@ -309,17 +350,17 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 34px;
+  min-height: 33px;
   padding: 0 10px;
   border-radius: 8px;
   background: transparent;
-  color: #CFCAC0;
+  color: #C7C2B8;
   font-size: 13px;
-  transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+  transition: background .12s ease, color .12s ease, box-shadow .12s ease;
 }
 
 .nav-item:hover {
-  background: rgba(255,255,255,.035);
+  background: rgba(255,255,255,.045);
   color: var(--bone);
 }
 
@@ -425,4 +466,191 @@
   color: var(--bone-2);
   font-size: 12px;
   line-height: 1.4;
+}
+
+/* ── Workspace surfaces (modern) ───────────────────────────────
+   Scoped to .app-main so the marketing landing's .card stays untouched.
+   Goal: crisp, restrained operating panels — no big radii, no hover lift,
+   no card-inside-card heaviness. */
+
+/* Crisp the radii used by inline-styled workspace panels (var(--r-lg/md)).
+   Scoped to .app-main so the marketing landing keeps its softer radii.
+   22px → 16px reads as "operating surface", not "marketing bubble". */
+.app-main {
+  --r-lg: 16px;
+  --r-md: 12px;
+}
+
+/* Re-tune the shared .card inside the workspace only. */
+.app-main .card {
+  border-radius: var(--panel-radius);
+  border-color: var(--line-1);
+  box-shadow: var(--elev-1);
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+
+.app-main .card:hover {
+  transform: none;
+  border-color: var(--line-2);
+  box-shadow: var(--elev-2);
+}
+
+/* Defuse card-inside-card: nested surfaces go flat. */
+.app-main .card .card,
+.app-main .panel .card,
+.app-main .card .panel {
+  box-shadow: none;
+  background: var(--surface-2);
+  border-color: var(--line-1);
+}
+
+.app-main .card .card:hover,
+.app-main .panel .card:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+/* Dedicated restrained panel primitive for operating pages. */
+.panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--line-1);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--elev-1);
+}
+
+.panel.pad,
+.panel-pad {
+  padding: 22px 24px;
+}
+
+.panel.is-quiet {
+  background: var(--surface-2);
+  box-shadow: none;
+}
+
+/* Stage width helpers — let pages opt into a narrower or full-bleed column
+   without fighting the default centered stage. */
+.stage {
+  width: 100%;
+  max-width: var(--stage-max);
+  margin-inline: auto;
+}
+
+.stage.narrow {
+  max-width: var(--stage-narrow);
+}
+
+.stage.wide {
+  max-width: none;
+}
+
+/* Centered prompt/action composition for the home/dashboard hero. */
+.stage-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 18px;
+  max-width: 720px;
+  margin: clamp(16px, 6vh, 64px) auto clamp(28px, 5vh, 52px);
+}
+
+.stage-hero .stage-hero-eyebrow {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--haze);
+}
+
+.stage-hero .stage-hero-title {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 34px);
+  font-weight: 680;
+  letter-spacing: -.01em;
+  line-height: 1.12;
+  color: var(--bone);
+}
+
+.stage-hero .stage-hero-sub {
+  margin: 0;
+  max-width: 52ch;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #B8B2A4;
+}
+
+/* Floating command/prompt surface (the a competing platform-signature centered input). */
+.stage-prompt {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-2);
+  border-radius: 16px;
+  background: var(--surface-1);
+  box-shadow: var(--elev-2);
+  transition: border-color .18s ease, box-shadow .18s ease;
+  cursor: text;
+}
+
+.stage-prompt:hover,
+.stage-prompt:focus-within {
+  border-color: var(--line-pulse);
+}
+
+.stage-prompt .stage-prompt-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--bone);
+  font-size: 15px;
+}
+
+.stage-prompt .stage-prompt-input::placeholder {
+  color: var(--haze);
+}
+
+.stage-prompt .stage-prompt-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--pulse);
+  color: var(--obsidian);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.stage-prompt .stage-prompt-go:hover {
+  background: #8DEEC4;
+}
+
+.stage-hero-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+@media (max-width: 760px) {
+  .stage-prompt {
+    flex-wrap: wrap;
+  }
+  .stage-prompt .stage-prompt-input {
+    flex-basis: 100%;
+    min-height: 28px;
+  }
+  .stage-prompt .stage-prompt-go {
+    margin-left: auto;
+  }
 }

@@ -42,14 +42,14 @@ import {
   type OrchStreamPayload,
 } from "@/lib/command-orchestration-transcript";
 
-export function CommandClient({ companyId }: { companyId: string }) {
+export function CommandClient({ companyId, initialPrompt }: { companyId: string; initialPrompt?: string }) {
   const [messages, setMessages] = useState<CeoMessage[]>([]);
   const [suggestions, setSuggestions] = useState<CeoSuggestion[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [mode, setMode] = useState<RunMode>("agent");
   const [model, setModel] = useState<ModelKey>("claude-sonnet-4-5");
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialPrompt ?? "");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [streaming, setStreaming] = useState(false);
