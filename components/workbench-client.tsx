@@ -16,11 +16,12 @@ import {
   type WorkbenchSurfaceMode,
 } from "@/lib/workbench-client-surface";
 import { workbenchPreviewFrameSrc } from "@/lib/workbench-preview-url";
+import { findPendingWorkbenchPlanApproval, type WorkbenchApprovalSummary } from "@/lib/workbench-approval-ui";
 import { readApiError } from "@/lib/read-api-error";
 import { ErrorBanner, LlmNotConfiguredBanner } from "@/components/error-banner";
 import { useRuntimeHealth } from "@/components/runtime-health";
 import { useStatusToast } from "@/components/status-toast";
-import type { AgentRole, WorkbenchSessionMetadata } from "@/lib/types";
+import type { AgentRole, CompanyAutonomyMode, CompanyAutonomySettings, WorkbenchSessionMetadata } from "@/lib/types";
 import { McpToolVisibilityPanel } from "@/components/mcp-tool-visibility-panel";
 
 // ── Types (mirror lib/types-workbench + lib/workbench-agent chunk protocol) ──────
@@ -119,6 +120,11 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
   const [composerError, setComposerError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadNotice, setUploadNotice] = useState("");
+  const [approvals, setApprovals] = useState<WorkbenchApprovalSummary[]>([]);
+  const [approvalActionId, setApprovalActionId] = useState<string | null>(null);
+  const [autonomyMode, setAutonomyMode] = useState<CompanyAutonomyMode>("supervised");
+  const [autonomySaving, setAutonomySaving] = useState(false);
+  const [autonomyNotice, setAutonomyNotice] = useState("");
   const [surfaceMode, setSurfaceMode] = useState<WorkbenchSurfaceMode>(() => surfaceModeFromQuery(searchParams.get("mode")));
   const agents = useMemo(() => initialAgents?.length ? initialAgents : getWorkbenchAgents(), [initialAgents]);
   const [selectedAgentRole, setSelectedAgentRole] = useState<WorkbenchAgent["role"]>("engineer");
@@ -133,6 +139,10 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
   const llmConfigured = healthLoading ? true : (readiness?.llm ?? false);
 
   const active = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [sessions, activeId]);
+  const pendingPlanApproval = useMemo(
+    () => findPendingWorkbenchPlanApproval(active?.id, approvals),
+    [active?.id, approvals],
+  );
   const transcriptRef = useRef<HTMLDivElement>(null);
   const autoOpenedRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -157,7 +167,23 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
     if (stRes.ok) setStats((await stRes.json()).stats ?? null);
   }, [companyId, pushError]);
 
+  const refreshApprovals = useCallback(async () => {
+    const res = await fetch(`/api/approvals?companyId=${companyId}`);
+    if (!res.ok) return;
+    const data = await res.json() as { approvals?: WorkbenchApprovalSummary[] };
+    setApprovals(data.approvals ?? []);
+  }, [companyId]);
+
+  const refreshAutonomy = useCallback(async () => {
+    const res = await fetch(`/api/companies/${companyId}/autonomy`);
+    if (!res.ok) return;
+    const data = await res.json() as { autonomy?: CompanyAutonomySettings };
+    if (data.autonomy?.mode) setAutonomyMode(data.autonomy.mode);
+  }, [companyId]);
+
   useEffect(() => { void refreshSessions(); }, [refreshSessions]);
+  useEffect(() => { void refreshApprovals(); }, [refreshApprovals]);
+  useEffect(() => { void refreshAutonomy(); }, [refreshAutonomy]);
 
   const loadSession = useCallback(async (id: string) => {
     setActiveId(id);
@@ -370,8 +396,69 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
 
   const refreshActive = useCallback(async () => {
     await refreshSessions();
+    await refreshApprovals();
     if (activeId) await loadSession(activeId);
-  }, [activeId, loadSession, refreshSessions]);
+  }, [activeId, loadSession, refreshApprovals, refreshSessions]);
+
+  const setWorkbenchAutonomy = useCallback(async (mode: CompanyAutonomyMode) => {
+    setAutonomySaving(true);
+    setAutonomyNotice("");
+    try {
+      const res = await fetch(`/api/companies/${companyId}/autonomy`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      if (!res.ok) {
+        const message = await readApiError(res);
+        setAutonomyNotice(message);
+        pushError(message);
+        return;
+      }
+      const data = await res.json() as { autonomy?: CompanyAutonomySettings };
+      setAutonomyMode(data.autonomy?.mode ?? mode);
+      setAutonomyNotice(mode === "autonomous"
+        ? "Autonomous test mode is on. Workbench plans can write/run without the first approval pause."
+        : "Supervised mode restored. New Workbench plans pause for approval before writes.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Autonomy update failed";
+      setAutonomyNotice(message);
+      pushError(message);
+    } finally {
+      setAutonomySaving(false);
+    }
+  }, [companyId, pushError]);
+
+  const resolveWorkbenchApproval = useCallback(async (
+    approval: WorkbenchApprovalSummary,
+    status: "approved" | "rejected",
+  ) => {
+    setApprovalActionId(approval.id);
+    setComposerError("");
+    try {
+      const res = await fetch(`/api/approvals/${approval.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) {
+        const message = await readApiError(res);
+        setComposerError(message);
+        pushError(message);
+        return;
+      }
+      setUploadNotice(status === "approved"
+        ? "Workbench plan approved. Continue the session when you are ready."
+        : "Workbench plan rejected.");
+      await refreshActive();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Approval update failed";
+      setComposerError(message);
+      pushError(message);
+    } finally {
+      setApprovalActionId(null);
+    }
+  }, [pushError, refreshActive]);
 
   const stopRun = useCallback(async () => {
     if (!active || streaming) return;
@@ -553,6 +640,21 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
                 <div className="mono" style={S.subMeta}>
                   <WorkbenchStatusDot status={active.status} /> {active.status} · {active.costCents}¢ spent
                 </div>
+                <div style={S.autonomyLine}>
+                  <span className="mono" style={S.autonomyLabel}>mode: {autonomyMode}</span>
+                  <button
+                    type="button"
+                    onClick={() => void setWorkbenchAutonomy(autonomyMode === "autonomous" ? "supervised" : "autonomous")}
+                    disabled={autonomySaving}
+                    style={S.autonomyBtn(autonomyMode === "autonomous")}
+                    title={autonomyMode === "autonomous"
+                      ? "Return Workbench to supervised plan approvals"
+                      : "Let Workbench skip the first plan approval pause while keeping risky external actions gated"}
+                  >
+                    {autonomySaving ? <Spinner /> : autonomyMode === "autonomous" ? <><I.bolt /> Autonomous on</> : <><I.play /> Make autonomous</>}
+                  </button>
+                </div>
+                {autonomyNotice ? <div className="mono" style={S.autonomyNotice}>{autonomyNotice}</div> : null}
               </div>
               <div style={{ display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
                 {(active.status === "running" || active.status === "starting") && (
@@ -573,6 +675,14 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
             </div>
 
             <div ref={transcriptRef} style={S.transcript}>
+              {pendingPlanApproval ? (
+                <WorkbenchPlanApprovalNotice
+                  approval={pendingPlanApproval}
+                  busy={approvalActionId === pendingPlanApproval.id}
+                  onApprove={() => void resolveWorkbenchApproval(pendingPlanApproval, "approved")}
+                  onReject={() => void resolveWorkbenchApproval(pendingPlanApproval, "rejected")}
+                />
+              ) : null}
               {messages.map((m) => <WorkbenchBubble key={m.id} role={m.role} content={m.content} />)}
               {(streaming || activity.length > 0) && (
                 <div style={{ marginBottom: 12 }}>
@@ -740,6 +850,43 @@ function sessionChipCode(session: Session): string {
   return MODES.find((mode) => mode.key === session.agentMode)?.code ?? "BLD";
 }
 
+export function WorkbenchPlanApprovalNotice({
+  approval,
+  busy,
+  onApprove,
+  onReject,
+}: {
+  approval: WorkbenchApprovalSummary;
+  busy?: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  return (
+    <section style={S.approvalNotice} data-testid="workbench-plan-approval-notice">
+      <div style={S.approvalNoticeTop}>
+        <span style={S.approvalIcon}><I.shield /></span>
+        <div style={{ minWidth: 0 }}>
+          <div style={S.approvalTitle}>Workbench plan needs approval</div>
+          <p style={S.approvalBody}>
+            Review the plan below, then approve it here. Full autonomous mode skips this first plan pause while keeping risky external actions gated.
+          </p>
+        </div>
+      </div>
+      {approval.previewContent ? (
+        <pre style={S.approvalPreview}>{approval.previewContent}</pre>
+      ) : null}
+      <div style={S.approvalActions}>
+        <button type="button" onClick={onReject} disabled={busy} style={S.rejectBtn}>
+          {busy ? <Spinner /> : <I.x />} Reject
+        </button>
+        <button type="button" onClick={onApprove} disabled={busy} style={S.approveBtn}>
+          {busy ? <Spinner /> : <I.check />} Approve plan
+        </button>
+      </div>
+    </section>
+  );
+}
+
 // ── Inline styles (house design tokens) ───────────────────────────────────────
 
 const border = "1px solid rgba(255,255,255,.07)";
@@ -798,6 +945,17 @@ const S = {
   centerHead: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, padding: "16px 20px", borderBottom: border } as React.CSSProperties,
   objective: { fontSize: 15, fontWeight: 600 } as React.CSSProperties,
   subMeta: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--mist)", marginTop: 8 } as React.CSSProperties,
+  autonomyLine: { display: "flex", alignItems: "center", gap: 8, marginTop: 9, flexWrap: "wrap" } as React.CSSProperties,
+  autonomyLabel: { fontSize: 10, color: "var(--haze)", textTransform: "uppercase", letterSpacing: ".08em" } as React.CSSProperties,
+  autonomyBtn: (active: boolean) => ({
+    display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
+    height: 28, padding: "0 10px", borderRadius: 8,
+    border: active ? "1px solid rgba(110,231,183,.44)" : border,
+    background: active ? "rgba(110,231,183,.12)" : "rgba(255,255,255,.03)",
+    color: active ? "var(--pulse)" : "var(--mist)", fontSize: 11, fontWeight: 700,
+    cursor: "pointer", whiteSpace: "nowrap",
+  }) as React.CSSProperties,
+  autonomyNotice: { marginTop: 6, fontSize: 10, color: "var(--mist)", lineHeight: 1.4, maxWidth: 520 } as React.CSSProperties,
   previewLink: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--ember)", textDecoration: "none", padding: "6px 10px", border: "1px solid rgba(251,146,60,.3)", borderRadius: 7 } as React.CSSProperties,
   ghostBtn: {
     display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
@@ -806,6 +964,38 @@ const S = {
     cursor: "pointer", whiteSpace: "nowrap",
   } as React.CSSProperties,
   transcript: { flex: 1, overflowY: "auto", padding: "20px", minHeight: 0 } as React.CSSProperties,
+  approvalNotice: {
+    marginBottom: 14, padding: 14, borderRadius: 12,
+    border: "1px solid rgba(110,231,183,.28)",
+    background: "linear-gradient(135deg, rgba(110,231,183,.11), rgba(255,255,255,.025))",
+    boxShadow: "0 18px 42px rgba(0,0,0,.18)",
+  } as React.CSSProperties,
+  approvalNoticeTop: { display: "flex", gap: 11, alignItems: "flex-start" } as React.CSSProperties,
+  approvalIcon: {
+    width: 30, height: 30, borderRadius: 9, flexShrink: 0,
+    display: "inline-flex", alignItems: "center", justifyContent: "center",
+    color: "var(--pulse)", background: "rgba(110,231,183,.1)",
+    border: "1px solid rgba(110,231,183,.2)",
+  } as React.CSSProperties,
+  approvalTitle: { fontSize: 14, fontWeight: 800, color: "var(--bone)" } as React.CSSProperties,
+  approvalBody: { margin: "5px 0 0", color: "var(--mist)", fontSize: 12, lineHeight: 1.45 } as React.CSSProperties,
+  approvalPreview: {
+    margin: "12px 0 0", maxHeight: 190, overflow: "auto", whiteSpace: "pre-wrap",
+    border: "1px solid rgba(255,255,255,.08)", borderRadius: 10,
+    padding: "10px 11px", background: "rgba(0,0,0,.2)", color: "var(--mist)",
+    fontSize: 11, lineHeight: 1.45, fontFamily: "var(--mono)",
+  } as React.CSSProperties,
+  approvalActions: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12, flexWrap: "wrap" } as React.CSSProperties,
+  approveBtn: {
+    display: "inline-flex", alignItems: "center", gap: 6, height: 32, padding: "0 12px",
+    borderRadius: 8, border: "none", background: "var(--pulse)", color: "#04140d",
+    fontSize: 12, fontWeight: 800, cursor: "pointer",
+  } as React.CSSProperties,
+  rejectBtn: {
+    display: "inline-flex", alignItems: "center", gap: 6, height: 32, padding: "0 12px",
+    borderRadius: 8, border, background: "rgba(255,255,255,.03)", color: "var(--mist)",
+    fontSize: 12, fontWeight: 700, cursor: "pointer",
+  } as React.CSSProperties,
   composer: { display: "flex", flexWrap: "wrap", gap: 10, padding: "14px 20px", borderTop: border } as React.CSSProperties,
   textarea: { flex: 1, resize: "none", minHeight: 52, maxHeight: 140, background: surface, border, borderRadius: 10, padding: "12px 14px", color: "var(--bone)", fontSize: 14, fontFamily: "var(--display)", outline: "none" } as React.CSSProperties,
   sendBtn: (disabled: boolean) => ({

@@ -6,8 +6,10 @@ import {
   inferApprovalAction,
   isExternalWriteApprovalBlock,
   pauseWorkbenchForCommandApproval,
+  shouldRequireWorkbenchPlanApproval,
   summarizeWorkbenchPlanActions,
 } from "@/lib/workbench-approval-gate";
+import { defaultAutonomySettings } from "@/lib/autonomy-settings";
 
 describe("workbench-approval-gate", () => {
   it("maps git push to git_push gate", () => {
@@ -98,5 +100,55 @@ describe("workbench-approval-gate", () => {
     await store.resolveApproval(first.approvalId, "approved");
     const second = await ensureWorkbenchPlanApproval(session, "Build approved UI", actions);
     expect(second).toMatchObject({ approved: true, approvalId: first.approvalId, fingerprint: first.fingerprint });
+  });
+
+  it("skips only the Workbench plan approval gate for autonomous companies", async () => {
+    const autonomousCompany = await store.createCompany({
+      name: `Autonomous Workbench ${Date.now()}`,
+      brief: {
+        vision: "test autonomous workbench",
+      },
+    });
+    const supervisedCompany = await store.createCompany({
+      name: `Supervised Workbench ${Date.now()}`,
+      brief: {
+        vision: "test supervised workbench",
+      },
+    });
+    await store.updateCompany(autonomousCompany.id, {
+      brief: { ...autonomousCompany.brief, autonomy: defaultAutonomySettings("autonomous") },
+    });
+    await store.updateCompany(supervisedCompany.id, {
+      brief: { ...supervisedCompany.brief, autonomy: defaultAutonomySettings("supervised") },
+    });
+    const baseMetadata = {
+      networkPolicy: "deny_all" as const,
+      allowedHosts: [],
+      maxRuntimeSeconds: 600,
+      maxCostCents: 100,
+      approvalRequiredFor: ["workbench_plan", "deploy"],
+      rollbackAvailable: true,
+    };
+    const autonomousSession = await store.createWorkbenchSession({
+      companyId: autonomousCompany.id,
+      agentRole: "engineer",
+      agentMode: "build",
+      provider: "mock_local",
+      status: "running",
+      objective: "Build without plan pause",
+      metadata: baseMetadata,
+    });
+    const supervisedSession = await store.createWorkbenchSession({
+      companyId: supervisedCompany.id,
+      agentRole: "engineer",
+      agentMode: "build",
+      provider: "mock_local",
+      status: "running",
+      objective: "Build with plan pause",
+      metadata: baseMetadata,
+    });
+
+    await expect(shouldRequireWorkbenchPlanApproval(autonomousSession)).resolves.toBe(false);
+    await expect(shouldRequireWorkbenchPlanApproval(supervisedSession)).resolves.toBe(true);
   });
 });

@@ -22,7 +22,7 @@ import {
   persistWorkbenchFileArtifact,
 } from "@/lib/workbench-verification-artifacts";
 import { nowIso } from "@/lib/utils";
-import { ensureWorkbenchPlanApproval, WorkbenchApprovalRequiredError } from "@/lib/workbench-approval-gate";
+import { ensureWorkbenchPlanApproval, shouldRequireWorkbenchPlanApproval, WorkbenchApprovalRequiredError } from "@/lib/workbench-approval-gate";
 import { PREVIEW_PID_FILENAME } from "@/lib/workbench-preview-reaper";
 import { syntaxErrorSummary } from "@/lib/workbench-syntax-gate";
 import {
@@ -319,9 +319,7 @@ export async function* runBuildLoop(
       detail: `Substrate: ${template.label} (${template.summary})`,
     };
   }
-  const requiresPlanApproval = session.metadata.approvalRequiredFor.some((gate) =>
-    gate === "workbench_plan" || gate === "workbench.plan" || gate === "plan",
-  );
+  const requiresPlanApproval = await shouldRequireWorkbenchPlanApproval(session);
   if (scopePolicy.intent !== "build") {
     yield {
       type: "status",

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { getCompanyAutonomySettings } from "@/lib/autonomy-settings";
 import { store } from "@/lib/store";
 import type { WorkbenchSession } from "@/lib/types";
 import type { ArtifactAction } from "@/lib/workbench-artifact-parser";
@@ -49,6 +50,19 @@ export function fingerprintWorkbenchPlan(actions: ArtifactAction[]): string {
     return { type: action.type, command: action.command };
   });
   return createHash("sha256").update(JSON.stringify(normalized)).digest("hex").slice(0, 16);
+}
+
+function hasWorkbenchPlanGate(session: WorkbenchSession): boolean {
+  return session.metadata.approvalRequiredFor.some((gate) =>
+    gate === "workbench_plan" || gate === "workbench.plan" || gate === "plan",
+  );
+}
+
+export async function shouldRequireWorkbenchPlanApproval(session: WorkbenchSession): Promise<boolean> {
+  if (!hasWorkbenchPlanGate(session)) return false;
+  const company = await store.getCompany(session.companyId).catch(() => undefined);
+  if (company && getCompanyAutonomySettings(company).mode === "autonomous") return false;
+  return true;
 }
 
 export async function ensureWorkbenchPlanApproval(
