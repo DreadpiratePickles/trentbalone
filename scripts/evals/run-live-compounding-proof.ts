@@ -75,6 +75,7 @@ async function main() {
       [{ title: "Ship variant A ('Join the waitlist') as the default CTA", rationale: "Neutral framing is safer for launch; measure conversion before committing." }],
     );
     proof.cycle1JournalId = cycle1Journal.id;
+    proof.cycle1CeoDecision = "Ship variant A ('Join the waitlist') as the default CTA";
 
     // ---------- wait for PostHog ingestion, then read the REAL outcome ----------
     const outcome = await pollExperimentOutcome(host, projectId, personalKey, experimentKey, 600_000);
@@ -84,6 +85,9 @@ async function main() {
     // ---------- CYCLE 2 ----------
     const recall = await buildSeatRegistryRecall(company.id, "growth");
     proof.cycle2RecalledExperiment = recall.includes(experimentKey);
+    proof.cycle2RecallText = recall;
+    proof.postHogEventProvenance = "seeded";
+    proof.postHogEventProvenanceNote = "Events are seeded proof traffic via PostHog /batch (not organic product sessions). HogQL outcome read and CEO decision change are live against real PostHog data.";
 
     const outcomeText = outcome.rows.map((r) => `variant ${r.variant}: ${r.submits}/${r.views} = ${pct(r.submits, r.views)}% conversion`).join("; ");
     proof.outcomeText = outcomeText;
@@ -118,6 +122,11 @@ async function main() {
     );
     proof.cycle2JournalId = cycle2Journal.id;
     proof.cycle2CeoDecision = ceoDecision.text;
+    proof.ceoDecisionChange = {
+      before: proof.cycle1CeoDecision,
+      after: ceoDecision.text,
+      journalDiff: { cycle1JournalId: cycle1Journal.id, cycle2JournalId: cycle2Journal.id },
+    };
 
     // ---------- verify the compounding ----------
     const winner = outcome.rows.slice().sort((a, b) => (b.submits / b.views) - (a.submits / a.views))[0];

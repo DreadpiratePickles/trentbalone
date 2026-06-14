@@ -147,11 +147,20 @@ export function resendToken(env: EnvLike = process.env): string | undefined {
   return firstNonEmpty(env.RESEND_AUTH_TOKEN, env.RESEND_API_KEY);
 }
 
+export function normalizeOutboundEmailDomain(domain: string): string {
+  return domain
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/.*$/, "")
+    .replace(/^send\./i, "")
+    .replace(/^mail\./i, "")
+    .toLowerCase();
+}
+
 export function resendFromAddress(env: EnvLike = process.env): string | undefined {
   const explicit = firstNonEmpty(env.RESEND_FROM_EMAIL, env.TRENT_EMAIL_FROM, env.EMAIL_FROM);
   if (explicit) return explicit;
   const domain = firstNonEmpty(env.RESEND_FROM_DOMAIN, env.TRENT_EMAIL_DOMAIN, env.TRENT_PLATFORM_DOMAIN, env.BASE_DOMAIN);
-  return domain ? `Trent <hello@${domain}>` : undefined;
+  return domain ? `Trent <hello@${normalizeOutboundEmailDomain(domain)}>` : undefined;
 }
 
 function resendSenderDomain(env: EnvLike = process.env): string | undefined {

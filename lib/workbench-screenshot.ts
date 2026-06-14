@@ -91,7 +91,7 @@ export async function isPlaywrightAvailable(launch: ProbeLauncher = defaultProbe
 export async function screenshotUrl(
   url: string,
   viewport: Viewport = VIEWPORTS.desktop,
-  options: ScreenshotOptions = {}
+  options: ScreenshotOptions & { extraHTTPHeaders?: Record<string, string> } = {},
 ): Promise<Buffer> {
   const { chromium } = await import("playwright");
 
@@ -101,6 +101,7 @@ export async function screenshotUrl(
       viewport: { width: viewport.width, height: viewport.height },
       deviceScaleFactor: viewport.deviceScaleFactor ?? 1,
       isMobile: viewport.isMobile ?? false,
+      extraHTTPHeaders: options.extraHTTPHeaders,
     });
     const page = await ctx.newPage();
 
@@ -169,17 +170,22 @@ export async function screenshotResponsive(
  */
 export async function captureScreenshot(
   url: string,
-  options: { width?: number; height?: number; storageKey: string; sessionId: string; _availabilityCheck?: () => Promise<boolean> }
+  options: {
+    width?: number;
+    height?: number;
+    storageKey: string;
+    sessionId: string;
+    extraHTTPHeaders?: Record<string, string>;
+    waitUntil?: ScreenshotOptions["waitUntil"];
+    timeout?: number;
+    _availabilityCheck?: () => Promise<boolean>;
+  },
 ): Promise<WorkbenchScreenshotResult> {
   const width = options.width ?? 1280;
   const height = options.height ?? 800;
   const failureReasons: string[] = [];
   const checkAvailable = options._availabilityCheck ?? isPlaywrightAvailable;
 
-  // Steel Cloud runs remotely and cannot reach a localhost sandbox. For local
-  // previews, skip Steel entirely and let local Playwright (which can reach
-  // localhost) handle it — unless the operator has explicitly opted in via a
-  // public tunnel (STEEL_ALLOW_LOCAL_URLS=true).
   const steelReachable = !isLocalPreviewUrl(url) || process.env.STEEL_ALLOW_LOCAL_URLS === "true";
   if (shouldUseSteelScreenshots() && steelReachable) {
     try {
@@ -212,7 +218,11 @@ export async function captureScreenshot(
   if (await checkAvailable()) {
     try {
       const vp: Viewport = { name: "desktop", width, height };
-      const buf = await screenshotUrl(url, vp, { waitUntil: "networkidle", timeout: 15_000 });
+      const buf = await screenshotUrl(url, vp, {
+        waitUntil: options.waitUntil ?? "networkidle",
+        timeout: options.timeout ?? 30_000,
+        extraHTTPHeaders: options.extraHTTPHeaders,
+      });
       return {
         dataUri: `data:image/png;base64,${buf.toString("base64")}`,
         width,

@@ -1,11 +1,23 @@
+import fs from "node:fs";
+import path from "node:path";
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { runProcessWithTimeout } from "@/lib/process-watchdog";
+import {
+  exitWorker,
+  resolveWatchdogParentExitCode,
+  shouldEmitWatchdogTimeoutFailure,
+} from "@/lib/workbench-live-cloud-worker-exit";
 import { loadAllowedEvalEnvFile } from "@/lib/eval-env-file";
 import type { WorkbenchProvider } from "@/lib/types";
+import type { DiversePromptId } from "@/lib/workbench-live-cloud-diverse-scaffolds";
 
 type Args = {
   provider?: Extract<WorkbenchProvider, "daytona" | "e2b">;
   envFile?: string;
+  outFile?: string;
+  diverse?: boolean;
+  diversePrompt?: DiversePromptId;
   previewPort: number;
   startTimeoutMs: number;
   processTimeoutMs: number;
@@ -33,6 +45,7 @@ async function main() {
 }
 
 async function runParentWithWatchdog(args: Args) {
+  await ensurePlaywrightChromium();
   const result = await runProcessWithTimeout({
     command: process.execPath,
     args: [
@@ -51,7 +64,7 @@ async function runParentWithWatchdog(args: Args) {
     onStderr: (chunk) => process.stderr.write(chunk),
   });
 
-  if (result.timedOut) {
+  if (result.timedOut && shouldEmitWatchdogTimeoutFailure(result)) {
     console.error(JSON.stringify({
       passed: false,
       provider: args.provider ?? defaultLiveProvider() ?? "unconfigured",
@@ -60,10 +73,21 @@ async function runParentWithWatchdog(args: Args) {
       artifacts: [],
     }, null, 2));
   }
-  process.exitCode = result.timedOut ? 1 : result.exitCode ?? 1;
+  process.exitCode = resolveWatchdogParentExitCode(result);
 }
 
 async function runWorker(args: Args) {
+  let exitCode = 1;
+  try {
+    exitCode = await runWorkerBody(args);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    exitCode = 1;
+  }
+  await exitWorker(exitCode);
+}
+
+async function runWorkerBody(args: Args): Promise<number> {
   await import("@/lib/workbench-providers");
   const { store } = await import("@/lib/store");
   const { createWorkbenchSession } = await import("@/lib/workbench");
@@ -75,6 +99,42 @@ async function runWorker(args: Args) {
   const provider = args.provider ?? defaultLiveProvider();
   if (!provider) {
     throw new Error("No live Workbench provider configured. Pass --provider daytona|e2b and set DAYTONA_API_KEY or E2B_API_KEY.");
+  }
+
+  if (args.diverse) {
+    const { runCloudWorkbenchDiverseProof } = await import("@/lib/workbench-live-cloud-diverse");
+    const company = await store.createCompany({
+      name: `Live Cloud Workbench Diverse ${new Date().toISOString()}`,
+      brief: { vision: "Prove Trent Workbench on five diverse prompt classes." },
+    });
+    const promptIds = args.diversePrompt ? [args.diversePrompt] : undefined;
+    const result = await runCloudWorkbenchDiverseProof({
+      threshold: args.threshold,
+      promptIds,
+      previewPort: args.previewPort,
+      startTimeoutMs: args.startTimeoutMs,
+      createSession: async (prompt, index) => createWorkbenchSession({
+        companyId: company.id,
+        objective: prompt.objective,
+        agentRole: "engineer",
+        agentMode: "build",
+        provider,
+        allowedHosts: ["registry.npmjs.org"],
+        enqueue: false,
+      }),
+      getProvider: (session) => getWorkbenchProvider(session.provider),
+      onProgress: (event) => {
+        console.error(JSON.stringify({
+          type: "workbench_live_cloud_diverse_progress",
+          ...event,
+          at: new Date().toISOString(),
+        }));
+      },
+    });
+    const report = { ...result, provider, loadedEnvKeys };
+    console.log(JSON.stringify(report, null, 2));
+    writeOutFile(args.outFile, report);
+    return result.passed ? 0 : 1;
   }
 
   if (args.runs > 1) {
@@ -120,8 +180,12 @@ async function runWorker(args: Args) {
       provider,
       loadedEnvKeys,
     }, null, 2));
-    process.exitCode = result.passed ? 0 : 1;
-    return;
+    writeOutFile(args.outFile, {
+      ...result,
+      provider,
+      loadedEnvKeys,
+    });
+    return result.passed ? 0 : 1;
   }
 
   const company = await store.createCompany({
@@ -184,11 +248,13 @@ async function runWorker(args: Args) {
     degradedArtifacts: proof.degradedArtifacts,
     interactionPassed: proof.interactionPassed,
     interactionTranscript: proof.interactionTranscript,
+    inspectDiagnostics: proof.inspectDiagnostics,
     loadedEnvKeys,
   };
 
   console.log(JSON.stringify(report, null, 2));
-  process.exitCode = proof.passed ? 0 : 1;
+  writeOutFile(args.outFile, report);
+  return proof.passed ? 0 : 1;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -206,6 +272,22 @@ function parseArgs(argv: string[]): Args {
     if (arg === "--provider") {
       if (next !== "daytona" && next !== "e2b") throw new Error("--provider must be daytona or e2b");
       args.provider = next;
+      i++;
+      continue;
+    }
+    if (arg === "--diverse") {
+      args.diverse = true;
+      continue;
+    }
+    if (arg === "--diverse-prompt") {
+      if (!next) throw new Error("--diverse-prompt requires static-landing|nextjs-app|api-db|dashboard-chart|persistent-form");
+      args.diversePrompt = next as DiversePromptId;
+      i++;
+      continue;
+    }
+    if (arg === "--out") {
+      if (!next) throw new Error("--out requires a file path");
+      args.outFile = next;
       i++;
       continue;
     }
@@ -261,6 +343,9 @@ function parseArgs(argv: string[]): Args {
   if (!Number.isFinite(args.threshold) || args.threshold < 0 || args.threshold > 1) {
     throw new Error("--threshold must be a number between 0 and 1");
   }
+  if (!processTimeoutExplicit && args.diverse) {
+    args.processTimeoutMs = Math.max(args.processTimeoutMs, 1000 * 60 * 60 * 3);
+  }
   if (!processTimeoutExplicit && args.runs > 1) {
     args.processTimeoutMs *= args.runs;
   }
@@ -287,17 +372,48 @@ function defaultLiveProvider(): Extract<WorkbenchProvider, "daytona" | "e2b"> | 
   return undefined;
 }
 
+function writeOutFile(outFile: string | undefined, payload: unknown) {
+  if (!outFile) return;
+  fs.mkdirSync(path.dirname(outFile), { recursive: true });
+  fs.writeFileSync(outFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+}
+
+async function ensurePlaywrightChromium() {
+  try {
+    const { chromium } = await import("playwright");
+    const browser = await chromium.launch({ headless: true });
+    await browser.close();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("Executable doesn't exist")) {
+      throw error;
+    }
+    console.error(JSON.stringify({
+      type: "workbench_live_cloud_progress",
+      stage: "preflight",
+      status: "running",
+      message: "Installing Playwright Chromium (first run on this machine)",
+    }));
+    execSync("npx playwright install chromium", { stdio: "inherit", cwd: process.cwd() });
+  }
+}
+
 function printHelp() {
   console.log([
-    "Usage: tsx scripts/evals/run-live-cloud-workbench.ts [--suite] [--smoke] [--threshold 0.8] [--provider daytona|e2b] [--env-file PATH]",
+    "Usage: tsx scripts/evals/run-live-cloud-workbench.ts [--suite] [--smoke] [--diverse] [--diverse-prompt ID] [--threshold 0.8] [--provider daytona|e2b] [--env-file PATH] [--out PATH]",
     "",
     "Suite mode (--suite): run golden-objective evals and print scorecard JSON.",
     "Live mode (default): start sandbox -> scaffold -> build -> test -> preview -> screenshot -> cleanup.",
+    "Diverse mode (--diverse): run five prompt classes (landing, Next.js, API+DB, dashboard, persistent form).",
     "Soak mode: add --runs 20 --threshold 0.9 to repeat the same live Workbench build and report pass rate/failure clusters.",
   ].join("\n"));
 }
 
-void main().catch((error) => {
+void main().catch(async (error) => {
   console.error(error instanceof Error ? error.message : String(error));
+  if (process.env.TRENT_LIVE_CLOUD_WORKER === "1") {
+    await exitWorker(1);
+    return;
+  }
   process.exitCode = 1;
 });

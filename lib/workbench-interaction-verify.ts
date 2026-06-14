@@ -17,6 +17,7 @@ export type InteractionStepOutcome = {
 
 export type InteractionDriver = {
   performStep(step: AcceptanceStep): Promise<InteractionStepOutcome>;
+  close?(): Promise<void> | void;
 };
 
 export type InteractionFailure = {
@@ -65,32 +66,36 @@ export async function verifyInteractions(input: {
   const networkLogs: string[] = [];
   let visibleText: string | undefined;
 
-  for (const step of steps) {
-    try {
-      const outcome = await input.driver.performStep(step);
-      consoleLogs.push(...outcome.consoleLogs);
-      networkLogs.push(...outcome.networkLogs);
-      visibleText = outcome.visibleText ?? visibleText;
-      transcriptLines.push(
-        outcome.ok
-          ? `PASS action="${step.action}" expect="${step.expect}" → ${outcome.detail}`
-          : `FAIL action="${step.action}" expect="${step.expect}" → ${outcome.detail}`,
-      );
-      if (!outcome.ok) {
-        failures.push({
-          step,
-          detail: outcome.detail,
-          consoleLogs: outcome.consoleLogs,
-          networkLogs: outcome.networkLogs,
-        });
+  try {
+    for (const step of steps) {
+      try {
+        const outcome = await input.driver.performStep(step);
+        consoleLogs.push(...outcome.consoleLogs);
+        networkLogs.push(...outcome.networkLogs);
+        visibleText = outcome.visibleText ?? visibleText;
+        transcriptLines.push(
+          outcome.ok
+            ? `PASS action="${step.action}" expect="${step.expect}" → ${outcome.detail}`
+            : `FAIL action="${step.action}" expect="${step.expect}" → ${outcome.detail}`,
+        );
+        if (!outcome.ok) {
+          failures.push({
+            step,
+            detail: outcome.detail,
+            consoleLogs: outcome.consoleLogs,
+            networkLogs: outcome.networkLogs,
+          });
+          break;
+        }
+      } catch (err) {
+        const detail = errText(err);
+        transcriptLines.push(`FAIL action="${step.action}" expect="${step.expect}" → ${detail}`);
+        failures.push({ step, detail, consoleLogs: [], networkLogs: [] });
         break;
       }
-    } catch (err) {
-      const detail = errText(err);
-      transcriptLines.push(`FAIL action="${step.action}" expect="${step.expect}" → ${detail}`);
-      failures.push({ step, detail, consoleLogs: [], networkLogs: [] });
-      break;
     }
+  } finally {
+    await closeInteractionDriver(input.driver);
   }
 
   const passed = failures.length === 0;
@@ -117,65 +122,103 @@ export function interactionResultToCheck(result: InteractionVerifyResult): Verif
   };
 }
 
-export function createPlaywrightInteractionDriver(previewUrl: string): InteractionDriver {
+export function createPlaywrightInteractionDriver(
+  previewUrl: string,
+  options?: { extraHTTPHeaders?: Record<string, string> },
+): InteractionDriver {
+  let browser: import("playwright").Browser | undefined;
+  let page: import("playwright").Page | undefined;
+  const consoleLogs: string[] = [];
+  const networkLogs: string[] = [];
+
+  async function ensurePage() {
+    if (page) return page;
+    const { chromium } = await import("playwright");
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    });
+    page = await browser.newPage({
+      viewport: { width: 1280, height: 720 },
+      extraHTTPHeaders: options?.extraHTTPHeaders,
+    });
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleLogs.push(message.text());
+    });
+    page.on("pageerror", (error) => consoleLogs.push(error.message));
+    page.on("request", (request) => {
+      if (request.resourceType() === "fetch" || request.resourceType() === "xhr") {
+        networkLogs.push(`${request.method()} ${request.url()}`);
+      }
+    });
+    await page.goto(previewUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await page.waitForLoadState("networkidle", { timeout: 12_000 }).catch(() => undefined);
+    await page.waitForSelector("button,a,input,textarea", { state: "visible", timeout: 30_000 }).catch(() => undefined);
+    return page;
+  }
+
+  async function closeBrowserResources() {
+    const activePage = page;
+    const activeBrowser = browser;
+    page = undefined;
+    browser = undefined;
+    await activePage?.close().catch(() => undefined);
+    await activeBrowser?.close().catch(() => undefined);
+  }
+
   return {
     async performStep(step) {
-      let browser: import("playwright").Browser | undefined;
-      try {
-        const { chromium } = await import("playwright");
-        browser = await chromium.launch({
-          headless: true,
-          args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-        });
-        const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-        const consoleLogs: string[] = [];
-        const networkLogs: string[] = [];
-        page.on("console", (message) => {
-          if (message.type() === "error") consoleLogs.push(message.text());
-        });
-        page.on("pageerror", (error) => consoleLogs.push(error.message));
-        page.on("request", (request) => {
-          if (request.resourceType() === "fetch" || request.resourceType() === "xhr") {
-            networkLogs.push(`${request.method()} ${request.url()}`);
-          }
-        });
+      const activePage = await ensurePage();
+      const before = await snapshotPageState(activePage);
+      await performParsedAction(activePage, step.action);
+      await activePage.waitForTimeout(400);
+      const after = await snapshotPageState(activePage);
+      const visibleText = after.bodyText;
 
-        await page.goto(previewUrl, { waitUntil: "domcontentloaded", timeout: 15_000 });
-        await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => undefined);
-
-        const before = await snapshotPageState(page);
-        await performParsedAction(page, step.action);
-        await page.waitForTimeout(400);
-        const after = await snapshotPageState(page);
-        const visibleText = after.bodyText;
-
-        const expectOk = evaluateExpectation(step.expect, before, after, networkLogs);
-        if (!expectOk.ok) {
-          return {
-            ok: false,
-            detail: `${step.action}; ${expectOk.detail}`,
-            consoleLogs,
-            networkLogs,
-            visibleText,
-          };
-        }
-
+      const expectOk = evaluateExpectation(step.expect, before, after, networkLogs);
+      if (!expectOk.ok) {
         return {
-          ok: true,
+          ok: false,
           detail: `${step.action}; ${expectOk.detail}`,
-          consoleLogs,
-          networkLogs,
+          consoleLogs: [...consoleLogs],
+          networkLogs: [...networkLogs],
           visibleText,
         };
-      } finally {
-        await browser?.close().catch(() => undefined);
       }
+
+      return {
+        ok: true,
+        detail: `${step.action}; ${expectOk.detail}`,
+        consoleLogs: [...consoleLogs],
+        networkLogs: [...networkLogs],
+        visibleText,
+      };
+    },
+    async close() {
+      await closeBrowserResources();
     },
   };
 }
 
+async function closeInteractionDriver(driver: InteractionDriver): Promise<void> {
+  try {
+    await driver.close?.();
+  } catch {
+    // Driver cleanup must not change interaction pass/fail.
+  }
+}
+
 async function performParsedAction(page: import("playwright").Page, action: string): Promise<void> {
   const trimmed = action.trim();
+  const compoundMatch = trimmed.match(
+    /^type\s+['"](.+?)['"]\s+in\s+(.+?)\s+then\s+click\s+first\s+visible\s+button$/i,
+  );
+  if (compoundMatch) {
+    await page.locator(compoundMatch[2].trim()).first().fill(compoundMatch[1], { timeout: 5_000 });
+    await page.locator("button:visible").first().click({ timeout: 5_000 });
+    return;
+  }
+
   const clickFirstButton = /^click\s+first\s+visible\s+button$/i.test(trimmed);
   if (clickFirstButton) {
     await page.locator("button:visible").first().click({ timeout: 5_000 });

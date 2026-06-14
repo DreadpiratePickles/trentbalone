@@ -30,6 +30,10 @@ import { checkCommand, requiresApproval } from "@/lib/workbench-safety";
 import { resolveWorkbenchProviderCredentialEnv } from "@/lib/credential-boundary";
 import { backgroundPreviewCommand, blockedPreviewCommand, inspectHttpPreview, parsePortFromCommand, DEFAULT_PREVIEW_PORT } from "@/lib/workbench-cloud-preview";
 import {
+  defaultCloudProofExpectedTexts,
+  getPreviewInspectContext,
+} from "@/lib/workbench-preview-inspect-context";
+import {
   diffProviderFileTree,
   exportProviderArtifacts,
   getProviderFileTree,
@@ -39,6 +43,7 @@ import {
 type DaytonaSandboxEntry = {
   sandbox: Sandbox;
   workdir: string;
+  previewAccessToken?: string;
 };
 
 const sandboxes = new Map<string, DaytonaSandboxEntry>();
@@ -334,6 +339,7 @@ const daytonaProvider: WorkbenchProviderAdapter = {
     session: WorkbenchSession,
     options?: { url?: string; width?: number; height?: number },
   ): Promise<WorkbenchScreenshotResult> {
+    const entry = getSandbox(session.id);
     const previewUrl = options?.url ?? (await daytonaProvider.getPreviewUrl(session));
     if (!previewUrl) {
       return { dataUri: "", width: 0, height: 0, storageKey: "" };
@@ -344,7 +350,12 @@ const daytonaProvider: WorkbenchProviderAdapter = {
       height: options?.height,
       storageKey,
       sessionId: session.id,
+      extraHTTPHeaders: previewTrafficHeaders(entry.previewAccessToken),
     });
+  },
+
+  async getPreviewTrafficToken(session: WorkbenchSession): Promise<string | undefined> {
+    return sandboxes.get(session.id)?.previewAccessToken;
   },
 
   async getPreviewUrl(session: WorkbenchSession): Promise<string | undefined> {
@@ -353,8 +364,8 @@ const daytonaProvider: WorkbenchProviderAdapter = {
 
     for (const port of PREVIEW_PORTS) {
       try {
-        const preview = await entry.sandbox.getSignedPreviewUrl(port, PREVIEW_EXPIRES_SECONDS);
-        return preview.url;
+        const signed = await resolveSignedPreview(entry, port);
+        return signed.url;
       } catch {
         // port not exposed; continue
       }
@@ -384,7 +395,7 @@ const daytonaProvider: WorkbenchProviderAdapter = {
     );
     const stdout = result.artifacts?.stdout ?? result.result ?? "";
     const exitCode = result.exitCode ?? 0;
-    const preview = await entry.sandbox.getSignedPreviewUrl(port, PREVIEW_EXPIRES_SECONDS);
+    const signed = await resolveSignedPreview(entry, port);
 
     await store.addWorkbenchEvent({
       companyId: session.companyId,
@@ -392,13 +403,13 @@ const daytonaProvider: WorkbenchProviderAdapter = {
       type: "deploy",
       status: exitCode === 0 ? "completed" : "failed",
       title: "Daytona preview started",
-      content: preview.url,
+      content: signed.url,
       command,
     });
 
     return {
       command,
-      url: preview.url,
+      url: signed.url,
       port,
       result: {
         stdout,
@@ -410,8 +421,16 @@ const daytonaProvider: WorkbenchProviderAdapter = {
   },
 
   async inspectPreview(session: WorkbenchSession, url: string): Promise<WorkbenchPreviewInspection> {
-    const screenshot = await this.screenshot(session, { url });
-    return inspectHttpPreview(url, screenshot);
+    const entry = getSandbox(session.id);
+    const expectedTexts = getPreviewInspectContext(session.id)?.expectedTexts ?? defaultCloudProofExpectedTexts();
+    return inspectHttpPreview(url, {
+      trafficAccessToken: entry.previewAccessToken,
+      expectedTexts,
+      screenshotCapture: {
+        storageKey: `daytona/${session.id}/screenshot`,
+        sessionId: session.id,
+      },
+    });
   },
 
   async captureArtifact(
@@ -466,6 +485,16 @@ function getSandbox(sessionId: string): DaytonaSandboxEntry {
   const entry = sandboxes.get(sessionId);
   if (!entry) throw new Error(`No Daytona sandbox for session ${sessionId}`);
   return entry;
+}
+
+async function resolveSignedPreview(entry: DaytonaSandboxEntry, port: number): Promise<{ url: string; token?: string }> {
+  const preview = await entry.sandbox.getSignedPreviewUrl(port, PREVIEW_EXPIRES_SECONDS);
+  if (preview.token) entry.previewAccessToken = preview.token;
+  return { url: preview.url, token: preview.token ?? entry.previewAccessToken };
+}
+
+function previewTrafficHeaders(token?: string): Record<string, string> | undefined {
+  return token ? { "X-Access-Token": token } : undefined;
 }
 
 function sandboxName(session: WorkbenchSession) {

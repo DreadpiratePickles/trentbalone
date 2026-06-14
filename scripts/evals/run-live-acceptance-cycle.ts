@@ -72,17 +72,44 @@ async function main() {
     const documents = await store.listDocuments(company.id);
     const approvals = await store.listApprovals(company.id);
     const audits = await store.listAuditLogs(company.id);
-    const emailAudit = audits.find((a) => a.action === "morning_briefing.email_sent");
+    const emailAudit = audits.find((a) => a.action.startsWith("morning_briefing.email_"));
+    const emailSentAudit = audits.find((a) => a.action === "morning_briefing.email_sent");
     const briefingDoc = documents.find((d) => d.source === "morning-briefing");
+    const resendMessageId = emailSentAudit?.summary?.match(/Resend accepted email ([^\s]+)/)?.[1];
+    const snapshotLines = (briefingDoc?.content ?? "").split("\n");
+    const providerStatuses = {
+      stripe: snapshotLines.find((line) => line.includes("Stripe billing:"))?.replace(/^- /, ""),
+      posthog: snapshotLines.find((line) => line.includes("PostHog analytics:"))?.replace(/^- /, ""),
+      sentry: snapshotLines.find((line) => line.includes("Sentry errors:"))?.replace(/^- /, ""),
+      ledger: snapshotLines.find((line) => line.includes("ledger spend:"))?.replace(/^- /, ""),
+    };
+    if (emailAudit) {
+      proof.founderEmail = {
+        auditAction: emailAudit.action,
+        summary: emailAudit.summary,
+        resendMessageId,
+      };
+    }
 
     const artifacts = {
       researchInMemory: { present: documents.some((d) => d.source === "operating_cycle:research"), docId: researchDoc.id },
-      deployedLandingUrl: { present: Boolean(deliverables.landing.deployed && deliverables.landing.liveUrl), url: deliverables.landing.liveUrl, httpStatus: deliverables.landing.httpStatus, interactionPassed: deliverables.landing.interactionPassed },
-      founderEmail: { present: Boolean(emailAudit), summary: emailAudit?.summary },
+      deployedLandingUrl: {
+        present: Boolean(deliverables.landing.deployed && deliverables.landing.liveUrl),
+        url: deliverables.landing.liveUrl,
+        httpStatus: deliverables.landing.httpStatus,
+        interactionPassed: deliverables.landing.interactionPassed,
+        screenshotStorageKey: deliverables.landing.screenshotStorageKey,
+      },
+      founderEmail: { present: Boolean(emailSentAudit), summary: emailSentAudit?.summary, resendMessageId, auditAction: emailAudit?.action },
       gatedApprovals: { present: approvals.filter((a) => a.status === "pending").length >= 3, count: approvals.length, ids: deliverables.approvals.map((a) => a.id) },
-      outcomeSnapshot: { present: Boolean(briefingDoc), reportId: report.id },
+      outcomeSnapshot: { present: Boolean(briefingDoc), reportId: report.id, providerStatuses },
     };
     proof.artifacts = artifacts;
+    proof.provenance = {
+      mockOnlyClaims: false,
+      landingInspectDependsOnEpicA: true,
+      researchModel: MODELS.STRONG,
+    };
     const presentCount = Object.values(artifacts).filter((a) => a.present).length;
     proof.artifactsPresent = presentCount;
     proof.passed = presentCount === 5;

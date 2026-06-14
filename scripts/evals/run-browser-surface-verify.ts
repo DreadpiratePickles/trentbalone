@@ -109,6 +109,10 @@ async function main() {
     await page.waitForSelector("text=/cycle/i", { timeout: 15_000 });
     return "cycles page rendered";
   });
+  await record("16-trust", `${BASE_URL}/companies/${companyId}/trust`, async () => {
+    await page.waitForSelector(".trust-panel, [class*='trust-panel']", { timeout: 15_000 });
+    return "trust panel page rendered";
+  });
   // Nav must actually reach trenchpad (the slice this verifies end-to-end).
   // Sidebar items are buttons driving router.push, not anchors.
   await record("15-nav-has-trenchpad", `${BASE_URL}/companies/${companyId}`, async () => {

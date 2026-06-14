@@ -68,6 +68,7 @@ export const NAV_GROUPS: NavGroupConfig[] = [
     label: "govern",
     items: [
       { label: "approvals", slug: "approvals", icon: "shield", keywords: ["pending", "gates", "review"], approvalsBadge: true },
+      { label: "trust", slug: "trust", icon: "shield", keywords: ["provenance", "verification", "claims", "honest autonomy"] },
       { label: "budgets", slug: "budgets", icon: "wallet", keywords: ["spend", "cost", "ledger"] },
       { label: "audit", slug: "audit", icon: "list", keywords: ["log", "compliance", "trail"] },
       { label: "integrations", slug: "integrations", icon: "plug", keywords: ["connections", "mcp", "credentials"] },

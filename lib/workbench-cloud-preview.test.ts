@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { inspectHttpPreview, parsePortFromCommand, DEFAULT_PREVIEW_PORT } from "@/lib/workbench-cloud-preview";
+import { inspectHttpPreview, parsePortFromCommand, DEFAULT_PREVIEW_PORT, probeBrowserPreviewDom } from "@/lib/workbench-cloud-preview";
 
 const {
   mockBrowserClose,
@@ -8,6 +8,9 @@ const {
   mockNewPage,
   mockWaitForLoadState,
   mockWaitForTimeout,
+  mockWaitForSelector,
+  mockContent,
+  mockCaptureScreenshot,
 } = vi.hoisted(() => ({
   mockBrowserClose: vi.fn(),
   mockGoto: vi.fn(),
@@ -15,6 +18,13 @@ const {
   mockNewPage: vi.fn(),
   mockWaitForLoadState: vi.fn(),
   mockWaitForTimeout: vi.fn(),
+  mockWaitForSelector: vi.fn(),
+  mockContent: vi.fn(),
+  mockCaptureScreenshot: vi.fn(),
+}));
+
+vi.mock("@/lib/workbench-screenshot", () => ({
+  captureScreenshot: mockCaptureScreenshot,
 }));
 
 vi.mock("playwright", () => ({
@@ -26,9 +36,41 @@ vi.mock("playwright", () => ({
   },
 }));
 
+function mockHydratedPage() {
+  mockGoto.mockResolvedValue({ status: () => 200 });
+  mockWaitForLoadState.mockResolvedValue(undefined);
+  mockWaitForTimeout.mockResolvedValue(undefined);
+  mockWaitForSelector.mockResolvedValue(undefined);
+  mockContent.mockResolvedValue("<html><body><button>Save note</button><p>Cloud Notes</p></body></html>");
+  mockEvaluate.mockResolvedValue({
+    bodyText: "Cloud Notes Save note Capture the idea",
+    visibleElements: 5,
+  });
+  mockNewPage.mockResolvedValue({
+    goto: mockGoto,
+    waitForLoadState: mockWaitForLoadState,
+    waitForTimeout: mockWaitForTimeout,
+    waitForSelector: mockWaitForSelector,
+    content: mockContent,
+    getByText: vi.fn(() => ({
+      first: () => ({
+        waitFor: vi.fn().mockRejectedValue(new Error("not yet")),
+      }),
+    })),
+    evaluate: mockEvaluate,
+    on: vi.fn(),
+  });
+}
+
 afterEach(() => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  mockCaptureScreenshot.mockResolvedValue({
+    dataUri: "data:image/png;base64,cmVhbC1wbmc=",
+    width: 1280,
+    height: 720,
+    storageKey: "proof.png",
+  });
 });
 
 describe("parsePortFromCommand", () => {
@@ -58,20 +100,7 @@ describe("inspectHttpPreview", () => {
       status: 200,
       text: async () => "<html><head><title>Cloud Notes Proof</title></head><body><div id=\"root\"></div><script type=\"module\" src=\"/src/main.tsx\"></script></body></html>",
     })));
-    mockGoto.mockResolvedValue({ status: () => 200 });
-    mockWaitForLoadState.mockResolvedValue(undefined);
-    mockWaitForTimeout.mockResolvedValue(undefined);
-    mockEvaluate.mockResolvedValue({
-      bodyText: "Cloud Notes Save note Capture the idea",
-      visibleElements: 5,
-    });
-    mockNewPage.mockResolvedValue({
-      goto: mockGoto,
-      waitForLoadState: mockWaitForLoadState,
-      waitForTimeout: mockWaitForTimeout,
-      evaluate: mockEvaluate,
-      on: vi.fn(),
-    });
+    mockHydratedPage();
 
     const result = await inspectHttpPreview("https://preview.example", {
       dataUri: "data:image/png;base64,real",
@@ -84,7 +113,60 @@ describe("inspectHttpPreview", () => {
     expect(result.domText).toContain("Cloud Notes Save note");
     expect(result.domText).not.toBe("Cloud Notes Proof");
     expect(result.visibleElements).toBe(5);
+    expect(result.diagnostics?.domProbeSource).toBe("browser");
     expect(result.pageErrors).toEqual([]);
     expect(mockBrowserClose).toHaveBeenCalled();
+  });
+
+  it("does not pass when only the SPA shell is visible", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      status: 200,
+      text: async () => "<html><body><div id=\"root\"></div></body></html>",
+    })));
+    mockGoto.mockResolvedValue({ status: () => 200 });
+    mockWaitForLoadState.mockResolvedValue(undefined);
+    mockWaitForTimeout.mockResolvedValue(undefined);
+    mockWaitForSelector.mockRejectedValue(new Error("no elements"));
+    mockContent.mockResolvedValue("<html><body><div id=\"root\"></div></body></html>");
+    mockEvaluate.mockResolvedValue({ bodyText: "Cloud Notes Proof", visibleElements: 0 });
+    mockNewPage.mockResolvedValue({
+      goto: mockGoto,
+      waitForLoadState: mockWaitForLoadState,
+      waitForTimeout: mockWaitForTimeout,
+      waitForSelector: mockWaitForSelector,
+      content: mockContent,
+      getByText: vi.fn(() => ({ first: () => ({ waitFor: vi.fn().mockRejectedValue(new Error("no")) }) })),
+      evaluate: mockEvaluate,
+      on: vi.fn(),
+    });
+
+    const result = await probeBrowserPreviewDom("https://preview.example", {
+      trafficAccessToken: "token",
+      hydrationTimeoutMs: 1_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.visibleElements).toBe(0);
+    expect(result.hydrationWaitReason).toContain("hydration timeout");
+  });
+
+  it("passes proxy auth header to Playwright without logging the token", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ status: 200, text: async () => "ok" })));
+    mockHydratedPage();
+
+    await inspectHttpPreview("https://preview.example", {
+      trafficAccessToken: "secret-token",
+      screenshotCapture: { storageKey: "proof.png", sessionId: "ws_1" },
+    });
+
+    expect(mockNewPage).toHaveBeenCalledWith(expect.objectContaining({
+      extraHTTPHeaders: { "X-Access-Token": "secret-token" },
+    }));
+    expect(mockCaptureScreenshot).toHaveBeenCalledWith(
+      "https://preview.example",
+      expect.objectContaining({
+        extraHTTPHeaders: { "X-Access-Token": "secret-token" },
+      }),
+    );
   });
 });

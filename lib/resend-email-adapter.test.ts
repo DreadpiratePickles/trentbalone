@@ -144,6 +144,11 @@ describe("Resend email adapter", () => {
     expect(result.summary).not.toContain("re_secret");
   });
 
+  it("normalizes send/mail subdomains to the verified root domain for default sender addresses", () => {
+    expect(resendFromAddress({ RESEND_FROM_DOMAIN: "send.let-trent.uk" })).toBe("Trent <hello@let-trent.uk>");
+    expect(resendFromAddress({ RESEND_FROM_DOMAIN: "mail.trent.test" })).toBe("Trent <hello@trent.test>");
+  });
+
   it("uses the configured platform domain as a default Resend sender", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ id: "email_456" }), { status: 200 }));
     const adapter = createResendEmailAdapter({
@@ -158,10 +163,10 @@ describe("Resend email adapter", () => {
       text: "Here is the update.",
     });
 
-    expect(resendFromAddress({ RESEND_FROM_DOMAIN: "mail.trent.test" })).toBe("Trent <hello@mail.trent.test>");
+    expect(resendFromAddress({ RESEND_FROM_DOMAIN: "mail.trent.test" })).toBe("Trent <hello@trent.test>");
     expect(fetchImpl).toHaveBeenCalledWith("https://api.resend.com/emails", expect.objectContaining({
       body: JSON.stringify({
-        from: "Trent <hello@mail.trent.test>",
+        from: "Trent <hello@trent.test>",
         to: ["founder@example.com"],
         subject: "Morning brief",
         text: "Here is the update.",

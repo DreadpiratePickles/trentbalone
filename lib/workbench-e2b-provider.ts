@@ -29,6 +29,10 @@ import { checkCommand, requiresApproval, safePosixPath, checkNetworkPolicy, reda
 import { resolveWorkbenchProviderCredentialEnv } from "@/lib/credential-boundary";
 import { blockedPreviewCommand, inspectHttpPreview, parsePortFromCommand, DEFAULT_PREVIEW_PORT } from "@/lib/workbench-cloud-preview";
 import {
+  defaultCloudProofExpectedTexts,
+  getPreviewInspectContext,
+} from "@/lib/workbench-preview-inspect-context";
+import {
   diffProviderFileTree,
   exportProviderArtifacts,
   getProviderFileTree,
@@ -467,7 +471,11 @@ const e2bProvider: WorkbenchProviderAdapter = {
   async inspectPreview(session: WorkbenchSession, url: string): Promise<WorkbenchPreviewInspection> {
     const sb = getSandbox(session.id);
     const screenshot = await this.screenshot(session, { url });
-    return inspectHttpPreview(url, screenshot, { trafficAccessToken: sb?.trafficAccessToken });
+    const expectedTexts = getPreviewInspectContext(session.id)?.expectedTexts ?? defaultCloudProofExpectedTexts();
+    return inspectHttpPreview(url, screenshot, {
+      trafficAccessToken: sb?.trafficAccessToken,
+      expectedTexts,
+    });
   },
 
   async captureArtifact(

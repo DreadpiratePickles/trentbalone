@@ -24,6 +24,7 @@ describe("NAV_GROUPS", () => {
       "vault graph",
       "autoresearch",
       "approvals",
+      "trust",
       "budgets",
       "audit",
       "integrations",

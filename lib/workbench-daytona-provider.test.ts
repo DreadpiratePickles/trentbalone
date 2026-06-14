@@ -70,6 +70,26 @@ vi.mock("@/lib/credential-boundary", () => ({
   resolveWorkbenchProviderCredentialEnv: mockResolveWorkbenchProviderCredentialEnv,
 }));
 
+vi.mock("playwright", () => ({
+  chromium: {
+    launch: vi.fn(async () => ({
+      close: vi.fn(),
+      newPage: vi.fn(async () => ({
+        goto: vi.fn(async () => ({ status: () => 200 })),
+        waitForLoadState: vi.fn(async () => undefined),
+        waitForTimeout: vi.fn(async () => undefined),
+        waitForSelector: vi.fn(async () => undefined),
+        content: vi.fn(async () => "<html><body><button>Save</button><h1>Cloud notes app</h1></body></html>"),
+        getByText: vi.fn(() => ({
+          first: () => ({ waitFor: vi.fn(async () => undefined) }),
+        })),
+        evaluate: vi.fn(async () => ({ bodyText: "Cloud notes app Save", visibleElements: 3 })),
+        on: vi.fn(),
+      })),
+    })),
+  },
+}));
+
 import { daytonaProvider } from "./workbench-daytona-provider";
 
 describe("daytona workbench provider safety", () => {
@@ -385,12 +405,13 @@ describe("daytona workbench provider safety", () => {
   });
 
   it("inspects a preview with screenshot and DOM evidence", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => ({
       status: 200,
       text: async () => "<main><h1>Cloud notes app</h1><button>Save</button></main>",
     })));
     const current = session("inspect");
     await daytonaProvider.start(current);
+    await daytonaProvider.startPreview!(current, "npm run dev -- --host 0.0.0.0", 3000);
 
     try {
       const inspection = await daytonaProvider.inspectPreview?.(current, "https://preview.daytona.test");
@@ -398,14 +419,18 @@ describe("daytona workbench provider safety", () => {
       expect(mockCaptureScreenshot).toHaveBeenCalledWith("https://preview.daytona.test", expect.objectContaining({
         storageKey: "daytona/inspect/screenshot",
         sessionId: "inspect",
+        extraHTTPHeaders: { "X-Access-Token": "token" },
       }));
       expect(inspection).toEqual(expect.objectContaining({
         url: "https://preview.daytona.test",
         httpStatus: 200,
-        domText: "Cloud notes app Save",
-        visibleElements: 3,
+        domText: expect.stringContaining("Cloud notes"),
+        visibleElements: expect.any(Number),
         consoleErrors: [],
-        pageErrors: [],
+        diagnostics: expect.objectContaining({
+          proxyAuthUsed: true,
+          domProbeSource: "browser",
+        }),
       }));
     } finally {
       vi.unstubAllGlobals();

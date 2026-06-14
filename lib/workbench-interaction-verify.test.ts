@@ -59,6 +59,81 @@ describe("verifyInteractions", () => {
     expect(result.failures[0].detail).toContain("no network call fired");
     expect(result.detail).toContain("click #add");
   });
+
+  it("calls driver.close on success", async () => {
+    const close = vi.fn();
+    const driver: InteractionDriver = {
+      ...passingInteractionDriver(),
+      close,
+    };
+
+    const result = await verifyInteractions({
+      previewUrl: "http://localhost:3000",
+      driver,
+    });
+
+    expect(result.passed).toBe(true);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls driver.close on failure", async () => {
+    const close = vi.fn();
+    const driver: InteractionDriver = {
+      ...deadButtonDriver(),
+      close,
+    };
+
+    const result = await verifyInteractions({
+      previewUrl: "http://localhost:3000",
+      steps: [{ action: "click #add", expect: "list contains 'Buy milk'" }],
+      driver,
+    });
+
+    expect(result.passed).toBe(false);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes Playwright browser resources after successful interaction", async () => {
+    const pageClose = vi.fn(async () => undefined);
+    const browserClose = vi.fn(async () => undefined);
+    const click = vi.fn(async () => undefined);
+    const waitForTimeout = vi.fn(async () => undefined);
+    const evaluate = vi.fn(async () => ({ bodyText: "Saved note Buy milk", elementCount: 4 }));
+
+    vi.doMock("playwright", () => ({
+      chromium: {
+        launch: vi.fn(async () => ({
+          newPage: vi.fn(async () => ({
+            goto: vi.fn(async () => undefined),
+            waitForLoadState: vi.fn(async () => undefined),
+            waitForSelector: vi.fn(async () => undefined),
+            locator: vi.fn(() => ({ first: () => ({ click }) })),
+            waitForTimeout,
+            evaluate,
+            close: pageClose,
+            on: vi.fn(),
+          })),
+          close: browserClose,
+        })),
+      },
+    }));
+
+    vi.resetModules();
+    const { createPlaywrightInteractionDriver: createDriver, verifyInteractions: verify } =
+      await import("./workbench-interaction-verify");
+
+    const driver = createDriver("http://localhost:3000");
+    await verify({
+      previewUrl: "http://localhost:3000",
+      steps: [{ action: "click first visible button", expect: "list contains 'Saved note'" }],
+      driver,
+    });
+
+    expect(pageClose).toHaveBeenCalledTimes(1);
+    expect(browserClose).toHaveBeenCalledTimes(1);
+    vi.doUnmock("playwright");
+    vi.resetModules();
+  });
 });
 
 describe("verifyBuild interaction gate", () => {

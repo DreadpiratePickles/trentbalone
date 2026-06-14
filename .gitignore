@@ -37,3 +37,4 @@ dump.rdb
 # build/download artifacts
 public/downloads/*.zip
 artifacts/
+cursor-docs/

@@ -85,6 +85,16 @@ export type WorkbenchExportResult = {
   event: WorkbenchEvent;
 };
 
+export type PreviewInspectDiagnostics = {
+  previewReadyMs?: number;
+  browserNavigationStatus?: string;
+  screenshotMime?: string;
+  screenshotByteLength?: number;
+  hydrationWaitReason?: string;
+  proxyAuthUsed: boolean;
+  domProbeSource?: "browser" | "steel" | "fetch" | "none";
+};
+
 export type WorkbenchPreviewInspection = {
   url: string;
   httpStatus?: number;
@@ -93,6 +103,7 @@ export type WorkbenchPreviewInspection = {
   visibleElements: number;
   consoleErrors: string[];
   pageErrors: string[];
+  diagnostics?: PreviewInspectDiagnostics;
 };
 
 // ── Provider adapter interface ────────────────────────────────────────────────
@@ -148,6 +159,9 @@ export interface WorkbenchProviderAdapter {
 
   /** Return the preview URL (local port or remote URL). */
   getPreviewUrl(session: WorkbenchSession): Promise<string | undefined>;
+
+  /** Optional signed-proxy traffic token (e.g. Daytona X-Access-Token). Never log the value. */
+  getPreviewTrafficToken?(session: WorkbenchSession): Promise<string | undefined>;
 
   /** Start a long-running preview server and return its managed URL. */
   startPreview?(session: WorkbenchSession, command: string, portHint?: number): Promise<WorkbenchPreviewRun>;

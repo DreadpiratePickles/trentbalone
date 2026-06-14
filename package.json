@@ -35,6 +35,7 @@
     "prisma:migrate": "prisma migrate dev",
     "x:refresh:proof": "tsx scripts/evals/run-live-x-refresh-proof.ts",
     "capability:proof": "tsx scripts/evals/run-live-capability-gate-proof.ts",
+    "trust-panel:proof": "tsx scripts/evals/run-live-trust-panel-proof.ts",
     "worker:env": "tsx scripts/dev/worker-with-env.ts",
     "acceptance:cycle": "tsx scripts/evals/run-live-acceptance-cycle.ts",
     "briefing:proof": "tsx scripts/evals/run-morning-briefing-proof.ts",

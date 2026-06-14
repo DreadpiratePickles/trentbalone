@@ -14,6 +14,7 @@ import type {
   WorkbenchSandboxHandle,
   WorkbenchSandboxSnapshot,
   WorkbenchTestResult,
+  PreviewInspectDiagnostics,
 } from "@/lib/workbench-provider";
 
 export type CloudWorkbenchCommandResult = {
@@ -45,6 +46,8 @@ export type CloudWorkbenchProofResult = {
   interactionPassed?: boolean;
   /** Human-readable transcript of the interaction steps. */
   interactionTranscript?: string;
+  /** Browser/preview inspect diagnostics (no secrets). */
+  inspectDiagnostics?: PreviewInspectDiagnostics;
 };
 
 export type CloudWorkbenchProofProgressEvent = {
@@ -72,9 +75,20 @@ export async function runCloudWorkbenchBuildProof(input: {
   /** Interaction steps to run against the live preview. Defaults to a click-and-assert. */
   interactionSteps?: AcceptanceStep[];
   /** Factory for the interaction driver; defaults to a real Playwright driver. */
-  interactionDriverFactory?: (previewUrl: string) => InteractionDriver;
+  interactionDriverFactory?: (
+    previewUrl: string,
+    options?: { extraHTTPHeaders?: Record<string, string> },
+  ) => InteractionDriver;
   /** Override the scaffolded app (e.g. a marketing landing page instead of Cloud Notes). */
   scaffoldFiles?: Record<string, string>;
+  /** Override the dev-server command (e.g. Next.js uses npm run dev without --host). */
+  previewCommand?: string;
+  /** Override install command (default npm install). */
+  installCommand?: string;
+  /** Commands run after install (e.g. prisma db push). */
+  postInstallCommands?: readonly string[];
+  /** Extra env vars for npm run build (e.g. NEXT_TELEMETRY_DISABLED=1). */
+  buildEnv?: Record<string, string>;
   onProgress?: (event: CloudWorkbenchProofProgressEvent) => void;
 }): Promise<CloudWorkbenchProofResult> {
   const { session, provider } = input;
@@ -93,6 +107,7 @@ export async function runCloudWorkbenchBuildProof(input: {
   let previewUrl: string | undefined;
   let interactionPassed: boolean | undefined;
   let interactionTranscript: string | undefined;
+  let inspectDiagnostics: PreviewInspectDiagnostics | undefined;
   const progress = (event: CloudWorkbenchProofProgressEvent) => input.onProgress?.(event);
 
   try {
@@ -109,9 +124,45 @@ export async function runCloudWorkbenchBuildProof(input: {
     await scaffoldCloudProofApp(session, provider, input.scaffoldFiles);
     progress({ stage: "scaffold", status: "completed", message: "Cloud proof starter app written" });
 
-    for (const command of ["npm install", "npm run typecheck", "npm run build"]) {
+    const installCommand = input.installCommand ?? "npm install";
+    progress({ stage: "command", status: "running", command: installCommand });
+    const installResult = await provider.exec(session, installCommand, { timeoutMs: commandTimeoutMs(installCommand) });
+    commandResults.push(toCommandResult(installCommand, installResult));
+    progress({
+      stage: "command",
+      status: installResult.exitCode === 0 ? "completed" : "failed",
+      command: installCommand,
+      exitCode: installResult.exitCode,
+      durationMs: installResult.durationMs,
+    });
+    if (installResult.exitCode !== 0) {
+      failures.push(`${installCommand} exited ${installResult.exitCode}: ${commandOutput(installResult)}`);
+    }
+
+    for (const postInstallCommand of input.postInstallCommands ?? []) {
+      progress({ stage: "command", status: "running", command: postInstallCommand });
+      const postInstallResult = await provider.exec(session, postInstallCommand, {
+        timeoutMs: commandTimeoutMs(postInstallCommand),
+      });
+      commandResults.push(toCommandResult(postInstallCommand, postInstallResult));
+      progress({
+        stage: "command",
+        status: postInstallResult.exitCode === 0 ? "completed" : "failed",
+        command: postInstallCommand,
+        exitCode: postInstallResult.exitCode,
+        durationMs: postInstallResult.durationMs,
+      });
+      if (postInstallResult.exitCode !== 0) {
+        failures.push(`${postInstallCommand} exited ${postInstallResult.exitCode}: ${commandOutput(postInstallResult)}`);
+      }
+    }
+
+    for (const command of ["npm run typecheck", "npm run build"]) {
       progress({ stage: "command", status: "running", command });
-      const result = await provider.exec(session, command, { timeoutMs: commandTimeoutMs(command) });
+      const result = await provider.exec(session, command, {
+        timeoutMs: commandTimeoutMs(command),
+        env: command === "npm run build" ? input.buildEnv : undefined,
+      });
       commandResults.push(toCommandResult(command, result));
       progress({ stage: "command", status: result.exitCode === 0 ? "completed" : "failed", command, exitCode: result.exitCode, durationMs: result.durationMs });
       if (result.exitCode !== 0) {
@@ -133,8 +184,9 @@ export async function runCloudWorkbenchBuildProof(input: {
       failures.push(`npm test failed: ${testResult.output.slice(0, 500)}`);
     }
 
-    progress({ stage: "preview", status: "running", command: PREVIEW_COMMAND });
-    const preview = await startPreview(session, provider, previewPort);
+    const previewCommand = input.previewCommand ?? PREVIEW_COMMAND;
+    progress({ stage: "preview", status: "running", command: previewCommand });
+    const preview = await startPreview(session, provider, previewPort, previewCommand);
     previewUrl = preview.url ?? await provider.getPreviewUrl(session);
     progress({ stage: "preview", status: preview.result.exitCode === 0 ? "completed" : "failed", command: preview.command, exitCode: preview.result.exitCode, durationMs: preview.result.durationMs });
     if (preview.result.exitCode !== 0) {
@@ -148,18 +200,21 @@ export async function runCloudWorkbenchBuildProof(input: {
     } else {
       progress({ stage: "inspect", status: "running", message: `Inspecting ${previewUrl}` });
       inspection = await provider.inspectPreview(session, previewUrl);
+      inspectDiagnostics = inspection.diagnostics;
       progress({ stage: "inspect", status: previewFailures(inspection).length === 0 ? "completed" : "failed", message: `Inspected ${previewUrl}` });
       failures.push(...previewFailures(inspection));
     }
 
-    // Interaction check: click/type like a user and assert the DOM actually reacts.
-    // A live URL that renders but does nothing (Potemkin UI) must fail the build.
     if (previewUrl && previewFailures(inspection ?? blankInspection(previewUrl)).length === 0) {
+      const trafficToken = provider.getPreviewTrafficToken
+        ? await provider.getPreviewTrafficToken(session)
+        : undefined;
+      const extraHTTPHeaders = trafficToken ? { "X-Access-Token": trafficToken } : undefined;
       progress({ stage: "interaction", status: "running", message: `Interacting with ${previewUrl}` });
       const interaction = await verifyInteractions({
         previewUrl,
         steps: interactionSteps,
-        driver: interactionDriverFactory(previewUrl),
+        driver: interactionDriverFactory(previewUrl, { extraHTTPHeaders }),
       }).catch((err) => ({
         passed: false,
         detail: err instanceof Error ? err.message : String(err),
@@ -244,6 +299,7 @@ export async function runCloudWorkbenchBuildProof(input: {
     degradedArtifacts: warnings.length > 0,
     interactionPassed,
     interactionTranscript,
+    inspectDiagnostics,
   };
 }
 
@@ -513,11 +569,12 @@ async function startPreview(
   session: WorkbenchSession,
   provider: WorkbenchProviderAdapter,
   previewPort: number,
+  previewCommand: string = PREVIEW_COMMAND,
 ) {
   if (!provider.startPreview) {
     throw new Error(`${provider.name} does not implement startPreview`);
   }
-  return provider.startPreview(session, PREVIEW_COMMAND, previewPort);
+  return provider.startPreview(session, previewCommand, previewPort);
 }
 
 function toCommandResult(command: string, result: WorkbenchExecResult): CloudWorkbenchCommandResult {
@@ -536,6 +593,10 @@ function previewFailures(inspection: WorkbenchPreviewInspection): string[] {
   else if (inspection.httpStatus < 200 || inspection.httpStatus >= 400) failures.push(`preview HTTP ${inspection.httpStatus}`);
   if (!isRealPngScreenshot(inspection.screenshot.dataUri)) failures.push("real PNG screenshot missing");
   if (inspection.visibleElements <= 0 || inspection.domText.trim().length < 3) failures.push("preview DOM is blank");
+  if (inspection.diagnostics?.domProbeSource === "fetch") failures.push("browser inspect fell back to static fetch (SPA shell only)");
+  if (inspection.diagnostics?.hydrationWaitReason && inspection.visibleElements <= 0) {
+    failures.push(`hydration failed: ${inspection.diagnostics.hydrationWaitReason}`);
+  }
   if (inspection.consoleErrors.length > 0) failures.push(`console errors: ${inspection.consoleErrors.slice(0, 5).join(" | ")}`);
   if (inspection.pageErrors.length > 0) failures.push(`page errors: ${inspection.pageErrors.slice(0, 5).join(" | ")}`);
   return failures;
@@ -550,8 +611,9 @@ function snapshotArtifact(snapshot: WorkbenchSandboxSnapshot) {
 }
 
 function commandTimeoutMs(command: string) {
-  if (command === "npm install") return 180_000;
-  if (command === "npm run build") return 120_000;
+  if (command === "npm install" || command.includes("npm install")) return 180_000;
+  if (command === "npm run build") return 240_000;
+  if (command.includes("prisma")) return 120_000;
   return 90_000;
 }
 

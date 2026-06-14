@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkbenchSession } from "@/lib/types";
 
-const { mockConnect, mockCreate, mockFilesList, mockRun, mockAddWorkbenchArtifact, mockAddWorkbenchEvent, mockCaptureScreenshot, mockResolveWorkbenchProviderCredentialEnv } = vi.hoisted(() => ({
+const { mockConnect, mockCreate, mockFilesList, mockRun, mockAddWorkbenchArtifact, mockAddWorkbenchEvent, mockCaptureScreenshot, mockResolveWorkbenchProviderCredentialEnv, mockInspectHttpPreview } = vi.hoisted(() => ({
   mockConnect: vi.fn(),
   mockCreate: vi.fn(),
   mockFilesList: vi.fn(),
@@ -10,6 +10,7 @@ const { mockConnect, mockCreate, mockFilesList, mockRun, mockAddWorkbenchArtifac
   mockAddWorkbenchEvent: vi.fn(),
   mockCaptureScreenshot: vi.fn(),
   mockResolveWorkbenchProviderCredentialEnv: vi.fn(),
+  mockInspectHttpPreview: vi.fn(),
 }));
 
 vi.mock("e2b", () => ({
@@ -37,6 +38,14 @@ vi.mock("@/lib/test-runner", () => ({
 vi.mock("@/lib/credential-boundary", () => ({
   resolveWorkbenchProviderCredentialEnv: mockResolveWorkbenchProviderCredentialEnv,
 }));
+
+vi.mock("@/lib/workbench-cloud-preview", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/workbench-cloud-preview")>();
+  return {
+    ...actual,
+    inspectHttpPreview: mockInspectHttpPreview,
+  };
+});
 
 import { e2bProvider } from "./workbench-e2b-provider";
 
@@ -264,29 +273,40 @@ describe("e2b workbench provider safety", () => {
   });
 
   it("inspects a preview with screenshot and DOM evidence", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      status: 200,
-      text: async () => "<main><h1>E2B notes app</h1><button>Save</button></main>",
-    })));
+    mockInspectHttpPreview.mockResolvedValue({
+      url: "https://preview.e2b.test",
+      httpStatus: 200,
+      domText: "E2B notes app Save",
+      visibleElements: 3,
+      consoleErrors: [],
+      pageErrors: [],
+      screenshot: {
+        dataUri: "data:image/png;base64,real",
+        width: 1280,
+        height: 720,
+        storageKey: "e2b/screenshot",
+      },
+    });
 
-    try {
-      const inspection = await e2bProvider.inspectPreview?.(session(), "https://preview.e2b.test");
+    const inspection = await e2bProvider.inspectPreview?.(session(), "https://preview.e2b.test");
 
-      expect(mockCaptureScreenshot).toHaveBeenCalledWith("https://preview.e2b.test", expect.objectContaining({
-        storageKey: "e2b/ws_e2b/screenshot",
-        sessionId: "ws_e2b",
-      }));
-      expect(inspection).toEqual(expect.objectContaining({
-        url: "https://preview.e2b.test",
-        httpStatus: 200,
-        domText: "E2B notes app Save",
-        visibleElements: 3,
-        consoleErrors: [],
-        pageErrors: [],
-      }));
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    expect(mockCaptureScreenshot).toHaveBeenCalledWith("https://preview.e2b.test", expect.objectContaining({
+      storageKey: "e2b/ws_e2b/screenshot",
+      sessionId: "ws_e2b",
+    }));
+    expect(mockInspectHttpPreview).toHaveBeenCalledWith(
+      "https://preview.e2b.test",
+      expect.objectContaining({ dataUri: "data:image/png;base64,real" }),
+      expect.objectContaining({ expectedTexts: expect.any(Array) }),
+    );
+    expect(inspection).toEqual(expect.objectContaining({
+      url: "https://preview.e2b.test",
+      httpStatus: 200,
+      domText: "E2B notes app Save",
+      visibleElements: 3,
+      consoleErrors: [],
+      pageErrors: [],
+    }));
   });
 
   it("returns failed test results instead of throwing when the sandbox command exits non-zero", async () => {
