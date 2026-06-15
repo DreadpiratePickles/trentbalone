@@ -308,22 +308,6 @@ export function createSeedState(): AppState {
       {
         id: makeId("integration"),
         companyId,
-        provider: "Fincept Terminal",
-        scopes: ["fincept:launch_sandbox", "fincept:market_research", "fincept:portfolio_analysis", "fincept:risk_report"],
-        status: "needs_credentials",
-        lastCheckedAt: createdAt
-      },
-      {
-        id: makeId("integration"),
-        companyId,
-        provider: "Ghostfolio",
-        scopes: ["ghostfolio:launch_sandbox", "ghostfolio:portfolio_overview", "ghostfolio:allocation_report", "ghostfolio:risk_insights"],
-        status: "needs_credentials",
-        lastCheckedAt: createdAt
-      },
-      {
-        id: makeId("integration"),
-        companyId,
         provider: "Sentry",
         scopes: ["error_monitoring", "diagnostics"],
         status: "needs_credentials",

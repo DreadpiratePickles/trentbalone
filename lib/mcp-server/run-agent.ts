@@ -143,7 +143,7 @@ export const RUN_AGENT_TOOL: McpToolDefinition = {
     properties: {
       objective: { type: "string", description: "What the agent should accomplish." },
       role: { type: "string", enum: MCP_AGENT_ROLES, description: "Solo seat. Defaults to engineer." },
-      appId: { type: "string", description: "Optional App-Solo app id for the selected solo seat, such as steel-browser, hyperframes, open-generative-ai, fincept-terminal, or ghostfolio." },
+      appId: { type: "string", description: "Optional App-Solo app id for the selected solo seat, such as steel-browser, hyperframes, or open-generative-ai." },
       mode: { type: "string", enum: MCP_AGENT_MODES, description: "Solo Workbench mode. Defaults to the role's App Solo mode." },
       engine: { type: "string", enum: ["solo", "team"], description: "solo or team. Defaults to solo." },
     },

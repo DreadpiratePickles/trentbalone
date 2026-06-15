@@ -325,7 +325,7 @@ function inferToolApprovalRequired(tool: string): boolean {
 }
 
 function inferToolExecutionMode(tool: string): SeatToolExecutionMode {
-  if (tool.includes("sandbox") || tool.includes("fincept") || tool.includes("hyperframes") || tool.includes("open_gen_ai")) return "sandbox";
+  if (tool.includes("sandbox") || tool.includes("hyperframes") || tool.includes("open_gen_ai")) return "sandbox";
   if (tool.includes("draft") || tool.includes("plan") || tool.includes("prompt")) return "draft";
   if (tool.includes("send") || tool.includes("deploy") || tool.includes("launch") || tool.includes("stripe")) return "external_write";
   return "read";

@@ -103,45 +103,15 @@ describe("integration health", () => {
     expect(result?.summary).toContain("/ads meta");
   });
 
-  it("declares Fincept Terminal as a sandbox-only finance adapter", async () => {
-    const fincept = adapters.find((adapter) => adapter.name === "Fincept Terminal");
-
-    expect(fincept?.scopes).toEqual([
+  it("does not expose removed fake finance sandbox apps", () => {
+    expect(adapters.map((adapter) => adapter.name)).not.toEqual(expect.arrayContaining([
+      "Fincept Terminal",
+      "Ghostfolio",
+    ]));
+    expect(adapters.flatMap((adapter) => adapter.scopes)).not.toEqual(expect.arrayContaining([
       "fincept:launch_sandbox",
-      "fincept:market_research",
-      "fincept:portfolio_analysis",
-      "fincept:risk_report",
-      "fincept:economic_data",
-      "fincept:paper_trading",
-    ]);
-    expect(fincept?.requiresApproval("portfolio risk report")).toBe(false);
-    expect(fincept?.requiresApproval("connect broker")).toBe(true);
-    expect(fincept?.requiresApproval("live trade")).toBe(true);
-
-    const result = await fincept?.execute("risk_report", { ticker: "NVDA" });
-    expect(result?.status).toBe("mocked");
-    expect(result?.summary).toContain("Fincept Terminal sandbox plan");
-  });
-
-  it("declares Ghostfolio as a sandbox-only finance wealth adapter", async () => {
-    const ghostfolio = adapters.find((adapter) => adapter.name === "Ghostfolio");
-
-    expect(ghostfolio?.scopes).toEqual([
       "ghostfolio:launch_sandbox",
-      "ghostfolio:portfolio_overview",
-      "ghostfolio:holdings_import",
-      "ghostfolio:allocation_report",
-      "ghostfolio:performance_report",
-      "ghostfolio:risk_insights",
-      "ghostfolio:fire_projection",
-    ]);
-    expect(ghostfolio?.requiresApproval("portfolio overview")).toBe(false);
-    expect(ghostfolio?.requiresApproval("connect broker")).toBe(true);
-    expect(ghostfolio?.requiresApproval("live account sync")).toBe(true);
-
-    const result = await ghostfolio?.execute("allocation_report", { portfolio: "client-model" });
-    expect(result?.status).toBe("mocked");
-    expect(result?.summary).toContain("Ghostfolio sandbox plan");
+    ]));
   });
 
   it("declares Open Generative AI as a safe-by-default growth creative adapter", async () => {

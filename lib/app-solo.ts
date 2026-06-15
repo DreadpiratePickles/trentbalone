@@ -64,28 +64,12 @@ const APP_DEFINITIONS: Record<string, Omit<AppSoloApp, "scopes">> = {
     description: "Sandbox image, video, lip-sync, and cinema workflows for growth creative.",
     accent: "pulse",
   },
-  "Fincept Terminal": {
-    id: "fincept-terminal",
-    name: "Fincept Terminal",
-    label: "Finance",
-    description: "Sandbox market research, portfolio analysis, risk reports, and paper trading.",
-    accent: "bone",
-  },
-  Ghostfolio: {
-    id: "ghostfolio",
-    name: "Ghostfolio",
-    label: "Wealth",
-    description: "Sandbox portfolio composition, holdings import, performance, risk, and FIRE planning.",
-    accent: "pulse",
-  },
 };
 
 const APP_TOOL_PREFIXES: Record<string, string[]> = {
   "Steel Browser": ["steel:"],
   HyperFrames: ["hyperframes:"],
   "Open Generative AI": ["open_gen_ai:"],
-  "Fincept Terminal": ["fincept:"],
-  Ghostfolio: ["ghostfolio:"],
 };
 
 const MODE_BY_ROLE: Record<AgentRole, WorkbenchAgentMode> = {

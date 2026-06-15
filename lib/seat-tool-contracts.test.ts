@@ -267,8 +267,6 @@ describe("seat-tool contracts", () => {
   it("does not advertise unverified sandbox app adapters as default seat tools", () => {
     const contracts = buildContracts();
     const unverifiedSandboxApps = new Set([
-      "Fincept Terminal",
-      "Ghostfolio",
       "HyperFrames",
       "Open Generative AI",
     ]);

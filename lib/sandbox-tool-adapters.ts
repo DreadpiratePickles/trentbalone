@@ -1,17 +1,5 @@
 import { buildClaudeAdsCommandPlan, buildClaudeAdsToolScopes, formatClaudeAdsCommand } from "@/lib/claude-ads";
 import {
-  buildFinceptTerminalCommandPlan,
-  buildFinceptTerminalToolScopes,
-  formatFinceptTerminalCommand,
-  isFinceptTerminalAction,
-} from "@/lib/fincept-terminal";
-import {
-  buildGhostfolioCommandPlan,
-  buildGhostfolioToolScopes,
-  formatGhostfolioCommand,
-  isGhostfolioAction,
-} from "@/lib/ghostfolio";
-import {
   buildHyperFramesCommandPlan,
   buildHyperFramesToolScopes,
   executeHyperFramesCommand,
@@ -152,106 +140,6 @@ export const sandboxToolAdapters: ToolAdapter[] = [
         action,
         status: this.requiresApproval(action) ? "needs_approval" : "mocked",
         summary: `Claude Ads dry-run: ${command}`,
-      };
-    },
-  },
-  {
-    name: "Fincept Terminal",
-    scopes: buildFinceptTerminalToolScopes(),
-    availability: "test_only",
-    async healthCheck() {
-      return "mocked";
-    },
-    estimateCost() {
-      return 0;
-    },
-    requiresApproval(action) {
-      return ["live", "trade", "broker", "order", "credential", "withdraw", "payout"].some((word) =>
-        action.toLowerCase().includes(word),
-      );
-    },
-    async execute(action, payload) {
-      const unavailable = toolUnavailableResult(this, action);
-      if (unavailable) return unavailable;
-      if (this.requiresApproval(action)) {
-        return {
-          adapter: "Fincept Terminal",
-          action,
-          status: "needs_approval",
-          summary: `Fincept Terminal action "${action}" requires approval before broker, live trading, order, credential, or payout activity.`,
-        };
-      }
-      if (!isFinceptTerminalAction(action)) {
-        return { adapter: "Fincept Terminal", action, status: "failed", summary: `Unsupported Fincept Terminal action "${action}".` };
-      }
-      return {
-        adapter: "Fincept Terminal",
-        action,
-        status: "mocked",
-        summary: `Fincept Terminal sandbox plan: ${formatFinceptTerminalCommand(buildFinceptTerminalCommandPlan(action, payload))}`,
-      };
-    },
-    async dryRun(action, payload) {
-      const unavailable = toolUnavailableResult(this, action);
-      if (unavailable) return unavailable;
-      if (!isFinceptTerminalAction(action)) {
-        return { adapter: "Fincept Terminal", action, status: "failed", summary: `Unsupported Fincept Terminal action "${action}".` };
-      }
-      return {
-        adapter: "Fincept Terminal",
-        action,
-        status: this.requiresApproval(action) ? "needs_approval" : "mocked",
-        summary: `Fincept Terminal dry-run: ${formatFinceptTerminalCommand(buildFinceptTerminalCommandPlan(action, payload))}`,
-      };
-    },
-  },
-  {
-    name: "Ghostfolio",
-    scopes: buildGhostfolioToolScopes(),
-    availability: "test_only",
-    async healthCheck() {
-      return "mocked";
-    },
-    estimateCost() {
-      return 0;
-    },
-    requiresApproval(action) {
-      return ["live", "sync", "broker", "real account", "credential", "import private", "delete", "trade"].some((word) =>
-        action.toLowerCase().includes(word),
-      );
-    },
-    async execute(action, payload) {
-      const unavailable = toolUnavailableResult(this, action);
-      if (unavailable) return unavailable;
-      if (this.requiresApproval(action)) {
-        return {
-          adapter: "Ghostfolio",
-          action,
-          status: "needs_approval",
-          summary: `Ghostfolio action "${action}" requires approval before Trent connects brokers, syncs live accounts, imports private holdings, or changes portfolio data.`,
-        };
-      }
-      if (!isGhostfolioAction(action)) {
-        return { adapter: "Ghostfolio", action, status: "failed", summary: `Unsupported Ghostfolio action "${action}".` };
-      }
-      return {
-        adapter: "Ghostfolio",
-        action,
-        status: "mocked",
-        summary: `Ghostfolio sandbox plan: ${formatGhostfolioCommand(buildGhostfolioCommandPlan(action, payload))}`,
-      };
-    },
-    async dryRun(action, payload) {
-      const unavailable = toolUnavailableResult(this, action);
-      if (unavailable) return unavailable;
-      if (!isGhostfolioAction(action)) {
-        return { adapter: "Ghostfolio", action, status: "failed", summary: `Unsupported Ghostfolio action "${action}".` };
-      }
-      return {
-        adapter: "Ghostfolio",
-        action,
-        status: this.requiresApproval(action) ? "needs_approval" : "mocked",
-        summary: `Ghostfolio dry-run: ${formatGhostfolioCommand(buildGhostfolioCommandPlan(action, payload))}`,
       };
     },
   },

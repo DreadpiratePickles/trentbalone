@@ -41,6 +41,8 @@ const APP_LABEL_TOOLS = new Set([
   "Steel Browser",
   "HyperFrames",
   "Open Generative AI",
+  // Legacy fake finance app labels can still exist in old contract snapshots.
+  // They are intentionally hidden until backed by real templates/providers.
   "Fincept Terminal",
   "Ghostfolio",
 ]);
