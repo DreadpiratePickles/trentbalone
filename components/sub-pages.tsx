@@ -19,6 +19,7 @@ import type {
   UsageLedgerEntry
 } from "@/lib/types";
 import type { ToolReadiness } from "@/lib/seat-tool-contracts";
+import { buildDailyOperatorStatus } from "@/lib/daily-operator-status";
 import { shortDate, money, roleLabel } from "@/lib/utils";
 import { CommentThread } from "@/components/comment-thread";
 import { AuditComplianceTools } from "@/components/audit-compliance-tools";
@@ -30,6 +31,7 @@ import { TaskRowActions } from "@/components/task-row-actions";
 import { CompanyMemoryUploadButton } from "@/components/company-memory-upload";
 import { McpServersPanel } from "@/components/mcp-servers-panel";
 import { AutonomyControlPanel } from "@/components/autonomy-control-panel";
+import { ConnectorMatrixPanel } from "@/components/connector-matrix-panel";
 import {
   PageHeader,
   Pill,
@@ -1523,6 +1525,8 @@ export function IntegrationsPageClient({ companyId }: { companyId: string }) {
         </div>
       )}
 
+      <ConnectorMatrixPanel companyId={companyId} />
+
       <McpServersPanel companyId={companyId} />
 
       {/* Coming-soon modal for non-GitHub integrations */}
@@ -1662,6 +1666,60 @@ export function ContractReadinessPill({ readiness }: { readiness?: string }) {
   if (readiness === "needs_credentials") return <Pill tone="ember">needs credentials</Pill>;
   if (readiness === "unavailable") return <Pill tone="ember">unavailable</Pill>;
   return <Pill tone="ember">not connected</Pill>;
+}
+
+function DailyOperatorPanel({ status }: { status: ReturnType<typeof buildDailyOperatorStatus> }) {
+  return (
+    <div
+      style={{
+        border: status.enabled ? "1px solid rgba(110,231,183,.22)" : "1px solid rgba(255,255,255,.08)",
+        borderRadius: 12,
+        background: status.enabled ? "rgba(110,231,183,.045)" : "rgba(255,255,255,.025)",
+        padding: 14,
+        display: "grid",
+        gap: 12,
+      }}
+      data-testid="daily-operator-panel"
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <div className="mono" style={{ fontSize: 10, color: "var(--pulse)", letterSpacing: ".14em", textTransform: "uppercase" }}>
+            daily operator mode
+          </div>
+          <div style={{ marginTop: 4, color: "var(--bone)", fontWeight: 800 }}>
+            {status.enabled ? "Nightly durable cycle is armed" : "Nightly cycle is disabled"}
+          </div>
+        </div>
+        <Pill tone={status.enabled ? "pulse" : "ember"}>{status.label}</Pill>
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+          gap: 10,
+        }}
+      >
+        <OperatorFact label="next run" value={status.nextRunAt ? shortDate(status.nextRunAt) : "not scheduled"} />
+        <OperatorFact label="last run" value={status.lastRunAt ? shortDate(status.lastRunAt) : "not yet"} />
+        <OperatorFact label="morning email" value={status.morningEmail} />
+        <OperatorFact label="approvals" value={status.approvalQueue} />
+      </div>
+      <div style={{ color: "var(--mist)", fontSize: 12, lineHeight: 1.55 }}>
+        Trent reads Stripe, PostHog, Sentry, memory, and goals before the run; safe reversible work can execute, while external spend, email sends, CRM writes, deploys, deletes, and social posts stay gated.
+      </div>
+    </div>
+  );
+}
+
+function OperatorFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ border: "1px solid rgba(255,255,255,.06)", borderRadius: 10, padding: "10px 12px", background: "rgba(0,0,0,.12)" }}>
+      <div className="mono" style={{ fontSize: 9, color: "var(--haze)", letterSpacing: ".12em", textTransform: "uppercase" }}>
+        {label}
+      </div>
+      <div style={{ marginTop: 5, color: "var(--bone-2)", fontSize: 12, lineHeight: 1.4 }}>{value}</div>
+    </div>
+  );
 }
 
 // ── SETTINGS PAGE ──────────────────────────────────────────────────────
@@ -1841,6 +1899,7 @@ export function SettingsPageClient({ companyId }: { companyId: string }) {
     legal: "LG",
     strategist: "ST",
   };
+  const dailyOperator = company ? buildDailyOperatorStatus(company) : null;
 
   return (
     <div>
@@ -2053,6 +2112,7 @@ export function SettingsPageClient({ companyId }: { companyId: string }) {
                 ))}
               </select>
             </SettingsField>
+            {dailyOperator ? <DailyOperatorPanel status={dailyOperator} /> : null}
             <SettingsField label="public dashboard">
               <div
                 style={{

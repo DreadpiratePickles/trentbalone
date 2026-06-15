@@ -68,6 +68,52 @@ describe("WorkbenchEvidenceRail", () => {
     expect(html).toContain("Rollback can restore text files only.");
   });
 
+  it("renders checkpoint timeline and restore affordance when rollback events are recorded", () => {
+    const html = renderToStaticMarkup(
+      <WorkbenchEvidenceRail
+        active={{
+          id: "ws_restore",
+          status: "completed",
+          previewUrl: "http://localhost:3000",
+          metadata: {
+            rollbackMode: "provider_native",
+            rollbackDescription: "Provider snapshot restores files, directories, and dependency state.",
+          },
+        }}
+        events={[
+          {
+            id: "evt_checkpoint",
+            type: "system",
+            title: "Checkpoint captured",
+            content: "Captured before attempt 1.",
+            status: "completed",
+            createdAt: "2026-06-11T00:00:00.000Z",
+            metadata: { checkpointId: "wcp_1", rollbackScope: "workspace" },
+          },
+          {
+            id: "evt_restore",
+            type: "system",
+            title: "Workspace restored from checkpoint",
+            content: "Workspace restored to checkpoint wcp_1.",
+            status: "completed",
+            createdAt: "2026-06-11T00:10:00.000Z",
+            metadata: { checkpointId: "wcp_1" },
+          },
+        ]}
+        artifacts={[]}
+        activity={[]}
+        streaming={false}
+        onRefreshSession={async () => undefined}
+        onOpenSandbox={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("checkpoint timeline");
+    expect(html).toContain("wcp_1");
+    expect(html).toContain("Provider snapshot restores files");
+    expect(html).toContain("Restore");
+  });
+
   it("renders Workbench agent contract metadata for agent sessions", () => {
     const html = renderToStaticMarkup(
       <WorkbenchEvidenceRail

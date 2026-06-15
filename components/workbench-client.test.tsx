@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { WorkbenchPlanApprovalNotice } from "@/components/workbench-client";
+import { WorkbenchAutonomyModeBar, WorkbenchPlanApprovalNotice } from "@/components/workbench-client";
 
 describe("WorkbenchPlanApprovalNotice", () => {
   it("renders a local approve/reject prompt with the plan preview", () => {
@@ -26,5 +26,23 @@ describe("WorkbenchPlanApprovalNotice", () => {
     expect(html).toContain("Reject");
     expect(html).toContain("Build spa site");
     expect(html).toContain("write index.html");
+  });
+});
+
+describe("WorkbenchAutonomyModeBar", () => {
+  it("renders all three modes and explains autonomous safety gates", () => {
+    const html = renderToStaticMarkup(
+      <WorkbenchAutonomyModeBar
+        mode="autonomous"
+        saving={false}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Manual");
+    expect(html).toContain("Supervised");
+    expect(html).toContain("Autonomous");
+    expect(html).toContain("Safe reversible work runs");
+    expect(html).toContain("spend, email, CRM, deploys, deletes, and social posts still need approval");
   });
 });

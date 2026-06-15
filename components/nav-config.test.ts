@@ -26,6 +26,7 @@ describe("NAV_GROUPS", () => {
       "autoresearch",
       "approvals",
       "trust",
+      "proofs",
       "budgets",
       "audit",
       "integrations",

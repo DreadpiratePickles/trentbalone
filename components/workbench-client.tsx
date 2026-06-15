@@ -647,20 +647,11 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
                 <div className="mono" style={S.subMeta}>
                   <WorkbenchStatusDot status={active.status} /> {active.status} · {active.costCents}¢ spent
                 </div>
-                <div style={S.autonomyLine}>
-                  <span className="mono" style={S.autonomyLabel}>mode: {autonomyMode}</span>
-                  <button
-                    type="button"
-                    onClick={() => void setWorkbenchAutonomy(autonomyMode === "autonomous" ? "supervised" : "autonomous")}
-                    disabled={autonomySaving}
-                    style={S.autonomyBtn(autonomyMode === "autonomous")}
-                    title={autonomyMode === "autonomous"
-                      ? "Return Workbench to supervised plan approvals"
-                      : "Let Workbench skip the first plan approval pause while keeping risky external actions gated"}
-                  >
-                    {autonomySaving ? <Spinner /> : autonomyMode === "autonomous" ? <><I.bolt /> Autonomous on</> : <><I.play /> Make autonomous</>}
-                  </button>
-                </div>
+                <WorkbenchAutonomyModeBar
+                  mode={autonomyMode}
+                  saving={autonomySaving}
+                  onChange={(mode) => void setWorkbenchAutonomy(mode)}
+                />
                 {autonomyNotice ? <div className="mono" style={S.autonomyNotice}>{autonomyNotice}</div> : null}
               </div>
               <div style={{ display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -894,6 +885,55 @@ export function WorkbenchPlanApprovalNotice({
   );
 }
 
+export function WorkbenchAutonomyModeBar({
+  mode,
+  saving,
+  onChange,
+}: {
+  mode: CompanyAutonomyMode;
+  saving: boolean;
+  onChange: (mode: CompanyAutonomyMode) => void;
+}) {
+  return (
+    <section style={S.autonomyCard} data-testid="workbench-autonomy-mode-bar" aria-label="Workbench autonomy mode">
+      <div style={S.autonomyCardTop}>
+        <span className="mono" style={S.autonomyLabel}>autonomy</span>
+        <span style={S.autonomySafety}>Safe reversible work runs; spend, email, CRM, deploys, deletes, and social posts still need approval.</span>
+      </div>
+      <div style={S.autonomyModes} role="radiogroup" aria-label="Workbench autonomy mode selector">
+        {(["manual", "supervised", "autonomous"] as CompanyAutonomyMode[]).map((candidate) => (
+          <button
+            key={candidate}
+            type="button"
+            role="radio"
+            aria-checked={mode === candidate}
+            onClick={() => onChange(candidate)}
+            disabled={saving}
+            style={S.autonomyModeButton(mode === candidate, candidate)}
+            title={autonomyModeCopy[candidate]}
+          >
+            {saving && mode === candidate ? <Spinner /> : null}
+            {labelMode(candidate)}
+          </button>
+        ))}
+      </div>
+      <p style={S.autonomyExplain}>{autonomyModeCopy[mode]}</p>
+    </section>
+  );
+}
+
+const autonomyModeCopy: Record<CompanyAutonomyMode, string> = {
+  manual: "Manual: agents research and draft. External side effects and risky actions pause for approval.",
+  supervised: "Supervised: safe internal/reversible work can run; external writes and high-risk actions pause. This is the default.",
+  autonomous: "Autonomous: low-risk, reversible, connected work runs without the first plan pause. Risky external actions remain gated.",
+};
+
+function labelMode(mode: CompanyAutonomyMode): string {
+  if (mode === "manual") return "Manual";
+  if (mode === "supervised") return "Supervised";
+  return "Autonomous";
+}
+
 // ── Inline styles (house design tokens) ───────────────────────────────────────
 
 const border = "1px solid rgba(255,255,255,.07)";
@@ -952,16 +992,20 @@ const S = {
   centerHead: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, padding: "16px 20px", borderBottom: border } as React.CSSProperties,
   objective: { fontSize: 15, fontWeight: 600 } as React.CSSProperties,
   subMeta: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--mist)", marginTop: 8 } as React.CSSProperties,
-  autonomyLine: { display: "flex", alignItems: "center", gap: 8, marginTop: 9, flexWrap: "wrap" } as React.CSSProperties,
+  autonomyCard: { marginTop: 10, border, borderRadius: 10, background: "rgba(255,255,255,.022)", padding: 10, maxWidth: 650 } as React.CSSProperties,
+  autonomyCardTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8 } as React.CSSProperties,
   autonomyLabel: { fontSize: 10, color: "var(--haze)", textTransform: "uppercase", letterSpacing: ".08em" } as React.CSSProperties,
-  autonomyBtn: (active: boolean) => ({
+  autonomySafety: { color: "var(--mist)", fontSize: 10, lineHeight: 1.35, textAlign: "right" } as React.CSSProperties,
+  autonomyModes: { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6 } as React.CSSProperties,
+  autonomyModeButton: (active: boolean, mode: CompanyAutonomyMode) => ({
     display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
-    height: 28, padding: "0 10px", borderRadius: 8,
-    border: active ? "1px solid rgba(110,231,183,.44)" : border,
-    background: active ? "rgba(110,231,183,.12)" : "rgba(255,255,255,.03)",
-    color: active ? "var(--pulse)" : "var(--mist)", fontSize: 11, fontWeight: 700,
-    cursor: "pointer", whiteSpace: "nowrap",
+    height: 30, padding: "0 8px", borderRadius: 8,
+    border: active ? "1px solid rgba(110,231,183,.42)" : border,
+    background: active ? "rgba(110,231,183,.1)" : "rgba(255,255,255,.025)",
+    color: active ? "var(--pulse)" : mode === "manual" ? "var(--haze)" : "var(--mist)",
+    fontSize: 11, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap",
   }) as React.CSSProperties,
+  autonomyExplain: { margin: "8px 0 0", color: "var(--haze)", fontSize: 10, lineHeight: 1.4 } as React.CSSProperties,
   autonomyNotice: { marginTop: 6, fontSize: 10, color: "var(--mist)", lineHeight: 1.4, maxWidth: 520 } as React.CSSProperties,
   previewLink: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--ember)", textDecoration: "none", padding: "6px 10px", border: "1px solid rgba(251,146,60,.3)", borderRadius: 7 } as React.CSSProperties,
   ghostBtn: {

@@ -115,6 +115,7 @@ export function WorkbenchEvidenceRail({
   const [testsRunning, setTestsRunning] = useState(false);
   const [testsResult, setTestsResult] = useState<TestRunResult | null>(null);
   const [testCommand, setTestCommand] = useState("");
+  const [restoringCheckpoint, setRestoringCheckpoint] = useState<string | null>(null);
 
   const sessionRunning = active?.status === "running";
 
@@ -140,6 +141,7 @@ export function WorkbenchEvidenceRail({
     () => (selectedFile ? inferCodeBlock(selectedFile, fileContent) : undefined),
     [selectedFile, fileContent],
   );
+  const checkpoints = useMemo(() => checkpointTimelineFromEvents(events), [events]);
 
   const captureScreenshot = useCallback(async () => {
     if (!active?.previewUrl) return;
@@ -232,6 +234,25 @@ export function WorkbenchEvidenceRail({
     }
   }, [active, onRefreshSession]);
 
+  const restoreCheckpoint = useCallback(async (checkpointId: string) => {
+    if (!active?.id) return;
+    setRestoringCheckpoint(checkpointId);
+    setRailError(null);
+    try {
+      const res = await fetch(`/api/workbench/${active.id}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ checkpointId }),
+      });
+      if (!res.ok) throw new Error(await readApiError(res));
+      await onRefreshSession();
+    } catch (err) {
+      setRailError(err instanceof Error ? err.message : "Checkpoint restore failed");
+    } finally {
+      setRestoringCheckpoint(null);
+    }
+  }, [active?.id, onRefreshSession]);
+
   useEffect(() => {
     if (!active?.id || railTab !== "files") return;
     let cancelled = false;
@@ -308,6 +329,11 @@ export function WorkbenchEvidenceRail({
       <RollbackModeStrip
         mode={active?.metadata?.rollbackMode}
         description={active?.metadata?.rollbackDescription}
+      />
+      <CheckpointTimelineStrip
+        checkpoints={checkpoints}
+        restoreBusyId={restoringCheckpoint}
+        onRestore={(checkpointId) => void restoreCheckpoint(checkpointId)}
       />
       <AgentContractStrip agentRun={active?.metadata?.agentRun} appSolo={active?.metadata?.appSolo} />
       {railError && <div style={R.railError}>{railError}</div>}
@@ -540,6 +566,55 @@ function RollbackModeStrip({
   );
 }
 
+type CheckpointTimelineItem = {
+  id: string;
+  title: string;
+  status: string;
+  detail: string;
+  createdAt: string;
+  restored: boolean;
+};
+
+function CheckpointTimelineStrip({
+  checkpoints,
+  restoreBusyId,
+  onRestore,
+}: {
+  checkpoints: CheckpointTimelineItem[];
+  restoreBusyId: string | null;
+  onRestore: (checkpointId: string) => void;
+}) {
+  if (!checkpoints.length) return null;
+  return (
+    <div style={R.checkpointStrip} aria-label="Workbench checkpoint timeline">
+      <div style={R.checkpointHead}>
+        <span style={R.rollbackTitle}>checkpoint timeline</span>
+        <span style={R.rollbackMeta}>{checkpoints.length} recorded</span>
+      </div>
+      {checkpoints.slice(0, 4).map((checkpoint) => (
+        <div key={`${checkpoint.id}-${checkpoint.createdAt}`} style={R.checkpointRow}>
+          <div style={{ minWidth: 0 }}>
+            <div style={R.checkpointTitle}>
+              <span>{checkpoint.id}</span>
+              {checkpoint.restored ? <span style={R.restoredPill}>restored</span> : null}
+            </div>
+            <div style={R.checkpointMeta}>{checkpoint.title} · {checkpoint.detail}</div>
+          </div>
+          <button
+            type="button"
+            style={R.restoreBtn}
+            onClick={() => onRestore(checkpoint.id)}
+            disabled={Boolean(restoreBusyId)}
+            title={`Restore checkpoint ${checkpoint.id}`}
+          >
+            {restoreBusyId === checkpoint.id ? "..." : "Restore"}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function AgentContractStrip({
   agentRun,
   appSolo,
@@ -584,6 +659,38 @@ function compactList(items?: string[], maxItems = 4): string {
   return items.length > maxItems ? `${visible}, +${items.length - maxItems} more` : visible;
 }
 
+function checkpointTimelineFromEvents(events: WbEvent[]): CheckpointTimelineItem[] {
+  const rows = events.flatMap((event): CheckpointTimelineItem[] => {
+    const checkpointId = typeof event.metadata?.checkpointId === "string"
+      ? event.metadata.checkpointId
+      : checkpointIdFromText(event.content) ?? checkpointIdFromText(event.title);
+    if (!checkpointId) return [];
+    const restored = /restore|restored/i.test(`${event.title} ${event.content}`);
+    return [{
+      id: checkpointId,
+      title: event.title,
+      status: event.status,
+      detail: typeof event.metadata?.rollbackScope === "string" ? event.metadata.rollbackScope : event.content,
+      createdAt: event.createdAt,
+      restored,
+    }];
+  });
+
+  const seen = new Map<string, CheckpointTimelineItem>();
+  for (const row of rows) {
+    const existing = seen.get(row.id);
+    if (!existing || row.restored || existing.createdAt < row.createdAt) {
+      seen.set(row.id, { ...existing, ...row, restored: Boolean(existing?.restored || row.restored) });
+    }
+  }
+  return [...seen.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+function checkpointIdFromText(value: string): string | undefined {
+  return value.match(/\b(?:wcp|wbsnap|checkpoint)_[a-z0-9_-]+\b/i)?.[0]
+    ?? value.match(/\b(wcp_[a-z0-9_-]+)\b/i)?.[1];
+}
+
 const border = "1px solid rgba(255,255,255,.07)";
 const surface = "rgba(255,255,255,.02)";
 
@@ -618,6 +725,13 @@ const R = {
   rollbackStrip: { padding: "9px 12px", borderBottom: border, display: "grid", gap: 4, background: "rgba(255,255,255,.012)" } as React.CSSProperties,
   rollbackTitle: { color: "var(--mist)", fontSize: 10, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase" } as React.CSSProperties,
   rollbackMeta: { color: "var(--haze)", fontSize: 10, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
+  checkpointStrip: { padding: "10px 12px", borderBottom: border, display: "grid", gap: 8, background: "rgba(110,231,183,.018)" } as React.CSSProperties,
+  checkpointHead: { display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" } as React.CSSProperties,
+  checkpointRow: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 8, alignItems: "center", padding: "8px 0", borderTop: "1px solid rgba(255,255,255,.05)" } as React.CSSProperties,
+  checkpointTitle: { display: "flex", alignItems: "center", gap: 6, color: "var(--bone)", fontSize: 11, fontFamily: "var(--mono)", minWidth: 0 } as React.CSSProperties,
+  checkpointMeta: { color: "var(--haze)", fontSize: 10, lineHeight: 1.35, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
+  restoredPill: { borderRadius: 999, padding: "2px 6px", color: "var(--pulse)", background: "rgba(110,231,183,.08)", border: "1px solid rgba(110,231,183,.18)", fontSize: 9, textTransform: "uppercase" } as React.CSSProperties,
+  restoreBtn: { height: 24, padding: "0 8px", borderRadius: 7, border: "1px solid rgba(110,231,183,.24)", background: "rgba(110,231,183,.07)", color: "var(--pulse)", fontSize: 10, fontWeight: 800, cursor: "pointer" } as React.CSSProperties,
   railSection: { padding: "14px 16px", borderBottom: border, display: "flex", flexDirection: "column", gap: 10, minHeight: 0 } as React.CSSProperties,
   sectionHead: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } as React.CSSProperties,
   kicker: { fontSize: 10, letterSpacing: ".18em", color: "var(--haze)" } as React.CSSProperties,
