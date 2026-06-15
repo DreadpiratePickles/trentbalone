@@ -16,7 +16,7 @@ import {
   type WorkbenchSurfaceMode,
 } from "@/lib/workbench-client-surface";
 import { workbenchPreviewFrameSrc } from "@/lib/workbench-preview-url";
-import { findPendingWorkbenchPlanApproval, type WorkbenchApprovalSummary } from "@/lib/workbench-approval-ui";
+import { findPendingWorkbenchPlanApproval, latestWorkbenchUserPrompt, type WorkbenchApprovalSummary } from "@/lib/workbench-approval-ui";
 import { readApiError } from "@/lib/read-api-error";
 import { ErrorBanner, LlmNotConfiguredBanner } from "@/components/error-banner";
 import { useRuntimeHealth } from "@/components/runtime-health";
@@ -420,6 +420,10 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
       setAutonomyNotice(mode === "autonomous"
         ? "Autonomous test mode is on. Workbench plans can write/run without the first approval pause."
         : "Supervised mode restored. New Workbench plans pause for approval before writes.");
+      if (mode === "autonomous" && active?.status === "paused" && pendingPlanApproval && !streaming) {
+        setAutonomyNotice("Autonomous test mode is on. Continuing the paused Workbench run now.");
+        await sendContent(latestWorkbenchUserPrompt(messages, active.objective));
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Autonomy update failed";
       setAutonomyNotice(message);
@@ -427,7 +431,7 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
     } finally {
       setAutonomySaving(false);
     }
-  }, [companyId, pushError]);
+  }, [active, companyId, messages, pendingPlanApproval, pushError, sendContent, streaming]);
 
   const resolveWorkbenchApproval = useCallback(async (
     approval: WorkbenchApprovalSummary,
@@ -447,10 +451,13 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
         pushError(message);
         return;
       }
-      setUploadNotice(status === "approved"
-        ? "Workbench plan approved. Continue the session when you are ready."
-        : "Workbench plan rejected.");
-      await refreshActive();
+      if (status === "approved" && active && !streaming) {
+        setUploadNotice("Workbench plan approved. Continuing the run now.");
+        await sendContent(latestWorkbenchUserPrompt(messages, active.objective));
+      } else {
+        setUploadNotice(status === "approved" ? "Workbench plan approved." : "Workbench plan rejected.");
+        await refreshActive();
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Approval update failed";
       setComposerError(message);
@@ -458,7 +465,7 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
     } finally {
       setApprovalActionId(null);
     }
-  }, [pushError, refreshActive]);
+  }, [active, messages, pushError, refreshActive, sendContent, streaming]);
 
   const stopRun = useCallback(async () => {
     if (!active || streaming) return;
@@ -868,7 +875,7 @@ export function WorkbenchPlanApprovalNotice({
         <div style={{ minWidth: 0 }}>
           <div style={S.approvalTitle}>Workbench plan needs approval</div>
           <p style={S.approvalBody}>
-            Review the plan below, then approve it here. Full autonomous mode skips this first plan pause while keeping risky external actions gated.
+            Review the plan below, then continue from here. Full autonomous mode skips this first plan pause while keeping risky external actions gated.
           </p>
         </div>
       </div>
@@ -880,7 +887,7 @@ export function WorkbenchPlanApprovalNotice({
           {busy ? <Spinner /> : <I.x />} Reject
         </button>
         <button type="button" onClick={onApprove} disabled={busy} style={S.approveBtn}>
-          {busy ? <Spinner /> : <I.check />} Approve plan
+          {busy ? <Spinner /> : <I.check />} Approve & continue
         </button>
       </div>
     </section>

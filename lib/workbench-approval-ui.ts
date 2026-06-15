@@ -17,3 +17,14 @@ export function findPendingWorkbenchPlanApproval(
     && approval.toolName === toolName,
   );
 }
+
+export function latestWorkbenchUserPrompt(
+  messages: Array<{ role: string; content: string }>,
+  fallback: string,
+): string {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message?.role === "user" && message.content.trim()) return message.content.trim();
+  }
+  return fallback.trim();
+}

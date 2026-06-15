@@ -17,12 +17,16 @@ vi.mock("@/lib/session", () => ({
 const mockGetApproval = vi.fn();
 const mockResolveApproval = vi.fn();
 const mockUpdateTask = vi.fn();
+const mockGetWorkbenchSession = vi.fn();
+const mockUpdateWorkbenchSession = vi.fn();
 
 vi.mock("@/lib/store", () => ({
   store: {
     getApproval: (...args: any[]) => mockGetApproval(...args),
     resolveApproval: (...args: any[]) => mockResolveApproval(...args),
     updateTask: (...args: any[]) => mockUpdateTask(...args),
+    getWorkbenchSession: (...args: any[]) => mockGetWorkbenchSession(...args),
+    updateWorkbenchSession: (...args: any[]) => mockUpdateWorkbenchSession(...args),
   }
 }));
 
@@ -41,6 +45,8 @@ describe("/api/approvals/[id] RBAC", () => {
     mockGetApproval.mockReset();
     mockResolveApproval.mockReset();
     mockUpdateTask.mockReset();
+    mockGetWorkbenchSession.mockReset();
+    mockUpdateWorkbenchSession.mockReset();
     mockResolveSupervisionApprovalExecution.mockReset();
     mockWithRlsContext.mockClear();
   });
@@ -123,5 +129,42 @@ describe("/api/approvals/[id] RBAC", () => {
     expect(res.status).toBe(200);
     expect(mockWithRlsContext).toHaveBeenCalledWith("c1", expect.any(Function));
     expect(calls).toEqual(["rls:start", "resolve", "task", "supervision", "rls:end"]);
+  });
+
+  it("POST: approving a Workbench plan clears only that session's plan gate so it can continue", async () => {
+    mockGetAuthUser.mockResolvedValue({ id: "u1" });
+    mockGetApproval.mockResolvedValue({
+      id: "approval_plan",
+      companyId: "c1",
+      action: "workbench.plan",
+      toolName: "workbench:workbench_1:plan",
+    });
+    mockRequireRoleForRequest.mockResolvedValue({ ok: true, role: "member" });
+    mockResolveApproval.mockResolvedValue({
+      id: "approval_plan",
+      companyId: "c1",
+      status: "approved",
+      action: "workbench.plan",
+      toolName: "workbench:workbench_1:plan",
+    });
+    mockGetWorkbenchSession.mockResolvedValue({
+      id: "workbench_1",
+      metadata: {
+        approvalRequiredFor: ["workbench_plan", "deploy", "secret_access"],
+      },
+    });
+
+    const res = await POST(new Request("http://x/api/approvals/approval_plan", {
+      method: "POST",
+      body: JSON.stringify({ status: "approved" }),
+    }), { params: Promise.resolve({ id: "approval_plan" }) });
+
+    expect(res.status).toBe(200);
+    expect(mockGetWorkbenchSession).toHaveBeenCalledWith("workbench_1");
+    expect(mockUpdateWorkbenchSession).toHaveBeenCalledWith("workbench_1", {
+      metadata: {
+        approvalRequiredFor: ["deploy", "secret_access"],
+      },
+    });
   });
 });

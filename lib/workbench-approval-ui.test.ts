@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findPendingWorkbenchPlanApproval } from "@/lib/workbench-approval-ui";
+import { findPendingWorkbenchPlanApproval, latestWorkbenchUserPrompt } from "@/lib/workbench-approval-ui";
 
 describe("workbench approval UI helpers", () => {
   it("finds only the pending plan approval for the active Workbench session", () => {
@@ -32,5 +32,14 @@ describe("workbench approval UI helpers", () => {
 
     expect(approval?.id).toBe("approval_active");
     expect(approval?.previewContent).toContain("Build app");
+  });
+
+  it("continues from the latest user prompt, not the placeholder objective", () => {
+    expect(latestWorkbenchUserPrompt([
+      { role: "user", content: "make me spa agency website" },
+      { role: "assistant", content: "Session paused for plan approval." },
+    ], "yo")).toBe("make me spa agency website");
+
+    expect(latestWorkbenchUserPrompt([], "fallback objective")).toBe("fallback objective");
   });
 });

@@ -22,7 +22,7 @@ describe("WorkbenchPlanApprovalNotice", () => {
     );
 
     expect(html).toContain("Workbench plan needs approval");
-    expect(html).toContain("Approve plan");
+    expect(html).toContain("Approve &amp; continue");
     expect(html).toContain("Reject");
     expect(html).toContain("Build spa site");
     expect(html).toContain("write index.html");

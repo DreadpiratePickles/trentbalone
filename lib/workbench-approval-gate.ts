@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { getCompanyAutonomySettings } from "@/lib/autonomy-settings";
 import { store } from "@/lib/store";
-import type { WorkbenchSession } from "@/lib/types";
+import type { Approval, WorkbenchSession } from "@/lib/types";
 import type { ArtifactAction } from "@/lib/workbench-artifact-parser";
 import { requiresApproval } from "@/lib/workbench-safety";
 
@@ -53,9 +53,11 @@ export function fingerprintWorkbenchPlan(actions: ArtifactAction[]): string {
 }
 
 function hasWorkbenchPlanGate(session: WorkbenchSession): boolean {
-  return session.metadata.approvalRequiredFor.some((gate) =>
-    gate === "workbench_plan" || gate === "workbench.plan" || gate === "plan",
-  );
+  return session.metadata.approvalRequiredFor.some(isWorkbenchPlanGate);
+}
+
+function isWorkbenchPlanGate(gate: string): boolean {
+  return gate === "workbench_plan" || gate === "workbench.plan" || gate === "plan";
 }
 
 export async function shouldRequireWorkbenchPlanApproval(session: WorkbenchSession): Promise<boolean> {
@@ -63,6 +65,31 @@ export async function shouldRequireWorkbenchPlanApproval(session: WorkbenchSessi
   const company = await store.getCompany(session.companyId).catch(() => undefined);
   if (company && getCompanyAutonomySettings(company).mode === "autonomous") return false;
   return true;
+}
+
+export function workbenchSessionIdFromPlanApproval(
+  approval: Pick<Approval, "action" | "toolName">,
+): string | undefined {
+  if (approval.action !== "workbench.plan") return undefined;
+  const match = approval.toolName?.match(/^workbench:([^:]+):plan$/);
+  return match?.[1];
+}
+
+export async function clearWorkbenchPlanGateForApproval(
+  approval: Pick<Approval, "action" | "toolName">,
+): Promise<void> {
+  const sessionId = workbenchSessionIdFromPlanApproval(approval);
+  if (!sessionId) return;
+  const session = await store.getWorkbenchSession(sessionId);
+  if (!session) return;
+  const approvalRequiredFor = session.metadata.approvalRequiredFor.filter((gate) => !isWorkbenchPlanGate(gate));
+  if (approvalRequiredFor.length === session.metadata.approvalRequiredFor.length) return;
+  await store.updateWorkbenchSession(sessionId, {
+    metadata: {
+      ...session.metadata,
+      approvalRequiredFor,
+    },
+  });
 }
 
 export async function ensureWorkbenchPlanApproval(

@@ -5,6 +5,7 @@ import { resolveSupervisionApprovalExecution } from "@/lib/supervision/approval-
 import { syncContentMissionForApproval } from "@/lib/content-mission-approval-hook";
 import { syncAgentMissionForApproval } from "@/lib/agent-mission-approval-hook";
 import { withRlsContext } from "@/lib/with-rls";
+import { clearWorkbenchPlanGateForApproval } from "@/lib/workbench-approval-gate";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getAuthUser();
@@ -29,6 +30,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       });
     }
     if (approval) {
+      if (status === "approved") {
+        await clearWorkbenchPlanGateForApproval(approval).catch(() => undefined);
+      }
       await resolveSupervisionApprovalExecution({ approval, status });
       await syncContentMissionForApproval(approval).catch(() => undefined);
       await syncAgentMissionForApproval(approval).catch(() => undefined);
