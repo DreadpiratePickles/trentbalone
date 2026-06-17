@@ -102,7 +102,7 @@ async function main() {
       return { status: res.status, body: await res.json().catch(() => ({})) };
     }, companyId);
     if (seed.status >= 400) {
-      throw new Error(`trust-panel seed failed: ${JSON.stringify(seed.body).slice(0, 300)}`);
+      throw new Error(`trust-panel seed failed: HTTP ${seed.status} ${JSON.stringify(seed.body).slice(0, 300)}`);
     }
 
     for (const scenario of ["clean", "blocked"] as const) {

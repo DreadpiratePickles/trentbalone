@@ -59,6 +59,7 @@ export type OrchestratorRunStatus = "planning" | "running" | "awaiting_approval"
 export type OrchestratorRunTrigger = "manual" | "scheduled" | "delegated" | "heartbeat";
 export type OrchestratorEventKind =
   | "snapshot"
+  | "run_preflight"
   | "run_start"
   | "plan_start"
   | "plan_end"

@@ -31,6 +31,20 @@ type ArtifactInput = { path: string; content: string };
 
 const REQUIRED: Array<Omit<ProofCategory, "status" | "detail"> & { patterns: RegExp[]; missingDetail: string }> = [
   {
+    key: "run_button",
+    label: "Top-right Run Cycle button",
+    patterns: [/run.*button.*truth.*\.json/i, /main.*run.*button.*\.json/i, /orc.*truth.*proof.*\.json/i, /orchestrator.*truth.*\.json/i],
+    missingDetail: "No proof that the top-right Run Cycle button queues, reconciles, and tracks a durable run.",
+    rerunCommand: "npm run orc:truth-proof",
+  },
+  {
+    key: "orchestration",
+    label: "Agent orchestration truth",
+    patterns: [/orc.*truth.*proof.*\.json/i, /orchestrator.*truth.*\.json/i, /orchestration.*truth.*\.json/i, /orc.*workbench.*proof.*\.json/i],
+    missingDetail: "No orchestration truth proof recorded for planning, steps, critic, approvals, evidence, and memory.",
+    rerunCommand: "npm run orc:truth-proof",
+  },
+  {
     key: "workbench",
     label: "Workbench live build",
     patterns: [/epicA.*(soak20|diverse|interaction).*\.json/i, /workbench.*cloud.*\.json/i],

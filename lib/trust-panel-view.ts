@@ -1,5 +1,4 @@
 import { MODELS } from "@/lib/ai-client";
-import { appendAuditLog } from "@/lib/audit-log";
 import { buildArtifactDraft } from "@/lib/artifacts";
 import { contractsForSeat, resolveSeatToolContracts } from "@/lib/seat-tool-contracts";
 import {
@@ -129,7 +128,7 @@ export async function seedTrustPanelProofEvidence(companyId: string): Promise<vo
 
   const audits = await store.listAuditLogs(companyId);
   if (!audits.some((row) => row.action === "memory.write")) {
-    await appendAuditLog(
+    await store.addAudit(
       companyId,
       "agent",
       "memory.write",

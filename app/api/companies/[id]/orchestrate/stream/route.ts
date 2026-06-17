@@ -116,6 +116,8 @@ export async function GET(
                 detail: event.payload?.detail,
                 run: event.payload?.run,
                 step: event.payload?.step,
+                payload: event.payload,
+                preflight: event.payload?.preflight,
               });
             }
           }

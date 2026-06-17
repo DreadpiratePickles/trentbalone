@@ -158,6 +158,11 @@ describe("/api/companies/[id]/cycles RBAC", () => {
       expect(res.status).toBe(202);
       const body = await res.json();
       expect(body.job).toEqual({ id: "job_1", type: "company_scheduled_cycle", companyId: "c1" });
+      expect(body.runCycle).toMatchObject({
+        status: "queued",
+        jobId: "job_1",
+        runId: null,
+      });
       expect(mockEnqueueCompanyCycle).toHaveBeenCalledWith({
         companyId: "c1",
         trigger: "user",

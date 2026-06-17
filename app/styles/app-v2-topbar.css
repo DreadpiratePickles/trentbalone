@@ -140,7 +140,8 @@
   text-transform: uppercase;
 }
 
-.tbar-running {
+.tbar-running,
+.tbar-cycle-control {
   height: 34px;
   display: inline-flex;
   align-items: center;
@@ -156,6 +157,57 @@
   letter-spacing: .14em;
   text-transform: uppercase;
   animation: pulse-soft 1.6s ease infinite;
+}
+
+.tbar-cycle-control[data-tone="approval"] {
+  border-color: rgba(125, 211, 252, .38);
+  background: rgba(125, 211, 252, .08);
+  color: #7dd3fc;
+}
+
+.tbar-cycle-control[data-tone="danger"] {
+  border-color: var(--line-ember);
+  background: var(--ember-tint);
+  color: var(--ember);
+  animation: none;
+}
+
+.tbar-cycle-control[data-tone="muted"] {
+  border-color: var(--line-1);
+  background: var(--surface-2);
+  color: var(--haze);
+  animation: none;
+}
+
+.tbar-cycle-approval {
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--haze);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.tbar-cycle-action {
+  height: 22px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 0 7px;
+  background: rgba(255,255,255,.04);
+  color: inherit;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.tbar-cycle-action:hover {
+  background: rgba(255,255,255,.09);
+}
+
+.tbar-cycle-action.danger {
+  color: var(--ember);
 }
 
 .tbar-notifs {

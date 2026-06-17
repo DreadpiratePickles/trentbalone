@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { enqueueCompanyCycle, processJobData, removeQueuedBullJob } from "@/lib/queue";
 import { launchOrchestration } from "@/lib/orchestrator";
+import { buildRunCycleControl } from "@/lib/run-cycle-control";
 import { store } from "@/lib/store";
 import { getAuthUser, unauthorized, forbidden, requireRoleForRequest } from "@/lib/session";
 import { checkRateLimit, checkCycleRateLimit, rateLimitExceeded } from "@/lib/rate-limit";
@@ -98,12 +99,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         trigger: "user",
         cycleTrigger: "manual",
       });
+      const processedJob = await store.getJobRun(job.id) ?? job;
       return NextResponse.json({
-        job: await store.getJobRun(job.id) ?? job,
+        job: processedJob,
         processed: true,
+        runCycle: buildRunCycleControl({ job: processedJob }),
       }, { status: 201 });
     }
-    return NextResponse.json({ job }, { status: 202 });
+    return NextResponse.json({ job, runCycle: buildRunCycleControl({ job }) }, { status: 202 });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Cycle failed" }, { status: 400 });
   }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { summarizeJobRunForCycleControl } from "@/lib/run-cycle-control";
 import { store } from "@/lib/store";
 import { forbidden, getAuthUser, requireRoleForRequest, unauthorized } from "@/lib/session";
 
@@ -15,5 +16,8 @@ export async function GET(request: Request) {
   if (!check.ok) return forbidden();
 
   const jobRuns = await store.listJobRuns(companyId);
-  return NextResponse.json({ jobRuns });
+  return NextResponse.json({
+    jobRuns,
+    runCycle: summarizeJobRunForCycleControl(jobRuns),
+  });
 }

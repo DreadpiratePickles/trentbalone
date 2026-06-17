@@ -6,6 +6,17 @@ import { CommandPalette } from "@/components/command-palette";
 import { Sidebar, type ShellCompany } from "@/components/shell-sidebar";
 import { TopBar, TrialBanner } from "@/components/shell-topbar";
 import { ConsoleMark, I } from "@/components/ui";
+import {
+  buildRunCycleControl,
+  emptyRunCycleControl,
+  mergeOrchestratorRunIntoCycleControl,
+  runCycleEventReducer,
+  runCycleIsActive,
+  type RunCycleControlState,
+  type RunCycleEvent,
+  type RunCycleOrchestratorSnapshot,
+} from "@/lib/run-cycle-control";
+import type { JobRun } from "@/lib/types";
 
 type AppShellProps = {
   children: ReactNode;
@@ -20,9 +31,9 @@ export function AppShell({ children, companyId, wide }: AppShellProps) {
   const [isMobile, setIsMobile] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [activeCycleId, setActiveCycleId] = useState<string | null>(null);
-  const [activeStepLabel, setActiveStepLabel] = useState<string | null>(null);
+  const [runCycleState, setRunCycle] = useState<RunCycleControlState>(() => emptyRunCycleControl());
   const router = useRouter();
+  const activeCycleId = runCycleState.runId ?? runCycleState.jobId;
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 1024);
@@ -64,36 +75,64 @@ export function AppShell({ children, companyId, wide }: AppShellProps) {
     const events = new EventSource(`/api/jobs/events?companyId=${companyId}`);
     events.onmessage = (event: MessageEvent) => {
       try {
-        const data = JSON.parse(event.data as string) as {
-          status?: string;
-          jobRunId?: string;
-          step?: { phase?: string; role?: string; label?: string };
-        };
-
-        if (data.status === "running" || data.status === "started") {
-          setActiveCycleId(data.jobRunId ?? "running");
-          setActiveStepLabel(null);
-        } else if (data.status === "step") {
-          setActiveCycleId((current) => current ?? data.jobRunId ?? "running");
-          if (data.step?.phase === "agent_start" && data.step.role) {
-            setActiveStepLabel(`${data.step.role} agent`);
-          } else if (data.step?.phase === "plan_start") {
-            setActiveStepLabel("planning");
-          } else if (data.step?.phase === "plan_end") {
-            setActiveStepLabel("plan ready");
-          }
-        } else if (data.status === "completed" || data.status === "failed" || data.status === "cancelled") {
-          setActiveCycleId(null);
-          setActiveStepLabel(null);
+        const data = JSON.parse(event.data as string) as RunCycleEvent;
+        setRunCycle((current) => runCycleEventReducer(current, data));
+        if (data.status === "completed" || data.status === "failed" || data.status === "cancelled") {
           reloadCompanies();
         }
       } catch {}
     };
     events.onerror = () => {
-      window.setTimeout(() => setActiveCycleId(null), 5000);
+      setRunCycle((current) => runCycleEventReducer(current, {
+        status: "lost_contact",
+        summary: "Connection to live cycle events dropped. Reconnecting with polling.",
+        at: new Date().toISOString(),
+      }));
     };
     return () => events.close();
   }, [companyId, reloadCompanies]);
+
+  const pollRunCycle = useCallback(async () => {
+    if (!companyId) return;
+
+    let next: RunCycleControlState | null = null;
+    try {
+      const jobsRes = await fetch(`/api/jobs?companyId=${encodeURIComponent(companyId)}`);
+      if (jobsRes.ok) {
+        const data = await jobsRes.json() as { runCycle?: RunCycleControlState | null };
+        if (data.runCycle && data.runCycle.status !== "idle") next = data.runCycle;
+      }
+
+      const runId = next?.runId ?? runCycleState.runId;
+      if (runId) {
+        const runRes = await fetch(`/api/companies/${companyId}/orchestrate?runId=${encodeURIComponent(runId)}`);
+        if (runRes.ok) {
+          const data = await runRes.json() as { run?: RunCycleOrchestratorSnapshot };
+          next = mergeOrchestratorRunIntoCycleControl(next ?? runCycleState, data.run);
+        }
+      }
+
+      if (next) {
+        setRunCycle(next);
+        if (next.status === "completed" || next.status === "failed" || next.status === "cancelled") {
+          reloadCompanies();
+        }
+      }
+    } catch {
+      setRunCycle((current) => runCycleEventReducer(current, {
+        status: "lost_contact",
+        summary: "Cycle polling could not reach the server.",
+        at: new Date().toISOString(),
+      }));
+    }
+  }, [companyId, reloadCompanies, runCycleState]);
+
+  useEffect(() => {
+    if (!runCycleIsActive(runCycleState)) return;
+    if (runCycleState.status === "lost_contact" || runCycleState.runId) void pollRunCycle();
+    const timer = window.setInterval(() => void pollRunCycle(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [pollRunCycle, runCycleState]);
 
   const toggleKillSwitch = useCallback(() => {
     if (!company || !companyId) return;
@@ -111,17 +150,64 @@ export function AppShell({ children, companyId, wide }: AppShellProps) {
   }, [company, companyId, router, reloadCompanies]);
 
   const runCycle = useCallback(() => {
-    if (!companyId || activeCycleId) return;
+    if (!companyId || runCycleIsActive(runCycleState)) return;
 
     fetch(`/api/companies/${companyId}/cycles`, { method: "POST" })
-      .then((response) => response.json())
-      .then((data: { cycle?: { id: string }; job?: { id: string }; run?: { id: string } }) => {
-        const activeId = data.run?.id ?? data.cycle?.id ?? data.job?.id;
-        if (activeId) setActiveCycleId(activeId);
+      .then(async (response) => {
+        const data = await response.json() as {
+          runCycle?: RunCycleControlState;
+          job?: JobRun;
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(data.error || "Could not queue cycle.");
+        }
+        if (data.runCycle) setRunCycle(data.runCycle);
+        else if (data.job) setRunCycle(buildRunCycleControl({ job: data.job }));
         router.refresh();
       })
-      .catch(() => {});
-  }, [companyId, activeCycleId, router]);
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "Could not queue cycle.";
+        setRunCycle({
+          ...emptyRunCycleControl(),
+          status: "failed",
+          label: "failed",
+          error: message,
+          lastEventAt: new Date().toISOString(),
+        });
+      });
+  }, [companyId, router, runCycleState]);
+
+  const cancelRunCycle = useCallback(async () => {
+    if (!companyId || !runCycleIsActive(runCycleState)) return;
+    try {
+      if (runCycleState.runId) {
+        await fetch(`/api/companies/${companyId}/orchestrate?runId=${encodeURIComponent(runCycleState.runId)}`, {
+          method: "DELETE",
+        });
+      } else if (runCycleState.jobId) {
+        await fetch(`/api/jobs/${encodeURIComponent(runCycleState.jobId)}/cancel`, { method: "POST" });
+      }
+      setRunCycle((current) => ({ ...current, status: "cancelled", label: "cancelled" }));
+      router.refresh();
+    } catch {
+      setRunCycle((current) => ({
+        ...current,
+        status: "lost_contact",
+        label: "cancel failed",
+        error: "Could not cancel the active cycle. Refresh and check the Ops trace.",
+      }));
+    }
+  }, [companyId, router, runCycleState]);
+
+  const viewRunCycle = useCallback(() => {
+    if (!companyId) return;
+    if (runCycleState.runId) {
+      router.push(`/companies/${companyId}/ops?runId=${encodeURIComponent(runCycleState.runId)}` as Parameters<typeof router.push>[0]);
+      return;
+    }
+    router.push(`/companies/${companyId}/cycles` as Parameters<typeof router.push>[0]);
+  }, [companyId, router, runCycleState.runId]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -156,8 +242,11 @@ export function AppShell({ children, companyId, wide }: AppShellProps) {
           isMobile={isMobile}
           onMenuClick={() => setSidebarOpen(true)}
           activeCycleId={activeCycleId}
-          activeStepLabel={activeStepLabel}
+          runCycle={runCycleState}
+          activeStepLabel={runCycleState.label}
           onRunCycle={runCycle}
+          onCancelCycle={cancelRunCycle}
+          onViewCycle={viewRunCycle}
           onOpenPalette={() => setPaletteOpen(true)}
           onToggleKillSwitch={toggleKillSwitch}
         />

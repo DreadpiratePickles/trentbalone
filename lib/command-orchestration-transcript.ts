@@ -29,6 +29,11 @@ export type OrchStreamPayload = {
   step?: CommandStepPayload;
   run?: CommandRunSnapshot;
   detail?: string;
+  preflight?: {
+    autonomy?: { mode?: string };
+    toolReadiness?: { connected?: number; needsCredentials?: number; failed?: number; unavailable?: number };
+    memory?: { totalSources?: number };
+  };
   id?: string;
   objective?: string;
   status?: string;
@@ -70,6 +75,7 @@ export function createOrchestrationTranscript(runId: string): OrchestrationTrans
 
 export const ORCHESTRATION_TRANSCRIPT_EVENTS = [
   "snapshot",
+  "run_preflight",
   "plan_end",
   "step_pending",
   "step_start",
@@ -92,7 +98,9 @@ export function applyOrchestrationTranscriptEvent(
   payload: OrchStreamPayload,
 ): OrchestrationTranscriptResult {
   if (eventName === "snapshot") return applySnapshot(state, payload);
-  if (eventName === "plan_end") {
+  if (eventName === "run_preflight") {
+    appendPreflight(state, payload);
+  } else if (eventName === "plan_end") {
     const count = Array.isArray(payload.run?.steps) ? payload.run.steps.length : 0;
     appendPlan(state, count);
   } else if (eventName === "step_start") {
@@ -172,6 +180,20 @@ function appendPlan(state: OrchestrationTranscriptState, count: number): void {
   if (state.planAnnounced) return;
   state.lines.push(`Plan ready${count ? `: ${count} steps` : ""}.`);
   state.planAnnounced = true;
+}
+
+function appendPreflight(state: OrchestrationTranscriptState, payload: OrchStreamPayload): void {
+  const key = "run_preflight";
+  if (state.seenNotices.has(key)) return;
+  state.seenNotices.add(key);
+  const preflight = payload.preflight;
+  const tools = preflight?.toolReadiness;
+  const bits = [
+    preflight?.autonomy?.mode ? `autonomy ${preflight.autonomy.mode}` : undefined,
+    tools ? `${tools.connected ?? 0} connected tools, ${tools.needsCredentials ?? 0} need credentials, ${tools.failed ?? 0} failed` : undefined,
+    preflight?.memory?.totalSources != null ? `${preflight.memory.totalSources} memory/evidence sources` : undefined,
+  ].filter(Boolean);
+  state.lines.push("", "Run preflight captured.", bits.join(" · ") || "Readiness snapshot recorded.");
 }
 
 function appendStart(state: OrchestrationTranscriptState, step?: CommandStepPayload): void {

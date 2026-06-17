@@ -14,6 +14,10 @@ export type OrcStreamInput = {
   kind?: string;
   step?: OrcStepPayload;
   run?: { steps?: unknown[]; summary?: string; status?: string };
+  preflight?: {
+    autonomy?: { mode?: string };
+    toolReadiness?: { connected?: number; needsCredentials?: number; failed?: number; unavailable?: number };
+  };
   detail?: string;
 };
 
@@ -23,6 +27,17 @@ export function mapOrcEventName(eventName: string, payload: OrcStreamInput, inde
   const title = step?.title ?? step?.id ?? "step";
 
   switch (eventName) {
+    case "run_preflight": {
+      const tools = payload.preflight?.toolReadiness;
+      return {
+        id: makeStepId("orc", index, "preflight"),
+        icon: "verify",
+        verb: "Preflight ready",
+        target: payload.preflight?.autonomy?.mode ? `autonomy ${payload.preflight.autonomy.mode}` : "readiness snapshot",
+        chip: tools ? `${tools.connected ?? 0} connected` : undefined,
+        status: "completed",
+      };
+    }
     case "plan_start":
       return { id: makeStepId("orc", index, "plan"), icon: "plan", verb: "Planning", status: "running" };
     case "plan_end": {

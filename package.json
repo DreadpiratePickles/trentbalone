@@ -41,7 +41,8 @@
     "worker:env": "tsx scripts/dev/worker-with-env.ts",
     "acceptance:cycle": "tsx scripts/evals/run-live-acceptance-cycle.ts",
     "briefing:proof": "tsx scripts/evals/run-morning-briefing-proof.ts",
-    "compounding:proof": "tsx scripts/evals/run-live-compounding-proof.ts"
+    "compounding:proof": "tsx scripts/evals/run-live-compounding-proof.ts",
+    "preflight:perfection": "npm run typecheck && npm run build && npm run test:ci && npm run ci:truth && npm run orc:truth-proof && npm run orc:workbench-proof -- --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} --provider ${TRENT_PREFLIGHT_WORKBENCH_PROVIDER:-daytona} && npm run workbench:eval:live-cloud -- --provider ${TRENT_PREFLIGHT_WORKBENCH_PROVIDER:-daytona} --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} --runs 1 --threshold 1 && npm run workbench:eval:live-cloud -- --diverse --provider ${TRENT_PREFLIGHT_WORKBENCH_PROVIDER:-daytona} --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} --threshold 1 && npm run providers:proof -- --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} --allow-failures && npm run mcp:proof -- --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} && npm run acceptance:cycle -- --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} && npm run compounding:proof -- --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} && npm run trust-panel:proof -- --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local}"
   },
   "dependencies": {
     "@daytona/sdk": "^0.183.0",

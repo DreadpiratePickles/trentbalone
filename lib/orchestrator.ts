@@ -32,6 +32,7 @@ import {
   resumeOrchestrationAfterApproval,
 } from "@/lib/orchestrator-run-worker";
 import { buildModelPolicySnapshot } from "@/lib/model-policy";
+import { buildOrchestratorPreflightSnapshot } from "@/lib/orchestrator-preflight";
 
 export { decideDelegation } from "@/lib/orchestrator-delegation";
 export { recallRelevantMemory } from "@/lib/semantic-router";
@@ -287,6 +288,7 @@ export async function launchOrchestration(opts: {
     fullTeam: opts.fullTeam ?? false,
   };
   cacheOrchestrationRun(run);
+  const preflight = await buildRunPreflightSnapshot(company);
   await store.createOrchestratorRun({
     id: run.id,
     companyId: run.companyId,
@@ -302,6 +304,7 @@ export async function launchOrchestration(opts: {
     startedAt: run.startedAt,
   }).catch(() => undefined);
   await persistOrcEvent(run, "snapshot", { run: snapshotRun(run) }).catch(() => undefined);
+  await persistOrcEvent(run, "run_preflight", { preflight }).catch(() => undefined);
   await persistOrcEvent(run, "run_start", { run: snapshotRun(run) }).catch(() => undefined);
   await auditTransition(company.id, "run_start", runId, `Started: ${opts.objective.slice(0, 120)}`);
 
@@ -322,6 +325,25 @@ export async function launchOrchestration(opts: {
 
   await enqueueOrchestrationPlanJob(runId, opts.companyId);
   return run;
+}
+
+async function buildRunPreflightSnapshot(company: NonNullable<Awaited<ReturnType<typeof store.getCompany>>>) {
+  const [documents, artifacts] = await Promise.all([
+    store.listDocuments(company.id).catch(() => []),
+    store.listArtifacts(company.id).catch(() => []),
+  ]);
+  return buildOrchestratorPreflightSnapshot({
+    company,
+    memorySourceCounts: {
+      documents: documents.length,
+      episodic: documents.filter((doc) => doc.memoryTier === "episodic").length,
+      semantic: documents.filter((doc) => doc.memoryTier === "semantic").length,
+      workbenchArtifacts: artifacts.filter((artifact) => {
+        const haystack = `${artifact.storageKey ?? ""} ${artifact.title} ${artifact.summary}`.toLowerCase();
+        return haystack.includes("workbench");
+      }).length,
+    },
+  });
 }
 
 export async function cancelOrchestration(runId: string): Promise<boolean> {

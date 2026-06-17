@@ -10,6 +10,7 @@
 import type { OrchestrationRun, StepRecord } from "@/lib/orchestrator";
 
 export type OrcEventKind =
+  | "run_preflight"
   | "run_start"
   | "plan_start"
   | "plan_end"

@@ -32,7 +32,39 @@ describe("proof dashboard", () => {
     });
 
     expect(dashboard.categories.find((category) => category.key === "workbench")?.status).toBe("passed");
+    expect(dashboard.categories.map((category) => category.key)).toEqual(expect.arrayContaining([
+      "run_button",
+      "orchestration",
+      "workbench",
+      "providers",
+      "mcp",
+      "production",
+    ]));
     expect(dashboard.categories.find((category) => category.key === "operating_cycle")?.status).toBe("not_recorded");
     expect(dashboard.summary.notRecorded).toBeGreaterThan(0);
+  });
+
+  it("recognizes run-button and orchestration truth proof artifacts", () => {
+    const dashboard = buildProofDashboard({
+      artifacts: [
+        {
+          path: "artifacts/live-proofs/run-button-truth-2026-06-16.json",
+          content: JSON.stringify({ passed: true, generatedAt: "2026-06-16T01:00:00.000Z" }),
+        },
+        {
+          path: "artifacts/live-proofs/orchestrator-truth-2026-06-17.json",
+          content: JSON.stringify({ passed: true, generatedAt: "2026-06-16T01:02:00.000Z" }),
+        },
+      ],
+    });
+
+    expect(dashboard.categories.find((category) => category.key === "run_button")).toMatchObject({
+      status: "passed",
+      rerunCommand: "npm run orc:truth-proof",
+    });
+    expect(dashboard.categories.find((category) => category.key === "orchestration")).toMatchObject({
+      status: "passed",
+      rerunCommand: "npm run orc:truth-proof",
+    });
   });
 });

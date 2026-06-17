@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react";
 import { I, PulseDot } from "@/components/ui";
 import { RuntimeHealthChip } from "@/components/runtime-health";
 import type { ShellCompany } from "@/components/shell-sidebar";
+import { runCycleIsActive, type RunCycleControlState } from "@/lib/run-cycle-control";
 
 type TopBarProps = {
   company: ShellCompany | null;
@@ -14,7 +15,10 @@ type TopBarProps = {
   onMenuClick?: () => void;
   activeCycleId?: string | null;
   activeStepLabel?: string | null;
+  runCycle?: RunCycleControlState;
   onRunCycle?: () => void;
+  onCancelCycle?: () => void;
+  onViewCycle?: () => void;
   onOpenPalette?: () => void;
   onToggleKillSwitch?: () => void;
 };
@@ -34,21 +38,19 @@ export function TopBar({
   onMenuClick,
   activeCycleId,
   activeStepLabel,
+  runCycle,
   onRunCycle,
+  onCancelCycle,
+  onViewCycle,
   onOpenPalette,
   onToggleKillSwitch,
 }: TopBarProps) {
-  const [runningCycle, setRunningCycle] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifCount, setNotifCount] = useState(0);
   const [notifs, setNotifs] = useState<Notification[]>([]);
   const router = useRouter();
   const pathname = usePathname();
   const { data: session } = useSession();
-
-  useEffect(() => {
-    if (!activeCycleId) setRunningCycle(false);
-  }, [activeCycleId]);
 
   useEffect(() => {
     if (!companyId) return;
@@ -97,11 +99,21 @@ export function TopBar({
   })();
 
   const handleRunCycle = () => {
-    if (!companyId || runningCycle || activeCycleId) return;
-    setRunningCycle(true);
+    if (!companyId || (runCycle && runCycleIsActive(runCycle))) return;
     onRunCycle?.();
-    window.setTimeout(() => setRunningCycle(false), 30_000);
   };
+  const cycleStatus = runCycle?.status ?? (activeCycleId ? "running" : "idle");
+  const cycleActive = runCycle ? runCycleIsActive(runCycle) : Boolean(activeCycleId);
+  const showCycleControl = cycleStatus !== "idle";
+  const cycleLabel = runCycle?.label || activeStepLabel || cycleStatus;
+  const cycleTone =
+    cycleStatus === "failed" || cycleStatus === "lost_contact"
+      ? "danger"
+      : cycleStatus === "awaiting_approval"
+        ? "approval"
+        : cycleStatus === "cancelled"
+          ? "muted"
+          : "live";
 
   return (
     <header className="tbar">
@@ -147,10 +159,26 @@ export function TopBar({
         </button>
       )}
 
-      {activeCycleId || runningCycle ? (
-        <div className="tbar-running">
+      {showCycleControl ? (
+        <div className="tbar-cycle-control" data-state={cycleStatus} data-tone={cycleTone}>
           <PulseDot size={6} />
-          {!isMobile && (activeStepLabel || "running")}
+          {!isMobile && <span>{cycleLabel}</span>}
+          {runCycle?.approvalId && !isMobile && <span className="tbar-cycle-approval">{runCycle.approvalId}</span>}
+          {onViewCycle && (
+            <button type="button" className="tbar-cycle-action" onClick={onViewCycle} title="View run evidence">
+              View
+            </button>
+          )}
+          {cycleActive && onCancelCycle && (
+            <button type="button" className="tbar-cycle-action danger" onClick={onCancelCycle} title="Cancel this run">
+              Cancel
+            </button>
+          )}
+          {!cycleActive && (
+            <button type="button" className="tbar-cycle-action" onClick={handleRunCycle} title="Run another cycle">
+              Retry
+            </button>
+          )}
         </div>
       ) : (
         <button type="button" onClick={handleRunCycle} className="tbar-run-button">

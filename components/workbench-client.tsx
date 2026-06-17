@@ -671,6 +671,14 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
                 )}
                 </div>
             </div>
+            <WorkbenchMissionControl
+              status={active.status}
+              autonomyMode={autonomyMode}
+              pendingApprovalId={pendingPlanApproval?.id ?? null}
+              rollbackMode={active.metadata?.rollbackMode}
+              events={events}
+              artifacts={artifacts}
+            />
 
             <div ref={transcriptRef} style={S.transcript}>
               {pendingPlanApproval ? (
@@ -922,6 +930,70 @@ export function WorkbenchAutonomyModeBar({
   );
 }
 
+export function WorkbenchMissionControl({
+  status,
+  autonomyMode,
+  pendingApprovalId,
+  rollbackMode,
+  events,
+  artifacts,
+}: {
+  status: SessionStatus;
+  autonomyMode: CompanyAutonomyMode;
+  pendingApprovalId?: string | null;
+  rollbackMode?: WorkbenchSessionMetadata["rollbackMode"];
+  events: WbEvent[];
+  artifacts: WbArtifact[];
+}) {
+  const fileCount = artifacts.filter((artifact) => artifact.kind === "file" || Boolean(artifact.path)).length
+    + events.filter((event) => event.type === "file").length;
+  const screenshotCount = artifacts.filter((artifact) => artifact.kind === "screenshot" || artifact.mimeType.startsWith("image/")).length;
+  const terminalCount = events.filter((event) => Boolean(event.command) || event.type === "shell").length;
+  const checkpointCount = events.filter((event) => typeof event.metadata?.checkpointId === "string").length;
+  const testEvents = events.filter((event) => event.type === "test" || /test|verify/i.test(event.title));
+  const latestTest = testEvents.at(-1);
+  const testsLabel = latestTest
+    ? latestTest.status === "failed" ? "tests failed" : latestTest.status === "completed" ? "tests passed" : "tests running"
+    : "tests pending";
+  const rollbackLabel = rollbackMode === "provider_native"
+    ? "provider-native rollback"
+    : rollbackMode === "text_files_only"
+      ? "text-files-only rollback"
+      : "rollback not proven";
+
+  return (
+    <section style={S.missionControl} data-testid="workbench-mission-control" aria-label="Workbench mission control">
+      <div style={S.missionControlHead}>
+        <span className="mono" style={S.missionKicker}>mission control</span>
+        <span className="mono" style={S.missionStatus}>{status}</span>
+      </div>
+      <div style={S.missionGrid}>
+        <MissionCell label="mode" value={autonomyMode} tone={autonomyMode === "autonomous" ? "pulse" : "neutral"} />
+        <MissionCell
+          label="approval"
+          value={pendingApprovalId ? `Approval ${pendingApprovalId}` : "clear"}
+          tone={pendingApprovalId ? "approval" : "neutral"}
+        />
+        <MissionCell label="files" value={`${fileCount} ${fileCount === 1 ? "file" : "files"}`} tone={fileCount ? "pulse" : "neutral"} />
+        <MissionCell label="screenshots" value={`${screenshotCount} ${screenshotCount === 1 ? "shot" : "shots"}`} tone={screenshotCount ? "pulse" : "neutral"} />
+        <MissionCell label="terminal" value={`${terminalCount} terminal`} tone={terminalCount ? "pulse" : "neutral"} />
+        <MissionCell label="tests" value={testsLabel} tone={testsLabel.includes("failed") ? "danger" : latestTest ? "pulse" : "neutral"} />
+        <MissionCell label="rollback" value={rollbackLabel} tone={rollbackMode === "provider_native" ? "pulse" : rollbackMode ? "approval" : "neutral"} />
+        <MissionCell label="checkpoints" value={`${checkpointCount} ${checkpointCount === 1 ? "checkpoint" : "checkpoints"}`} tone={checkpointCount ? "pulse" : "neutral"} />
+      </div>
+    </section>
+  );
+}
+
+function MissionCell({ label, value, tone }: { label: string; value: string; tone: "pulse" | "approval" | "danger" | "neutral" }) {
+  return (
+    <div style={S.missionCell} data-tone={tone}>
+      <span className="mono" style={S.missionCellLabel}>{label}</span>
+      <span style={S.missionCellValue}>{value}</span>
+    </div>
+  );
+}
+
 const autonomyModeCopy: Record<CompanyAutonomyMode, string> = {
   manual: "Manual: agents research and draft. External side effects and risky actions pause for approval.",
   supervised: "Supervised: safe internal/reversible work can run; external writes and high-risk actions pause. This is the default.",
@@ -1007,6 +1079,17 @@ const S = {
   }) as React.CSSProperties,
   autonomyExplain: { margin: "8px 0 0", color: "var(--haze)", fontSize: 10, lineHeight: 1.4 } as React.CSSProperties,
   autonomyNotice: { marginTop: 6, fontSize: 10, color: "var(--mist)", lineHeight: 1.4, maxWidth: 520 } as React.CSSProperties,
+  missionControl: { borderBottom: border, padding: "10px 20px 12px", background: "rgba(255,255,255,.012)" } as React.CSSProperties,
+  missionControlHead: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 } as React.CSSProperties,
+  missionKicker: { fontSize: 10, color: "var(--haze)", textTransform: "uppercase", letterSpacing: ".11em" } as React.CSSProperties,
+  missionStatus: { fontSize: 10, color: "var(--mist)", textTransform: "uppercase", letterSpacing: ".11em" } as React.CSSProperties,
+  missionGrid: { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 7 } as React.CSSProperties,
+  missionCell: {
+    minWidth: 0, border, borderRadius: 8, padding: "8px 9px",
+    background: "rgba(255,255,255,.018)", display: "grid", gap: 3,
+  } as React.CSSProperties,
+  missionCellLabel: { color: "var(--haze)", fontSize: 9, textTransform: "uppercase", letterSpacing: ".08em" } as React.CSSProperties,
+  missionCellValue: { color: "var(--bone)", fontSize: 12, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
   previewLink: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--ember)", textDecoration: "none", padding: "6px 10px", border: "1px solid rgba(251,146,60,.3)", borderRadius: 7 } as React.CSSProperties,
   ghostBtn: {
     display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,

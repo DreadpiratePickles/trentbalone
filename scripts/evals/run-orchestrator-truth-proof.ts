@@ -26,7 +26,7 @@ type Check = { name: string; ok: boolean; detail: string };
 async function main() {
   const { store } = await import("@/lib/store");
   const { makeId } = await import("@/lib/utils");
-  const { getOrchestrationRunSnapshot } = await import("@/lib/orchestrator");
+  const { getOrchestrationRunSnapshot, launchOrchestration } = await import("@/lib/orchestrator");
   const { clearOrchestrationRunCache } = await import("@/lib/orchestrator-cache");
   const { buildOrchestratorTraceReplay } = await import("@/lib/orchestrator-trace-replay");
 
@@ -82,7 +82,8 @@ async function main() {
 
   // Confirm the persisted row is genuinely stale before reconciliation.
   const rowBefore = await store.getOrchestratorRun(staleRunId);
-  checks.push(check("persisted row is stale at planning before read", rowBefore?.status === "planning", `row=${rowBefore?.status}`));
+  const rowBeforeStatus = rowBefore?.status;
+  checks.push(check("persisted row is stale at planning before read", rowBeforeStatus === "planning", `row=${rowBeforeStatus}`));
 
   clearOrchestrationRunCache();
   const snapshot = await getOrchestrationRunSnapshot(staleRunId);
@@ -123,6 +124,22 @@ async function main() {
   const cleanSnapshot = await getOrchestrationRunSnapshot(cleanRunId);
   checks.push(check("honest completed run is not falsely flagged stale", cleanSnapshot?.status === "completed" && cleanSnapshot?.reconciled === false && cleanSnapshot?.staleSnapshotDetected === false, `reconciled=${cleanSnapshot?.reconciled} stale=${cleanSnapshot?.staleSnapshotDetected}`));
 
+  // ── Case C: new durable launches persist a preflight snapshot ─────────────
+  const preflightRun = await launchOrchestration({
+    companyId,
+    objective: "Prove new launches record preflight readiness before planning",
+    trigger: "manual",
+    fullTeam: true,
+    cycleKind: "scheduled",
+  });
+  const preflightEvents = await store.listOrchestratorEvents(preflightRun.id);
+  const preflight = preflightEvents.find((event) => event.kind === "run_preflight");
+  checks.push(check(
+    "new launches persist run_preflight readiness",
+    Boolean(preflight?.payload && typeof preflight.payload === "object" && "preflight" in preflight.payload),
+    `preflight=${preflight ? "present" : "missing"}`,
+  ));
+
   const ok = checks.every((c) => c.ok);
   const report = {
     proof: "orchestrator-truth-proof",
@@ -136,11 +153,15 @@ async function main() {
     },
     staleRun: {
       runId: staleRunId,
-      persistedRowBefore: rowBefore?.status,
+      persistedRowBefore: rowBeforeStatus,
       snapshotStatus: snapshot?.status,
       snapshotReconciledFrom: snapshot?.reconciledFrom,
       traceStatus: trace.status,
       agree: snapshot?.status === trace.status,
+    },
+    preflightRun: {
+      runId: preflightRun.id,
+      preflightRecorded: Boolean(preflight),
     },
     checks,
   };

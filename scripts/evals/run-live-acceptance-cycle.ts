@@ -35,18 +35,23 @@ async function main() {
   };
 
   try {
+    emit("company", "running", "Creating zero-setup acceptance company");
     const companyName = `Acceptance ${new Date().toISOString()}`;
     const vision = "An AI scheduling assistant that books meetings for busy founders from a single chat message.";
     const company = await store.createCompany({ name: companyName, brief: { vision } });
     proof.companyId = company.id;
+    emit("company", "completed", `Created ${company.id}`);
 
     // 1) Real market research (gpt-5.4) → memory.
-    const research = await callText(
-      MODELS.STRONG,
-      "You are Trent's market analyst. Be concrete and concise.",
-      `Company vision: ${vision}\nWrite market research: list 5 named competitors, 3 positioning angles, and the single sharpest wedge. Plain text.`,
-      900,
+    const research = await runStage("research", "Writing market research with the strong model", () => callText(
+        MODELS.STRONG,
+        "You are Trent's market analyst. Be concrete and concise.",
+        `Company vision: ${vision}\nWrite market research: list 5 named competitors, 3 positioning angles, and the single sharpest wedge. Plain text.`,
+        900,
+      ),
+      120_000,
     );
+    emit("memory", "running", "Persisting market research memory");
     const researchDoc = await store.createDocument({
       companyId: company.id,
       type: "agent_note",
@@ -58,14 +63,25 @@ async function main() {
     });
     proof.researchDocId = researchDoc.id;
     proof.researchTokens = research.tokens;
+    emit("memory", "completed", `Persisted market research ${researchDoc.id}`);
 
     // 2) + 3) Ship the landing page (live URL, verified) and queue gated approvals.
-    const deliverables = await shipLaunchDeliverables({ companyId: company.id, companyName, vision });
+    const deliverables = await runStage(
+      "deliverables",
+      "Deploying landing page and queuing gated approvals",
+      () => shipLaunchDeliverables({ companyId: company.id, companyName, vision }),
+      900_000,
+    );
     proof.landing = deliverables.landing;
     proof.approvals = deliverables.approvals;
 
     // 4) + 5) Real founder email + outcome snapshot.
-    const report = await assembleMorningBriefing(company.id);
+    const report = await runStage(
+      "morning_briefing",
+      "Assembling outcome snapshot and sending founder email",
+      () => assembleMorningBriefing(company.id),
+      180_000,
+    );
     proof.reportId = report.id;
 
     // Verify the five artifacts with provenance.
@@ -113,8 +129,10 @@ async function main() {
     const presentCount = Object.values(artifacts).filter((a) => a.present).length;
     proof.artifactsPresent = presentCount;
     proof.passed = presentCount === 5;
+    emit("verify", proof.passed ? "completed" : "failed", `${presentCount}/5 acceptance artifacts present`);
   } catch (error) {
     proof.error = error instanceof Error ? `${error.message}\n${error.stack}` : String(error);
+    emit("error", "failed", error instanceof Error ? error.message : String(error));
   }
 
   const json = JSON.stringify(proof, null, 2);
@@ -133,3 +151,38 @@ function parseArgs(argv: string[]): { envFile?: string; outFile?: string } {
 }
 
 void main();
+
+function emit(stage: string, status: "running" | "completed" | "failed", message: string) {
+  process.stdout.write(`${JSON.stringify({
+    type: "acceptance_cycle_progress",
+    stage,
+    status,
+    message,
+    at: new Date().toISOString(),
+  })}\n`);
+}
+
+async function runStage<T>(
+  stage: string,
+  message: string,
+  fn: () => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  emit(stage, "running", message);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      fn(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${stage} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+    emit(stage, "completed", message);
+    return result;
+  } catch (error) {
+    emit(stage, "failed", error instanceof Error ? error.message : String(error));
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}

@@ -67,6 +67,24 @@ describe("Command orchestration transcript", () => {
     expect(result.content).toContain("approval_1");
   });
 
+  it("renders the run preflight readiness snapshot", () => {
+    const state = createOrchestrationTranscript("orc_1");
+
+    const result = applyOrchestrationTranscriptEvent(state, "run_preflight", {
+      preflight: {
+        autonomy: { mode: "supervised" },
+        toolReadiness: { connected: 6, needsCredentials: 2, failed: 1, unavailable: 0 },
+        memory: { totalSources: 9 },
+      },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.content).toContain("Run preflight captured.");
+    expect(result.content).toContain("autonomy supervised");
+    expect(result.content).toContain("6 connected tools");
+    expect(result.content).toContain("9 memory/evidence sources");
+  });
+
   it("marks an awaiting-approval snapshot as done", () => {
     const state = createOrchestrationTranscript("orc_1");
 

@@ -111,6 +111,34 @@ describe("orchestration persistence", () => {
     expect(persistedEvents.some((event) => event.kind === "run_done" || event.kind === "run_failed")).toBe(true);
   });
 
+  it("persists a run preflight snapshot before planning work starts", async () => {
+    const run = await launchOrchestration({
+      companyId,
+      objective: "Run the morning operator cycle",
+      trigger: "manual",
+      fullTeam: true,
+      cycleKind: "scheduled",
+    });
+
+    const events = await store.listOrchestratorEvents(run.id);
+    const preflight = events.find((event) => event.kind === "run_preflight");
+
+    expect(preflight?.payload).toMatchObject({
+      preflight: {
+        autonomy: { mode: "supervised" },
+        budget: expect.objectContaining({ weeklyBudgetCents: expect.any(Number) }),
+        providers: expect.any(Array),
+        connectors: expect.objectContaining({
+          summary: expect.any(Object),
+        }),
+        toolReadiness: expect.any(Object),
+        memory: expect.objectContaining({
+          totalSources: expect.any(Number),
+        }),
+      },
+    });
+  });
+
   it("persists content mission packet and action ledger evidence into the markdown memory log", async () => {
     const run = await launchOrchestration({
       companyId,
