@@ -7,6 +7,10 @@ import {
   type JsonRpcMessage,
   type JsonRpcResponse,
   type McpAuthContext,
+  type McpPromptDescriptor,
+  type McpPromptResult,
+  type McpResourceDescriptor,
+  type McpResourceReadResult,
   type McpToolDescriptor,
   type McpToolResult,
 } from "./types";
@@ -18,6 +22,10 @@ export type McpDispatchOutcome =
 type ProtocolDeps = {
   listTools: (ctx: McpAuthContext) => McpToolDescriptor[] | Promise<McpToolDescriptor[]>;
   callTool: (ctx: McpAuthContext, name: string, args: Record<string, unknown>) => McpToolResult | Promise<McpToolResult>;
+  listResources?: (ctx: McpAuthContext) => McpResourceDescriptor[] | Promise<McpResourceDescriptor[]>;
+  readResource?: (ctx: McpAuthContext, uri: string) => McpResourceReadResult | Promise<McpResourceReadResult>;
+  listPrompts?: (ctx: McpAuthContext) => McpPromptDescriptor[] | Promise<McpPromptDescriptor[]>;
+  getPrompt?: (ctx: McpAuthContext, name: string, args: Record<string, unknown>) => McpPromptResult | Promise<McpPromptResult>;
 };
 
 const KNOWN_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -44,7 +52,11 @@ export async function handleMcpMessage(
       const requested = typeof params.protocolVersion === "string" ? params.protocolVersion : "";
       return response(id, {
         protocolVersion: KNOWN_PROTOCOL_VERSIONS.includes(requested) ? requested : MCP_PROTOCOL_VERSION,
-        capabilities: { tools: { listChanged: false } },
+        capabilities: {
+          tools: { listChanged: false },
+          resources: { listChanged: false },
+          prompts: { listChanged: false },
+        },
         serverInfo: MCP_SERVER_INFO,
         instructions:
           "Trent runs governed AI-company operations. Call trent_list_app_solo_options before App-Solo work, then use trent_run_agent with engine=solo; optionally pass appId to choose the seat-specific app. trent_run_agent returns runId, productReviewPlan, and nextCall for structured polling. Follow nextCall to trent_get_run, inspect nextAction for poll/approval/review guidance, inspect evidenceSummary for verification counts, inspect productArtifactIndex for preview/artifact/check/command evidence, and inspect productReview for delivery readiness. Approval gates, spend limits, RLS, and audit logging remain enforced inside Trent.",
@@ -66,6 +78,38 @@ export async function handleMcpMessage(
       const args = asRecord(params.arguments);
       return response(id, await resolvedDeps.callTool(ctx, name, args));
     }
+    case "resources/list":
+      if (!resolvedDeps.listResources) {
+        return response(id, undefined, { code: JSONRPC_METHOD_NOT_FOUND, message: "method not found: resources/list" });
+      }
+      return response(id, { resources: await resolvedDeps.listResources(ctx) });
+    case "resources/read": {
+      if (!resolvedDeps.readResource) {
+        return response(id, undefined, { code: JSONRPC_METHOD_NOT_FOUND, message: "method not found: resources/read" });
+      }
+      const params = asRecord(message.params);
+      const uri = typeof params.uri === "string" ? params.uri : "";
+      if (!uri) {
+        return response(id, undefined, { code: JSONRPC_INVALID_PARAMS, message: "params.uri is required" });
+      }
+      return response(id, await resolvedDeps.readResource(ctx, uri));
+    }
+    case "prompts/list":
+      if (!resolvedDeps.listPrompts) {
+        return response(id, undefined, { code: JSONRPC_METHOD_NOT_FOUND, message: "method not found: prompts/list" });
+      }
+      return response(id, { prompts: await resolvedDeps.listPrompts(ctx) });
+    case "prompts/get": {
+      if (!resolvedDeps.getPrompt) {
+        return response(id, undefined, { code: JSONRPC_METHOD_NOT_FOUND, message: "method not found: prompts/get" });
+      }
+      const params = asRecord(message.params);
+      const name = typeof params.name === "string" ? params.name : "";
+      if (!name) {
+        return response(id, undefined, { code: JSONRPC_INVALID_PARAMS, message: "params.name is required" });
+      }
+      return response(id, await resolvedDeps.getPrompt(ctx, name, asRecord(params.arguments)));
+    }
     default:
       if (notification) return { kind: "accepted" };
       return response(id, undefined, {
@@ -80,6 +124,10 @@ async function loadDefaultDeps(): Promise<ProtocolDeps> {
   return {
     listTools: registry.listMcpTools,
     callTool: registry.callMcpTool,
+    listResources: registry.listMcpResources,
+    readResource: registry.readMcpResource,
+    listPrompts: registry.listMcpPrompts,
+    getPrompt: registry.getMcpPrompt,
   };
 }
 

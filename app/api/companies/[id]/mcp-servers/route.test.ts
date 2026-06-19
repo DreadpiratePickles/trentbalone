@@ -79,6 +79,20 @@ describe("/api/companies/[id]/mcp-servers", () => {
     expect(body.error).toMatch(/unsupported stdio MCP preset/i);
     expect(mockCreateMcpServer).not.toHaveBeenCalled();
   });
+
+  it("rejects loopback/private HTTP endpoints before storage", async () => {
+    const res = await POST(jsonRequest({
+      name: "Localhost",
+      url: "http://127.0.0.1:7777/mcp",
+      transport: "http",
+      token: "secret",
+    }), { params: Promise.resolve({ id: "co_1" }) });
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toMatch(/private|loopback/i);
+    expect(mockCreateMcpServer).not.toHaveBeenCalled();
+  });
 });
 
 function jsonRequest(body: Record<string, unknown>) {

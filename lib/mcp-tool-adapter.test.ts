@@ -10,7 +10,7 @@ import { getMcpServerToken, updateMcpServer, type McpServerRecord } from "@/lib/
 import { appendAuditLog } from "@/lib/audit-log";
 
 const remote = vi.hoisted(() => ({
-  tools: [{ name: "search", description: "Search docs" }] as Array<{ name: string; description: string }>,
+  tools: [{ name: "search", description: "Search docs" }] as Array<Record<string, unknown> & { name: string; description?: string }>,
   listToolsError: undefined as Error | undefined,
   callTool: vi.fn(async () => ({ content: [{ type: "text", text: "search ok" }] })),
 }));
@@ -73,6 +73,7 @@ function server(overrides: Partial<McpServerRecord> = {}): McpServerRecord {
     hasCredential: true,
     toolAllowlist: ["search"],
     reversibleTools: [],
+    approvalPolicies: {},
     status: "connected",
     discoveredTools: [{ name: "search", description: "Search docs", descriptionHash: APPROVED_HASH }],
     enabled: true,
@@ -123,6 +124,56 @@ describe("createMcpToolAdapter", () => {
       status: "completed",
       summary: expect.stringContaining("search ok"),
     });
+  });
+
+  it("stores rich MCP tool schemas, titles, annotations, output schemas, and schema-aware hashes", async () => {
+    remote.tools = [{
+      name: "search",
+      title: "Search docs",
+      description: "Search docs",
+      inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      outputSchema: { type: "object", properties: { results: { type: "array" } } },
+      annotations: { readOnlyHint: true },
+    }];
+
+    await expect(discoverMcpTools(server({ hasCredential: false }))).resolves.toEqual([
+      {
+        name: "search",
+        title: "Search docs",
+        description: "Search docs",
+        inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        outputSchema: { type: "object", properties: { results: { type: "array" } } },
+        annotations: { readOnlyHint: true },
+        descriptionHash: mcpToolDescriptionHash("search", "Search docs", {
+          title: "Search docs",
+          inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+          outputSchema: { type: "object", properties: { results: { type: "array" } } },
+          annotations: { readOnlyHint: true },
+        }),
+      },
+    ]);
+  });
+
+  it("honors structured approval policies and blocks disabled tools", async () => {
+    const adapter = createMcpToolAdapter(server({
+      toolAllowlist: ["search", "delete_doc"],
+      discoveredTools: [
+        { name: "search", description: "Search docs", annotations: { readOnlyHint: true } },
+        { name: "delete_doc", description: "Delete a doc", annotations: { destructiveHint: true } },
+      ],
+      approvalPolicies: {
+        search: "read_only_auto",
+        delete_doc: "disabled",
+      },
+    }));
+
+    expect(adapter.requiresApproval("search")).toBe(false);
+    expect(adapter.requiresApproval("delete_doc")).toBe(true);
+    await expect(adapter.execute("delete_doc", {})).resolves.toMatchObject({
+      status: "failed",
+      summary: expect.stringContaining("disabled"),
+    });
+    expect(remote.callTool).not.toHaveBeenCalled();
   });
 
   it("connects allowlisted Sentry stdio servers without putting the token in argv", async () => {
@@ -224,6 +275,21 @@ describe("MCP tool integrity (rug-pull detection)", () => {
 
     expect(result.status).toBe("completed");
     expect(remote.callTool).toHaveBeenCalledOnce();
+  });
+
+  it("does not false-trip legacy description-only hashes when live discovery now includes schemas", async () => {
+    remote.tools = [{
+      name: "search",
+      description: "Search docs",
+      inputSchema: { type: "object", properties: { query: { type: "string" } } },
+      annotations: { readOnlyHint: true },
+    }];
+
+    const result = await createMcpToolAdapter(server({ hasCredential: false })).execute("search", {});
+
+    expect(result.status).toBe("completed");
+    expect(remote.callTool).toHaveBeenCalledOnce();
+    expect(updateMcpServer).not.toHaveBeenCalled();
   });
 
   it("verifyMcpToolIntegrity reports ok for an in-sync server without mutating it", async () => {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser, unauthorized, forbidden, requireRoleForRequest } from "@/lib/session";
 import { deleteMcpServer, updateMcpServer, type McpDiscoveredTool } from "@/lib/mcp-store";
 import { normalizeMcpTransport, validateMcpServerTarget } from "@/lib/mcp-transport";
+import { normalizeMcpApprovalPolicies } from "@/lib/mcp-policy";
 
 /** PATCH /api/companies/:id/mcp-servers/:serverId — edit allowlist/policy/credentials. */
 export async function PATCH(
@@ -21,6 +22,7 @@ export async function PATCH(
     token?: string;
     toolAllowlist?: unknown;
     reversibleTools?: unknown;
+    approvalPolicies?: unknown;
     enabled?: boolean;
   };
   const toStringArray = (value: unknown) =>
@@ -47,6 +49,9 @@ export async function PATCH(
   if (allow) patch.toolAllowlist = allow;
   const reversible = toStringArray(body.reversibleTools);
   if (reversible) patch.reversibleTools = reversible;
+  if (body.approvalPolicies !== undefined) {
+    patch.approvalPolicies = normalizeMcpApprovalPolicies({ rawPolicies: body.approvalPolicies });
+  }
   if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ error: "no valid fields to update" }, { status: 400 });

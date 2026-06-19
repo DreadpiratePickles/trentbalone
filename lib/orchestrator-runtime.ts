@@ -1426,9 +1426,13 @@ export async function executeStepWithRuntime(input: StepExecutionInput): Promise
   }
 
   // §3.3 — client-configured MCP servers as additional ToolAdapters.
-  // Each enabled MCP server becomes `mcp_<server>` in the seat tool registry;
-  // every MCP tool defaults to requires-approval (lib/mcp-tool-adapter.ts).
-  const mcpAdapters = await getMcpAdaptersForCompany(company.id).catch(() => []);
+  // Load only MCP servers relevant to this step so seats see a focused tool set.
+  const mcpQuery = [
+    step.title,
+    step.expectedOutput,
+    input.objective ?? "",
+  ].filter(Boolean).join("\n");
+  const mcpAdapters = await getMcpAdaptersForCompany(company.id, { query: mcpQuery, limit: 4 }).catch(() => []);
   const environment = mcpAdapters.length
     ? {
         ...runtime.environment,

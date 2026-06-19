@@ -11,7 +11,7 @@ const ctx: McpAuthContext = {
 };
 
 describe("MCP JSON-RPC protocol", () => {
-  it("initializes with Trent server metadata and tools capability", async () => {
+  it("initializes with Trent server metadata, tools, resources, and prompts capability", async () => {
     const outcome = await handleMcpMessage(ctx, {
       jsonrpc: "2.0",
       id: 1,
@@ -27,7 +27,11 @@ describe("MCP JSON-RPC protocol", () => {
         result: {
           protocolVersion: "2025-06-18",
           serverInfo: { name: "trent-os" },
-          capabilities: { tools: { listChanged: false } },
+          capabilities: {
+            tools: { listChanged: false },
+            resources: { listChanged: false },
+            prompts: { listChanged: false },
+          },
         },
       },
     });
@@ -70,6 +74,51 @@ describe("MCP JSON-RPC protocol", () => {
     expect(listed).toMatchObject({ kind: "response", body: { result: { tools: [{ name: "trent_company_context" }] } } });
     expect(called).toMatchObject({ kind: "response", body: { result: { content: [{ type: "text", text: "{}" }] } } });
     expect(callTool).toHaveBeenCalledWith(ctx, "trent_company_context", { verbose: true });
+  });
+
+  it("dispatches resources and prompts through injected dependencies", async () => {
+    const deps = {
+      listTools: vi.fn(() => []),
+      callTool: vi.fn(),
+      listResources: vi.fn(() => [{ uri: "trent://company/context", name: "Company context" }]),
+      readResource: vi.fn(() => ({
+        contents: [{ uri: "trent://company/context", mimeType: "application/json", text: "{\"company\":true}" }],
+      })),
+      listPrompts: vi.fn(() => [{ name: "daily-operator", description: "Run the daily operator loop" }]),
+      getPrompt: vi.fn(() => ({
+        messages: [{ role: "user" as const, content: { type: "text" as const, text: "Run the daily operator loop." } }],
+      })),
+    };
+
+    const resources = await handleMcpMessage(ctx, {
+      jsonrpc: "2.0",
+      id: "resources",
+      method: "resources/list",
+    }, deps);
+    const read = await handleMcpMessage(ctx, {
+      jsonrpc: "2.0",
+      id: "read",
+      method: "resources/read",
+      params: { uri: "trent://company/context" },
+    }, deps);
+    const prompts = await handleMcpMessage(ctx, {
+      jsonrpc: "2.0",
+      id: "prompts",
+      method: "prompts/list",
+    }, deps);
+    const prompt = await handleMcpMessage(ctx, {
+      jsonrpc: "2.0",
+      id: "prompt",
+      method: "prompts/get",
+      params: { name: "daily-operator", arguments: { focus: "sales" } },
+    }, deps);
+
+    expect(resources).toMatchObject({ kind: "response", body: { result: { resources: [{ uri: "trent://company/context" }] } } });
+    expect(read).toMatchObject({ kind: "response", body: { result: { contents: [{ uri: "trent://company/context" }] } } });
+    expect(prompts).toMatchObject({ kind: "response", body: { result: { prompts: [{ name: "daily-operator" }] } } });
+    expect(prompt).toMatchObject({ kind: "response", body: { result: { messages: [{ role: "user" }] } } });
+    expect(deps.readResource).toHaveBeenCalledWith(ctx, "trent://company/context");
+    expect(deps.getPrompt).toHaveBeenCalledWith(ctx, "daily-operator", { focus: "sales" });
   });
 
   it("returns JSON-RPC errors for malformed requests and unknown methods", async () => {

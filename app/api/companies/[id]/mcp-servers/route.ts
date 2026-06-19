@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthUser, unauthorized, forbidden, requireRoleForRequest } from "@/lib/session";
 import { createMcpServer, listMcpServers } from "@/lib/mcp-store";
 import { validateMcpServerTarget } from "@/lib/mcp-transport";
+import { normalizeMcpApprovalPolicies } from "@/lib/mcp-policy";
 
 /** GET /api/companies/:id/mcp-servers — list client-connected MCP servers (§3.3). */
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -28,6 +29,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     token?: string;
     toolAllowlist?: unknown;
     reversibleTools?: unknown;
+    approvalPolicies?: unknown;
   };
   const name = body.name?.trim();
   const url = body.url?.trim();
@@ -46,6 +48,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     token: body.token?.trim() || undefined,
     toolAllowlist: toStringArray(body.toolAllowlist),
     reversibleTools: toStringArray(body.reversibleTools),
+    approvalPolicies: body.approvalPolicies
+      ? normalizeMcpApprovalPolicies({ rawPolicies: body.approvalPolicies })
+      : undefined,
   });
   return NextResponse.json({ server }, { status: 201 });
 }

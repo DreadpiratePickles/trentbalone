@@ -8,7 +8,14 @@
  * requires-approval until the client explicitly marks it reversible.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
+import { MCP_CONNECTOR_GALLERY, type McpConnectorTemplate } from "@/lib/mcp-connector-catalog";
+import {
+  MCP_APPROVAL_POLICIES,
+  mcpApprovalPolicyLabel,
+  type McpApprovalPolicies,
+  type McpApprovalPolicy,
+} from "@/lib/mcp-policy";
 
 type McpServer = {
   id: string;
@@ -18,10 +25,20 @@ type McpServer = {
   hasCredential: boolean;
   toolAllowlist: string[];
   reversibleTools: string[];
+  approvalPolicies: McpApprovalPolicies;
   status: string;
   lastError?: string;
-  discoveredTools: { name: string; description: string }[];
+  discoveredTools: Array<{
+    name: string;
+    title?: string;
+    description: string;
+    inputSchema?: Record<string, unknown>;
+    outputSchema?: Record<string, unknown>;
+    annotations?: Record<string, unknown>;
+  }>;
   enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type McpTransport = "http" | "sse" | "stdio";
@@ -78,16 +95,24 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
     await load();
   }
 
-  async function toggleReversible(server: McpServer, tool: string) {
-    const reversibleTools = server.reversibleTools.includes(tool)
-      ? server.reversibleTools.filter((t) => t !== tool)
-      : [...server.reversibleTools, tool];
+  async function setPolicy(server: McpServer, tool: string, policy: McpApprovalPolicy) {
     await fetch(`/api/companies/${companyId}/mcp-servers/${server.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ reversibleTools }),
+      body: JSON.stringify({ approvalPolicies: { ...server.approvalPolicies, [tool]: policy } }),
     });
     await load();
+  }
+
+  function useTemplate(template: McpConnectorTemplate) {
+    setDraft({
+      name: template.name,
+      url: template.url,
+      transport: template.transport,
+      token: "",
+    });
+    setAdding(true);
+    setError("");
   }
 
   async function toggleEnabled(server: McpServer) {
@@ -106,13 +131,12 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
 
   return (
     <div className="card" data-testid="mcp-servers-panel" style={{ marginTop: 24 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 16 }}>
         <div>
-          <div style={{ fontWeight: 600, fontSize: 16, color: "var(--bone)" }}>MCP servers</div>
+          <div style={{ fontWeight: 600, fontSize: 16, color: "var(--bone)" }}>MCP Connector Command Center</div>
           <div style={{ fontSize: 12, color: "var(--haze)", marginTop: 4, lineHeight: 1.5, maxWidth: 560 }}>
-            Connect a remote Model Context Protocol server or approved local preset (your CRM,
-            helpdesk, data warehouse…) and Trent&apos;s agents can act in it. Every MCP tool requires
-            founder approval until you explicitly mark it reversible.
+            Connect governed MCP providers, inspect discovered schemas, set per-tool approval policy,
+            and let seats load only the relevant connector tools for each task.
           </div>
         </div>
         <button
@@ -125,13 +149,15 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
         </button>
       </div>
 
+      <McpConnectorGallery onSelect={useTemplate} />
+
       {adding && (
         <div data-testid="mcp-add-form" style={{ marginTop: 12, border: "1px solid rgba(110,231,183,.15)", borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <input
               className="input"
               data-testid="mcp-name-input"
-              placeholder="Name — e.g. hubspot"
+              placeholder="Name — e.g. GitHub"
               value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
             />
@@ -164,7 +190,7 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
             className="input"
             type="password"
             data-testid="mcp-token-input"
-            placeholder="Auth token (optional — stored encrypted)"
+            placeholder="Token or provider-issued credential (stored encrypted)"
             value={draft.token}
             onChange={(e) => setDraft({ ...draft, token: e.target.value })}
           />
@@ -193,91 +219,150 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
           {servers.map((server) => (
-            <div
+            <McpServerCommandCenterCard
               key={server.id}
-              data-testid={`mcp-server-row-${server.id}`}
-              style={{ border: "1px solid rgba(255,255,255,.07)", borderRadius: 10, padding: "14px 16px", opacity: server.enabled ? 1 : 0.55 }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--bone)" }}>{server.name}</div>
-                <span
-                  className="mono"
-                  data-testid={`mcp-server-status-${server.id}`}
-                  style={{
-                    fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", padding: "2px 8px", borderRadius: 99,
-                    color: server.status === "connected" ? "var(--pulse)" : server.status === "error" ? "var(--ember)" : "var(--haze)",
-                    border: `1px solid ${server.status === "connected" ? "rgba(110,231,183,.25)" : server.status === "error" ? "rgba(251,146,60,.25)" : "rgba(255,255,255,.1)"}`,
-                  }}
-                >
-                  {server.status}
-                </span>
-                <span className="mono" style={{ fontSize: 10, color: "var(--haze)" }}>{server.url}</span>
-                {server.hasCredential && <span className="mono" style={{ fontSize: 9, color: "var(--haze)" }}>token ✓</span>}
-                <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                  <button
-                    className="btn btn-secondary btn-mono"
-                    data-testid={`mcp-discover-${server.id}`}
-                    style={{ height: 26, padding: "0 10px", fontSize: 9 }}
-                    onClick={() => discover(server.id)}
-                    disabled={discovering === server.id}
-                  >
-                    {discovering === server.id ? "discovering…" : "discover tools"}
-                  </button>
-                  <button
-                    className="btn btn-secondary btn-mono"
-                    style={{ height: 26, padding: "0 10px", fontSize: 9 }}
-                    onClick={() => toggleEnabled(server)}
-                  >
-                    {server.enabled ? "on" : "off"}
-                  </button>
-                  <button
-                    className="btn btn-secondary btn-mono"
-                    data-testid={`mcp-delete-${server.id}`}
-                    style={{ height: 26, padding: "0 10px", fontSize: 9, color: "var(--ember)", borderColor: "rgba(251,146,60,.2)" }}
-                    onClick={() => remove(server.id)}
-                  >
-                    remove
-                  </button>
-                </div>
-              </div>
-
-              {server.lastError && (
-                <div style={{ fontSize: 11, color: "var(--ember)", marginTop: 8 }}>{server.lastError}</div>
-              )}
-
-              {server.discoveredTools.length > 0 && (
-                <div style={{ marginTop: 10 }}>
-                  <div className="mono" style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--haze)", marginBottom: 6 }}>
-                    tools · click to toggle approval policy
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {server.discoveredTools.map((tool) => {
-                      const reversible = server.reversibleTools.includes(tool.name);
-                      return (
-                        <button
-                          key={tool.name}
-                          data-testid={`mcp-tool-${server.id}-${tool.name}`}
-                          title={`${tool.description || tool.name} — ${reversible ? "reversible (no approval)" : "requires approval"}`}
-                          onClick={() => toggleReversible(server, tool.name)}
-                          className="mono"
-                          style={{
-                            fontSize: 10, padding: "4px 10px", borderRadius: 99, cursor: "pointer",
-                            background: reversible ? "rgba(110,231,183,.06)" : "rgba(251,146,60,.05)",
-                            border: `1px solid ${reversible ? "rgba(110,231,183,.25)" : "rgba(251,146,60,.2)"}`,
-                            color: reversible ? "var(--pulse)" : "var(--ember)",
-                          }}
-                        >
-                          {tool.name} {reversible ? "· auto" : "· approval"}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
+              server={server}
+              discovering={discovering === server.id}
+              onDiscover={() => discover(server.id)}
+              onToggleEnabled={() => toggleEnabled(server)}
+              onRemove={() => remove(server.id)}
+              onPolicyChange={(tool, policy) => setPolicy(server, tool, policy)}
+            />
           ))}
         </div>
       )}
     </div>
   );
+}
+
+export function McpConnectorGallery({ onSelect }: { onSelect: (template: McpConnectorTemplate) => void }) {
+  return (
+    <div data-testid="mcp-connector-gallery" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 8, marginTop: 14 }}>
+      {MCP_CONNECTOR_GALLERY.map((template) => (
+        <button
+          key={template.id}
+          type="button"
+          onClick={() => onSelect(template)}
+          style={{ textAlign: "left", border: "1px solid rgba(255,255,255,.08)", borderRadius: 8, padding: 12, background: "rgba(255,255,255,.025)", cursor: "pointer" }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+            <strong style={{ color: "var(--bone)", fontSize: 13 }}>{template.name}</strong>
+            <span className="mono" style={{ color: "var(--pulse)", fontSize: 9 }}>trust {template.trustScore}</span>
+          </div>
+          <div style={{ color: "var(--haze)", fontSize: 11, lineHeight: 1.4, marginTop: 5 }}>{template.description}</div>
+          <div className="mono" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8, color: "var(--haze)", fontSize: 9 }}>
+            <span>{authLabel(template.authMode)}</span>
+            {template.supportsResources && <span>resources</span>}
+            {template.supportsPrompts && <span>prompts</span>}
+            <span>{template.riskTier} risk</span>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function McpServerCommandCenterCard(props: {
+  server: McpServer;
+  discovering: boolean;
+  onDiscover: () => void;
+  onToggleEnabled: () => void;
+  onRemove: () => void;
+  onPolicyChange: (tool: string, policy: McpApprovalPolicy) => void;
+}) {
+  const { server } = props;
+  return (
+    <div
+      data-testid={`mcp-server-row-${server.id}`}
+      style={{ border: "1px solid rgba(255,255,255,.07)", borderRadius: 8, padding: "14px 16px", opacity: server.enabled ? 1 : 0.55 }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--bone)" }}>{server.name}</div>
+          <div className="mono" style={{ fontSize: 9, color: "var(--haze)", marginTop: 2 }}>Connector Command Center</div>
+        </div>
+        <StatusPill id={server.id} status={server.status} />
+        <span className="mono" style={{ fontSize: 10, color: "var(--haze)" }}>{server.url}</span>
+        {server.hasCredential && <span className="mono" style={{ fontSize: 9, color: "var(--haze)" }}>credential stored</span>}
+        <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+          <button className="btn btn-secondary btn-mono" data-testid={`mcp-discover-${server.id}`} style={{ height: 26, padding: "0 10px", fontSize: 9 }} onClick={props.onDiscover} disabled={props.discovering}>
+            {props.discovering ? "discovering…" : "discover"}
+          </button>
+          <button className="btn btn-secondary btn-mono" style={{ height: 26, padding: "0 10px", fontSize: 9 }} onClick={props.onToggleEnabled}>
+            {server.enabled ? "on" : "off"}
+          </button>
+          <button className="btn btn-secondary btn-mono" data-testid={`mcp-delete-${server.id}`} style={{ height: 26, padding: "0 10px", fontSize: 9, color: "var(--ember)", borderColor: "rgba(251,146,60,.2)" }} onClick={props.onRemove}>
+            remove
+          </button>
+        </div>
+      </div>
+
+      {server.lastError && <div style={{ fontSize: 11, color: "var(--ember)", marginTop: 8 }}>{server.lastError}</div>}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8, marginTop: 12 }}>
+        <Metric label="tools" value={String(server.discoveredTools.length)} />
+        <Metric label="resources" value="ready" />
+        <Metric label="prompts" value="ready" />
+        <Metric label="credential" value={server.hasCredential ? "per-user ready" : "none"} />
+      </div>
+
+      {server.discoveredTools.length > 0 && (
+        <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+          {server.discoveredTools.map((tool) => {
+            const policy = server.approvalPolicies?.[tool.name] ?? (server.reversibleTools.includes(tool.name) ? "read_only_auto" : "approve_once");
+            return (
+              <div key={tool.name} data-testid={`mcp-tool-${server.id}-${tool.name}`} style={{ border: "1px solid rgba(255,255,255,.06)", borderRadius: 8, padding: 10 }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <strong style={{ color: "var(--bone)", fontSize: 12 }}>{tool.title ?? tool.name}</strong>
+                  <span className="mono" style={{ color: "var(--haze)", fontSize: 9 }}>{tool.name}</span>
+                  <select className="input mono" value={policy} onChange={(event) => props.onPolicyChange(tool.name, event.target.value as McpApprovalPolicy)} style={{ marginLeft: "auto", minWidth: 150, height: 28, fontSize: 10 }}>
+                    {MCP_APPROVAL_POLICIES.map((option) => <option key={option} value={option}>{mcpApprovalPolicyLabel(option)}</option>)}
+                  </select>
+                </div>
+                {tool.description && <div style={{ color: "var(--haze)", fontSize: 11, lineHeight: 1.45, marginTop: 6 }}>{tool.description}</div>}
+                <div className="mono" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8, color: "var(--haze)", fontSize: 9 }}>
+                  {tool.inputSchema && <span>input schema</span>}
+                  {tool.outputSchema && <span>output schema</span>}
+                  {tool.annotations?.readOnlyHint === true && <span>read-only hint</span>}
+                  {tool.annotations?.destructiveHint === true && <span>destructive hint</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusPill({ id, status }: { id: string; status: string }) {
+  return (
+    <span
+      className="mono"
+      data-testid={`mcp-server-status-${id}`}
+      style={{
+        fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", padding: "2px 8px", borderRadius: 99,
+        color: status === "connected" ? "var(--pulse)" : status === "error" ? "var(--ember)" : "var(--haze)",
+        border: `1px solid ${status === "connected" ? "rgba(110,231,183,.25)" : status === "error" ? "rgba(251,146,60,.25)" : "rgba(255,255,255,.1)"}`,
+      }}
+    >
+      {status}
+    </span>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ border: "1px solid rgba(255,255,255,.06)", borderRadius: 8, padding: "8px 10px" }}>
+      <div className="mono" style={{ color: "var(--haze)", fontSize: 8, letterSpacing: ".1em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ color: "var(--bone)", fontSize: 12, marginTop: 3 }}>{value}</div>
+    </div>
+  );
+}
+
+function authLabel(mode: McpConnectorTemplate["authMode"]): string {
+  if (mode === "oauth") return "OAuth";
+  if (mode === "provider_url") return "provider URL";
+  if (mode === "none") return "no auth";
+  return "token";
 }

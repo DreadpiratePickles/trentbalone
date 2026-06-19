@@ -15,6 +15,7 @@ import {
   toolForStep,
 } from "@/lib/orchestrator-runtime";
 import type { OrchestrationStep, RuntimeStep } from "@/lib/orchestrator-runtime";
+import type { ToolAdapter } from "@/lib/tools";
 import { makeId, nowIso } from "@/lib/utils";
 import {
   clearRuntimeEvalOverrides,
@@ -51,6 +52,10 @@ const mockRuntime = vi.hoisted(() => ({
   }),
 }));
 
+const mockMcp = vi.hoisted(() => ({
+  getMcpAdaptersForCompany: vi.fn(async () => [] as ToolAdapter[]),
+}));
+
 const mockGateway = vi.hoisted(() => ({
   executeSeatModel: vi.fn().mockResolvedValue({
     output: { summary: "did the work ↗ next: review", findings: [], recommendations: [] },
@@ -64,6 +69,7 @@ const mockGateway = vi.hoisted(() => ({
 vi.mock("@/lib/spend", () => mockSpend);
 vi.mock("@/lib/agent-runtime", () => mockRuntime);
 vi.mock("@/lib/model-gateway", () => mockGateway);
+vi.mock("@/lib/mcp-tool-adapter", () => mockMcp);
 
 describe("Cycle.kind discriminator", () => {
   it("defaults saved cycles to scheduled when no kind is provided", async () => {
@@ -553,6 +559,8 @@ describe("executeStepWithRuntime", () => {
     mockRuntime.getAgentRuntime.mockClear();
     mockGateway.executeSeatModel.mockClear();
     mockWikiEmbeddings.semanticSearch.mockClear();
+    mockMcp.getMcpAdaptersForCompany.mockClear();
+    mockMcp.getMcpAdaptersForCompany.mockResolvedValue([]);
   });
 
   it("checks budget before executing", async () => {
@@ -653,6 +661,40 @@ describe("executeStepWithRuntime", () => {
 
     expect(captured.subtask.objective).toContain("analyze spacex stocks and make a slideshow");
     expect(captured.subtask.contextBundle.overallObjective).toBe("analyze spacex stocks and make a slideshow");
+  });
+
+  it("loads MCP adapters with the current task query instead of mounting every server blindly", async () => {
+    const company = await store.createCompany({
+      name: `Runtime MCP Query ${makeId("test")}`,
+      brief: { vision: "defer MCP loading" },
+    });
+    const mcpAdapter: ToolAdapter = {
+      name: "mcp_sentry",
+      scopes: ["mcp:find_errors"],
+      availability: "real" as const,
+      healthCheck: vi.fn(async () => "connected" as const),
+      estimateCost: vi.fn(() => 0),
+      requiresApproval: vi.fn(() => true),
+      dryRun: vi.fn(async () => ({ adapter: "mcp_sentry", action: "find_errors", status: "needs_approval" as const, summary: "approval" })),
+      execute: vi.fn(async () => ({ adapter: "mcp_sentry", action: "find_errors", status: "completed" as const, summary: "ok" })),
+    };
+    mockMcp.getMcpAdaptersForCompany.mockResolvedValueOnce([mcpAdapter]);
+
+    await executeStepWithRuntime({
+      step: {
+        ...step,
+        title: "Investigate Sentry production errors",
+        expectedOutput: "Root cause and issue links.",
+      },
+      company,
+      previousOutputs: {},
+      objective: "Investigate Sentry errors and open a GitHub issue.",
+    });
+
+    expect(mockMcp.getMcpAdaptersForCompany).toHaveBeenCalledWith(company.id, {
+      query: expect.stringContaining("Investigate Sentry production errors"),
+      limit: expect.any(Number),
+    });
   });
 
   it("injects semantic wiki chunks into seat source documents and coverage", async () => {

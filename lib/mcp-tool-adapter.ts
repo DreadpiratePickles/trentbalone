@@ -25,6 +25,13 @@ import type { ToolCallRecord } from "@/lib/types";
 import { appendAuditLog } from "@/lib/audit-log";
 import { isAllowedStdioMcpUrl } from "@/lib/mcp-transport";
 import {
+  defaultMcpApprovalPolicyForTool,
+  mcpApprovalPolicyAllowsExecution,
+  mcpApprovalPolicyRequiresApproval,
+  normalizeMcpApprovalPolicies,
+} from "@/lib/mcp-policy";
+import { rankMcpServersForTask } from "@/lib/mcp-tool-index";
+import {
   getMcpServerToken,
   listEnabledMcpServers,
   updateMcpServer,
@@ -103,8 +110,9 @@ function sentryMcpStdioCommand(): { command: string; args: string[] } {
   return { command: "sentry-mcp", args: [`--skills=${SENTRY_STDIO_SKILLS}`] };
 }
 
-export function mcpToolDescriptionHash(name: string, description: string): string {
-  return createHash("sha256").update(`${name}\n${description}`).digest("hex");
+export function mcpToolDescriptionHash(name: string, description: string, metadata?: Record<string, unknown>): string {
+  const richMetadata = metadata && Object.keys(metadata).length ? `\n${stableStringify(metadata)}` : "";
+  return createHash("sha256").update(`${name}\n${description}${richMetadata}`).digest("hex");
 }
 
 /** Connect to the server and list its tools — used by the discover endpoint. */
@@ -113,11 +121,21 @@ export async function discoverMcpTools(server: McpServerRecord): Promise<McpDisc
   try {
     const result = await client.listTools();
     return (result.tools ?? []).map((tool) => {
+      const source = tool as Record<string, unknown> & { name: string; description?: string };
       const description = (tool.description ?? "").slice(0, 300);
+      const metadata: Record<string, unknown> = {};
+      if (typeof source.title === "string" && source.title) metadata.title = source.title;
+      if (isRecord(source.inputSchema)) metadata.inputSchema = source.inputSchema;
+      if (isRecord(source.outputSchema)) metadata.outputSchema = source.outputSchema;
+      if (isRecord(source.annotations)) metadata.annotations = source.annotations;
       return {
         name: tool.name,
+        ...(typeof source.title === "string" && source.title ? { title: source.title } : {}),
         description,
-        descriptionHash: mcpToolDescriptionHash(tool.name, description),
+        ...(isRecord(source.inputSchema) ? { inputSchema: source.inputSchema } : {}),
+        ...(isRecord(source.outputSchema) ? { outputSchema: source.outputSchema } : {}),
+        ...(isRecord(source.annotations) ? { annotations: source.annotations } : {}),
+        descriptionHash: mcpToolDescriptionHash(tool.name, description, metadata),
       };
     });
   } finally {
@@ -160,13 +178,13 @@ export async function verifyMcpToolIntegrity(server: McpServerRecord): Promise<M
     return { ok: false, changedTools: [], missingTools: [], unverifiable: true, checkedAt };
   }
 
-  const liveHashByName = new Map(live.map((tool) => [tool.name, tool.descriptionHash]));
+  const liveByName = new Map(live.map((tool) => [tool.name, tool]));
   const changedTools: string[] = [];
   const missingTools: string[] = [];
   for (const tool of baseline) {
-    const liveHash = liveHashByName.get(tool.name);
-    if (liveHash === undefined) missingTools.push(tool.name);
-    else if (liveHash !== tool.descriptionHash) changedTools.push(tool.name);
+    const liveTool = liveByName.get(tool.name);
+    if (!liveTool) missingTools.push(tool.name);
+    else if (!matchesApprovedToolHash(tool, liveTool)) changedTools.push(tool.name);
   }
 
   if (changedTools.length || missingTools.length) {
@@ -192,6 +210,17 @@ export async function verifyMcpToolIntegrity(server: McpServerRecord): Promise<M
   return { ok: true, changedTools: [], missingTools: [], unverifiable: false, checkedAt };
 }
 
+function matchesApprovedToolHash(approved: McpDiscoveredTool, live: McpDiscoveredTool): boolean {
+  if (!approved.descriptionHash) return true;
+  if (live.descriptionHash === approved.descriptionHash) return true;
+  if (hasRichToolMetadata(approved)) return false;
+  return mcpToolDescriptionHash(live.name, live.description) === approved.descriptionHash;
+}
+
+function hasRichToolMetadata(tool: McpDiscoveredTool): boolean {
+  return Boolean(tool.title || tool.inputSchema || tool.outputSchema || tool.annotations);
+}
+
 async function verifyMcpToolIntegrityCached(server: McpServerRecord): Promise<McpIntegrityResult> {
   const cached = integrityCache.get(server.id);
   if (cached && Date.now() - cached.at < MCP_INTEGRITY_CACHE_TTL_MS) return cached.result;
@@ -213,7 +242,14 @@ export function createMcpToolAdapter(server: McpServerRecord): ToolAdapter {
   const name = mcpAdapterName(server.name);
   const knownTools = server.discoveredTools.map((tool) => tool.name);
   const allowed = new Set(server.toolAllowlist.length ? server.toolAllowlist : knownTools);
-  const reversible = new Set(server.reversibleTools);
+  const approvalPolicies = normalizeMcpApprovalPolicies({
+    rawPolicies: server.approvalPolicies,
+    legacyReversibleTools: server.reversibleTools,
+    discoveredTools: server.discoveredTools,
+  });
+  const toolByName = new Map(server.discoveredTools.map((tool) => [tool.name, tool]));
+  const policyFor = (tool: string) =>
+    approvalPolicies[tool] ?? defaultMcpApprovalPolicyForTool(toolByName.get(tool) ?? { name: tool });
 
   return {
     name,
@@ -226,9 +262,9 @@ export function createMcpToolAdapter(server: McpServerRecord): ToolAdapter {
       return 0;
     },
     requiresApproval(action: string) {
-      // Default-deny: only tools the client explicitly marked reversible skip approval.
+      // Default-deny: only read-only-auto policies skip founder approval.
       const { tool } = parseMcpAction(action);
-      return !reversible.has(tool);
+      return mcpApprovalPolicyRequiresApproval(policyFor(tool));
     },
     async dryRun(action: string): Promise<ToolCallRecord> {
       const { tool } = parseMcpAction(action);
@@ -240,6 +276,7 @@ export function createMcpToolAdapter(server: McpServerRecord): ToolAdapter {
       };
     },
     async execute(action: string): Promise<ToolCallRecord> {
+      const startedAt = Date.now();
       const { tool, args } = parseMcpAction(action);
       if (!allowed.has(tool)) {
         return {
@@ -247,6 +284,15 @@ export function createMcpToolAdapter(server: McpServerRecord): ToolAdapter {
           action,
           status: "failed",
           summary: `MCP tool "${tool}" is not in the allowlist for server "${server.name}". Allowed: ${[...allowed].join(", ") || "none discovered"}.`,
+        };
+      }
+      const policy = policyFor(tool);
+      if (!mcpApprovalPolicyAllowsExecution(policy)) {
+        return {
+          adapter: name,
+          action,
+          status: "failed",
+          summary: `MCP tool "${tool}" is disabled by the connector approval policy for server "${server.name}".`,
         };
       }
       const hasBaseline = server.discoveredTools.some((item) => item.name === tool && item.descriptionHash);
@@ -277,31 +323,69 @@ export function createMcpToolAdapter(server: McpServerRecord): ToolAdapter {
           });
           const text = renderMcpResult(result as { content?: unknown; isError?: boolean });
           const failed = Boolean((result as { isError?: boolean }).isError);
-          return {
+          const record = {
             adapter: name,
             action,
             status: failed ? "failed" : "completed",
             summary: `[${server.name} · ${tool}] ${text}`.slice(0, 800),
-          };
+          } satisfies ToolCallRecord;
+          await appendMcpActivityTrace(server, tool, record.status, policy, args, Date.now() - startedAt);
+          return record;
         } finally {
           await client.close().catch(() => undefined);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "unknown MCP error";
-        return {
+        const record = {
           adapter: name,
           action,
           status: "failed",
           summary: `MCP call to ${server.name} failed: ${message.slice(0, 300)}`,
-        };
+        } satisfies ToolCallRecord;
+        await appendMcpActivityTrace(server, tool, record.status, policy, args, Date.now() - startedAt);
+        return record;
       }
     },
   };
 }
 
 /** All enabled MCP servers for a company as ToolAdapters (merged into the seat registry). */
-export async function getMcpAdaptersForCompany(companyId: string): Promise<ToolAdapter[]> {
+export async function getMcpAdaptersForCompany(
+  companyId: string,
+  options: { query?: string; limit?: number } = {},
+): Promise<ToolAdapter[]> {
   if (!process.env.DATABASE_URL) return [];
   const servers = await listEnabledMcpServers(companyId).catch(() => []);
-  return servers.map(createMcpToolAdapter);
+  const selected = options.query
+    ? rankMcpServersForTask(servers, options.query, { limit: options.limit }).map((rank) => rank.server)
+    : servers.slice(0, options.limit ?? servers.length);
+  return selected.map(createMcpToolAdapter);
+}
+
+async function appendMcpActivityTrace(
+  server: McpServerRecord,
+  tool: string,
+  status: ToolCallRecord["status"],
+  policy: string,
+  args: Record<string, unknown>,
+  latencyMs: number,
+): Promise<void> {
+  await appendAuditLog(
+    server.companyId,
+    "agent",
+    `mcp.tool_call.${status}`,
+    "mcp_server",
+    server.id,
+    `MCP ${server.name}.${tool} ${status} policy=${policy} latencyMs=${latencyMs} args=${Object.keys(args).sort().join(",") || "none"}`,
+  ).catch(() => undefined);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (!isRecord(value)) return JSON.stringify(value);
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
 }

@@ -11,10 +11,19 @@ import { db } from "@/lib/db";
 import { makeId } from "@/lib/utils";
 import { decryptJson, encryptJson } from "@/lib/secrets";
 import { normalizeMcpTransport, type McpTransport } from "@/lib/mcp-transport";
+import {
+  approvalPoliciesToLegacyAutoTools,
+  normalizeMcpApprovalPolicies,
+  type McpApprovalPolicies,
+} from "@/lib/mcp-policy";
 
 export type McpDiscoveredTool = {
   name: string;
+  title?: string;
   description: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
   descriptionHash?: string;
 };
 
@@ -27,6 +36,7 @@ export type McpServerRecord = {
   hasCredential: boolean;
   toolAllowlist: string[];
   reversibleTools: string[];
+  approvalPolicies: McpApprovalPolicies;
   status: string;
   lastError?: string;
   discoveredTools: McpDiscoveredTool[];
@@ -63,7 +73,11 @@ function toDiscoveredTools(value: unknown): McpDiscoveredTool[] {
     .filter((item): item is Record<string, unknown> => item !== null && typeof item === "object")
     .map((item) => ({
       name: typeof item.name === "string" ? item.name : "",
+      ...(typeof item.title === "string" && item.title ? { title: item.title } : {}),
       description: typeof item.description === "string" ? item.description : "",
+      ...(isRecord(item.inputSchema) ? { inputSchema: item.inputSchema } : {}),
+      ...(isRecord(item.outputSchema) ? { outputSchema: item.outputSchema } : {}),
+      ...(isRecord(item.annotations) ? { annotations: item.annotations } : {}),
       ...(typeof item.descriptionHash === "string" && item.descriptionHash
         ? { descriptionHash: item.descriptionHash }
         : {}),
@@ -72,6 +86,12 @@ function toDiscoveredTools(value: unknown): McpDiscoveredTool[] {
 }
 
 function fromRow(row: Row): McpServerRecord {
+  const discoveredTools = toDiscoveredTools(row.discoveredTools);
+  const approvalPolicies = normalizeMcpApprovalPolicies({
+    rawPolicies: row.reversibleTools,
+    legacyReversibleTools: row.reversibleTools,
+    discoveredTools,
+  });
   return {
     id: row.id,
     companyId: row.companyId,
@@ -80,10 +100,11 @@ function fromRow(row: Row): McpServerRecord {
     transport: normalizeMcpTransport(row.transport) ?? "http",
     hasCredential: Boolean(row.credentialRef),
     toolAllowlist: toStringArray(row.toolAllowlist),
-    reversibleTools: toStringArray(row.reversibleTools),
+    reversibleTools: approvalPoliciesToLegacyAutoTools(approvalPolicies),
+    approvalPolicies,
     status: row.status,
     lastError: row.lastError ?? undefined,
-    discoveredTools: toDiscoveredTools(row.discoveredTools),
+    discoveredTools,
     enabled: row.enabled,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -127,6 +148,7 @@ export async function createMcpServer(input: {
   token?: string;
   toolAllowlist?: string[];
   reversibleTools?: string[];
+  approvalPolicies?: McpApprovalPolicies;
 }): Promise<McpServerRecord> {
   const row = await db.mcpServer.create({
     data: {
@@ -137,7 +159,7 @@ export async function createMcpServer(input: {
       transport: input.transport ?? "http",
       credentialRef: input.token ? encryptJson({ token: input.token }) : null,
       toolAllowlist: input.toolAllowlist ?? [],
-      reversibleTools: input.reversibleTools ?? [],
+      reversibleTools: input.approvalPolicies ?? input.reversibleTools ?? [],
       discoveredTools: [],
       status: "configured",
       enabled: true,
@@ -156,14 +178,16 @@ export async function updateMcpServer(
     token: string;
     toolAllowlist: string[];
     reversibleTools: string[];
+    approvalPolicies: McpApprovalPolicies;
     discoveredTools: McpDiscoveredTool[];
     status: string;
     lastError: string | null;
     enabled: boolean;
   }>,
 ): Promise<McpServerRecord | null> {
-  const { token, ...rest } = patch;
+  const { token, approvalPolicies, ...rest } = patch;
   const data: Record<string, unknown> = { ...rest };
+  if (approvalPolicies) data.reversibleTools = approvalPolicies;
   if (typeof token === "string") {
     data.credentialRef = token ? encryptJson({ token }) : null;
   }
@@ -176,4 +200,8 @@ export async function updateMcpServer(
 export async function deleteMcpServer(companyId: string, id: string): Promise<boolean> {
   const { count } = await db.mcpServer.deleteMany({ where: { id, companyId } });
   return count > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
