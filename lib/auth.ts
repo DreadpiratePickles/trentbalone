@@ -2,6 +2,7 @@ import NextAuth from "next-auth";
 import type { Provider } from "next-auth/providers";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
+import { isDevelopmentLoginEnabled } from "@/lib/auth-dev-login";
 import { db } from "@/lib/db";
 import { makeId } from "@/lib/utils";
 
@@ -17,8 +18,10 @@ declare module "next-auth" {
 }
 
 // ─── Providers ───────────────────────────────────────────────────────────────
-const providers: Provider[] = [
-  Credentials({
+const providers: Provider[] = [];
+
+if (isDevelopmentLoginEnabled()) {
+  providers.push(Credentials({
     name: "Development Login",
     credentials: {
       email: { label: "Email", type: "email", placeholder: "you@example.com" }
@@ -32,8 +35,8 @@ const providers: Provider[] = [
         name: email.split("@")[0]
       };
     }
-  })
-];
+  }));
+}
 
 const googleClientId = process.env.AUTH_GOOGLE_ID || process.env.GOOGLE_CLIENT_ID;
 const googleClientSecret = process.env.AUTH_GOOGLE_SECRET || process.env.GOOGLE_CLIENT_SECRET;
@@ -47,11 +50,27 @@ if (googleClientId && googleClientSecret) {
 }
 
 // ─── NextAuth config ─────────────────────────────────────────────────────────
+const useSecureCookies =
+  process.env.NODE_ENV === "production" ||
+  process.env.AUTH_URL?.startsWith("https://") ||
+  process.env.NEXTAUTH_URL?.startsWith("https://");
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers,
   session: { strategy: "jwt" },
   trustHost: true,
   secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
+  cookies: {
+    sessionToken: {
+      name: useSecureCookies ? "__Secure-authjs.session-token" : "authjs.session-token",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: useSecureCookies,
+      },
+    },
+  },
 
   pages: {
     signIn: "/auth/signin",

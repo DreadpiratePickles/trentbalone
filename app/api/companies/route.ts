@@ -3,6 +3,7 @@ import { store } from "@/lib/store";
 import { companySchema } from "@/lib/validators";
 import { getAuthUser, unauthorized, createOwnerMembership, getUserCompanyIds } from "@/lib/session";
 import { db } from "@/lib/db";
+import { mapCompany } from "@/lib/prisma-store-mappers";
 
 export async function GET() {
   const user = await getAuthUser();
@@ -16,11 +17,8 @@ export async function GET() {
         where: { id: { in: companyIds }, status: { not: "archived" } },
         orderBy: { createdAt: "desc" }
       });
-      // Map Prisma rows through the store's public mapper by using getCompany per id
-      // (simpler than duplicating the mapper here)
-      const companies = await Promise.all(companyIds.map((id) => store.getCompany(id)));
       return NextResponse.json({
-        companies: companies.filter(Boolean)
+        companies: rows.map(mapCompany)
       });
     }
   }

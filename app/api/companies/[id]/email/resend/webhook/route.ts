@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { parseResendInboundEmailEvent, persistResendInboundEmail, verifyResendWebhookSignature } from "@/lib/resend-email-adapter";
+import { checkPublicRateLimit, ipFromHeaders, rateLimitExceeded } from "@/lib/rate-limit";
 import { store } from "@/lib/store";
 
 type RouteContext = {
@@ -7,6 +8,9 @@ type RouteContext = {
 };
 
 export async function POST(request: Request, context: RouteContext) {
+  const limit = await checkPublicRateLimit(ipFromHeaders(request.headers), "webhook:company-resend");
+  if (!limit.ok) return rateLimitExceeded(limit.retryAfterSeconds);
+
   const secret = process.env.RESEND_WEBHOOK_SECRET;
   if (!secret) {
     return NextResponse.json({

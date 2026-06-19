@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
+import { checkPublicRateLimit, ipFromHeaders, rateLimitExceeded } from "@/lib/rate-limit";
 import { store } from "@/lib/store";
 
-export async function GET(_: Request, { params }: { params: Promise<{ companySlug: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ companySlug: string }> }) {
   const { companySlug } = await params;
+  const limit = await checkPublicRateLimit(ipFromHeaders(request.headers), `public:${companySlug}`);
+  if (!limit.ok) return rateLimitExceeded(limit.retryAfterSeconds);
+
   const company = await store.getCompany(companySlug);
   if (!company || !company.publicVisibility) {
     return NextResponse.json({ error: "Public company not found" }, { status: 404 });

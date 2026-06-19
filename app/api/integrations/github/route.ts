@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import {
   getGitHubCredentials,
   listGitHubRepos,
@@ -7,7 +8,15 @@ import {
   validateGitHubConnection
 } from "@/lib/github";
 import { store } from "@/lib/store";
+import { isHttpHeaderValueSafe } from "@/lib/http-credential";
 import { forbidden, getAuthUser, requireRoleForRequest, unauthorized } from "@/lib/session";
+
+const githubConnectionSchema = z.object({
+  companyId: z.string().min(1).max(128),
+  token: z.string().min(1).max(512).refine(isHttpHeaderValueSafe),
+  owner: z.string().min(1).max(100).regex(/^[A-Za-z0-9_.-]+$/),
+  repo: z.string().min(1).max(100).regex(/^[A-Za-z0-9_.-]+$/),
+});
 
 export async function GET(request: Request) {
   const user = await getAuthUser();
@@ -43,23 +52,20 @@ export async function POST(request: Request) {
   const user = await getAuthUser();
   if (!user) return unauthorized();
 
-  const body = await request.json();
-  if (!body.companyId || !body.token || !body.owner || !body.repo) {
-    return NextResponse.json(
-      { error: "companyId, token, owner, and repo are required" },
-      { status: 400 }
-    );
+  const parsed = githubConnectionSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Invalid GitHub connection request" }, { status: 400 });
   }
+  const body = parsed.data;
 
   const check = await requireRoleForRequest(user.id, "admin", { companyId: body.companyId });
   if (!check.ok) return forbidden();
 
   const connection = await saveGitHubConnection(body.companyId, {
-    token: String(body.token),
-    owner: String(body.owner),
-    repo: String(body.repo)
+    token: body.token,
+    owner: body.owner,
+    repo: body.repo
   });
 
   return NextResponse.json({ connection: publicGitHubConnection(connection) }, { status: 201 });
 }
-

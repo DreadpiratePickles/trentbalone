@@ -16,6 +16,8 @@ import {
   checkRateLimit,
   checkCycleRateLimit,
   checkAuthRateLimit,
+  checkPublicRateLimit,
+  ipFromHeaders,
   rateLimitExceeded,
 } from "./rate-limit";
 
@@ -132,6 +134,43 @@ describe("checkAuthRateLimit", () => {
     mockGetRedisClient.mockReturnValue(null);
     const result = await checkAuthRateLimit("1.2.3.4");
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("checkPublicRateLimit", () => {
+  it("uses an IP and sanitized scope key for public endpoints", async () => {
+    mockIncr.mockResolvedValue(1);
+
+    const result = await checkPublicRateLimit("203.0.113.10", "public:/companies/acme?x=1");
+
+    expect(result.ok).toBe(true);
+    expect(mockIncr).toHaveBeenCalledWith("rl:public:public:_companies_acme_x_1:203.0.113.10");
+  });
+
+  it("returns ok:false when the public IP limit is exceeded", async () => {
+    mockIncr.mockResolvedValue(121);
+    mockTtl.mockResolvedValue(17);
+
+    const result = await checkPublicRateLimit("203.0.113.10", "v1:models");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.retryAfterSeconds).toBe(17);
+  });
+});
+
+describe("ipFromHeaders", () => {
+  it("prefers the first x-forwarded-for address", () => {
+    const headers = new Headers({
+      "x-forwarded-for": "203.0.113.10, 10.0.0.1",
+      "x-real-ip": "198.51.100.1",
+    });
+
+    expect(ipFromHeaders(headers)).toBe("203.0.113.10");
+  });
+
+  it("falls back to x-real-ip and then unknown", () => {
+    expect(ipFromHeaders(new Headers({ "x-real-ip": "198.51.100.1" }))).toBe("198.51.100.1");
+    expect(ipFromHeaders(new Headers())).toBe("unknown");
   });
 });
 

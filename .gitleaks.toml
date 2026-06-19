@@ -16,8 +16,8 @@ tags = ["key", "trent"]
 
 [[rules]]
 id = "trent-env-file"
-description = "Raw .env file committed"
-path = '''(^|/)\.env$'''
+description = "Raw env file committed"
+path = '''(^|/)(?:\.env(?:\..*)?|[^/]+\.env(?:\..*)?|[^/]*env\.local|trent\.env\.local)$'''
 tags = ["env", "trent"]
 
 [allowlist]

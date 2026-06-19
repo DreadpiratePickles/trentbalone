@@ -9,6 +9,7 @@ const BUCKETS = {
   companyGlobal: { limit: 100, windowSec: 60 },
   companyCycle:  { limit: 10,  windowSec: 3600 },
   ipAuth:        { limit: 5,   windowSec: 60 },
+  publicIp:      { limit: 120, windowSec: 60 },
 } as const;
 
 async function check(
@@ -71,6 +72,24 @@ export async function checkAuthRateLimit(ip: string): Promise<RateLimitResult> {
     BUCKETS.ipAuth.limit,
     BUCKETS.ipAuth.windowSec
   );
+}
+
+export async function checkPublicRateLimit(ip: string, scope = "global"): Promise<RateLimitResult> {
+  return check(
+    `rl:public:${safeRateLimitScope(scope)}:${ip}`,
+    BUCKETS.publicIp.limit,
+    BUCKETS.publicIp.windowSec
+  );
+}
+
+export function ipFromHeaders(headers: Headers): string {
+  const forwarded = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  if (forwarded) return forwarded;
+  return headers.get("x-real-ip")?.trim() || "unknown";
+}
+
+function safeRateLimitScope(scope: string): string {
+  return scope.replace(/[^a-z0-9:_-]/gi, "_").slice(0, 80) || "global";
 }
 
 export function rateLimitExceeded(retryAfterSeconds = 60): NextResponse {

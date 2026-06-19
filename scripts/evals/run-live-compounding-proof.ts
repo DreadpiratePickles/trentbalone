@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadAllowedEvalEnvFile } from "@/lib/eval-env-file";
+import { hogqlStringLiteral } from "@/lib/hogql";
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -171,7 +172,7 @@ async function captureExperimentTraffic(captureKey: string, experimentKey: strin
 }
 
 async function pollExperimentOutcome(host: string, projectId: string, personalKey: string, experimentKey: string, timeoutMs: number) {
-  const query = `SELECT properties.variant AS variant, countIf(event='signup_view') AS views, countIf(event='signup_submit') AS submits FROM events WHERE properties.experiment = '${experimentKey}' GROUP BY variant ORDER BY variant`;
+  const query = `SELECT properties.variant AS variant, countIf(event='signup_view') AS views, countIf(event='signup_submit') AS submits FROM events WHERE properties.experiment = ${hogqlStringLiteral(experimentKey)} GROUP BY variant ORDER BY variant`;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const res = await fetch(`${host}/api/projects/${projectId}/query/`, {

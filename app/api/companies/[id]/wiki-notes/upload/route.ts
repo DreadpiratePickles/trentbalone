@@ -18,6 +18,7 @@ const TEXT_TYPES = new Set([
   "text/plain", "text/markdown", "text/x-markdown", "text/csv",
   "application/json", "application/x-yaml", "text/yaml",
 ]);
+const MAX_WIKI_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 export async function POST(
   request: NextRequest,
@@ -35,6 +36,9 @@ export async function POST(
 
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "file required" }, { status: 400 });
+  }
+  if (file.size > MAX_WIKI_UPLOAD_BYTES) {
+    return NextResponse.json({ error: "File exceeds 5 MB upload limit" }, { status: 413 });
   }
 
   const baseName = file.name.replace(/\.(md|markdown|txt|pdf|json|csv|yaml|yml)$/i, "");

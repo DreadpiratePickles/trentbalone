@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { ConsoleMark, Wordmark, Atmosphere, I } from "@/components/ui";
+import { isDevelopmentLoginEnabled } from "@/lib/auth-dev-login";
 
 export default function SignInPage() {
   const [email, setEmail] = useState("");
@@ -44,6 +45,8 @@ export default function SignInPage() {
   }
 
   const hasGoogle = process.env.NEXT_PUBLIC_HAS_GOOGLE === "true";
+  const hasDevLogin = isDevelopmentLoginEnabled();
+  const hasAnyProvider = hasDevLogin || hasGoogle;
 
   return (
     <div
@@ -132,80 +135,82 @@ export default function SignInPage() {
             Sign in to your console
           </h2>
           <p style={{ margin: "0 0 28px", fontSize: 14, color: "var(--mist)", lineHeight: 1.5 }}>
-            Enter your email to access your companies and agent cycles.
+            Sign in to access your companies and agent cycles.
           </p>
 
-          <form onSubmit={handleCredentials}>
-            <div style={{ marginBottom: 12 }}>
-              <label
-                htmlFor="email"
-                className="mono"
-                style={{
-                  display: "block",
-                  fontSize: 10,
-                  letterSpacing: ".18em",
-                  textTransform: "uppercase",
-                  color: "var(--haze)",
-                  marginBottom: 8,
-                }}
-              >
-                Email address
-              </label>
-              <input
-                id="email"
-                type="email"
-                className="input"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@yourcompany.com"
-                required
-                autoComplete="email"
-                autoFocus
-                disabled={loading}
-              />
-            </div>
-
-            {error && (
-              <div
-                style={{
-                  background: "rgba(248,113,113,.06)",
-                  border: "1px solid rgba(248,113,113,.2)",
-                  borderRadius: 8,
-                  padding: "10px 14px",
-                  fontSize: 13,
-                  color: "var(--danger)",
-                  marginBottom: 12,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                <I.alert width={14} height={14} />
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={loading || !email.trim()}
-              style={{
-                width: "100%",
-                height: 44,
-                marginTop: 4,
-                opacity: loading || !email.trim() ? 0.5 : 1,
-                cursor: loading || !email.trim() ? "not-allowed" : "pointer",
-              }}
-            >
-              {loading ? (
-                <span
-                  className="spinner"
-                  style={{ width: 16, height: 16, borderWidth: 1.5, borderColor: "rgba(10,10,15,.2)", borderTopColor: "var(--obsidian)" }}
+          {hasDevLogin && (
+            <form onSubmit={handleCredentials}>
+              <div style={{ marginBottom: 12 }}>
+                <label
+                  htmlFor="email"
+                  className="mono"
+                  style={{
+                    display: "block",
+                    fontSize: 10,
+                    letterSpacing: ".18em",
+                    textTransform: "uppercase",
+                    color: "var(--haze)",
+                    marginBottom: 8,
+                  }}
+                >
+                  Email address
+                </label>
+                <input
+                  id="email"
+                  type="email"
+                  className="input"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@yourcompany.com"
+                  required
+                  autoComplete="email"
+                  autoFocus
+                  disabled={loading}
                 />
-              ) : null}
-              Continue with email
-            </button>
-          </form>
+              </div>
+
+              {error && (
+                <div
+                  style={{
+                    background: "rgba(248,113,113,.06)",
+                    border: "1px solid rgba(248,113,113,.2)",
+                    borderRadius: 8,
+                    padding: "10px 14px",
+                    fontSize: 13,
+                    color: "var(--danger)",
+                    marginBottom: 12,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <I.alert width={14} height={14} />
+                  {error}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={loading || !email.trim()}
+                style={{
+                  width: "100%",
+                  height: 44,
+                  marginTop: 4,
+                  opacity: loading || !email.trim() ? 0.5 : 1,
+                  cursor: loading || !email.trim() ? "not-allowed" : "pointer",
+                }}
+              >
+                {loading ? (
+                  <span
+                    className="spinner"
+                    style={{ width: 16, height: 16, borderWidth: 1.5, borderColor: "rgba(10,10,15,.2)", borderTopColor: "var(--obsidian)" }}
+                  />
+                ) : null}
+                Continue with email
+              </button>
+            </form>
+          )}
 
           {hasGoogle && (
             <>
@@ -214,7 +219,7 @@ export default function SignInPage() {
                   display: "flex",
                   alignItems: "center",
                   gap: 12,
-                  margin: "20px 0",
+                  margin: hasDevLogin ? "20px 0" : "0 0 20px",
                 }}
               >
                 <div className="divider" style={{ flex: 1 }} />
@@ -247,33 +252,39 @@ export default function SignInPage() {
               </button>
             </>
           )}
+
+          {!hasAnyProvider && (
+            <p style={{ margin: 0, fontSize: 14, color: "var(--mist)", lineHeight: 1.5 }}>
+              Sign-in is not configured for this environment.
+            </p>
+          )}
         </div>
 
-        {/* Demo sign-in shortcut */}
-        <button
-          className="mono"
-          onClick={() => {
-            setEmail("demo@trent.app");
-            // submit after a brief tick so the input registers
-            setTimeout(() => {
-              document.querySelector<HTMLButtonElement>("form button[type=submit]")?.click();
-            }, 100);
-          }}
-          style={{
-            marginTop: 20,
-            background: "transparent",
-            border: 0,
-            cursor: "pointer",
-            color: "var(--haze)",
-            fontSize: 10,
-            letterSpacing: ".14em",
-            textTransform: "uppercase",
-            textDecoration: "underline",
-            textUnderlineOffset: 3,
-          }}
-        >
-          sign in as demo operator
-        </button>
+        {hasDevLogin && (
+          <button
+            className="mono"
+            onClick={() => {
+              setEmail("demo@trent.app");
+              setTimeout(() => {
+                document.querySelector<HTMLButtonElement>("form button[type=submit]")?.click();
+              }, 100);
+            }}
+            style={{
+              marginTop: 20,
+              background: "transparent",
+              border: 0,
+              cursor: "pointer",
+              color: "var(--haze)",
+              fontSize: 10,
+              letterSpacing: ".14em",
+              textTransform: "uppercase",
+              textDecoration: "underline",
+              textUnderlineOffset: 3,
+            }}
+          >
+            sign in as demo operator
+          </button>
+        )}
       </div>
     </div>
   );

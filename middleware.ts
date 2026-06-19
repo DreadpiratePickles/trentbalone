@@ -1,15 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { getToken } from "next-auth/jwt";
 
-const SESSION_COOKIE_NAMES = [
-  "authjs.session-token",
-  "__Secure-authjs.session-token",
-  "next-auth.session-token",
-  "__Secure-next-auth.session-token",
-];
-
-export default function middleware(req: NextRequest) {
-  const isAuthorized = SESSION_COOKIE_NAMES.some((name) => !!req.cookies.get(name)?.value);
+export default async function middleware(req: NextRequest) {
   const pathname = req.nextUrl.pathname;
 
   // Skip gating for public, auth, health, and cron routes
@@ -25,6 +18,12 @@ export default function middleware(req: NextRequest) {
   ) {
     return NextResponse.next();
   }
+
+  const token = await getToken({
+    req,
+    secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
+  }).catch(() => null);
+  const isAuthorized = Boolean(token?.sub);
 
   // Protect all other company workspace and API paths
   if (!isAuthorized) {
