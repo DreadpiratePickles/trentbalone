@@ -15,10 +15,15 @@ describe("MCP Connector Command Center UI", () => {
     for (const name of ["Stripe", "GitHub", "Sentry", "Microsoft Learn", "Notion", "Atlassian", "Zapier", "Pipedream"]) {
       expect(html).toContain(name);
     }
+    expect(html).toContain("Official");
+    expect(html).toContain("Gateway");
+    expect(html).toContain("Self-hosted");
     expect(html).toContain("OAuth");
+    expect(html).toContain("OAuth / per-user grant");
     expect(html).toContain("trust");
     expect(html).toContain("resources");
     expect(html).toContain("prompts");
+    expect(html).toContain("apps/ui ready");
   });
 
   it("renders structured approval policies and full discovered schema metadata", () => {
@@ -62,6 +67,8 @@ describe("MCP Connector Command Center UI", () => {
         onToggleEnabled={() => undefined}
         onRemove={() => undefined}
         onPolicyChange={() => undefined}
+        onProof={() => undefined}
+        proofing={null}
       />,
     );
 
@@ -71,5 +78,8 @@ describe("MCP Connector Command Center UI", () => {
     expect(html).toContain("input schema");
     expect(html).toContain("output schema");
     expect(html).toContain("Search Stripe");
+    expect(html).toContain("critical risk");
+    expect(html).toContain("test write dry-run");
+    expect(html).toContain("re-approve changed tools");
   });
 });
