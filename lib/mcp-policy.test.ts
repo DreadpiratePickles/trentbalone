@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   approvalPoliciesToLegacyAutoTools,
+  classifyMcpToolPolicyClasses,
   defaultMcpApprovalPolicyForTool,
+  mcpToolRiskLabel,
   mcpApprovalPolicyAllowsExecution,
   mcpApprovalPolicyRequiresApproval,
   normalizeMcpApprovalPolicies,
@@ -61,5 +63,22 @@ describe("MCP approval policies", () => {
     expect(mcpApprovalPolicyRequiresApproval("always_approve")).toBe(true);
     expect(mcpApprovalPolicyAllowsExecution("disabled")).toBe(false);
     expect(approvalPoliciesToLegacyAutoTools({ search: "read_only_auto", refund: "always_approve" })).toEqual(["search"]);
+  });
+
+  it("classifies MCP policy classes separately from approval policy", () => {
+    const refund = classifyMcpToolPolicyClasses({
+      name: "stripe_refund_payment",
+      description: "Create a customer-facing refund for a payment",
+    });
+    expect(refund).toEqual(expect.arrayContaining(["write", "customer_facing", "money_moving", "destructive"]));
+    expect(mcpToolRiskLabel(refund)).toBe("critical");
+
+    const docs = classifyMcpToolPolicyClasses({
+      name: "docs_search",
+      description: "Search documentation",
+      annotations: { readOnlyHint: true },
+    });
+    expect(docs).toEqual(["read_only"]);
+    expect(mcpToolRiskLabel(docs)).toBe("low");
   });
 });

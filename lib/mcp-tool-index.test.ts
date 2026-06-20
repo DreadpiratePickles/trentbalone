@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rankMcpServersForTask } from "@/lib/mcp-tool-index";
+import { buildMcpToolInventory, rankMcpServersForTask, searchMcpToolInventory } from "@/lib/mcp-tool-index";
 import type { McpServerRecord } from "@/lib/mcp-store";
 
 describe("MCP tool search and deferred loading", () => {
@@ -40,6 +40,34 @@ describe("MCP tool search and deferred loading", () => {
     ], "Do the daily operator sweep", { limit: 1 });
 
     expect(ranked.map((item) => item.server.id)).toEqual(["mcp_1"]);
+  });
+
+  it("builds searchable inventory with owner, risk, schemas, proof, and availability reasons", () => {
+    const inventory = buildMcpToolInventory([
+      server({
+        id: "mcp_stripe",
+        name: "Stripe",
+        url: "https://mcp.stripe.com",
+        discoveredTools: [
+          {
+            name: "stripe_refund",
+            title: "Refund payment",
+            description: "Create a customer refund",
+            inputSchema: { type: "object" },
+            annotations: { destructiveHint: true },
+          },
+        ],
+      }),
+    ]);
+
+    expect(inventory[0]).toMatchObject({
+      owner: "Stripe",
+      risk: "critical",
+      schema: { input: "present", output: "missing" },
+      lastProof: { status: "passed" },
+    });
+    expect(inventory[0]?.whyAvailable).toContain("enabled");
+    expect(searchMcpToolInventory(inventory, "refund customer")[0]?.toolName).toBe("stripe_refund");
   });
 });
 

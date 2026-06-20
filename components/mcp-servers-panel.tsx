@@ -8,51 +8,47 @@
  * requires-approval until the client explicitly marks it reversible.
  */
 
-import React, { useCallback, useEffect, useState } from "react";
-import { MCP_CONNECTOR_GALLERY, type McpConnectorTemplate } from "@/lib/mcp-connector-catalog";
+import { useCallback, useEffect, useState } from "react";
 import {
-  MCP_APPROVAL_POLICIES,
-  mcpApprovalPolicyLabel,
-  type McpApprovalPolicies,
-  type McpApprovalPolicy,
-} from "@/lib/mcp-policy";
+  McpActivityTimeline,
+  McpConnectorGallery,
+  McpInventorySearch,
+  McpServerCommandCenterCard,
+  type McpActivityItem,
+  type McpPanelServer,
+  type ProofAction,
+} from "@/components/mcp-marketplace-sections";
+import {
+  type McpConnectorGrantMode,
+  type McpConnectorTemplate,
+} from "@/lib/mcp-connector-catalog";
+import type { McpApprovalPolicy } from "@/lib/mcp-policy";
+import { buildMcpToolInventory, searchMcpToolInventory } from "@/lib/mcp-tool-index";
 
-type McpServer = {
-  id: string;
-  name: string;
-  url: string;
-  transport: McpTransport;
-  hasCredential: boolean;
-  toolAllowlist: string[];
-  reversibleTools: string[];
-  approvalPolicies: McpApprovalPolicies;
-  status: string;
-  lastError?: string;
-  discoveredTools: Array<{
-    name: string;
-    title?: string;
-    description: string;
-    inputSchema?: Record<string, unknown>;
-    outputSchema?: Record<string, unknown>;
-    annotations?: Record<string, unknown>;
-  }>;
-  enabled: boolean;
-  createdAt: string;
-  updatedAt: string;
-};
+export { McpConnectorGallery, McpServerCommandCenterCard } from "@/components/mcp-marketplace-sections";
 
 type McpTransport = "http" | "sse" | "stdio";
 
-const emptyDraft = { name: "", url: "", transport: "http" as McpTransport, token: "" };
+const emptyDraft = {
+  name: "",
+  url: "",
+  transport: "http" as McpTransport,
+  token: "",
+  grantMode: "bearer_token" as McpConnectorGrantMode,
+};
 
 export function McpServersPanel({ companyId }: { companyId: string }) {
-  const [servers, setServers] = useState<McpServer[]>([]);
+  const [servers, setServers] = useState<McpPanelServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState(emptyDraft);
   const [saving, setSaving] = useState(false);
   const [discovering, setDiscovering] = useState<string | null>(null);
+  const [proofing, setProofing] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [inventoryQuery, setInventoryQuery] = useState("");
+  const [proofActivity, setProofActivity] = useState<McpActivityItem[]>([]);
+  const [auditActivity, setAuditActivity] = useState<McpActivityItem[]>([]);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/companies/${companyId}/mcp-servers`);
@@ -61,7 +57,18 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
     setLoading(false);
   }, [companyId]);
 
-  useEffect(() => { void load(); }, [load]);
+  const loadActivity = useCallback(async () => {
+    const res = await fetch(`/api/audit?companyId=${companyId}`).catch(() => null);
+    if (!res?.ok) return;
+    const data = await res.json().catch(() => ({}));
+    setAuditActivity(parseMcpAuditActivity(data.auditLogs ?? []));
+  }, [companyId]);
+
+  useEffect(() => { void load(); void loadActivity(); }, [load, loadActivity]);
+
+  const inventory = buildMcpToolInventory(servers.map((server) => ({ ...server, companyId })));
+  const visibleInventory = searchMcpToolInventory(inventory, inventoryQuery).slice(0, 18);
+  const activity = [...proofActivity, ...auditActivity].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10);
 
   async function addServer() {
     if (!draft.name.trim() || !draft.url.trim()) {
@@ -73,7 +80,7 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
     const res = await fetch(`/api/companies/${companyId}/mcp-servers`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(draft),
+      body: JSON.stringify({ ...draft, token: draft.grantMode === "bearer_token" || draft.grantMode === "local_stdio" ? draft.token : "" }),
     });
     setSaving(false);
     if (!res.ok) {
@@ -93,9 +100,35 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
     await fetch(`/api/companies/${companyId}/mcp-servers/${serverId}/discover`, { method: "POST" });
     setDiscovering(null);
     await load();
+    await loadActivity();
   }
 
-  async function setPolicy(server: McpServer, tool: string, policy: McpApprovalPolicy) {
+  async function runProof(server: McpPanelServer, action: ProofAction) {
+    setProofing(`${server.id}:${action}`);
+    const startedAt = Date.now();
+    const res = await fetch(`/api/companies/${companyId}/mcp-servers/${server.id}/proof`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    const data = await res.json().catch(() => ({}));
+    const proof = data.proof ?? {};
+    const status: McpActivityItem["status"] = res.ok ? "passed" : "failed";
+    setProofActivity((items) => [{
+      id: `${server.id}:${action}:${Date.now()}`,
+      serverId: server.id,
+      action,
+      summary: String(proof.evidence ?? proof.error ?? `${server.name} ${action}`),
+      status,
+      latencyMs: typeof proof.latencyMs === "number" ? proof.latencyMs : Date.now() - startedAt,
+      createdAt: new Date().toISOString(),
+    }, ...items].slice(0, 12));
+    setProofing(null);
+    await load();
+    await loadActivity();
+  }
+
+  async function setPolicy(server: McpPanelServer, tool: string, policy: McpApprovalPolicy) {
     await fetch(`/api/companies/${companyId}/mcp-servers/${server.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -110,12 +143,13 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
       url: template.url,
       transport: template.transport,
       token: "",
+      grantMode: template.grantMode,
     });
     setAdding(true);
     setError("");
   }
 
-  async function toggleEnabled(server: McpServer) {
+  async function toggleEnabled(server: McpPanelServer) {
     await fetch(`/api/companies/${companyId}/mcp-servers/${server.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -150,6 +184,15 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
       </div>
 
       <McpConnectorGallery onSelect={useTemplate} />
+
+      <McpInventorySearch
+        query={inventoryQuery}
+        onQueryChange={setInventoryQuery}
+        items={visibleInventory}
+        total={inventory.length}
+      />
+
+      <McpActivityTimeline items={activity} />
 
       {adding && (
         <div data-testid="mcp-add-form" style={{ marginTop: 12, border: "1px solid rgba(110,231,183,.15)", borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
@@ -186,14 +229,36 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
             value={draft.url}
             onChange={(e) => setDraft({ ...draft, url: e.target.value })}
           />
-          <input
+          <select
             className="input"
-            type="password"
-            data-testid="mcp-token-input"
-            placeholder="Token or provider-issued credential (stored encrypted)"
-            value={draft.token}
-            onChange={(e) => setDraft({ ...draft, token: e.target.value })}
-          />
+            data-testid="mcp-grant-mode-select"
+            value={draft.grantMode}
+            onChange={(e) => setDraft({ ...draft, grantMode: e.target.value as McpConnectorGrantMode })}
+          >
+            <option value="oauth_user">OAuth / per-user grant</option>
+            <option value="bearer_token">Bearer token</option>
+            <option value="provider_url">Provider-issued URL</option>
+            <option value="local_stdio">Local stdio credential</option>
+            <option value="none">No credential</option>
+          </select>
+          {(draft.grantMode === "bearer_token" || draft.grantMode === "local_stdio") ? (
+            <input
+              className="input"
+              type="password"
+              data-testid="mcp-token-input"
+              placeholder="Token or provider-issued credential (stored encrypted)"
+              value={draft.token}
+              onChange={(e) => setDraft({ ...draft, token: e.target.value })}
+            />
+          ) : (
+            <div data-testid="mcp-oauth-grant-note" style={{ border: "1px solid rgba(255,255,255,.08)", borderRadius: 8, padding: 10, color: "var(--haze)", fontSize: 11, lineHeight: 1.45 }}>
+              {draft.grantMode === "oauth_user"
+                ? "OAuth/per-user grants are modeled here so every user can own their own connector consent. Hosted OAuth handshake is the next implementation step; this server will remain credential-pending until a grant is completed."
+                : draft.grantMode === "provider_url"
+                  ? "Paste the provider-issued MCP URL above. Trent stores no raw user password for this grant mode."
+                  : "This connector is read-only or public; no credential will be stored."}
+            </div>
+          )}
           {error && <div data-testid="mcp-add-error" style={{ fontSize: 12, color: "var(--ember)" }}>{error}</div>}
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn btn-secondary btn-mono" style={{ fontSize: 10 }} onClick={() => setAdding(false)}>cancel</button>
@@ -227,6 +292,8 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
               onToggleEnabled={() => toggleEnabled(server)}
               onRemove={() => remove(server.id)}
               onPolicyChange={(tool, policy) => setPolicy(server, tool, policy)}
+              onProof={(action) => runProof(server, action)}
+              proofing={proofing?.startsWith(`${server.id}:`) ? proofing.split(":")[1] as ProofAction : null}
             />
           ))}
         </div>
@@ -235,134 +302,27 @@ export function McpServersPanel({ companyId }: { companyId: string }) {
   );
 }
 
-export function McpConnectorGallery({ onSelect }: { onSelect: (template: McpConnectorTemplate) => void }) {
-  return (
-    <div data-testid="mcp-connector-gallery" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 8, marginTop: 14 }}>
-      {MCP_CONNECTOR_GALLERY.map((template) => (
-        <button
-          key={template.id}
-          type="button"
-          onClick={() => onSelect(template)}
-          style={{ textAlign: "left", border: "1px solid rgba(255,255,255,.08)", borderRadius: 8, padding: 12, background: "rgba(255,255,255,.025)", cursor: "pointer" }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-            <strong style={{ color: "var(--bone)", fontSize: 13 }}>{template.name}</strong>
-            <span className="mono" style={{ color: "var(--pulse)", fontSize: 9 }}>trust {template.trustScore}</span>
-          </div>
-          <div style={{ color: "var(--haze)", fontSize: 11, lineHeight: 1.4, marginTop: 5 }}>{template.description}</div>
-          <div className="mono" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8, color: "var(--haze)", fontSize: 9 }}>
-            <span>{authLabel(template.authMode)}</span>
-            {template.supportsResources && <span>resources</span>}
-            {template.supportsPrompts && <span>prompts</span>}
-            <span>{template.riskTier} risk</span>
-          </div>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-export function McpServerCommandCenterCard(props: {
-  server: McpServer;
-  discovering: boolean;
-  onDiscover: () => void;
-  onToggleEnabled: () => void;
-  onRemove: () => void;
-  onPolicyChange: (tool: string, policy: McpApprovalPolicy) => void;
-}) {
-  const { server } = props;
-  return (
-    <div
-      data-testid={`mcp-server-row-${server.id}`}
-      style={{ border: "1px solid rgba(255,255,255,.07)", borderRadius: 8, padding: "14px 16px", opacity: server.enabled ? 1 : 0.55 }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--bone)" }}>{server.name}</div>
-          <div className="mono" style={{ fontSize: 9, color: "var(--haze)", marginTop: 2 }}>Connector Command Center</div>
-        </div>
-        <StatusPill id={server.id} status={server.status} />
-        <span className="mono" style={{ fontSize: 10, color: "var(--haze)" }}>{server.url}</span>
-        {server.hasCredential && <span className="mono" style={{ fontSize: 9, color: "var(--haze)" }}>credential stored</span>}
-        <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-          <button className="btn btn-secondary btn-mono" data-testid={`mcp-discover-${server.id}`} style={{ height: 26, padding: "0 10px", fontSize: 9 }} onClick={props.onDiscover} disabled={props.discovering}>
-            {props.discovering ? "discovering…" : "discover"}
-          </button>
-          <button className="btn btn-secondary btn-mono" style={{ height: 26, padding: "0 10px", fontSize: 9 }} onClick={props.onToggleEnabled}>
-            {server.enabled ? "on" : "off"}
-          </button>
-          <button className="btn btn-secondary btn-mono" data-testid={`mcp-delete-${server.id}`} style={{ height: 26, padding: "0 10px", fontSize: 9, color: "var(--ember)", borderColor: "rgba(251,146,60,.2)" }} onClick={props.onRemove}>
-            remove
-          </button>
-        </div>
-      </div>
-
-      {server.lastError && <div style={{ fontSize: 11, color: "var(--ember)", marginTop: 8 }}>{server.lastError}</div>}
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8, marginTop: 12 }}>
-        <Metric label="tools" value={String(server.discoveredTools.length)} />
-        <Metric label="resources" value="ready" />
-        <Metric label="prompts" value="ready" />
-        <Metric label="credential" value={server.hasCredential ? "per-user ready" : "none"} />
-      </div>
-
-      {server.discoveredTools.length > 0 && (
-        <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
-          {server.discoveredTools.map((tool) => {
-            const policy = server.approvalPolicies?.[tool.name] ?? (server.reversibleTools.includes(tool.name) ? "read_only_auto" : "approve_once");
-            return (
-              <div key={tool.name} data-testid={`mcp-tool-${server.id}-${tool.name}`} style={{ border: "1px solid rgba(255,255,255,.06)", borderRadius: 8, padding: 10 }}>
-                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                  <strong style={{ color: "var(--bone)", fontSize: 12 }}>{tool.title ?? tool.name}</strong>
-                  <span className="mono" style={{ color: "var(--haze)", fontSize: 9 }}>{tool.name}</span>
-                  <select className="input mono" value={policy} onChange={(event) => props.onPolicyChange(tool.name, event.target.value as McpApprovalPolicy)} style={{ marginLeft: "auto", minWidth: 150, height: 28, fontSize: 10 }}>
-                    {MCP_APPROVAL_POLICIES.map((option) => <option key={option} value={option}>{mcpApprovalPolicyLabel(option)}</option>)}
-                  </select>
-                </div>
-                {tool.description && <div style={{ color: "var(--haze)", fontSize: 11, lineHeight: 1.45, marginTop: 6 }}>{tool.description}</div>}
-                <div className="mono" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8, color: "var(--haze)", fontSize: 9 }}>
-                  {tool.inputSchema && <span>input schema</span>}
-                  {tool.outputSchema && <span>output schema</span>}
-                  {tool.annotations?.readOnlyHint === true && <span>read-only hint</span>}
-                  {tool.annotations?.destructiveHint === true && <span>destructive hint</span>}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StatusPill({ id, status }: { id: string; status: string }) {
-  return (
-    <span
-      className="mono"
-      data-testid={`mcp-server-status-${id}`}
-      style={{
-        fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", padding: "2px 8px", borderRadius: 99,
-        color: status === "connected" ? "var(--pulse)" : status === "error" ? "var(--ember)" : "var(--haze)",
-        border: `1px solid ${status === "connected" ? "rgba(110,231,183,.25)" : status === "error" ? "rgba(251,146,60,.25)" : "rgba(255,255,255,.1)"}`,
-      }}
-    >
-      {status}
-    </span>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ border: "1px solid rgba(255,255,255,.06)", borderRadius: 8, padding: "8px 10px" }}>
-      <div className="mono" style={{ color: "var(--haze)", fontSize: 8, letterSpacing: ".1em", textTransform: "uppercase" }}>{label}</div>
-      <div style={{ color: "var(--bone)", fontSize: 12, marginTop: 3 }}>{value}</div>
-    </div>
-  );
-}
-
-function authLabel(mode: McpConnectorTemplate["authMode"]): string {
-  if (mode === "oauth") return "OAuth";
-  if (mode === "provider_url") return "provider URL";
-  if (mode === "none") return "no auth";
-  return "token";
+function parseMcpAuditActivity(logs: Array<Record<string, unknown>>): McpActivityItem[] {
+  return logs
+    .filter((log) => typeof log.action === "string" && log.action.startsWith("mcp."))
+    .slice(0, 20)
+    .map((log) => {
+      const summary = typeof log.summary === "string" ? log.summary : "";
+      const latencyMatch = summary.match(/latencyMs=(\d+)/) ?? summary.match(/in (\d+)ms/);
+      const status: McpActivityItem["status"] =
+        String(log.action).includes("failed") || summary.toLowerCase().includes("failed")
+          ? "failed"
+          : String(log.action).includes("approval")
+            ? "needs_approval"
+            : "recorded";
+      return {
+        id: String(log.id ?? `${log.action}:${log.createdAt}`),
+        serverId: typeof log.objectId === "string" ? log.objectId : undefined,
+        action: String(log.action),
+        summary,
+        status,
+        latencyMs: latencyMatch ? Number(latencyMatch[1]) : undefined,
+        createdAt: typeof log.createdAt === "string" ? log.createdAt : new Date().toISOString(),
+      };
+    });
 }
