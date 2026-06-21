@@ -2,7 +2,10 @@ import NextAuth from "next-auth";
 import type { Provider } from "next-auth/providers";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
-import { isDevelopmentLoginEnabled } from "@/lib/auth-dev-login";
+import {
+  isCredentialsLoginEnabled,
+  isEmailAllowedForCredentialsLogin,
+} from "@/lib/auth-dev-login";
 import { db } from "@/lib/db";
 import { makeId } from "@/lib/utils";
 
@@ -20,15 +23,15 @@ declare module "next-auth" {
 // ─── Providers ───────────────────────────────────────────────────────────────
 const providers: Provider[] = [];
 
-if (isDevelopmentLoginEnabled()) {
+if (isCredentialsLoginEnabled()) {
   providers.push(Credentials({
-    name: "Development Login",
+    name: "Email Login",
     credentials: {
       email: { label: "Email", type: "email", placeholder: "you@example.com" }
     },
     async authorize(credentials) {
-      const email = String(credentials?.email || "founder@trent.local").trim();
-      if (!email || !email.includes("@")) return null;
+      const email = String(credentials?.email || "").trim();
+      if (!isEmailAllowedForCredentialsLogin(email)) return null;
       return {
         id: `user_${email.replace(/[^a-z0-9]/gi, "_")}`,
         email,
