@@ -30,7 +30,7 @@ export function SignInClient({ hasCredentials, hasGoogle, showDemoShortcut = fal
       if (result?.error) {
         setError("Sign-in failed. Check your email and try again.");
         setLoading(false);
-      } else if (result?.ok) {
+      } else if (result) {
         window.location.href = "/companies";
       } else {
         setError("Sign-in did not complete. Refresh and try again.");
