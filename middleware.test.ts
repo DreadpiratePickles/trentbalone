@@ -34,6 +34,9 @@ describe("middleware", () => {
   beforeEach(() => {
     mockGetToken.mockReset();
     mockGetToken.mockResolvedValue(null);
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("AUTH_URL", "");
+    vi.stubEnv("NEXTAUTH_URL", "");
   });
 
   it("lets /api/mcp reach its bearer-auth route without a browser session", async () => {
@@ -54,8 +57,23 @@ describe("middleware", () => {
   it("rejects forged session-cookie presence without a valid JWT", async () => {
     const res = await middleware(request("/api/tasks", true));
 
-    expect(mockGetToken).toHaveBeenCalledTimes(1);
+    expect(mockGetToken).toHaveBeenCalledWith(expect.objectContaining({
+      cookieName: "authjs.session-token",
+      secureCookie: false,
+    }));
     expect(res.status).toBe(401);
+  });
+
+  it("uses the secure Auth.js cookie name in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+
+    const res = await middleware(request("/companies/co_1", true));
+
+    expect(mockGetToken).toHaveBeenCalledWith(expect.objectContaining({
+      cookieName: "__Secure-authjs.session-token",
+      secureCookie: true,
+    }));
+    expect(res.status).toBe(307);
   });
 
   it("allows ordinary API routes when Auth.js returns a valid token subject", async () => {

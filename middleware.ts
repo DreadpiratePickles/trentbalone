@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
+import { authSessionCookieName, usesSecureAuthCookies } from "@/lib/auth-cookies";
 
 export default async function middleware(req: NextRequest) {
   const pathname = req.nextUrl.pathname;
@@ -22,6 +23,8 @@ export default async function middleware(req: NextRequest) {
   const token = await getToken({
     req,
     secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
+    secureCookie: usesSecureAuthCookies(),
+    cookieName: authSessionCookieName(),
   }).catch(() => null);
   const isAuthorized = Boolean(token?.sub);
 

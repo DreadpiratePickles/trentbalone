@@ -6,6 +6,7 @@ import {
   isCredentialsLoginEnabled,
   isEmailAllowedForCredentialsLogin,
 } from "@/lib/auth-dev-login";
+import { authSessionCookieName, usesSecureAuthCookies } from "@/lib/auth-cookies";
 import { db } from "@/lib/db";
 import { makeId } from "@/lib/utils";
 
@@ -53,11 +54,6 @@ if (googleClientId && googleClientSecret) {
 }
 
 // ─── NextAuth config ─────────────────────────────────────────────────────────
-const useSecureCookies =
-  process.env.NODE_ENV === "production" ||
-  process.env.AUTH_URL?.startsWith("https://") ||
-  process.env.NEXTAUTH_URL?.startsWith("https://");
-
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers,
   session: { strategy: "jwt" },
@@ -65,12 +61,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
   cookies: {
     sessionToken: {
-      name: useSecureCookies ? "__Secure-authjs.session-token" : "authjs.session-token",
+      name: authSessionCookieName(),
       options: {
         httpOnly: true,
         sameSite: "lax",
         path: "/",
-        secure: useSecureCookies,
+        secure: usesSecureAuthCookies(),
       },
     },
   },
