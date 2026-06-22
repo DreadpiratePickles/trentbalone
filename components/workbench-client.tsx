@@ -227,6 +227,81 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
     }
   }, [active]);
 
+  const appendActivityStep = useCallback((chunk: AgentChunk) => {
+    setActivity((prev) => {
+      const step = mapWorkbenchChunk(chunk, prev.length);
+      return step ? [...prev, step] : prev;
+    });
+  }, []);
+
+  const streamSessionContent = useCallback(async (sessionId: string, rawContent: string) => {
+    const content = rawContent.trim();
+    if (!content || streaming) return;
+    if (!llmConfigured) {
+      setComposerError("LLM not configured — see docs/RUN.md");
+      return;
+    }
+    setComposer("");
+    setComposerError("");
+    setStreaming(true);
+    setStreamText("");
+    setMessages((prev) => [...prev, { id: `local-${Date.now()}`, role: "user", content, createdAt: new Date().toISOString() }]);
+
+    try {
+      const res = await fetch(`/api/workbench/${sessionId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      if (!res.ok) {
+        const message = await readApiError(res);
+        setComposerError(message);
+        pushError(message);
+        appendActivityStep({ type: "error", message });
+        return;
+      }
+      if (!res.body) {
+        const message = "No response stream from agent";
+        setComposerError(message);
+        pushError(message);
+        appendActivityStep({ type: "error", message });
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let acc = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6);
+          if (payload === "[DONE]") continue;
+          let chunk: AgentChunk;
+          try { chunk = JSON.parse(payload) as AgentChunk; } catch { continue; }
+          if (chunk.type === "content") { acc += chunk.content; setStreamText(acc); }
+          else appendActivityStep(chunk);
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "stream failed";
+      setComposerError(message);
+      pushError(message);
+      appendActivityStep({ type: "error", message });
+    } finally {
+      setStreaming(false);
+      setStreamText("");
+      await loadSession(sessionId);
+      await refreshSessions();
+      await refreshApprovals();
+    }
+  }, [streaming, appendActivityStep, loadSession, refreshApprovals, refreshSessions, llmConfigured, pushError]);
+
   const createSession = useCallback(async (
     objective: string,
     mode: AgentMode,
@@ -286,85 +361,17 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
       }
       await refreshSessions();
       await loadSession(session.id);
+      void streamSessionContent(session.id, objective);
       return true;
     } finally {
       setCreating(false);
     }
-  }, [companyId, refreshSessions, loadSession, llmConfigured, pushError]);
-
-  const appendActivityStep = useCallback((chunk: AgentChunk) => {
-    setActivity((prev) => {
-      const step = mapWorkbenchChunk(chunk, prev.length);
-      return step ? [...prev, step] : prev;
-    });
-  }, []);
+  }, [companyId, refreshSessions, loadSession, llmConfigured, pushError, streamSessionContent]);
 
   const sendContent = useCallback(async (rawContent: string) => {
-    const content = rawContent.trim();
-    if (!content || !active || streaming) return;
-    if (!llmConfigured) {
-      setComposerError("LLM not configured — see docs/RUN.md");
-      return;
-    }
-    setComposer("");
-    setComposerError("");
-    setStreaming(true);
-    setStreamText("");
-    setMessages((prev) => [...prev, { id: `local-${Date.now()}`, role: "user", content, createdAt: new Date().toISOString() }]);
-
-    try {
-      const res = await fetch(`/api/workbench/${active.id}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
-      });
-      if (!res.ok) {
-        const message = await readApiError(res);
-        setComposerError(message);
-        pushError(message);
-        appendActivityStep({ type: "error", message });
-        return;
-      }
-      if (!res.body) {
-        const message = "No response stream from agent";
-        setComposerError(message);
-        pushError(message);
-        appendActivityStep({ type: "error", message });
-        return;
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let acc = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const payload = line.slice(6);
-          if (payload === "[DONE]") continue;
-          let chunk: AgentChunk;
-          try { chunk = JSON.parse(payload) as AgentChunk; } catch { continue; }
-          if (chunk.type === "content") { acc += chunk.content; setStreamText(acc); }
-          else appendActivityStep(chunk);
-        }
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "stream failed";
-      setComposerError(message);
-      pushError(message);
-      appendActivityStep({ type: "error", message });
-    } finally {
-      setStreaming(false);
-      setStreamText("");
-      if (active) await loadSession(active.id);
-      await refreshSessions();
-    }
-  }, [active, streaming, appendActivityStep, loadSession, refreshSessions, llmConfigured, pushError]);
+    if (!active) return;
+    await streamSessionContent(active.id, rawContent);
+  }, [active, streamSessionContent]);
 
   const sendMessage = useCallback(async () => {
     await sendContent(composer);
@@ -399,6 +406,16 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
     await refreshApprovals();
     if (activeId) await loadSession(activeId);
   }, [activeId, loadSession, refreshApprovals, refreshSessions]);
+
+  useEffect(() => {
+    if (!activeId || !active || streaming) return;
+    if (!["queued", "starting", "running", "paused"].includes(active.status)) return;
+    const intervalMs = active.status === "running" ? 4000 : 6000;
+    const timer = window.setInterval(() => {
+      void refreshActive();
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [active, activeId, refreshActive, streaming]);
 
   const setWorkbenchAutonomy = useCallback(async (mode: CompanyAutonomyMode) => {
     setAutonomySaving(true);
