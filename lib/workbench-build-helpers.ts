@@ -31,9 +31,14 @@ export async function safeWrite(provider: WorkbenchProviderAdapter, session: Wor
   }
 }
 
-export async function safeExec(provider: WorkbenchProviderAdapter, session: WorkbenchSession, cmd: string) {
+export async function safeExec(
+  provider: WorkbenchProviderAdapter,
+  session: WorkbenchSession,
+  cmd: string,
+  options?: { timeoutMs?: number },
+) {
   try {
-    const r = await provider.exec(session, cmd);
+    const r = await provider.exec(session, cmd, options);
     if (isExternalWriteApprovalBlock(r)) {
       const approvalId = await pauseWorkbenchForCommandApproval(session, cmd);
       throw new WorkbenchApprovalRequiredError(approvalId, cmd);

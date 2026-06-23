@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { I, Pill, Spinner, AgentChip } from "@/components/ui";
 import { WorkbenchEvidenceRail } from "@/components/workbench-evidence-rail";
 import { WorkbenchSandboxModal } from "@/components/workbench-sandbox-modal";
+import { WorkbenchCommandPalette, type PaletteAction } from "@/components/workbench-command-palette";
 import { AgentActivityFeed, mapWorkbenchChunk, type ActivityStep } from "@/components/agent-activity";
 import { WorkbenchBubble, WorkbenchNewSession, WorkbenchStatusDot, type WorkbenchCreateSource } from "@/components/workbench-session-parts";
 import { buildWorkbenchCreateRequestBody } from "@/lib/workbench-session-request";
@@ -115,6 +116,7 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
   const [modeFilter, setModeFilter] = useState<AgentMode>("build");
   const [creating, setCreating] = useState(false);
   const [sandboxOpen, setSandboxOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState("");
   const [composerError, setComposerError] = useState("");
@@ -533,6 +535,26 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
   }, [active, uploading, pushError, refreshActive]);
 
   const filteredSessions = filterWorkbenchSessionsForSurface(sessions, surfaceMode, modeFilter);
+
+  const paletteActions = useMemo<PaletteAction[]>(() => {
+    const list: PaletteAction[] = [
+      { id: "refresh", label: "Refresh current session", hint: "reload", run: () => void refreshActive() },
+      { id: "mode-build", label: "Filter: Build sessions", hint: "build", run: () => setModeFilter("build") },
+      { id: "mode-research", label: "Filter: Research sessions", hint: "research", run: () => setModeFilter("research") },
+      { id: "mode-design", label: "Filter: Design sessions", hint: "design", run: () => setModeFilter("design") },
+    ];
+    if (active?.previewUrl) {
+      list.unshift({ id: "open-sandbox", label: "Open test sandbox", hint: "preview", run: () => setSandboxOpen(true) });
+    }
+    if (active && (active.status === "running" || active.status === "starting")) {
+      list.unshift({ id: "stop", label: "Stop current run", hint: "stop", run: () => void stopRun() });
+    }
+    if (active?.status === "failed") {
+      list.unshift({ id: "rerun", label: "Rerun failed attempt", hint: "rerun", run: () => void rerunFailed() });
+    }
+    return list;
+  }, [active, refreshActive, stopRun, rerunFailed]);
+
   const newSessionMode = surfaceMode === "agents" ? selectedAgent.mode : modeFilter;
   const newSessionPlaceholder = surfaceMode === "agents"
     ? `Brief ${selectedAgent.label} for a scoped Workbench run...`
@@ -545,9 +567,14 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
         <div style={S.sidebarHead}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <span className="mono" style={S.kicker}>WORKBENCH</span>
-            <button onClick={() => void refreshActive()} style={S.iconBtn} title="Refresh objectives and current session" aria-label="Refresh Workbench">
-              <I.refresh />
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <button onClick={() => setPaletteOpen(true)} style={S.cmdkBtn} title="Command palette (⌘K)" aria-label="Open command palette">
+                <span className="mono">⌘K</span>
+              </button>
+              <button onClick={() => void refreshActive()} style={S.iconBtn} title="Refresh objectives and current session" aria-label="Refresh Workbench">
+                <I.refresh />
+              </button>
+            </div>
           </div>
           <div style={S.surfaceTabs} aria-label="Workbench surface">
             {(["workbench", "agents"] as const).map((surface) => (
@@ -819,6 +846,15 @@ export function WorkbenchClient({ companyId, agents: initialAgents }: { companyI
         onUploadFiles={(files) => void uploadFiles(files)}
       />
 
+      <WorkbenchCommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        sessions={filteredSessions.map((s) => ({ id: s.id, objective: s.objective, status: s.status, agentMode: s.agentMode }))}
+        activeId={activeId}
+        onSelectSession={(id) => void loadSession(id)}
+        actions={paletteActions}
+      />
+
       {sandboxOpen && active?.previewUrl && (
         <WorkbenchSandboxModal
           url={previewSrc(active)}
@@ -1029,7 +1065,7 @@ const border = "1px solid rgba(255,255,255,.07)";
 const surface = "rgba(255,255,255,.02)";
 
 const S = {
-  root: { display: "grid", gridTemplateColumns: "280px 1fr 360px", height: "calc(100vh - 64px)", background: "var(--obsidian)", color: "var(--bone)" } as React.CSSProperties,
+  root: { display: "grid", gridTemplateColumns: "280px minmax(0, 1fr) minmax(420px, 38vw)", height: "calc(100vh - 64px)", background: "var(--obsidian)", color: "var(--bone)" } as React.CSSProperties,
   sidebar: { borderRight: border, display: "flex", flexDirection: "column", minHeight: 0 } as React.CSSProperties,
   sidebarHead: { padding: "16px 14px 12px", borderBottom: border } as React.CSSProperties,
   kicker: { fontSize: 10, letterSpacing: ".18em", color: "var(--haze)" } as React.CSSProperties,
@@ -1059,6 +1095,11 @@ const S = {
   iconBtn: {
     width: 28, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
     background: "rgba(255,255,255,.03)", border, borderRadius: 7, color: "var(--mist)", cursor: "pointer",
+  } as React.CSSProperties,
+  cmdkBtn: {
+    height: 28, padding: "0 8px", display: "inline-flex", alignItems: "center", justifyContent: "center",
+    background: "rgba(255,255,255,.03)", border, borderRadius: 7, color: "var(--haze)", cursor: "pointer",
+    fontSize: 10, fontWeight: 700,
   } as React.CSSProperties,
   sessionWrap: (active: boolean) => ({
     position: "relative", display: "flex", alignItems: "stretch", gap: 4, marginBottom: 4,

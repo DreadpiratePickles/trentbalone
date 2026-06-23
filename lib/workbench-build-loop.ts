@@ -344,7 +344,7 @@ export async function* runBuildLoop(
       }
     }
     chunks.push({ type: "status", phase: "installing", detail: template.installCommand });
-    const install = await safeExec(deps.provider, session, template.installCommand);
+    const install = await safeExec(deps.provider, session, template.installCommand, { timeoutMs: 180_000 });
     workspaceState.executedCommands.push(template.installCommand);
     chunks.push({ type: "command", command: template.installCommand, exitCode: install.exitCode, output: truncate(install.output) });
     if (install.exitCode !== 0) {
@@ -358,7 +358,7 @@ export async function* runBuildLoop(
     }
     for (const cmd of template.postInstallCommands) {
       chunks.push({ type: "status", phase: "provisioning", detail: cmd });
-      const res = await safeExec(deps.provider, session, cmd);
+      const res = await safeExec(deps.provider, session, cmd, { timeoutMs: 180_000 });
       workspaceState.executedCommands.push(cmd);
       chunks.push({ type: "command", command: cmd, exitCode: res.exitCode, output: truncate(res.output) });
       if (res.exitCode !== 0) {

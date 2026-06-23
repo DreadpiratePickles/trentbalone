@@ -2,7 +2,8 @@
 
 import React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AgentActivityFeed, CodeBlock, inferCodeBlock, mapWorkbenchEventsToSteps, type ActivityStep } from "@/components/agent-activity";
+import { AgentActivityFeed, CodeBlock, mapWorkbenchEventsToSteps, type ActivityStep } from "@/components/agent-activity";
+import { WorkbenchCodeEditor } from "@/components/workbench-code-editor";
 import { Spinner } from "@/components/ui";
 import { buildWorkbenchIdeView, type WorkbenchIdeEvidenceSummary } from "@/lib/workbench-ide-view";
 import { workbenchPreviewFrameSrc } from "@/lib/workbench-preview-url";
@@ -71,17 +72,20 @@ type WbArtifact = {
 
 type FileEntry = { name: string; path: string; isDir: boolean; sizeBytes: number; modifiedAt: string };
 type DiffSummary = { changedPaths: string[]; summary: string; patch?: string; fromHash?: string; toHash?: string };
-type RailTab = "preview" | "files" | "diff" | "terminal" | "tests" | "artifacts" | "screenshots";
+type RailTab = "files" | "diff" | "terminal" | "tests" | "artifacts" | "screenshots";
 
 const RAIL_TABS: { key: RailTab; label: string; title: string }[] = [
-  { key: "preview", label: "Preview", title: "Live sandbox preview" },
   { key: "files", label: "Files", title: "Generated file tree and file viewer" },
-  { key: "diff", label: "Diff", title: "Changes since the persisted checkpoint" },
   { key: "terminal", label: "Terminal", title: "Shell commands, outputs, and exits" },
+  { key: "diff", label: "Diff", title: "Changes since the persisted checkpoint" },
   { key: "tests", label: "Tests", title: "Verification checks and failures" },
   { key: "artifacts", label: "Artifacts", title: "Captured files, logs, previews, and exports" },
   { key: "screenshots", label: "Shots", title: "Captured screenshots" },
 ];
+
+// Default share of the rail height given to the always-on live preview pane.
+const PREVIEW_PANE_MIN_PCT = 22;
+const PREVIEW_PANE_MAX_PCT = 78;
 
 export function WorkbenchEvidenceRail({
   active,
@@ -102,7 +106,9 @@ export function WorkbenchEvidenceRail({
   onOpenSandbox: () => void;
   onUploadFiles?: (files: FileList) => void;
 }) {
-  const [railTab, setRailTab] = useState<RailTab>("preview");
+  const [railTab, setRailTab] = useState<RailTab>("files");
+  const [previewPct, setPreviewPct] = useState(46);
+  const railBodyRef = React.useRef<HTMLDivElement>(null);
   const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState("");
@@ -136,10 +142,6 @@ export function WorkbenchEvidenceRail({
       ...activity,
     ],
     [ideView.terminalLines, activity],
-  );
-  const selectedFileBlock = useMemo(
-    () => (selectedFile ? inferCodeBlock(selectedFile, fileContent) : undefined),
-    [selectedFile, fileContent],
   );
   const checkpoints = useMemo(() => checkpointTimelineFromEvents(events), [events]);
 
@@ -253,6 +255,26 @@ export function WorkbenchEvidenceRail({
     }
   }, [active?.id, onRefreshSession]);
 
+  const startPreviewResize = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    const body = railBodyRef.current;
+    if (!body) return;
+    const onMove = (move: MouseEvent) => {
+      const rect = body.getBoundingClientRect();
+      if (rect.height === 0) return;
+      const pct = ((move.clientY - rect.top) / rect.height) * 100;
+      setPreviewPct(Math.min(PREVIEW_PANE_MAX_PCT, Math.max(PREVIEW_PANE_MIN_PCT, pct)));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+    };
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
+
   useEffect(() => {
     if (!active?.id || railTab !== "files") return;
     let cancelled = false;
@@ -318,30 +340,26 @@ export function WorkbenchEvidenceRail({
         onUploadFiles(event.dataTransfer.files);
       }}
     >
-      <div style={R.railTabs}>
-        {RAIL_TABS.map((tab) => (
-          <button key={tab.key} onClick={() => setRailTab(tab.key)} style={R.railTab(railTab === tab.key)} title={tab.title}>
-            {tab.label}
-          </button>
-        ))}
+      <div style={R.railMeta}>
+        <EvidenceSummaryStrip summary={ideView.evidenceSummary} />
+        <RollbackModeStrip
+          mode={active?.metadata?.rollbackMode}
+          description={active?.metadata?.rollbackDescription}
+        />
+        <CheckpointTimelineStrip
+          checkpoints={checkpoints}
+          restoreBusyId={restoringCheckpoint}
+          onRestore={(checkpointId) => void restoreCheckpoint(checkpointId)}
+        />
+        <AgentContractStrip agentRun={active?.metadata?.agentRun} appSolo={active?.metadata?.appSolo} />
+        {railError && <div style={R.railError}>{railError}</div>}
       </div>
-      <EvidenceSummaryStrip summary={ideView.evidenceSummary} />
-      <RollbackModeStrip
-        mode={active?.metadata?.rollbackMode}
-        description={active?.metadata?.rollbackDescription}
-      />
-      <CheckpointTimelineStrip
-        checkpoints={checkpoints}
-        restoreBusyId={restoringCheckpoint}
-        onRestore={(checkpointId) => void restoreCheckpoint(checkpointId)}
-      />
-      <AgentContractStrip agentRun={active?.metadata?.agentRun} appSolo={active?.metadata?.appSolo} />
-      {railError && <div style={R.railError}>{railError}</div>}
 
-      {railTab === "preview" && (
-        <div style={R.railSection}>
+      <div ref={railBodyRef} style={R.railBody}>
+        {/* Always-on live preview — visible alongside the workspace below, a competing platform-style. */}
+        <div style={{ ...R.previewPane, height: `${previewPct}%` }}>
           <div style={R.sectionHead}>
-            <span className="mono" style={R.kicker}>SANDBOX</span>
+            <span className="mono" style={R.kicker}>LIVE PREVIEW</span>
             {active?.previewUrl && (
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={() => void captureScreenshot()} className="mono" style={R.expandBtn} title="Capture screenshot">
@@ -352,12 +370,33 @@ export function WorkbenchEvidenceRail({
             )}
           </div>
           {active?.previewUrl ? (
-            <iframe src={workbenchPreviewFrameSrc(active)} style={R.previewFrame} title="sandbox preview" sandbox="allow-scripts allow-same-origin" />
+            <iframe src={workbenchPreviewFrameSrc(active)} style={R.previewFrameFill} title="sandbox preview" sandbox="allow-scripts allow-same-origin" />
           ) : (
-            <div style={R.previewEmpty} className="mono">{streaming ? "building..." : "no sandbox yet"}</div>
+            <div style={R.previewEmptyFill} className="mono">{streaming ? "building…" : "no sandbox yet"}</div>
           )}
         </div>
-      )}
+
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize preview"
+          style={R.resizer}
+          onMouseDown={startPreviewResize}
+        >
+          <span style={R.resizerGrip} />
+        </div>
+
+        {/* Workspace: tabbed file tree / terminal / diff / tests / artifacts / screenshots. */}
+        <div style={R.workspace}>
+          <div style={R.railTabs}>
+            {RAIL_TABS.map((tab) => (
+              <button key={tab.key} onClick={() => setRailTab(tab.key)} style={R.railTab(railTab === tab.key)} title={tab.title}>
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <div style={R.workspaceBody}>
 
       {railTab === "files" && (
         <RailPanel title="FILES" loading={railLoading && !selectedFile}>
@@ -370,10 +409,17 @@ export function WorkbenchEvidenceRail({
                 </button>
               ))}
             </div>
-            {selectedFileBlock ? (
-              <CodeBlock block={selectedFileBlock} defaultCollapsed={false} />
+            {selectedFile && !railLoading ? (
+              <WorkbenchCodeEditor
+                key={selectedFile}
+                sessionId={active!.id}
+                path={selectedFile}
+                initialContent={fileContent}
+                editable={sessionRunning}
+                onSaved={() => void onRefreshSession()}
+              />
             ) : (
-              <div style={R.railMuted}>{selectedFile ? "loading file..." : "Select a file to inspect it."}</div>
+              <div style={R.railMuted}>{selectedFile ? "loading file…" : "Select a file to open it in the editor."}</div>
             )}
           </div>
         </RailPanel>
@@ -496,6 +542,9 @@ export function WorkbenchEvidenceRail({
           {ideView.screenshots.map((artifact) => <ArtifactRow key={artifact.id} artifact={artifact as WbArtifact} />)}
         </RailPanel>
       )}
+          </div>
+        </div>
+      </div>
     </aside>
   );
 }
@@ -696,7 +745,16 @@ const surface = "rgba(255,255,255,.02)";
 
 const R = {
   rail: { borderLeft: border, display: "flex", flexDirection: "column", minHeight: 0 } as React.CSSProperties,
-  railTabs: { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 4, padding: "10px 12px", borderBottom: border, background: "rgba(255,255,255,.015)" } as React.CSSProperties,
+  railMeta: { maxHeight: "34%", overflowY: "auto", flexShrink: 0 } as React.CSSProperties,
+  railBody: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } as React.CSSProperties,
+  previewPane: { display: "flex", flexDirection: "column", gap: 8, padding: "12px 14px 8px", minHeight: 0 } as React.CSSProperties,
+  previewFrameFill: { flex: 1, width: "100%", minHeight: 0, border, borderRadius: 8, background: "#fff" } as React.CSSProperties,
+  previewEmptyFill: { flex: 1, display: "grid", placeItems: "center", border, borderRadius: 8, color: "var(--haze)", fontSize: 12, background: surface } as React.CSSProperties,
+  resizer: { height: 11, flexShrink: 0, display: "grid", placeItems: "center", cursor: "row-resize", borderTop: border, borderBottom: border, background: "rgba(255,255,255,.015)" } as React.CSSProperties,
+  resizerGrip: { width: 34, height: 3, borderRadius: 999, background: "rgba(255,255,255,.18)" } as React.CSSProperties,
+  workspace: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } as React.CSSProperties,
+  workspaceBody: { flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" } as React.CSSProperties,
+  railTabs: { display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 4, padding: "10px 12px", borderBottom: border, background: "rgba(255,255,255,.015)" } as React.CSSProperties,
   railTab: (active: boolean) => ({
     minWidth: 0, height: 28, padding: "0 6px", borderRadius: 7, border: active ? "1px solid rgba(110,231,183,.32)" : border,
     background: active ? "rgba(110,231,183,.08)" : "transparent", color: active ? "var(--pulse)" : "var(--mist)",
