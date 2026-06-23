@@ -19,9 +19,11 @@ const REQUIRED_UI = [
   "dialog",
   "dropdown-menu",
   "input",
+  "scroll-area",
   "skeleton",
   "table",
   "tabs",
+  "textarea",
   "toast",
 ] as const;
 

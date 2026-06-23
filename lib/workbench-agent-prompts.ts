@@ -80,6 +80,7 @@ CRITICAL — the workspace is a Vite + React 18 SPA (TypeScript, Tailwind, shadc
 - Put the application UI in src/App.tsx and components under src/components/.
 - src/globals.css already contains the @tailwind directives and theme tokens — extend it with type="edit"; never replace it wholesale.
 - Compose UIs from the shadcn/ui primitives in src/components/ui/. Do not hand-author CSS for anything a primitive covers.
+- The ONLY primitives that exist are: badge, button, card, dialog, dropdown-menu, input, scroll-area, skeleton, table, tabs, textarea, toast (e.g. import { Textarea } from "@/components/ui/textarea"). NEVER import a primitive outside this exact list (no select, checkbox, switch, avatar, tooltip, popover, accordion, etc.) — those files do not exist and the build will fail. If you need one that isn't listed, hand-build it inline with Tailwind classes instead of importing a nonexistent module.
 - The starter already includes React 18, Vite 5, TypeScript, Tailwind, shadcn/ui, and ReactDOM.createRoot. For common apps (notes, todos, dashboards, calculators, portfolios, landing pages), DO NOT rewrite package.json or run npm install unless a new external package is truly required.
 - tsconfig uses jsx: "react-jsx" with noUnusedLocals: NEVER write 'import React from "react"' just for JSX — import ONLY the hooks/values you actually call.
 - The start action must be exactly: <boltAction type="start">npm run dev</boltAction>

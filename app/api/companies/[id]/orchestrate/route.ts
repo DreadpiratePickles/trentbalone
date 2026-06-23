@@ -7,6 +7,7 @@ import {
   cancelOrchestration,
 } from "@/lib/orchestrator";
 import { store } from "@/lib/store";
+import { withRlsContext } from "@/lib/with-rls";
 
 export async function GET(
   request: NextRequest,
@@ -19,14 +20,16 @@ export async function GET(
   const check = await requireRoleForRequest(user.id, "viewer", { companyId });
   if (!check.ok) return forbidden();
 
-  const runId = request.nextUrl.searchParams.get("runId");
-  if (runId) {
-    const run = await getOrchestrationRunSnapshot(runId);
-    if (!run) return NextResponse.json({ error: "run not found" }, { status: 404 });
-    return NextResponse.json({ run });
-  }
+  return withRlsContext(companyId, async () => {
+    const runId = request.nextUrl.searchParams.get("runId");
+    if (runId) {
+      const run = await getOrchestrationRunSnapshot(runId);
+      if (!run) return NextResponse.json({ error: "run not found" }, { status: 404 });
+      return NextResponse.json({ run });
+    }
 
-  return NextResponse.json({ runs: await listOrchestrationRunSnapshots(companyId) });
+    return NextResponse.json({ runs: await listOrchestrationRunSnapshots(companyId) });
+  });
 }
 
 export async function POST(
@@ -50,20 +53,22 @@ export async function POST(
   const check = await requireRoleForRequest(user.id, "member", { companyId });
   if (!check.ok) return forbidden();
 
-  await store.addCeoMessage({
-    companyId,
-    direction: "from_owner",
-    kind: "chat",
-    content: objective,
-  }).catch(() => {});
+  return withRlsContext(companyId, async () => {
+    await store.addCeoMessage({
+      companyId,
+      direction: "from_owner",
+      kind: "chat",
+      content: objective,
+    }).catch(() => {});
 
-  const run = await launchOrchestration({
-    companyId,
-    objective,
-    trigger: body.trigger ?? "manual",
-    fullTeam: body.fullTeam ?? false,
+    const run = await launchOrchestration({
+      companyId,
+      objective,
+      trigger: body.trigger ?? "manual",
+      fullTeam: body.fullTeam ?? false,
+    });
+    return NextResponse.json({ run }, { status: 201 });
   });
-  return NextResponse.json({ run }, { status: 201 });
 }
 
 export async function DELETE(
@@ -79,11 +84,13 @@ export async function DELETE(
   const check = await requireRoleForRequest(user.id, "member", { companyId });
   if (!check.ok) return forbidden();
 
-  const run = await getOrchestrationRunSnapshot(runId);
-  if (!run || run.companyId !== companyId) {
-    return NextResponse.json({ error: "run not found" }, { status: 404 });
-  }
+  return withRlsContext(companyId, async () => {
+    const run = await getOrchestrationRunSnapshot(runId);
+    if (!run || run.companyId !== companyId) {
+      return NextResponse.json({ error: "run not found" }, { status: 404 });
+    }
 
-  const ok = await cancelOrchestration(runId);
-  return NextResponse.json({ cancelled: ok });
+    const ok = await cancelOrchestration(runId);
+    return NextResponse.json({ cancelled: ok });
+  });
 }
