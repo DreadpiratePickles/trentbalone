@@ -185,7 +185,12 @@ jobs:
           VERSION=8.21.2
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
           tar -xzf gitleaks.tar.gz gitleaks
-          ./gitleaks detect --source . --config .gitleaks.toml --redact --verbose --no-banner
+          # --no-git scans the working tree (current files), not git history.
+          # History scanning re-flags old test fixtures and pre-fix lines forever
+          # (e.g. an env read in a superseded commit); we care about secrets in
+          # the code as it stands now, where inline `gitleaks:allow` + the path
+          # allowlist apply.
+          ./gitleaks detect --source . --no-git --config .gitleaks.toml --redact --verbose --no-banner
 
   sast:
     name: SAST (CodeQL)
