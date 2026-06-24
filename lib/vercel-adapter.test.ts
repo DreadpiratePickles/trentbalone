@@ -79,4 +79,39 @@ describe("Vercel adapter", () => {
     expect(result.status).toBe("failed");
     expect(result.summary).toContain("Invalid project name");
   });
+
+  it("inline-file deploys include the required projectSettings and pass file encoding", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ id: "d", url: "x.vercel.app" }));
+    const adapter = createVercelAdapter({ env: ENV, fetchImpl });
+    await adapter.execute("deploy", {
+      name: "site",
+      files: [
+        { file: "index.html", data: "<h1>hi</h1>" },
+        { file: "logo.png", data: "QUJD", encoding: "base64" },
+      ],
+    });
+    const body = JSON.parse((fetchImpl.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.projectSettings).toEqual({ framework: null }); // required for inline-file deploys
+    expect(body.files).toEqual([
+      { file: "index.html", data: "<h1>hi</h1>" },
+      { file: "logo.png", data: "QUJD", encoding: "base64" },
+    ]);
+  });
+
+  it("deploys under the company's OWN Vercel account when connected (multi-tenant)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ id: "d", url: "co.vercel.app" }));
+    const adapter = createVercelAdapter({
+      env: { VERCEL_TOKEN: "vc-GLOBAL" },
+      fetchImpl,
+      credentialDeps: {
+        getIntegration: async () => ({ encryptedData: "ENC" }),
+        decrypt: () => ({ token: "vc-COMPANY", teamId: "team_co" }),
+      },
+    });
+    await adapter.execute("deploy", { companyId: "co_7", name: "app", gitSource: { repo: "a/b" } });
+
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe("https://api.vercel.com/v13/deployments?teamId=team_co"); // company team
+    expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer vc-COMPANY" });
+  });
 });

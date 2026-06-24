@@ -2,6 +2,7 @@ import type { ToolAdapter } from "@/lib/tools";
 import type { ToolCallRecord } from "@/lib/types";
 import { isHttpHeaderValueSafe, malformedCredentialSummary } from "@/lib/http-credential";
 import { logger } from "@/lib/logger";
+import { resolveToolCredential, type ResolveToolCredentialDeps } from "@/lib/tool-credentials";
 
 const REQUEST_TIMEOUT_MS = 20_000;
 
@@ -11,7 +12,11 @@ type FetchLike = typeof fetch;
 export type VercelAdapterOptions = {
   env?: EnvLike;
   fetchImpl?: FetchLike;
+  /** Injectable credential resolver deps (per-company ToolConnection lookup) for tests. */
+  credentialDeps?: ResolveToolCredentialDeps;
 };
+
+export type VercelCredential = { token: string; teamId?: string };
 
 const ADAPTER_NAME = "Vercel";
 const API_BASE = "https://api.vercel.com";
@@ -31,8 +36,7 @@ function failed(action: string, summary: string): ToolCallRecord {
   return { adapter: ADAPTER_NAME, action, status: "failed", summary };
 }
 
-function withTeam(env: EnvLike, path: string): string {
-  const teamId = vercelTeamId(env);
+function withTeam(teamId: string | undefined, path: string): string {
   if (!teamId) return `${API_BASE}${path}`;
   return `${API_BASE}${path}${path.includes("?") ? "&" : "?"}teamId=${encodeURIComponent(teamId)}`;
 }
@@ -46,15 +50,17 @@ function parseGitSource(value: unknown): GitSource | undefined {
   return { type: "github", repo: v.repo.trim(), ref: typeof v.ref === "string" ? v.ref : "main" };
 }
 
-type InlineFile = { file: string; data: string };
+type InlineFile = { file: string; data: string; encoding?: "base64" };
 
 function parseFiles(value: unknown): InlineFile[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const files = value.flatMap((item) => {
+  const files = value.flatMap((item): InlineFile[] => {
     if (!item || typeof item !== "object") return [];
     const f = item as Record<string, unknown>;
     if (typeof f.file !== "string" || typeof f.data !== "string") return [];
-    return [{ file: f.file, data: f.data }];
+    // Vercel inline files carry raw content in `data`; binary content must set
+    // encoding:"base64" so Vercel decodes it correctly.
+    return [f.encoding === "base64" ? { file: f.file, data: f.data, encoding: "base64" } : { file: f.file, data: f.data }];
   });
   return files.length ? files : undefined;
 }
@@ -70,13 +76,28 @@ export function createVercelAdapter(options: VercelAdapterOptions = {}): ToolAda
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  async function api(path: string, init: RequestInit): Promise<{ ok: boolean; status: number; data: any }> {
-    const token = vercelToken(env)!;
-    const response = await fetchImpl(withTeam(env, path), {
+  // Per-company Vercel account (encrypted ToolConnection) first, global env second.
+  async function resolveCredential(companyId?: string): Promise<VercelCredential | undefined> {
+    const { value } = await resolveToolCredential<VercelCredential>({
+      companyId,
+      provider: ADAPTER_NAME,
+      deps: options.credentialDeps,
+      envFallback: () => {
+        const token = vercelToken(env);
+        if (!token) return undefined;
+        const teamId = vercelTeamId(env);
+        return teamId ? { token, teamId } : { token };
+      },
+    });
+    return value;
+  }
+
+  async function api(cred: VercelCredential, path: string, init: RequestInit): Promise<{ ok: boolean; status: number; data: any }> {
+    const response = await fetchImpl(withTeam(cred.teamId, path), {
       ...init,
       signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${cred.token}`,
         "Content-Type": "application/json",
         ...(init.headers ?? {}),
       },
@@ -89,11 +110,11 @@ export function createVercelAdapter(options: VercelAdapterOptions = {}): ToolAda
     name: ADAPTER_NAME,
     scopes: ["vercel:deploy", "vercel:projects:read", "hosting", "deploy_requires_approval"],
     availability: "real",
-    async healthCheck() {
-      const token = vercelToken(env);
-      if (!token || !isHttpHeaderValueSafe(token)) return "needs_credentials";
+    async healthCheck(companyId?: string) {
+      const cred = await resolveCredential(companyId);
+      if (!cred?.token || !isHttpHeaderValueSafe(cred.token)) return "needs_credentials";
       try {
-        const { ok } = await api("/v2/user", { method: "GET" });
+        const { ok } = await api(cred, "/v2/user", { method: "GET" });
         return ok ? "connected" : "needs_credentials";
       } catch {
         return "needs_credentials";
@@ -106,11 +127,12 @@ export function createVercelAdapter(options: VercelAdapterOptions = {}): ToolAda
       return DEPLOY_ACTIONS.some((word) => action.toLowerCase().includes(word));
     },
     async execute(action, payload): Promise<ToolCallRecord> {
-      const token = vercelToken(env);
-      if (!token) {
-        return failed(action, "Vercel is not configured. Set VERCEL_TOKEN before agents can deploy.");
+      const companyId = typeof payload.companyId === "string" ? payload.companyId : undefined;
+      const cred = await resolveCredential(companyId);
+      if (!cred?.token) {
+        return failed(action, "Vercel is not configured. Connect a Vercel account for this company or set VERCEL_TOKEN.");
       }
-      if (!isHttpHeaderValueSafe(token)) {
+      if (!isHttpHeaderValueSafe(cred.token)) {
         return failed(action, malformedCredentialSummary(ADAPTER_NAME));
       }
 
@@ -119,7 +141,7 @@ export function createVercelAdapter(options: VercelAdapterOptions = {}): ToolAda
       // Reads — never approval-gated.
       if (lower.includes("list") || lower.includes("project")) {
         try {
-          const { ok, data, status } = await api("/v9/projects", { method: "GET" });
+          const { ok, data, status } = await api(cred, "/v9/projects", { method: "GET" });
           if (!ok) return failed(action, `Vercel project list failed (HTTP ${status}).`);
           const projects = Array.isArray(data?.projects) ? data.projects : [];
           return {
@@ -152,11 +174,14 @@ export function createVercelAdapter(options: VercelAdapterOptions = {}): ToolAda
         if (target === "production") body.target = "production";
         if (gitSource) body.gitSource = gitSource;
         if (files) body.files = files;
+        // Vercel requires projectSettings for inline-file (non-git) deploys; pass
+        // the framework when known, else null so it deploys as static/unframework.
         if (typeof payload.framework === "string") body.projectSettings = { framework: payload.framework };
+        else if (files) body.projectSettings = { framework: null };
 
-        logger.info({ adapter: ADAPTER_NAME, action, name, target, source: gitSource ? "git" : "files" }, "vercel.deploy");
+        logger.info({ adapter: ADAPTER_NAME, action, companyId, name, target, source: gitSource ? "git" : "files" }, "vercel.deploy");
         try {
-          const { ok, data, status } = await api("/v13/deployments", { method: "POST", body: JSON.stringify(body) });
+          const { ok, data, status } = await api(cred, "/v13/deployments", { method: "POST", body: JSON.stringify(body) });
           if (!ok) {
             const message = data?.error?.message ?? `HTTP ${status}`;
             return failed(action, `Vercel deploy failed: ${message}.`);
