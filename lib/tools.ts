@@ -14,6 +14,8 @@ import { createPostHogReadAdapter } from "@/lib/posthog-read-adapter";
 import { createXSocialAdapter } from "@/lib/x-social-adapter";
 import { createAttioCrmAdapter } from "@/lib/attio-crm-adapter";
 import { createWebSearchAdapter } from "@/lib/web-search-adapter";
+import { createSlackAdapter } from "@/lib/slack-adapter";
+import { createWebReaderAdapter } from "@/lib/web-reader-adapter";
 
 export type ToolAdapter = {
   name: string;
@@ -445,7 +447,8 @@ export function buildAdapterRegistry(options: AdapterRegistryOptions = {}): Tool
   mockedAdapter("Meta Pixel/CAPI", ["conversion_events", "attribution"], ["send", "identify"]),
   createStripeReadAdapter({ env }),
   mockedAdapter("Google OAuth/Gmail", ["auth", "gmail_draft", "send_requires_approval"], ["send"]),
-  mockedAdapter("Slack", ["notifications", "workspace_updates"], ["post"]),
+  createSlackAdapter({ env }),
+  createWebReaderAdapter({ env }),
   createXSocialAdapter({ env }),
   createAttioCrmAdapter({ env }),
   unavailableAdapter("Late.dev", ["social_schedule", "multi_platform_posting"], ["publish", "post"]),
