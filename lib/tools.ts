@@ -13,6 +13,7 @@ import { createSentryReadAdapter } from "@/lib/sentry-read-adapter";
 import { createPostHogReadAdapter } from "@/lib/posthog-read-adapter";
 import { createXSocialAdapter } from "@/lib/x-social-adapter";
 import { createAttioCrmAdapter } from "@/lib/attio-crm-adapter";
+import { createWebSearchAdapter } from "@/lib/web-search-adapter";
 
 export type ToolAdapter = {
   name: string;
@@ -432,6 +433,7 @@ export function buildAdapterRegistry(options: AdapterRegistryOptions = {}): Tool
   new GitNexusVaultIndexAdapter({ enabled: env.GITNEXUS_VAULT_ENABLED === "1" }),
   ...sandboxToolAdapters,
   createResendEmailAdapter({ env }),
+  createWebSearchAdapter({ env }),
   mockedAdapter("Anthropic", ["llm:primary", "model_telemetry"], []),
   mockedAdapter("AWS Bedrock", ["llm:fallback", "model_routing"], []),
   mockedAdapter("OpenAI", ["llm", "video_generation"], []),
