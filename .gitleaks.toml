@@ -27,6 +27,13 @@ paths = [
   ".gitleaks.toml",
   "vitest.config.ts",   # contains DATABASE_URL pointing to test.db
   "vitest.setup.ts",
+  # Scope scanning to first-party application code. The paths below hold fake
+  # fixtures / example keys (e.g. ghp_1234567890abcdef, sk_live_abc123) or
+  # third-party code, not real Trent secrets:
+  '''.*\.test\.tsx?$''',        # unit-test fixtures
+  '''(^|/)\.agents/.*''',       # agent skill docs/examples
+  '''(^|/)docs/.*''',           # design/planning docs (e.g. credential-boundary) show example creds
+  '''(^|/)vendor/.*''',         # vendored third-party code (mem0, LightRAG) and its own telemetry keys
 ]
 regexes = [
   # placeholder values
@@ -34,4 +41,6 @@ regexes = [
   '''sk-\.\.\.''',
   '''sk-ant-\.\.\.''',
   '''00000000000000000000000000000000''',
+  '''ghp_1234567890abcdef''',  # github.test.ts fixture
+  '''sk_live_abc123''',        # api-design SKILL.md example
 ]
