@@ -51,6 +51,26 @@ describe("Slack adapter", () => {
     expect(body.text.length).toBeLessThanOrEqual(40_000);
   });
 
+  it("posts under the company's OWN workspace when connected, not the global env one", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true, ts: "9.9" }));
+    const adapter = createSlackAdapter({
+      env: { SLACK_BOT_TOKEN: "xoxb-GLOBAL", SLACK_DEFAULT_CHANNEL: "#global" },
+      fetchImpl,
+      credentialDeps: {
+        getIntegration: async () => ({ encryptedData: "ENC" }),
+        decrypt: () => ({ botToken: "xoxb-COMPANY", defaultChannel: "#company" }),
+      },
+    });
+
+    const result = await adapter.execute("post", { companyId: "co_7", text: "hi" });
+    expect(result.status).toBe("completed");
+    expect(result.summary).toContain("#company"); // company channel, not #global
+
+    const init = fetchImpl.mock.calls[0][1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer xoxb-COMPANY");
+    expect(JSON.parse(init.body as string).channel).toBe("#company");
+  });
+
   it("requires a channel and a text body", async () => {
     const fetchImpl = vi.fn();
     const noChannel = createSlackAdapter({ env: { SLACK_BOT_TOKEN: "xoxb-x" }, fetchImpl });

@@ -2,6 +2,7 @@ import type { ToolAdapter } from "@/lib/tools";
 import type { ToolCallRecord } from "@/lib/types";
 import { isHttpHeaderValueSafe, malformedCredentialSummary } from "@/lib/http-credential";
 import { logger } from "@/lib/logger";
+import { resolveToolCredential, type ResolveToolCredentialDeps } from "@/lib/tool-credentials";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 // Slack's chat.postMessage hard-rejects text beyond ~40k chars; clip below it.
@@ -13,7 +14,11 @@ type FetchLike = typeof fetch;
 export type SlackAdapterOptions = {
   env?: EnvLike;
   fetchImpl?: FetchLike;
+  /** Injectable credential resolver deps (per-company ToolConnection lookup) for tests. */
+  credentialDeps?: ResolveToolCredentialDeps;
 };
+
+export type SlackCredential = { botToken: string; defaultChannel?: string };
 
 const ADAPTER_NAME = "Slack";
 const POST_MESSAGE_ENDPOINT = "https://slack.com/api/chat.postMessage";
@@ -52,17 +57,34 @@ function messageText(payload: Record<string, unknown>): string {
 export function createSlackAdapter(options: SlackAdapterOptions = {}): ToolAdapter {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
+
+  // Per-company Slack workspace (encrypted ToolConnection) first, global env second.
+  async function resolveCredential(companyId?: string): Promise<SlackCredential | undefined> {
+    const { value } = await resolveToolCredential<SlackCredential>({
+      companyId,
+      provider: ADAPTER_NAME,
+      deps: options.credentialDeps,
+      envFallback: () => {
+        const botToken = slackBotToken(env);
+        if (!botToken) return undefined;
+        const defaultChannel = slackDefaultChannel(env);
+        return defaultChannel ? { botToken, defaultChannel } : { botToken };
+      },
+    });
+    return value;
+  }
+
   return {
     name: ADAPTER_NAME,
     scopes: ["slack:chat:write", "notifications", "workspace_updates"],
     availability: "real",
-    async healthCheck() {
-      const token = slackBotToken(env);
-      if (!token || !isHttpHeaderValueSafe(token)) return "needs_credentials";
+    async healthCheck(companyId?: string) {
+      const cred = await resolveCredential(companyId);
+      if (!cred?.botToken || !isHttpHeaderValueSafe(cred.botToken)) return "needs_credentials";
       try {
         const response = await fetchImpl(AUTH_TEST_ENDPOINT, {
           method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${cred.botToken}` },
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
         if (!response.ok) return "needs_credentials";
@@ -81,10 +103,12 @@ export function createSlackAdapter(options: SlackAdapterOptions = {}): ToolAdapt
       return false;
     },
     async execute(action, payload): Promise<ToolCallRecord> {
-      const token = slackBotToken(env);
-      if (!token) {
-        return failed(action, "Slack is not configured. Set SLACK_BOT_TOKEN before agents can post to your workspace.");
+      const companyId = typeof payload.companyId === "string" ? payload.companyId : undefined;
+      const cred = await resolveCredential(companyId);
+      if (!cred?.botToken) {
+        return failed(action, "Slack is not configured. Connect a Slack workspace for this company or set SLACK_BOT_TOKEN.");
       }
+      const token = cred.botToken;
       if (!isHttpHeaderValueSafe(token)) {
         return failed(action, malformedCredentialSummary(ADAPTER_NAME));
       }
@@ -94,9 +118,9 @@ export function createSlackAdapter(options: SlackAdapterOptions = {}): ToolAdapt
 
       const channel = typeof payload.channel === "string" && payload.channel.trim()
         ? payload.channel.trim()
-        : slackDefaultChannel(env);
+        : cred.defaultChannel;
       if (!channel) {
-        return failed(action, "Slack post requires a channel (payload.channel or SLACK_DEFAULT_CHANNEL).");
+        return failed(action, "Slack post requires a channel (payload.channel or a configured default channel).");
       }
       const rawText = messageText(payload);
       if (!rawText) {
