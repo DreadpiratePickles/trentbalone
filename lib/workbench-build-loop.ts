@@ -113,7 +113,13 @@ const DEPLOYMENT_ENV_VARS = [
 export function isWorkspaceUnscaffolded(
   files: ReadonlyArray<{ name: string; isDir: boolean }>,
 ): boolean {
-  return files.every((file) => !file.isDir && SCAFFOLD_BOOKKEEPING_FILES.has(file.name));
+  // A fresh cloud sandbox (e.g. E2B "base") ships shell dotfiles like
+  // .bashrc/.profile/.bash_logout in the workdir. Treat any hidden dot-entry as
+  // ignorable so the workspace still counts as unscaffolded — otherwise the
+  // scaffold + `npm install` step is skipped and the dev server has no deps.
+  return files.every(
+    (file) => file.name.startsWith(".") || (!file.isDir && SCAFFOLD_BOOKKEEPING_FILES.has(file.name)),
+  );
 }
 
 export async function verifyScopedWorkbenchRun(input: {

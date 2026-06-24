@@ -68,7 +68,10 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
-  server: { port: 3000, host: true },
+  // allowedHosts:true lets Vite serve the cloud sandbox's public preview
+  // domain (e.g. *.e2b.app). Without it, Vite 5.4+ returns 403 "host not
+  // allowed" for the proxied preview host. Safe: the sandbox is isolated + ephemeral.
+  server: { port: 3000, host: true, allowedHosts: true },
 })`;
 
 export const STARTER_TSCONFIG = JSON.stringify({
