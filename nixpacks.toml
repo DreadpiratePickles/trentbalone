@@ -47,10 +47,23 @@ aptPkgs = [
   "fonts-liberation"
 ]
 
-# Download the Chromium browser binary after dependencies are installed and
-# before `next build`. Without this, /root/.cache/ms-playwright is empty in
-# the runtime image and every workbench screenshot/render/interaction check
-# fails with "Executable doesn't exist".
+# Pin the browsers cache to an absolute path. Playwright's default location
+# (~/.cache/ms-playwright) is resolved from $HOME, which is not guaranteed to
+# be the same string in the Nixpacks build-phase shell as in the runtime
+# container process — a mismatch there installs the binary at build time into
+# a path the runtime process never looks in, surfacing as "Executable doesn't
+# exist" even though the browsers phase ran successfully. Pinning removes the
+# ambiguity. This must be a top-level [variables] entry (not just exported in
+# a phase cmd) so Nixpacks bakes it into the final image's ENV, not just the
+# build shell.
+[variables]
+PLAYWRIGHT_BROWSERS_PATH = "/root/.cache/ms-playwright"
+
+# Download the Chromium browser binary (and its headless-shell companion,
+# installed by default unless --no-shell is passed) after dependencies are
+# installed and before `next build`. Without this phase, the browsers cache
+# is empty in the runtime image and every workbench screenshot/render/
+# interaction check fails with "Executable doesn't exist".
 [phases.browsers]
 dependsOn = ["install"]
 cmds = ["npx playwright install chromium"]
