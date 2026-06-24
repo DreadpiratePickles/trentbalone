@@ -16,6 +16,8 @@ import { createAttioCrmAdapter } from "@/lib/attio-crm-adapter";
 import { createWebSearchAdapter } from "@/lib/web-search-adapter";
 import { createSlackAdapter } from "@/lib/slack-adapter";
 import { createWebReaderAdapter } from "@/lib/web-reader-adapter";
+import { createVercelAdapter } from "@/lib/vercel-adapter";
+import { createDeliverablesAdapter } from "@/lib/deliverables-adapter";
 
 export type ToolAdapter = {
   name: string;
@@ -454,6 +456,8 @@ export function buildAdapterRegistry(options: AdapterRegistryOptions = {}): Tool
   unavailableAdapter("Late.dev", ["social_schedule", "multi_platform_posting"], ["publish", "post"]),
   mockedAdapter("Browserbase", ["cloud_browser", "screenshots", "extraction"], ["submit", "purchase", "login"]),
   mockedAdapter("ScreenshotOne", ["automated_screenshots"], []),
+  createVercelAdapter({ env }),
+  createDeliverablesAdapter(),
   mockedAdapter("Render", ["hosting", "deploy_requires_approval"], ["deploy", "rollback"]),
   mockedAdapter("Neon", ["postgres", "database_provisioning"], ["delete", "rotate"]),
   mockedAdapter("Expo", ["mobile_builds", "eas_distribution"], ["submit", "publish"]),

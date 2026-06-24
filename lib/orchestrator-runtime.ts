@@ -34,6 +34,8 @@ import { InMemorySkillDraftStore, type SkillDraftStore } from "@/lib/skill-found
 import { PrismaSkillDraftStore } from "@/lib/self-improvement/skill-draft-store.prisma";
 import { foldPlaybook, renderPlaybookBlock } from "@/lib/self-improvement/company-playbook";
 import { getCompanyPlaybookLog } from "@/lib/self-improvement/company-playbook-log";
+import { loadCrossCompanyLearnings } from "@/lib/self-improvement/cross-company-learning-loader";
+import { renderCrossCompanyLearningBlock } from "@/lib/self-improvement/cross-company-learning";
 import { formatPlanValidationErrors, validateOrchestrationPlan } from "@/lib/plan-validator";
 import { buildGroundedSourceContext } from "@/lib/source-grounding";
 import { selectRelevantDocuments } from "@/lib/source-coverage";
@@ -1425,6 +1427,18 @@ export async function executeStepWithRuntime(input: StepExecutionInput): Promise
       .catch(() => "");
     if (playbookBlock) {
       systemPrompt = `${playbookBlock}\n\n${systemPrompt}`;
+    }
+    // Opt-in a competing product-style cross-company learning: anonymized priors from what
+    // worked at other companies, relevance-ranked to this objective. Off unless
+    // CROSS_COMPANY_LEARNING_ENABLED=1; best-effort so it never blocks a cycle.
+    const crossCompanyBlock = await loadCrossCompanyLearnings({
+      objective: [input.objective, step.title, step.expectedOutput].filter(Boolean).join("\n"),
+      excludeCompanyId: company.id,
+    })
+      .then(renderCrossCompanyLearningBlock)
+      .catch(() => "");
+    if (crossCompanyBlock) {
+      systemPrompt = `${crossCompanyBlock}\n\n${systemPrompt}`;
     }
   }
   void skillApplied; // recorded on the trace once live trace derivation (Slice 2) lands
