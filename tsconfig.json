@@ -39,6 +39,12 @@
     "node_modules",
     ".next",
     "vendor",
-    "gbrain"
+    "gbrain",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "lib/vitest-guards.ts",
+    "lib/workbench-test-fakes.ts",
+    "vitest.config.ts",
+    "vitest.setup.ts"
   ]
 }

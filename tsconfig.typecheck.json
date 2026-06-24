@@ -1,0 +1,22 @@
+{
+  // Full-project type-check config used by `npm run typecheck` / CI.
+  //
+  // The base tsconfig.json deliberately EXCLUDES test files and vitest-only
+  // helpers so that `next build` (which type-checks the project) does not
+  // depend on the `vitest` devDependency being resolvable in the production
+  // image. This config re-includes everything so test code is still fully
+  // type-checked in CI, where devDependencies are installed.
+  "extends": "./tsconfig.json",
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "next-env.d.ts",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next",
+    "vendor",
+    "gbrain"
+  ]
+}

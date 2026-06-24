@@ -10,7 +10,7 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit --incremental false",
+    "typecheck": "tsc --noEmit --incremental false -p tsconfig.typecheck.json",
     "test": "vitest run --pool=forks --poolOptions.forks.singleFork=true",
     "test:ci": "vitest run --pool=forks --poolOptions.forks.singleFork=true --reporter=default --reporter=json --outputFile=artifacts/ci/vitest-results.json",
     "ci:truth": "tsx scripts/ci/verify-vitest-counts.ts --results artifacts/ci/vitest-results.json --baseline docs/verification/ci-truth-baseline.json --out artifacts/ci/ci-truth.md",
