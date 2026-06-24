@@ -16,6 +16,17 @@ env:
   SECRET_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
 
 jobs:
+  config:
+    name: Resolve optional secrets
+    runs-on: ubuntu-latest
+    outputs:
+      has_openai: ${{ steps.flags.outputs.has_openai }}
+    steps:
+      # secrets context is not allowed in a job-level `if:`, so expose presence
+      # as a job output here (secrets ARE available inside a step `run`).
+      - id: flags
+        run: echo "has_openai=${{ secrets.OPENAI_API_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
   typecheck:
     name: TypeScript
     runs-on: ubuntu-latest
@@ -99,8 +110,8 @@ jobs:
   runtime-eval-live:
     name: Runtime live eval (optional)
     runs-on: ubuntu-latest
-    needs: [typecheck, test]
-    if: ${{ secrets.OPENAI_API_KEY != '' }}
+    needs: [config, typecheck, test]
+    if: needs.config.outputs.has_openai == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
