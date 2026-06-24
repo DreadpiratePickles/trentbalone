@@ -7,6 +7,7 @@
 
 import { Sandbox } from "e2b";
 import { store } from "@/lib/store";
+import { MANAGED_BY_TAG } from "@/lib/workbench-sandbox-reaper";
 import { makeId, nowIso } from "@/lib/utils";
 import {
   registerWorkbenchProvider,
@@ -80,6 +81,9 @@ const e2bProvider: WorkbenchProviderAdapter = {
       apiKey,
       timeoutMs: DEFAULT_SANDBOX_TIMEOUT_MS,
       secure: false, // public preview URLs (no X-Access-Token required on *.e2b.app)
+      // Tag so the idle-sandbox reaper can identify (and safely scope to) only
+      // Trent-created sandboxes for cost cleanup.
+      metadata: { managedBy: MANAGED_BY_TAG, trentSessionId: session.id, companyId: session.companyId },
     });
 
     sandboxes.set(session.id, sb);
