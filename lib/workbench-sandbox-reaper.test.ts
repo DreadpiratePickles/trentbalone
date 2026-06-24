@@ -58,8 +58,8 @@ describe("reapIdleSandboxes", () => {
       managed("live", 1),
       { sandboxId: "foreign", metadata: { managedBy: "other" } },
     ];
-    const killSandbox = vi.fn(async () => {});
-    const loadSessions = vi.fn(async () => new Map<string, ReaperSession>([
+    const killSandbox = vi.fn(async (_sandboxId: string) => {});
+    const loadSessions = vi.fn(async (_sandboxes: ReaperSandbox[]) => new Map<string, ReaperSession>([
       ["done", { status: "failed" }],
       ["live", { status: "running" }],
     ]));
