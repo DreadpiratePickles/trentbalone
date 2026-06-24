@@ -55,9 +55,11 @@ describe("Web Search adapter", () => {
     expect(result.summary).toContain("https://example.com/icp");
 
     // maxResults is clamped to the ceiling (10), not the requested 25.
-    const body = JSON.parse((fetchImpl.mock.calls[0][1] as RequestInit).body as string);
+    const init = fetchImpl.mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(init.body as string);
     expect(body.max_results).toBe(10);
     expect(body.include_answer).toBe(true);
+    expect(init.signal).toBeInstanceOf(AbortSignal); // request timeout
   });
 
   it("surfaces rejected credentials distinctly", async () => {

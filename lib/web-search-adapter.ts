@@ -19,6 +19,7 @@ export type WebSearchResult = {
 
 const TAVILY_ENDPOINT = "https://api.tavily.com/search";
 const ADAPTER_NAME = "Web Search";
+const REQUEST_TIMEOUT_MS = 15_000;
 // Pure research/read tool: it has no external side effects, so nothing here is approval-gated.
 const MAX_RESULTS_DEFAULT = 5;
 const MAX_RESULTS_CEILING = 10;
@@ -111,6 +112,7 @@ export function createWebSearchAdapter(options: WebSearchAdapterOptions = {}): T
             search_depth: payload.deep === true ? "advanced" : "basic",
             include_answer: true,
           }),
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
 
         if (!response.ok) {
