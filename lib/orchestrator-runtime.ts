@@ -36,6 +36,7 @@ import { foldPlaybook, renderPlaybookBlock } from "@/lib/self-improvement/compan
 import { getCompanyPlaybookLog } from "@/lib/self-improvement/company-playbook-log";
 import { formatPlanValidationErrors, validateOrchestrationPlan } from "@/lib/plan-validator";
 import { buildGroundedSourceContext } from "@/lib/source-grounding";
+import { selectRelevantDocuments } from "@/lib/source-coverage";
 import { seatOutputSchemas } from "@/lib/seat-output-schemas";
 import { logger } from "@/lib/logger";
 import { callCriticJsonWithRepair, logCriticRepairTelemetry } from "@/lib/orchestrator-critic-repair";
@@ -1269,15 +1270,26 @@ async function buildLiveContext(
       .map(r => ({ title: r.title, type: r.type, findings: r.findings.slice(0, 3), recommendations: r.recommendations.slice(0, 3) }));
   }
   if (docs) {
-    const episodic = docs.filter(d => d.memoryTier === "episodic").slice(0, 3)
-      .map(d => ({ title: d.title, summary: d.content.slice(0, 400) }));
+    // Relevance-rank recalled memory against the current mission instead of
+    // taking the most-recent few. Long-horizon recall should surface the past
+    // cycles/learnings most relevant to THIS objective (Viktor-style context),
+    // not just whatever happened last. selectRelevantDocuments degrades to
+    // recency order when the mission has no usable keywords, so behaviour is
+    // unchanged for objective-less runs.
+    const episodic = selectRelevantDocuments(
+      missionText,
+      docs.filter(d => d.memoryTier === "episodic"),
+      3,
+    ).map(d => ({ title: d.title, summary: d.content.slice(0, 400) }));
     if (episodic.length > 0) ctx.recentMemory = episodic;
     if (needsDocs) {
-      const productDocs = docs.filter(d => d.type === "brief" || d.type === "weekly_report").slice(0, 3)
-        .map(d => ({ title: d.title, summary: d.content.slice(0, 500) }));
+      const productDocs = selectRelevantDocuments(
+        missionText,
+        docs.filter(d => d.type === "brief" || d.type === "weekly_report"),
+        3,
+      ).map(d => ({ title: d.title, summary: d.content.slice(0, 500) }));
       if (productDocs.length > 0) ctx.productDocs = productDocs;
     }
-
   }
 
   // RC1 + competitive upgrade: every seat gets relevance-ranked source
