@@ -16,6 +16,17 @@ env:
   SECRET_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
 
 jobs:
+  config:
+    name: Resolve optional secrets
+    runs-on: ubuntu-latest
+    outputs:
+      has_openai: ${{ steps.flags.outputs.has_openai }}
+    steps:
+      # secrets context is not allowed in a job-level `if:`, so expose presence
+      # as a job output here (secrets ARE available inside a step `run`).
+      - id: flags
+        run: echo "has_openai=${{ secrets.OPENAI_API_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
   typecheck:
     name: TypeScript
     runs-on: ubuntu-latest
@@ -48,6 +59,10 @@ jobs:
         ports:
           - 5432:5432
     env:
+      # Prisma's datasource reads DATABASE_URL/DIRECT_URL (see prisma/schema.prisma);
+      # `prisma generate` fails without them. The TEST_* vars drive the vitest suite.
+      DATABASE_URL: "postgresql://trent:trent@localhost:5432/trent_test"
+      DIRECT_URL: "postgresql://trent:trent@localhost:5432/trent_test"
       TEST_DATABASE_URL: "postgresql://trent:trent@localhost:5432/trent_test"
       TEST_DIRECT_URL: "postgresql://trent:trent@localhost:5432/trent_test"
     steps:
@@ -99,8 +114,8 @@ jobs:
   runtime-eval-live:
     name: Runtime live eval (optional)
     runs-on: ubuntu-latest
-    needs: [typecheck, test]
-    if: ${{ secrets.OPENAI_API_KEY != '' }}
+    needs: [config, typecheck, test]
+    if: needs.config.outputs.has_openai == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -172,12 +187,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-        with:
-          config-path: .gitleaks.toml
+      # Run the gitleaks binary directly. gitleaks-action@v2 targets Node 20,
+      # is force-run on Node 24 by current runners, and crashes on its startup
+      # license/keygen call — making the whole job fail regardless of findings.
+      # The binary needs no license and exits non-zero only on real findings.
+      - name: Run gitleaks
+        run: |
+          VERSION=8.21.2
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks detect --source . --config .gitleaks.toml --redact --verbose --no-banner
 
   sast:
     name: SAST (CodeQL)
