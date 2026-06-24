@@ -1,6 +1,7 @@
 import { Worker } from "bullmq";
 import { getRedisConnection, QUEUE_NAME, processJobData, requeueRunningOrchestrationJobs } from "./queue";
 import { writeWorkerHeartbeat } from "./worker-heartbeat";
+import { runSandboxReaperSweep, sandboxReaperEnabled } from "./workbench-sandbox-reaper";
 
 const connection = getRedisConnection();
 if (!connection) {
@@ -58,6 +59,18 @@ const heartbeatTimer = setInterval(() => {
   void pingHeartbeat();
 }, HEARTBEAT_INTERVAL_MS);
 
+// Periodic E2B idle-sandbox reaper (cost control). No-op unless E2B is the
+// provider; runs in the worker so exactly one process owns the sweep.
+const SANDBOX_REAPER_INTERVAL_MS = Number(process.env.E2B_SANDBOX_REAPER_INTERVAL_MS ?? 5 * 60 * 1000);
+const sandboxReaperTimer = sandboxReaperEnabled()
+  ? setInterval(() => {
+      void runSandboxReaperSweep().catch((err) => console.error("[Worker] Sandbox reaper sweep failed:", err));
+    }, SANDBOX_REAPER_INTERVAL_MS)
+  : undefined;
+if (sandboxReaperTimer) {
+  console.log(`[Worker] E2B idle-sandbox reaper armed (every ${Math.round(SANDBOX_REAPER_INTERVAL_MS / 1000)}s)`);
+}
+
 worker.on("completed", (job) => {
   console.log(`[Worker] Job ${job.id} (${job.name}) completed`);
 });
@@ -69,6 +82,7 @@ worker.on("failed", (job, err) => {
 async function shutdown(signal: string) {
   console.log(`[Worker] ${signal} received, shutting down gracefully...`);
   clearInterval(heartbeatTimer);
+  if (sandboxReaperTimer) clearInterval(sandboxReaperTimer);
   await worker.close();
   process.exit(0);
 }
