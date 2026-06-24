@@ -12,7 +12,7 @@ node_modules/
 .env.local
 .env*.local
 .empty-types/
-tsconfig.tsbuildinfo
+*.tsbuildinfo
 prisma/generated/
 *.db
 *.db-journal
