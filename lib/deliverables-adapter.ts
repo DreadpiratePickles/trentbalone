@@ -11,6 +11,10 @@ import {
 
 const ADAPTER_NAME = "Deliverables";
 const CREATE_ACTIONS = ["create", "generate", "render", "export", "build", "deliver"];
+// Tool summaries flow into traces, the audit log, and back into the agent's
+// own context — so never inline an unbounded artifact. Small reports/CSVs pass
+// through whole; large HTML decks are clipped with a clear marker.
+const MAX_INLINE_CHARS = 16_000;
 
 function failed(action: string, summary: string): ToolCallRecord {
   return { adapter: ADAPTER_NAME, action, status: "failed", summary };
@@ -98,11 +102,14 @@ export function createDeliverablesAdapter(): ToolAdapter {
       try {
         const deliverable = buildDeliverable(format, content);
         const bytes = Buffer.byteLength(deliverable.content, "utf8");
+        const inline = deliverable.content.length > MAX_INLINE_CHARS
+          ? `${deliverable.content.slice(0, MAX_INLINE_CHARS)}\n…[truncated ${deliverable.content.length - MAX_INLINE_CHARS} chars — full ${bytes}-byte artifact was rendered]`
+          : deliverable.content;
         return {
           adapter: ADAPTER_NAME,
           action,
           status: "completed",
-          summary: `Built ${format} deliverable "${deliverable.filename}" (${bytes} bytes). Deliver it via Slack/Email or attach to the cycle.\n\n${deliverable.content}`,
+          summary: `Built ${format} deliverable "${deliverable.filename}" (${bytes} bytes). Deliver it via Slack/Email or attach to the cycle.\n\n${inline}`,
         };
       } catch (err: unknown) {
         return failed(action, (err as Error).message);

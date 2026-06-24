@@ -39,4 +39,14 @@ describe("Deliverables adapter", () => {
     expect(result.status).toBe("failed");
     expect(result.summary).toContain("table");
   });
+
+  it("bounds the inlined artifact so tool summaries cannot grow unbounded", async () => {
+    const result = await adapter.execute("create", {
+      format: "markdown",
+      content: { title: "Big", sections: [{ heading: "H", body: "x".repeat(40000) }] },
+    });
+    expect(result.status).toBe("completed");
+    expect(result.summary).toContain("truncated");
+    expect(result.summary.length).toBeLessThan(20000);
+  });
 });

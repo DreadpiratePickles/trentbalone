@@ -64,9 +64,15 @@ export function selectCrossCompanyLearnings(
   objective: string,
   entries: CompanyPlaybookEntry[],
   k = 3,
-  options: { excludeCompanyId?: string } = {},
+  options: { excludeCompanyId?: string; minCorroborations?: number } = {},
 ): AnonymizedLearning[] {
-  const aggregated = anonymizeAndAggregate(entries, options);
+  // Privacy + signal: optionally require a learning to be corroborated by N
+  // distinct companies before it can surface. With N>=2, no single company's
+  // free-text learning is ever exposed verbatim to another — only patterns that
+  // independently recurred elsewhere. Production policy sets this in the loader.
+  const minCorroborations = Math.max(1, options.minCorroborations ?? 1);
+  const aggregated = anonymizeAndAggregate(entries, options)
+    .filter((learning) => learning.corroborations >= minCorroborations);
   if (aggregated.length === 0) return [];
   // Rank with the shared lexical ranker by mapping topic→title, text→content.
   const ranked = selectRelevantDocuments(
@@ -91,7 +97,8 @@ export function renderCrossCompanyLearningBlock(learnings: AnonymizedLearning[])
   ];
   for (const l of learnings) {
     const corroborated = l.corroborations > 1 ? ` (corroborated by ${l.corroborations} companies)` : "";
-    lines.push(`- [${l.topic}] ${l.text}${corroborated}`);
+    const text = l.text.length > 280 ? `${l.text.slice(0, 280)}…` : l.text;
+    lines.push(`- [${l.topic}] ${text}${corroborated}`);
   }
   return lines.join("\n");
 }

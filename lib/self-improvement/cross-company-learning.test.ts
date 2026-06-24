@@ -62,6 +62,16 @@ describe("cross-company-learning", () => {
     expect(picked[0].text).toContain("Annual pricing tiers");
   });
 
+  it("can require a minimum corroboration count (no single-company text surfaces)", () => {
+    const entries = [
+      entry({ companyId: "co_a", text: "shared insight" }),
+      entry({ companyId: "co_b", text: "shared insight" }),
+      entry({ companyId: "co_c", text: "lonely insight" }),
+    ];
+    const picked = selectCrossCompanyLearnings("insight", entries, 5, { minCorroborations: 2 });
+    expect(picked.map((l) => l.text)).toEqual(["shared insight"]);
+  });
+
   it("renders an anonymized, clearly-labeled prior block", () => {
     const block = renderCrossCompanyLearningBlock([
       { kind: "add", topic: "outreach", text: "8am beats 2pm", corroborations: 4 },

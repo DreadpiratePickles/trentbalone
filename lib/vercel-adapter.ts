@@ -1,6 +1,9 @@
 import type { ToolAdapter } from "@/lib/tools";
 import type { ToolCallRecord } from "@/lib/types";
 import { isHttpHeaderValueSafe, malformedCredentialSummary } from "@/lib/http-credential";
+import { logger } from "@/lib/logger";
+
+const REQUEST_TIMEOUT_MS = 20_000;
 
 type EnvLike = Pick<NodeJS.ProcessEnv, string>;
 type FetchLike = typeof fetch;
@@ -71,6 +74,7 @@ export function createVercelAdapter(options: VercelAdapterOptions = {}): ToolAda
     const token = vercelToken(env)!;
     const response = await fetchImpl(withTeam(env, path), {
       ...init,
+      signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
@@ -140,11 +144,17 @@ export function createVercelAdapter(options: VercelAdapterOptions = {}): ToolAda
         if (!gitSource && !files) {
           return failed(action, `Vercel ${action} requires either payload.gitSource ({ repo, ref }) or payload.files ([{ file, data }]).`);
         }
-        const body: Record<string, unknown> = { name, target: "production" };
+        // Default to a throwaway PREVIEW deployment. Promoting to the production
+        // domain requires an explicit payload.target === "production" — we never
+        // auto-publish agent-generated code to the live alias.
+        const target = payload.target === "production" ? "production" : "preview";
+        const body: Record<string, unknown> = { name };
+        if (target === "production") body.target = "production";
         if (gitSource) body.gitSource = gitSource;
         if (files) body.files = files;
         if (typeof payload.framework === "string") body.projectSettings = { framework: payload.framework };
 
+        logger.info({ adapter: ADAPTER_NAME, action, name, target, source: gitSource ? "git" : "files" }, "vercel.deploy");
         try {
           const { ok, data, status } = await api("/v13/deployments", { method: "POST", body: JSON.stringify(body) });
           if (!ok) {
@@ -157,8 +167,8 @@ export function createVercelAdapter(options: VercelAdapterOptions = {}): ToolAda
             action,
             status: "completed",
             summary: url
-              ? `Deployed "${name}" to Vercel → https://${url} (state ${data?.readyState ?? "queued"}).`
-              : `Vercel deployment for "${name}" was created (id ${data?.id ?? "unknown"}).`,
+              ? `Deployed "${name}" to Vercel (${target}) → https://${url} (state ${data?.readyState ?? "queued"}).`
+              : `Vercel ${target} deployment for "${name}" was created (id ${data?.id ?? "unknown"}).`,
           };
         } catch (err: unknown) {
           return failed(action, `Vercel request errored: ${(err as Error).message}`);

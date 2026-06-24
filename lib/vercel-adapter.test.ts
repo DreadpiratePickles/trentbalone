@@ -25,19 +25,30 @@ describe("Vercel adapter", () => {
     expect(adapter.requiresApproval("list projects")).toBe(false);
   });
 
-  it("deploys from a git source and returns the live URL", async () => {
+  it("deploys from a git source as a PREVIEW by default (never auto-prod) with a request timeout", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ id: "dpl_1", url: "my-app-abc.vercel.app", readyState: "QUEUED" }));
     const adapter = createVercelAdapter({ env: ENV, fetchImpl });
 
     const result = await adapter.execute("deploy", { name: "my-app", gitSource: { repo: "acme/site", ref: "main" } });
     expect(result.status).toBe("completed");
     expect(result.summary).toContain("https://my-app-abc.vercel.app");
+    expect(result.summary).toContain("(preview)");
 
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe("https://api.vercel.com/v13/deployments");
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.name).toBe("my-app");
     expect(body.gitSource).toEqual({ type: "github", repo: "acme/site", ref: "main" });
+    expect(body.target).toBeUndefined(); // preview, not production
+    expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal); // request timeout
+  });
+
+  it("only targets production when explicitly requested", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ id: "dpl_2", url: "my-app.vercel.app" }));
+    const adapter = createVercelAdapter({ env: ENV, fetchImpl });
+    const result = await adapter.execute("deploy", { name: "my-app", target: "production", gitSource: { repo: "a/b" } });
+    expect(result.summary).toContain("(production)");
+    const body = JSON.parse((fetchImpl.mock.calls[0][1] as RequestInit).body as string);
     expect(body.target).toBe("production");
   });
 

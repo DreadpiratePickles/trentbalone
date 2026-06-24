@@ -12,22 +12,44 @@
  * deliberate, flag-gated aggregation — not an incidental RLS bypass.
  */
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import type { CompanyPlaybookEntry, PlaybookDeltaKind, PlaybookEntryStatus } from "@/lib/self-improvement/company-playbook";
 import { selectCrossCompanyLearnings, type AnonymizedLearning } from "@/lib/self-improvement/cross-company-learning";
 
 type EnvLike = Pick<NodeJS.ProcessEnv, string>;
 
+// Production privacy policy: only surface learnings independently corroborated
+// by at least this many distinct companies, so no single company's free-text
+// learning is ever exposed verbatim. Operators can lower it (≥1) deliberately.
+const DEFAULT_MIN_CORROBORATIONS = 2;
+// The across-company read is identical for every seat in a cycle; cache it
+// briefly so a multi-seat run does one query, not one per step.
+const CACHE_TTL_MS = 60_000;
+
+let entryCache: { entries: CompanyPlaybookEntry[]; expiresAt: number } | null = null;
+
 export function crossCompanyLearningEnabled(env: EnvLike = process.env): boolean {
   return env.CROSS_COMPANY_LEARNING_ENABLED === "1";
 }
 
+function minCorroborations(env: EnvLike): number {
+  const raw = Number(env.CROSS_COMPANY_LEARNING_MIN_CORROBORATIONS);
+  return Number.isFinite(raw) && raw >= 1 ? Math.trunc(raw) : DEFAULT_MIN_CORROBORATIONS;
+}
+
+/** Test seam: drop the cache so injected data is read fresh. */
+export function resetCrossCompanyLearningCache(): void {
+  entryCache = null;
+}
+
 async function fetchActiveAcrossCompanies(limit: number): Promise<CompanyPlaybookEntry[]> {
+  if (entryCache && entryCache.expiresAt > Date.now()) return entryCache.entries;
   const rows = await db.companyPlaybookEntry.findMany({
     where: { status: "active" },
     orderBy: { createdAt: "desc" },
     take: limit,
   });
-  return rows.map((r): CompanyPlaybookEntry => ({
+  const entries = rows.map((r): CompanyPlaybookEntry => ({
     id: r.id,
     companyId: r.companyId,
     kind: r.kind as PlaybookDeltaKind,
@@ -37,6 +59,8 @@ async function fetchActiveAcrossCompanies(limit: number): Promise<CompanyPlayboo
     status: r.status as PlaybookEntryStatus,
     createdAt: r.createdAt.toISOString(),
   }));
+  entryCache = { entries, expiresAt: Date.now() + CACHE_TTL_MS };
+  return entries;
 }
 
 export async function loadCrossCompanyLearnings(input: {
@@ -55,8 +79,12 @@ export async function loadCrossCompanyLearnings(input: {
     const entries = await fetchEntries(limit);
     return selectCrossCompanyLearnings(input.objective, entries, input.k ?? 3, {
       excludeCompanyId: input.excludeCompanyId,
+      minCorroborations: minCorroborations(env),
     });
-  } catch {
+  } catch (err) {
+    // Best-effort: a degraded cross-company read must never block a cycle, but
+    // it should be visible to ops rather than silently disappearing.
+    logger.warn({ err: (err as Error).message }, "cross_company_learning.load_failed");
     return [];
   }
 }
