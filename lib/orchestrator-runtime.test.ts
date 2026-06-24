@@ -663,6 +663,51 @@ describe("executeStepWithRuntime", () => {
     expect(captured.subtask.contextBundle.overallObjective).toBe("analyze spacex stocks and make a slideshow");
   });
 
+  it("recalls the episodic memory most RELEVANT to the objective, not just the newest", async () => {
+    let captured: any;
+    mockGateway.executeSeatModel.mockImplementationOnce(async (input: any) => {
+      captured = input;
+      return { output: { summary: "ok", findings: [], recommendations: [] }, model: "gpt-4o-mini", tokens: 10, costCents: 1, fallback: false };
+    });
+    const company = await store.createCompany({
+      name: `Runtime Memory Relevance ${makeId("test")}`,
+      brief: { vision: "memory recall" },
+    });
+
+    // Seed the relevant memory FIRST (oldest). listDocuments returns newest-first,
+    // so under the old recency-only `.slice(0, 3)` this would be pushed out by the
+    // three newer-but-irrelevant notes created after it.
+    await store.createDocument({
+      companyId: company.id,
+      type: "agent_note",
+      title: "Pricing experiment results",
+      content: "We tested annual pricing tiers; conversion on the pricing page rose 18%.",
+      source: "cycle:old",
+      memoryTier: "episodic",
+    });
+    for (const title of ["Office snacks restocked", "Logo color tweak", "Standup notes Tuesday"]) {
+      await store.createDocument({
+        companyId: company.id,
+        type: "agent_note",
+        title,
+        content: `${title} — routine note unrelated to the objective.`,
+        source: "cycle:new",
+        memoryTier: "episodic",
+      });
+    }
+
+    await executeStepWithRuntime({
+      step: { ...step, title: "Plan the next pricing experiment", expectedOutput: "pricing experiment plan" },
+      company,
+      previousOutputs: {},
+      objective: "Design a new pricing experiment to lift conversion",
+    });
+
+    const recalled: string[] = (captured.subtask.contextBundle.recentMemory ?? []).map((m: any) => m.title);
+    expect(recalled).toContain("Pricing experiment results");
+    expect(recalled).not.toContain("Office snacks restocked");
+  });
+
   it("loads MCP adapters with the current task query instead of mounting every server blindly", async () => {
     const company = await store.createCompany({
       name: `Runtime MCP Query ${makeId("test")}`,
