@@ -23,7 +23,25 @@ describe("Web Reader adapter", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("reads a page as markdown via Jina Reader", async () => {
+  it("blocks internal / private / cloud-metadata hosts (SSRF guard)", async () => {
+    const fetchImpl = vi.fn();
+    const adapter = createWebReaderAdapter({ env: {}, fetchImpl });
+    for (const url of [
+      "http://169.254.169.254/latest/meta-data/",
+      "http://localhost:3000/admin",
+      "http://127.0.0.1/",
+      "http://10.1.2.3/",
+      "http://192.168.0.1/",
+      "http://db.internal/",
+    ]) {
+      const result = await adapter.execute("read", { url });
+      expect(result.status).toBe("failed");
+      expect(result.summary).toContain("internal/private");
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("reads a page as markdown via Jina Reader with a request timeout", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(textResponse("# Pricing\n\nPlans start at $0."));
     const adapter = createWebReaderAdapter({ env: {}, fetchImpl });
 
@@ -35,6 +53,7 @@ describe("Web Reader adapter", () => {
     expect(url).toBe("https://r.jina.ai/https://example.com/pricing");
     // No Authorization header without a key.
     expect((init as RequestInit).headers).not.toHaveProperty("Authorization");
+    expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal);
   });
 
   it("adds Authorization when JINA_API_KEY is set", async () => {

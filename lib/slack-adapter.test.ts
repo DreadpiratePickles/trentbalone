@@ -40,6 +40,15 @@ describe("Slack adapter", () => {
     expect(url).toBe("https://slack.com/api/chat.postMessage");
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body).toEqual({ channel: "#ops", text: "Weekly founder brief is ready." });
+    expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal); // request timeout
+  });
+
+  it("clips oversized text under Slack's hard limit", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true, ts: "1.2" }));
+    const adapter = createSlackAdapter({ env: ENV, fetchImpl });
+    await adapter.execute("post", { text: "x".repeat(50_000) });
+    const body = JSON.parse((fetchImpl.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.text.length).toBeLessThanOrEqual(40_000);
   });
 
   it("requires a channel and a text body", async () => {

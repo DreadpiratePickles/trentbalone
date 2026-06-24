@@ -1,6 +1,11 @@
 import type { ToolAdapter } from "@/lib/tools";
 import type { ToolCallRecord } from "@/lib/types";
 import { isHttpHeaderValueSafe, malformedCredentialSummary } from "@/lib/http-credential";
+import { logger } from "@/lib/logger";
+
+const REQUEST_TIMEOUT_MS = 15_000;
+// Slack's chat.postMessage hard-rejects text beyond ~40k chars; clip below it.
+const MAX_TEXT_CHARS = 39_000;
 
 type EnvLike = Pick<NodeJS.ProcessEnv, string>;
 type FetchLike = typeof fetch;
@@ -58,6 +63,7 @@ export function createSlackAdapter(options: SlackAdapterOptions = {}): ToolAdapt
         const response = await fetchImpl(AUTH_TEST_ENDPOINT, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
         if (!response.ok) return "needs_credentials";
         const data = (await response.json().catch(() => ({}))) as { ok?: boolean };
@@ -92,12 +98,14 @@ export function createSlackAdapter(options: SlackAdapterOptions = {}): ToolAdapt
       if (!channel) {
         return failed(action, "Slack post requires a channel (payload.channel or SLACK_DEFAULT_CHANNEL).");
       }
-      const text = messageText(payload);
-      if (!text) {
+      const rawText = messageText(payload);
+      if (!rawText) {
         return failed(action, `Slack action "${action}" requires payload.text.`);
       }
+      const text = rawText.length > MAX_TEXT_CHARS ? `${rawText.slice(0, MAX_TEXT_CHARS)}…` : rawText;
 
       try {
+        logger.info({ adapter: ADAPTER_NAME, action, channel, chars: text.length }, "slack.post");
         const response = await fetchImpl(POST_MESSAGE_ENDPOINT, {
           method: "POST",
           headers: {
@@ -105,6 +113,7 @@ export function createSlackAdapter(options: SlackAdapterOptions = {}): ToolAdapt
             "Content-Type": "application/json; charset=utf-8",
           },
           body: JSON.stringify({ channel, text }),
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
         const data = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string; ts?: string };
         if (!response.ok || data.ok !== true) {

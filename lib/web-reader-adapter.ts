@@ -14,6 +14,7 @@ const ADAPTER_NAME = "Web Reader";
 const JINA_READER_BASE = "https://r.jina.ai/";
 const READ_ACTIONS = ["read", "fetch", "extract", "open", "scrape"];
 const MAX_CHARS = 8000;
+const REQUEST_TIMEOUT_MS = 30_000;
 
 function jinaToken(env: EnvLike): string | undefined {
   const token = env.JINA_API_KEY?.trim();
@@ -24,11 +25,30 @@ function failed(action: string, summary: string): ToolCallRecord {
   return { adapter: ADAPTER_NAME, action, status: "failed", summary };
 }
 
-function isHttpUrl(value: unknown): value is string {
+/** Block loopback, private, link-local (incl. 169.254.169.254 cloud metadata), and internal TLDs. */
+function isBlockedHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, ""); // strip IPv6 brackets
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) return true;
+  if (h === "::1" || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe80:")) return true;
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true; // link-local + cloud metadata endpoint
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+  }
+  return false;
+}
+
+/** A public http(s) URL — internal/private hosts are rejected (SSRF defense-in-depth). */
+function isSafePublicHttpUrl(value: unknown): value is string {
   if (typeof value !== "string") return false;
   try {
     const u = new URL(value);
-    return u.protocol === "http:" || u.protocol === "https:";
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    return !isBlockedHost(u.hostname);
   } catch {
     return false;
   }
@@ -63,8 +83,8 @@ export function createWebReaderAdapter(options: WebReaderAdapterOptions = {}): T
         return failed(action, `Unsupported Web Reader action "${action}". Supported: ${READ_ACTIONS.join(", ")}.`);
       }
       const url = payload.url;
-      if (!isHttpUrl(url)) {
-        return failed(action, `Web Reader action "${action}" requires a valid http(s) payload.url.`);
+      if (!isSafePublicHttpUrl(url)) {
+        return failed(action, `Web Reader action "${action}" requires a valid public http(s) payload.url (internal/private hosts are blocked).`);
       }
 
       const headers: Record<string, string> = { Accept: "text/plain" };
@@ -72,7 +92,11 @@ export function createWebReaderAdapter(options: WebReaderAdapterOptions = {}): T
       if (token && isHttpHeaderValueSafe(token)) headers.Authorization = `Bearer ${token}`;
 
       try {
-        const response = await fetchImpl(`${JINA_READER_BASE}${url}`, { method: "GET", headers });
+        const response = await fetchImpl(`${JINA_READER_BASE}${url}`, {
+          method: "GET",
+          headers,
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
         if (!response.ok) {
           return failed(action, `Web Reader could not fetch ${url} (HTTP ${response.status}).`);
         }
