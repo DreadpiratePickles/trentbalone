@@ -128,7 +128,7 @@ export async function runSandboxReaperSweep(opts?: {
 }): Promise<ReapResult | { skipped: true }> {
   const env = opts?.env ?? process.env;
   if (!sandboxReaperEnabled(env)) return { skipped: true };
-  const apiKey = env.E2B_API_KEY as string;
+  const apiKey = env.E2B_API_KEY as string; // gitleaks:allow -- reads from env, not a hardcoded secret
   try {
     const result = await reapIdleSandboxes({
       deps: {
