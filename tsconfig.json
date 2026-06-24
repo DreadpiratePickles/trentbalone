@@ -44,7 +44,6 @@
     "**/*.test.tsx",
     "lib/vitest-guards.ts",
     "lib/workbench-test-fakes.ts",
-    "vitest.config.ts",
-    "vitest.setup.ts"
+    "vitest*.ts"
   ]
 }
