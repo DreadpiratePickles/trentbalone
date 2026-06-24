@@ -2,6 +2,7 @@ import { Worker } from "bullmq";
 import { getRedisConnection, QUEUE_NAME, processJobData, requeueRunningOrchestrationJobs } from "./queue";
 import { writeWorkerHeartbeat } from "./worker-heartbeat";
 import { runSandboxReaperSweep, sandboxReaperEnabled } from "./workbench-sandbox-reaper";
+import { runAutonomousSweep, autonomySweepEnabled, parseCompanyAllowlist } from "./autonomy-scheduler";
 
 const connection = getRedisConnection();
 if (!connection) {
@@ -71,6 +72,24 @@ if (sandboxReaperTimer) {
   console.log(`[Worker] E2B idle-sandbox reaper armed (every ${Math.round(SANDBOX_REAPER_INTERVAL_MS / 1000)}s)`);
 }
 
+// Autonomy scheduler — the proactive "runs while you sleep" loop. OFF unless
+// AUTONOMY_SWEEP_ENABLED=1; only acts on companies in `autonomous` mode (and an
+// optional AUTONOMY_SWEEP_COMPANY_IDS allowlist). Runs in the worker so exactly
+// one process owns the sweep; each launched cycle keeps all spend/approval rails.
+const AUTONOMY_SWEEP_INTERVAL_MS = Number(process.env.AUTONOMY_SWEEP_INTERVAL_MS ?? 3 * 60 * 60 * 1000);
+const autonomyAllowlist = parseCompanyAllowlist();
+const autonomySweepTimer = autonomySweepEnabled()
+  ? setInterval(() => {
+      void runAutonomousSweep({ allowlist: autonomyAllowlist })
+        .then((s) => console.log(`[Worker] Autonomy sweep: ${s.eligible} eligible, ${s.acted} acted, ${s.monitored} monitored, ${s.skipped} skipped`))
+        .catch((err) => console.error("[Worker] Autonomy sweep failed:", err));
+    }, AUTONOMY_SWEEP_INTERVAL_MS)
+  : undefined;
+if (autonomySweepTimer) {
+  const scope = autonomyAllowlist.length ? `companies [${autonomyAllowlist.join(", ")}]` : "all autonomous-mode companies";
+  console.log(`[Worker] Autonomy scheduler armed (every ${Math.round(AUTONOMY_SWEEP_INTERVAL_MS / 1000)}s) for ${scope}`);
+}
+
 worker.on("completed", (job) => {
   console.log(`[Worker] Job ${job.id} (${job.name}) completed`);
 });
@@ -83,6 +102,7 @@ async function shutdown(signal: string) {
   console.log(`[Worker] ${signal} received, shutting down gracefully...`);
   clearInterval(heartbeatTimer);
   if (sandboxReaperTimer) clearInterval(sandboxReaperTimer);
+  if (autonomySweepTimer) clearInterval(autonomySweepTimer);
   await worker.close();
   process.exit(0);
 }
