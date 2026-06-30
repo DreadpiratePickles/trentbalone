@@ -46,12 +46,19 @@ const sandboxes = new Map<string, Sandbox>();
 function getSandbox(sessionId: string): Sandbox {
   const sb = sandboxes.get(sessionId);
   if (!sb) throw new Error(`No E2B sandbox for session ${sessionId}`);
+  // Keepalive: refresh the sandbox TTL on every access so a long build (multi-
+  // attempt repair cycles + slow model calls) can't outrun the timeout and
+  // vanish mid-run — the "Sandbox was not found" failures. Fire-and-forget:
+  // never block an op or fail it on the refresh. The sandbox still expires
+  // ~DEFAULT_SANDBOX_TIMEOUT_MS after the LAST operation, and the reaper sweeps
+  // anything still lingering.
+  void sb.setTimeout(DEFAULT_SANDBOX_TIMEOUT_MS).catch(() => {});
   return sb;
 }
 
 const DEFAULT_TEMPLATE = process.env.E2B_TEMPLATE ?? "base";
 const DEFAULT_WORKDIR = "/home/user";
-const DEFAULT_SANDBOX_TIMEOUT_MS = Number(process.env.E2B_SANDBOX_TIMEOUT_MS ?? 30 * 60 * 1000);
+const DEFAULT_SANDBOX_TIMEOUT_MS = Number(process.env.E2B_SANDBOX_TIMEOUT_MS ?? 45 * 60 * 1000);
 const DEFAULT_EXEC_TIMEOUT_MS = Number(process.env.E2B_EXEC_TIMEOUT_MS ?? 5 * 60 * 1000);
 
 type E2BCommandResult = {
