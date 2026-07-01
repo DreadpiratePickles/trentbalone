@@ -5,42 +5,42 @@ import { describe, expect, it } from "vitest";
 import { NAV_GROUPS, flattenNav, fuzzyScore, hrefFor, matchesNavItem } from "@/components/nav-config";
 
 describe("NAV_GROUPS", () => {
-  it("groups the app navigation into five operator sections", () => {
-    expect(NAV_GROUPS.map((group) => group.id)).toEqual(["operate", "build", "knowledge", "govern", "setup"]);
+  it("groups the app navigation into the six product areas", () => {
+    expect(NAV_GROUPS.map((group) => group.id)).toEqual(["command", "workbench", "agents", "plugs", "knowledge", "settings"]);
     expect(NAV_GROUPS.flatMap((group) => group.items).map((item) => item.label)).toEqual([
       "console",
       "command",
       "goals",
       "queue",
-      "missions",
       "cycles",
       "ops",
-      "workbench",
-      "trenchpad",
-      "mcp",
-      "artifacts",
-      "reports",
-      "memory",
-      "wiki",
-      "vault graph",
-      "autoresearch",
       "approvals",
       "trust",
       "proofs",
-      "budgets",
       "audit",
-      "integrations",
+      "workbench",
+      "trenchpad",
+      "artifacts",
       "agents",
+      "missions",
+      "autoresearch",
+      "reports",
       "agent plug",
+      "mcp",
+      "integrations",
+      "memory",
+      "wiki",
+      "vault graph",
       "settings",
+      "budgets",
     ]);
     expect(NAV_GROUPS.flatMap((group) => group.items).map((item) => item.slug)).not.toContain("app-solo");
   });
 
-  it("keeps approvals badge metadata on the govern group", () => {
-    const govern = NAV_GROUPS.find((group) => group.id === "govern");
+  it("keeps approvals badge metadata on the command group", () => {
+    const command = NAV_GROUPS.find((group) => group.id === "command");
 
-    expect(govern?.items.find((item) => item.slug === "approvals")).toMatchObject({
+    expect(command?.items.find((item) => item.slug === "approvals")).toMatchObject({
       label: "approvals",
       approvalsBadge: true,
     });
@@ -94,8 +94,8 @@ describe("navigation helpers", () => {
   it("flattens grouped nav with href and group labels", () => {
     expect(flattenNav("co_123").find((item) => item.slug === "workbench")).toMatchObject({
       label: "workbench",
-      groupId: "build",
-      groupLabel: "build",
+      groupId: "workbench",
+      groupLabel: "workbench",
       href: "/companies/co_123/workbench",
     });
   });
