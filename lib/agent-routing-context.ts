@@ -14,14 +14,15 @@ export type SeatRouteRecommendation = {
 export function recommendSeatForObjective(objective: string): SeatRouteRecommendation {
   const text = objective.toLowerCase();
 
+  // SHRINK: Finance is a shelved seat — its oversight folds into the Operator (ceo).
   if (/\b(fincept|ghostfolio|portfolio|holdings|market risk|risk report|finance|billing|ledger|runway|spend|refund|budget|cfo)\b/.test(text)) {
     if (/\bfincept\b/.test(text)) {
-      return { role: "finance", tool: "Stripe", reason: "Fincept Terminal is not installed as a verified sandbox app; Finance should use real billing, usage, and Stripe evidence." };
+      return { role: "ceo", tool: "Stripe", reason: "Fincept Terminal is not installed as a verified sandbox app; the Operator handles finance oversight using real billing, usage, and Stripe evidence (a dedicated Finance seat is shelved)." };
     }
     if (/\bghostfolio|holdings|fire|portfolio\b/.test(text)) {
-      return { role: "finance", tool: "Stripe", reason: "Ghostfolio is not installed as a verified sandbox app; portfolio or finance work belongs to Finance using available real financial evidence." };
+      return { role: "ceo", tool: "Stripe", reason: "Ghostfolio is not installed as a verified sandbox app; the Operator handles portfolio/finance oversight using available real financial evidence (a dedicated Finance seat is shelved)." };
     }
-    return { role: "finance", tool: "Stripe", reason: "Finance analysis, market-risk, budget, and ledger work belongs to Finance using billing, usage, and Stripe evidence." };
+    return { role: "ceo", tool: "Stripe", reason: "Finance oversight (billing, usage, budget, ledger, market-risk) is handled by the Operator using real Stripe evidence; a dedicated Finance seat is shelved until a tenant workflow demands one." };
   }
 
   if (/\b(hyperframes|launch video|motion creative|video creative|render video)\b/.test(text)) {
@@ -36,8 +37,9 @@ export function recommendSeatForObjective(objective: string): SeatRouteRecommend
     return { role: "support", tool: "support:inbound_email", reason: "Customer issue triage and reply drafting belongs to Support / Ops." };
   }
 
+  // SHRINK: Sales is a shelved seat — go-to-market folds into Growth.
   if (/\b(sales|prospect|lead|pipeline|crm|outreach|follow[- ]?up|qualification)\b/.test(text)) {
-    return { role: "sales", tool: "prospects:research", reason: "Prospecting, qualification, and outbound drafts belong to Sales." };
+    return { role: "growth", tool: "prospects:research", reason: "Prospecting, qualification, pipeline, and outbound drafts are handled by Growth as part of go-to-market; a dedicated Sales seat is shelved." };
   }
 
   if (
@@ -47,12 +49,14 @@ export function recommendSeatForObjective(objective: string): SeatRouteRecommend
     return { role: "engineer", tool: "Workbench Sandbox", reason: "Code, repo, test, issue, PR, and deploy planning belongs to Engineer." };
   }
 
+  // SHRINK: Analyst is a shelved seat — web-evidence/research synthesis folds into the Operator (ceo).
   if (/\b(steel|camofox|browser|web research|competitor|competitors|screenshot|website|web evidence|public pages)\b/.test(text)) {
-    return { role: "analyst", tool: "Steel Browser", reason: "Web evidence gathering and screenshots belong to Research / Analyst." };
+    return { role: "ceo", tool: "Steel Browser", reason: "Web-evidence gathering, competitor research, and analysis synthesis are coordinated by the Operator; a dedicated Analyst seat is shelved." };
   }
 
+  // SHRINK: Escalation is not a seat — risk/audit/approval is a feature of the approval flow, owned by the Operator.
   if (/\b(audit|critic|unsafe|destructive|approval|legal|privacy|policy|merge|delete|irreversible)\b/.test(text)) {
-    return { role: "escalation", tool: "audit:create", reason: "Risk, audit, policy, and irreversible actions belong to Critic / Escalation / Auditor." };
+    return { role: "ceo", tool: "audit:create", reason: "Risk, audit, policy, and irreversible-action review is owned by the Operator through the approval gate." };
   }
 
   if (/\b(copy|content|design|landing page|email draft|visual|slides|presentation)\b/.test(text)) {

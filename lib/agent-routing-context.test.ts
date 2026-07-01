@@ -23,8 +23,9 @@ describe("agent routing context", () => {
 
   it.each([
     {
+      // SHRINK: Finance shelved → Operator (ceo) handles finance oversight.
       objective: "Use Fincept Terminal to research market risk and produce a portfolio risk report.",
-      role: "finance",
+      role: "ceo",
       tool: "Stripe",
     },
     {
@@ -33,13 +34,15 @@ describe("agent routing context", () => {
       tool: "documents:write",
     },
     {
+      // SHRINK: Analyst shelved → Operator (ceo) coordinates web-evidence/research.
       objective: "Use Steel to research competitor websites and capture screenshots.",
-      role: "analyst",
+      role: "ceo",
       tool: "Steel Browser",
     },
     {
+      // SHRINK: Sales shelved → Growth owns go-to-market.
       objective: "Build a prospect list and draft sales outreach for qualified leads.",
-      role: "sales",
+      role: "growth",
       tool: "prospects:research",
     },
     {
