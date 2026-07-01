@@ -1,7 +1,7 @@
 import { computeCapabilityScore, deriveQualityLabel, runEvalSuite } from "@/lib/plug-evals";
 import type { CatalogAgent } from "@/lib/agent-catalog";
 import type { TrialResult } from "@/lib/plug-evals";
-import type { PlugDefinition } from "@/lib/plug/schema-v2";
+import { actionReversibilityFor, type PlugActionReversibility, type PlugDefinition } from "@/lib/plug/schema-v2";
 
 export type PlugEvalResult = {
   subjectType: "plug";
@@ -42,6 +42,14 @@ export async function runPlugEval(plug: PlugDefinition): Promise<PlugEvalResult>
   };
 }
 
+function actionsByReversibility(plug: PlugDefinition, cls: PlugActionReversibility): string[] {
+  return plug.declaredTools.flatMap((tool) =>
+    tool.allowedActions
+      .filter((action) => actionReversibilityFor(tool, action) === cls)
+      .map((action) => `${tool.toolId}.${action}`),
+  );
+}
+
 function plugToEvalAgent(plug: PlugDefinition): CatalogAgent {
   const requiredPhrase = plug.name.split(" ")[0] ?? plug.name;
   return {
@@ -54,9 +62,9 @@ function plugToEvalAgent(plug: PlugDefinition): CatalogAgent {
     color: "#2563eb",
     file: `plugs/${plug.slug}.md`,
     reversibilityMatrix: {
-      reversible: plug.declaredTools.flatMap((tool) => tool.allowedActions.map((action) => `${tool.toolId}.${action}`)),
-      costlyToReverse: [],
-      irreversible: [],
+      reversible: actionsByReversibility(plug, "reversible"),
+      costlyToReverse: actionsByReversibility(plug, "compensable"),
+      irreversible: actionsByReversibility(plug, "irreversible"),
     },
     evalSuite: {
       capability: plug.evalSet.fixtureRefs.map((fixture) => ({

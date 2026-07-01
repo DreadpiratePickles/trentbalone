@@ -50,7 +50,12 @@ function makePlug(slug: string, name: string, category: string, index: number): 
     industry: category === "commerce" ? "ecommerce" : "b2b-saas",
     complexityTier: index % 4 === 0 ? "advanced" : "standard",
     version: "1.0.0",
-    declaredTools: [{ toolId: "reports", allowedActions: ["create", "read"], approvalRequiredActions: [] }],
+    declaredTools: [{
+      toolId: "reports",
+      allowedActions: ["create", "read"],
+      approvalRequiredActions: [],
+      actionReversibility: { create: "reversible", read: "reversible" },
+    }],
     integrations: ["analytics"],
     seats: [{ seat: "analyst", promptTemplate: `${name} for {{company}}`, outputContract: `${slug}.v1`, timeoutMs: 600000, budgetCents: 200, modelTier: "sonnet" }],
     memoryNamespace: `company:{companyId}/plug:${slug}`,

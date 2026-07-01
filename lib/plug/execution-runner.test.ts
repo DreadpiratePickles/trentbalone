@@ -61,7 +61,7 @@ describe("runPlugExecution", () => {
       slug: "paid-launch-test",
       name: "Paid Launch Test",
       declaredTools: [
-        { toolId: "meta_ads", allowedActions: ["launch"], approvalRequiredActions: ["launch"] },
+        { toolId: "meta_ads", allowedActions: ["launch"], approvalRequiredActions: ["launch"], actionReversibility: { launch: "irreversible" } },
       ],
     };
 
