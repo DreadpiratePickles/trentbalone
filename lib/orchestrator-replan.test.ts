@@ -254,7 +254,7 @@ describe("reviseOrchestrationPlanTail", () => {
     expect(plan.successCriteria).toEqual(["Produce a revised grounded priority brief"]);
     expect(plan.blockers).toEqual([]);
     expect(plan.steps.find((step) => step.id === "s4")).toMatchObject({
-      agentRole: "analyst",
+      agentRole: "ceo",
       dependsOn: ["s1"],
       riskLevel: "medium",
       needsApproval: false,

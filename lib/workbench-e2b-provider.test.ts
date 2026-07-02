@@ -372,6 +372,7 @@ function e2bSandbox(sandboxId: string) {
     files: { read: vi.fn(), write: vi.fn(), list: mockFilesList },
     getHost: vi.fn((port: number) => `${port}-${sandboxId}.e2b.dev`),
     kill: vi.fn(),
+    setTimeout: vi.fn().mockResolvedValue(undefined),
   };
 }
 
