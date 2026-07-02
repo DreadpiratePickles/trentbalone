@@ -1,9 +1,21 @@
 import { evaluatePlugLaunchRequirements, type PlugApprovalMatrixEntry } from "@/lib/plug/launch-requirements";
 import { plugMemoryNamespace, type PlugDefinition } from "@/lib/plug/schema-v2";
 import { store } from "@/lib/store";
-import type { AgentRole, Report, WorkbenchArtifact } from "@/lib/types";
+import type { AgentRole, Report, ToolCallRecord, WorkbenchArtifact } from "@/lib/types";
 import { makeId, nowIso } from "@/lib/utils";
 import { getDefaultWorkbenchProvider } from "@/lib/workbench-providers";
+import { resolveToolCredential } from "@/lib/tool-credentials";
+import { adapters, executeToolWithPolicy, type ToolAdapter } from "@/lib/tools";
+
+/**
+ * Injectable seams for the executor -> ToolAdapter bridge. Production uses the
+ * real registry + credential resolver + policy executor; tests pass fakes.
+ */
+export type PlugBridgeDeps = {
+  adapters?: ToolAdapter[];
+  resolveToolCredential?: typeof resolveToolCredential;
+  executeToolWithPolicy?: typeof executeToolWithPolicy;
+};
 
 export type PlugToolExecutionStatus = "completed" | "needs_approval" | "blocked" | "failed";
 
@@ -45,15 +57,17 @@ type PlugExecutionInput = {
   objective: string;
   variables?: Record<string, string>;
   approvalIds?: Record<string, string>;
+  bridge?: PlugBridgeDeps;
 };
 
-type ToolContext = {
+export type ToolContext = {
   companyId: string;
   sessionId: string;
   plug: PlugDefinition;
   objective: string;
   seat: AgentRole;
   variables: Record<string, string>;
+  bridge?: PlugBridgeDeps;
 };
 
 export async function runPlugExecution(input: PlugExecutionInput): Promise<PlugExecutionResult> {
@@ -95,6 +109,7 @@ export async function runPlugExecution(input: PlugExecutionInput): Promise<PlugE
       objective: input.objective,
       seat: seat.seat,
       variables: input.variables ?? {},
+      bridge: input.bridge,
     };
     for (const declared of input.plug.declaredTools) {
       for (const action of declared.allowedActions) {
@@ -184,13 +199,24 @@ async function executeDeclaredTool(
   approvalId?: string,
 ): Promise<PlugToolExecution> {
   try {
+    // Built-in reports executor stays as the path for report actions — it
+    // produces the real report artifacts the launch-evidence flow depends on.
+    // It is a fallback, no longer the ONLY path.
     if (toolId === "reports" && action === "create") {
       return createReportOutput(context, approvalId);
     }
     if (toolId === "reports" && action === "read") {
       return readReports(context, approvalId);
     }
-    return recordBlockedTool(context, toolId, action, "No safe local executor is registered for this Plug action.", approvalId);
+    // Everything else bridges to the real ToolAdapter registry.
+    const declared = context.plug.declaredTools.find((tool) => tool.toolId === toolId);
+    return await bridgePlugToolCall(
+      context,
+      toolId,
+      action,
+      declared ? [...declared.allowedActions] : [],
+      approvalId,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown Plug tool failure";
     await store.addWorkbenchEvent({
@@ -214,6 +240,83 @@ async function executeDeclaredTool(
       error: message,
     };
   }
+}
+
+/**
+ * Bridge a declared Plug action to the real ToolAdapter registry.
+ *
+ * - Enforces the Plug's allowedActions AT THE BRIDGE (an undeclared action is
+ *   blocked here, never forwarded to an adapter).
+ * - Resolves the per-tenant credential via the shared resolveToolCredential seam
+ *   (encrypted ToolConnection first, env fallback). Only the credential SOURCE
+ *   is used downstream — the secret value never enters the payload, the workbench
+ *   event, PlugRunTelemetry, or logs.
+ * - Delegates execution to executeToolWithPolicy with allowedActions as the
+ *   permission constraint (belt-and-suspenders with the bridge guard above).
+ */
+export async function bridgePlugToolCall(
+  context: ToolContext,
+  toolId: string,
+  action: string,
+  allowedActions: string[],
+  approvalId?: string,
+): Promise<PlugToolExecution> {
+  const registry = context.bridge?.adapters ?? adapters;
+  const resolveCredential = context.bridge?.resolveToolCredential ?? resolveToolCredential;
+  const runTool = context.bridge?.executeToolWithPolicy ?? executeToolWithPolicy;
+
+  if (!allowedActions.includes(action)) {
+    return recordBlockedTool(context, toolId, action, `Action "${action}" is not in the Plug's allowedActions.`, approvalId);
+  }
+
+  const adapter = registry.find(
+    (candidate) => candidate.name === toolId || candidate.name.toLowerCase() === toolId.toLowerCase(),
+  );
+  if (!adapter) {
+    return recordBlockedTool(context, toolId, action, `No tool adapter is registered for "${toolId}".`, approvalId);
+  }
+
+  // Per-tenant credential seam. Value is intentionally discarded — the adapter
+  // resolves the concrete secret itself under companyId; we keep only `source`.
+  const credential = await resolveCredential({
+    companyId: context.companyId,
+    provider: toolId,
+    envFallback: () => undefined,
+  });
+
+  const payload: Record<string, unknown> = { companyId: context.companyId, ...context.variables };
+  const record = await runTool(adapter, action, payload, { allowedActions });
+  const status = mapToolStatus(record.status);
+
+  await store.addWorkbenchEvent({
+    companyId: context.companyId,
+    sessionId: context.sessionId,
+    type: status === "needs_approval" ? "approval" : "shell",
+    status: status === "completed" ? "completed" : status === "needs_approval" ? "needs_approval" : "failed",
+    title: `${toolId}.${action} via ${adapter.name}`,
+    content: record.summary,
+    agentRole: context.seat,
+    metadata: { toolId, action, plugId: context.plug.id, adapter: adapter.name, credentialSource: credential.source },
+  });
+
+  return {
+    id: makeId("plugtool"),
+    toolId,
+    action,
+    status,
+    seat: context.seat,
+    summary: record.summary,
+    approvalId,
+    approvalGate: status === "needs_approval" ? `${toolId}.${action}` : undefined,
+    error: status === "failed" ? record.summary : undefined,
+  };
+}
+
+function mapToolStatus(status: ToolCallRecord["status"]): PlugToolExecutionStatus {
+  if (status === "mocked" || status === "completed") return "completed";
+  if (status === "needs_approval") return "needs_approval";
+  if (status === "blocked") return "blocked";
+  return "failed";
 }
 
 async function createReportOutput(context: ToolContext, approvalId?: string): Promise<PlugToolExecution> {
