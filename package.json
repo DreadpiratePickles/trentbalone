@@ -48,6 +48,8 @@
     "preflight:perfection": "npm run typecheck && npm run build && npm run test:ci && npm run ci:truth && npm run preflight:security && npm run orc:truth-proof && npm run orc:workbench-proof -- --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} --provider ${TRENT_PREFLIGHT_WORKBENCH_PROVIDER:-daytona} && npm run workbench:eval:live-cloud -- --provider ${TRENT_PREFLIGHT_WORKBENCH_PROVIDER:-daytona} --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} --runs 1 --threshold 1 && npm run workbench:eval:live-cloud -- --diverse --provider ${TRENT_PREFLIGHT_WORKBENCH_PROVIDER:-daytona} --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} --threshold 1 && npm run providers:proof -- --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} --allow-failures && npm run mcp:proof -- --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} && npm run acceptance:cycle -- --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} && npm run compounding:proof -- --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local} && npm run trust-panel:proof -- --env-file ${TRENT_PREFLIGHT_ENV_FILE:-trent.env.local}"
   },
   "dependencies": {
+    "@tailwindcss/postcss": "^4.1.7",
+    "tailwindcss": "^4.1.7",
     "@daytona/sdk": "^0.189.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@monaco-editor/react": "^4.7.0",
@@ -79,12 +81,10 @@
     "zod": "^3.25.28"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.1.7",
     "@testing-library/react": "^16.3.0",
     "@types/node": "^22.15.21",
     "@types/react": "^19.1.5",
     "@types/react-dom": "^19.1.5",
-    "tailwindcss": "^4.1.7",
     "typescript": "^5.8.3",
     "vitest": "^3.2.6"
   },
