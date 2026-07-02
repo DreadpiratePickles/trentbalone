@@ -11,7 +11,7 @@ describe("Plug schema v2", () => {
       industry: "b2b-saas",
       complexityTier: "standard",
       version: "1.0.0",
-      declaredTools: [{ toolId: "reports", allowedActions: ["create"], approvalRequiredActions: [] }],
+      declaredTools: [{ toolId: "reports", allowedActions: ["create"], approvalRequiredActions: [], actionReversibility: { create: "reversible" } }],
       integrations: ["analytics"],
       seats: [{ seat: "analyst", promptTemplate: "Review {{company}}", outputContract: "weekly_report.v1", timeoutMs: 600000, budgetCents: 200, modelTier: "sonnet" }],
       memoryNamespace: "company:{companyId}/plug:weekly-ops-review",

@@ -172,7 +172,7 @@ export function Sidebar({
               group={group}
               collapsed={Boolean(collapsed[group.id])}
               pathname={pathname}
-              approvalCount={group.id === "govern" ? pendingApprovals : 0}
+              approvalCount={group.id === "command" ? pendingApprovals : 0}
               onToggle={() => setCollapsed((current) => ({ ...current, [group.id]: !current[group.id] }))}
               onNavigate={(href) => {
                 router.push(href as Parameters<typeof router.push>[0]);

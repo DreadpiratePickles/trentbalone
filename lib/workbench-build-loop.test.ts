@@ -18,7 +18,10 @@ import {
   buildGroundedWorkbenchSourceContext,
   buildWorkbenchSourceContext,
   isWorkspaceUnscaffolded,
+  STRICT_ARTIFACT_REPROMPT,
+  streamArtifactWithRetry,
 } from "@/lib/workbench-build-loop";
+import type { ArtifactStreamToken, StreamInput, WorkbenchAgentChunk } from "@/lib/workbench-agent-types";
 import { PREVIEW_PID_FILENAME } from "@/lib/workbench-preview-reaper";
 
 describe("isWorkspaceUnscaffolded", () => {
@@ -136,5 +139,91 @@ describe("buildWorkbenchSourceContext", () => {
     expect(summary).toMatch(/no deploy/i);
     expect(summary).not.toContain("JWT_SECRET");
     expect(summary).not.toContain("generic API_KEY");
+  });
+});
+
+describe("streamArtifactWithRetry", () => {
+  const ARTIFACT = `<boltArtifact id="crm" title="CRM"><boltAction type="file" filePath="index.html">hi</boltAction></boltArtifact>`;
+
+  function baseMessages(): StreamInput["messages"] {
+    return [
+      { role: "system", content: "sys" },
+      { role: "user", content: "build a CRM" },
+    ];
+  }
+
+  // Mock provider: each call returns the next scripted response as one token,
+  // then a usage record and a non-truncated finish (matches the executor stream).
+  function makeStream(responses: string[]) {
+    const calls: StreamInput[] = [];
+    async function* stream(input: StreamInput): AsyncGenerator<ArtifactStreamToken> {
+      const idx = calls.length;
+      calls.push({ messages: input.messages.map((m) => ({ ...m })) });
+      yield { type: "token", content: responses[Math.min(idx, responses.length - 1)] };
+      yield { type: "usage", inputTokens: 100, outputTokens: 200 };
+      yield { type: "finish", reason: "stop" };
+    }
+    return { stream, calls };
+  }
+
+  async function drain(gen: AsyncGenerator<WorkbenchAgentChunk, Awaited<ReturnType<typeof streamArtifactWithRetry>> extends AsyncGenerator<infer _C, infer R> ? R : never>) {
+    const chunks: WorkbenchAgentChunk[] = [];
+    let next = await gen.next();
+    while (!next.done) {
+      chunks.push(next.value);
+      next = await gen.next();
+    }
+    return { chunks, result: next.value };
+  }
+
+  it("returns the artifact on the first try without reprompting", async () => {
+    const { stream, calls } = makeStream([ARTIFACT]);
+    const { chunks, result } = await drain(streamArtifactWithRetry(stream, baseMessages()));
+
+    expect(result.reprompted).toBe(false);
+    expect(result.artifact?.actions).toHaveLength(1);
+    expect(result.inputTokens).toBe(100);
+    expect(result.outputTokens).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(chunks.some((c) => c.type === "status" && c.phase === "reprompting")).toBe(false);
+  });
+
+  it("re-prompts strictly and recovers when the first response is prose", async () => {
+    const prose = "Sure! I'll build a CRM. First we set up the project, then add pages.";
+    const { stream, calls } = makeStream([prose, ARTIFACT]);
+    const { chunks, result } = await drain(streamArtifactWithRetry(stream, baseMessages()));
+
+    expect(result.reprompted).toBe(true);
+    expect(result.artifact?.actions).toHaveLength(1);
+    // both segments' tokens are accounted for (real spend happened)
+    expect(result.inputTokens).toBe(200);
+    expect(result.outputTokens).toBe(400);
+    expect(calls).toHaveLength(2);
+
+    const retry = calls[1].messages;
+    expect(retry.some((m) => m.role === "assistant" && m.content === prose)).toBe(true);
+    expect(retry.some((m) => m.role === "user" && m.content === STRICT_ARTIFACT_REPROMPT)).toBe(true);
+    expect(chunks.some((c) => c.type === "status" && c.phase === "reprompting")).toBe(true);
+    // prose (no <bolt) is still surfaced to the user as content
+    expect(chunks.some((c) => c.type === "content" && c.content === prose)).toBe(true);
+  });
+
+  it("re-prompts once when the artifact has no actions", async () => {
+    const empty = `<boltArtifact id="x" title="x"></boltArtifact>`;
+    const { stream, calls } = makeStream([empty, ARTIFACT]);
+    const { result } = await drain(streamArtifactWithRetry(stream, baseMessages()));
+
+    expect(result.reprompted).toBe(true);
+    expect(result.artifact?.actions).toHaveLength(1);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("gives up after exactly one reprompt (caller decides to throw)", async () => {
+    const { stream, calls } = makeStream(["only prose", "still no artifact here"]);
+    const { result } = await drain(streamArtifactWithRetry(stream, baseMessages()));
+
+    expect(result.reprompted).toBe(true);
+    expect(result.artifact).toBeNull();
+    expect(calls).toHaveLength(2);
   });
 });

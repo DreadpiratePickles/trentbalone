@@ -25,65 +25,82 @@ export type NavItemConfig = {
 };
 
 export type NavGroupConfig = {
-  id: "operate" | "build" | "knowledge" | "govern" | "setup";
+  id: "command" | "workbench" | "agents" | "plugs" | "knowledge" | "settings";
   label: string;
   items: NavItemConfig[];
 };
 
+// SHRINK (Tier 1): the app's navigation is consolidated from 5 fuzzy groups
+// (operate/build/knowledge/govern/setup) into the 6 product areas. No routes
+// were removed — every slug still resolves to its page; items were regrouped
+// into their logical home so the IA reads as six areas. Deeper item reduction
+// (tabs/redirects) is a deliberate follow-up.
 export const NAV_GROUPS: NavGroupConfig[] = [
   {
-    id: "operate",
-    label: "operate",
+    // Command = the supervision surface (absorbs operate + govern).
+    id: "command",
+    label: "command",
     items: [
       { label: "console", slug: "", icon: "bolt", keywords: ["home", "dashboard", "overview"] },
       { label: "command", slug: "command", icon: "sparkle", keywords: ["chat", "ceo", "orchestrate", "goal"] },
       { label: "goals", slug: "goals", icon: "check", keywords: ["objectives", "criteria"] },
       { label: "queue", slug: "queue", icon: "inbox", keywords: ["tasks", "backlog", "work"] },
-      { label: "missions", slug: "missions", icon: "cycle", keywords: ["agent missions", "campaigns"] },
       { label: "cycles", slug: "cycles", icon: "cycle", keywords: ["runs", "history", "operating"] },
       { label: "ops", slug: "ops", icon: "radar", keywords: ["operations", "control tower", "evidence", "trust", "diagnostics", "provenance"] },
+      { label: "approvals", slug: "approvals", icon: "shield", keywords: ["pending", "gates", "review"], approvalsBadge: true },
+      { label: "trust", slug: "trust", icon: "shield", keywords: ["provenance", "verification", "claims", "honest autonomy"] },
+      { label: "proofs", slug: "proofs", icon: "radar", keywords: ["verification", "live proofs", "production", "railway", "evidence"] },
+      { label: "audit", slug: "audit", icon: "list", keywords: ["log", "compliance", "trail"] },
     ],
   },
   {
-    id: "build",
-    label: "build",
+    // Workbench = the execution surface (protected; absorbs trenchpad + artifacts).
+    id: "workbench",
+    label: "workbench",
     items: [
       { label: "workbench", slug: "workbench", icon: "building", keywords: ["sandbox", "code", "sessions", "dev"] },
       { label: "trenchpad", slug: "trenchpad", icon: "play", keywords: ["operator workspace", "live sessions", "work stream", "terminal"] },
-      { label: "mcp", slug: "mcp", icon: "plug", keywords: ["model context protocol", "tools", "servers"] },
       { label: "artifacts", slug: "artifacts", icon: "diamond", keywords: ["deliverables", "outputs", "exports"] },
+    ],
+  },
+  {
+    // Agents = the seats and their runs.
+    id: "agents",
+    label: "agents",
+    items: [
+      { label: "agents", slug: "agents", icon: "list", keywords: ["seats", "team", "roles"] },
+      { label: "missions", slug: "missions", icon: "cycle", keywords: ["agent missions", "campaigns"] },
+      { label: "autoresearch", slug: "autoresearch", icon: "sparkle", keywords: ["research", "deep dive"] },
       { label: "reports", slug: "reports", icon: "doc", keywords: ["weekly", "summary"] },
     ],
   },
   {
+    // Plugs = marketplace + connections (absorbs mcp + integrations).
+    id: "plugs",
+    label: "plugs",
+    items: [
+      { label: "agent plug", slug: "plug", icon: "plug", keywords: ["marketplace", "plugs", "specialists"] },
+      { label: "mcp", slug: "mcp", icon: "plug", keywords: ["model context protocol", "tools", "servers"] },
+      { label: "integrations", slug: "integrations", icon: "plug", keywords: ["connections", "mcp", "credentials"] },
+    ],
+  },
+  {
+    // Knowledge = the tenant wiki surface (memory + wiki + graph).
     id: "knowledge",
     label: "knowledge",
     items: [
       { label: "memory", slug: "memory", icon: "brain", keywords: ["vault", "context", "documents", "search"] },
       { label: "wiki", slug: "wiki", icon: "doc", keywords: ["docs", "knowledge base", "trench"] },
       { label: "vault graph", slug: "vault-graph", icon: "diamond", keywords: ["graph", "connections"] },
-      { label: "autoresearch", slug: "autoresearch", icon: "sparkle", keywords: ["research", "deep dive"] },
     ],
   },
   {
-    id: "govern",
-    label: "govern",
+    // Settings = config + billing/spend (crypto rails land here in Phase 2).
+    id: "settings",
+    label: "settings",
     items: [
-      { label: "approvals", slug: "approvals", icon: "shield", keywords: ["pending", "gates", "review"], approvalsBadge: true },
-      { label: "trust", slug: "trust", icon: "shield", keywords: ["provenance", "verification", "claims", "honest autonomy"] },
-      { label: "proofs", slug: "proofs", icon: "radar", keywords: ["verification", "live proofs", "production", "railway", "evidence"] },
-      { label: "budgets", slug: "budgets", icon: "wallet", keywords: ["spend", "cost", "ledger"] },
-      { label: "audit", slug: "audit", icon: "list", keywords: ["log", "compliance", "trail"] },
-      { label: "integrations", slug: "integrations", icon: "plug", keywords: ["connections", "mcp", "credentials"] },
-    ],
-  },
-  {
-    id: "setup",
-    label: "setup",
-    items: [
-      { label: "agents", slug: "agents", icon: "list", keywords: ["seats", "team", "roles"] },
-      { label: "agent plug", slug: "plug", icon: "plug", keywords: ["marketplace", "plugs", "specialists"] },
       { label: "settings", slug: "settings", icon: "settings", keywords: ["configuration", "preferences", "company"] },
+      { label: "budgets", slug: "budgets", icon: "wallet", keywords: ["spend", "cost", "ledger"] },
     ],
   },
 ];

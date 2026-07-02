@@ -1,4 +1,9 @@
-import type { PlugDefinition } from "@/lib/plug/schema-v2";
+import {
+  actionReversibilityFor,
+  compensationFor,
+  type PlugActionReversibility,
+  type PlugDefinition,
+} from "@/lib/plug/schema-v2";
 
 export type PlugLaunchRequirementId =
   | "fixtures"
@@ -17,6 +22,8 @@ export type PlugApprovalMatrixEntry = {
   toolId: string;
   allowedActions: string[];
   approvalRequiredActions: string[];
+  actionReversibility: Record<string, PlugActionReversibility>;
+  compensations: Record<string, string>;
 };
 
 export type PlugLaunchEvidence = {
@@ -72,9 +79,20 @@ export function estimatePlugRunCostCents(plug: PlugDefinition) {
 }
 
 export function buildPlugApprovalMatrix(plug: PlugDefinition): PlugApprovalMatrixEntry[] {
-  return plug.declaredTools.map((tool) => ({
-    toolId: tool.toolId,
-    allowedActions: [...tool.allowedActions],
-    approvalRequiredActions: [...tool.approvalRequiredActions],
-  }));
+  return plug.declaredTools.map((tool) => {
+    const actionReversibility: Record<string, PlugActionReversibility> = {};
+    const compensations: Record<string, string> = {};
+    for (const action of tool.allowedActions) {
+      actionReversibility[action] = actionReversibilityFor(tool, action);
+      const compensation = compensationFor(tool, action);
+      if (compensation !== undefined) compensations[action] = compensation;
+    }
+    return {
+      toolId: tool.toolId,
+      allowedActions: [...tool.allowedActions],
+      approvalRequiredActions: [...tool.approvalRequiredActions],
+      actionReversibility,
+      compensations,
+    };
+  });
 }

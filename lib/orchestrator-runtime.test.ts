@@ -129,7 +129,7 @@ describe("buildOrchestrationPlanningPrompts", () => {
     expect(prompts.system).toContain("not installed as a verified sandbox app");
     expect(prompts.system).not.toContain("HyperFrames");
     expect(prompts.system).toContain("Steel Browser");
-    expect(prompts.system).toContain("Recommended route for this objective: finance via Stripe");
+    expect(prompts.system).toContain("Recommended route for this objective: ceo via Stripe");
   });
 
   it("instructs the planner to engage every specialist seat in full-team (autonomous) mode", () => {
@@ -140,7 +140,7 @@ describe("buildOrchestrationPlanningPrompts", () => {
       { fullTeam: true },
     );
     expect(prompts.system).toContain("FULL AUTONOMOUS COMPANY RUN");
-    expect(prompts.system).toContain("engineer, growth, content, support, analyst, finance, sales");
+    expect(prompts.system).toContain("engineer, growth, content, support");
   });
 
   it("asks model plans to emit per-step acceptance criteria", () => {
@@ -199,14 +199,14 @@ describe("generateOrchestrationPlan — autonomous full-team fallback", () => {
       { fullTeam: true },
     );
     const roles = new Set(plan.steps.map((s) => s.agentRole));
-    for (const seat of ["engineer", "growth", "content", "support", "analyst", "finance", "sales"]) {
+    for (const seat of ["engineer", "growth", "content", "support"]) {
       expect(roles.has(seat as never)).toBe(true);
     }
     // CEO bookends: scope first, consolidate last.
     expect(plan.steps[0].agentRole).toBe("ceo");
     expect(plan.steps[plan.steps.length - 1].agentRole).toBe("ceo");
-    // Final consolidation depends on all specialist steps.
-    expect(plan.steps[plan.steps.length - 1].dependsOn.length).toBe(7);
+    // Final consolidation depends on all specialist steps (SHRINK: 4 actives).
+    expect(plan.steps[plan.steps.length - 1].dependsOn.length).toBe(4);
   });
 
   it("adds acceptance specs to fallback orchestration steps", async () => {
@@ -314,7 +314,8 @@ describe("generateOrchestrationPlan — autonomous full-team fallback", () => {
     );
 
     expect(plan.reasoning).toBe("near-valid model plan");
-    expect(plan.steps.map((step) => step.agentRole)).toEqual(["analyst", "engineer", "ceo"]);
+    // SHRINK: "Research / Analyst" now normalizes to the Operator (ceo).
+    expect(plan.steps.map((step) => step.agentRole)).toEqual(["ceo", "engineer", "ceo"]);
     expect(plan.steps.map((step) => step.riskLevel)).toEqual(["low", "medium", "high"]);
     expect(plan.steps.map((step) => step.dependsOn)).toEqual([[], ["s1"], ["s1", "s2"]]);
     expect(plan.steps.map((step) => step.needsApproval)).toEqual([false, false, false]);
@@ -322,11 +323,13 @@ describe("generateOrchestrationPlan — autonomous full-team fallback", () => {
     expect(plan.blockers).toEqual([]);
   });
 
-  it("normalizes common marketing role synonyms to growth", () => {
+  it("normalizes role synonyms to active seats and never a shelved one", () => {
     expect(normalizePlannerAgentRole("marketer")).toBe("growth");
-    expect(normalizePlannerAgentRole("strategist")).toBe("analyst");
-    expect(normalizePlannerAgentRole("manager")).toBe("analyst");
-    expect(normalizePlannerAgentRole("totally custom role")).toBe("analyst");
+    expect(normalizePlannerAgentRole("salesperson")).toBe("growth"); // sales folds into growth
+    // SHRINK: strategy/analysis/manager/unknown all fold into the Operator (ceo).
+    expect(normalizePlannerAgentRole("strategist")).toBe("ceo");
+    expect(normalizePlannerAgentRole("manager")).toBe("ceo");
+    expect(normalizePlannerAgentRole("totally custom role")).toBe("ceo");
   });
 
   it("strips approval gates from read-only implementation-plan objectives", async () => {
@@ -462,10 +465,13 @@ describe("generateOrchestrationPlan — content publishing mission fallback", ()
     );
     const roles = new Set(plan.steps.map((step) => step.agentRole));
 
-    for (const role of ["analyst", "growth", "content", "support", "sales", "finance", "escalation", "ceo"]) {
+    // SHRINK: the curated content-mission plan is remapped to the 5 active
+    // seats (analyst/finance/escalation → ceo, sales → growth) at finalization.
+    for (const role of ["ceo", "growth", "content", "support"]) {
       expect(roles.has(role as never)).toBe(true);
     }
-    expect(plan.steps[0].agentRole).toBe("analyst");
+    expect(["analyst", "finance", "sales", "escalation"].some((r) => roles.has(r as never))).toBe(false);
+    expect(plan.steps[0].agentRole).toBe("ceo");
     expect(plan.steps.some((step) => step.needsApproval && /paid ad|approval packet/i.test(step.title))).toBe(true);
     expect(plan.successCriteria.join(" ")).toContain("approval-gated");
   });

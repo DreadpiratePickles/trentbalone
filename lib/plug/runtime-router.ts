@@ -3,7 +3,7 @@ import { store } from "@/lib/store";
 import type { Subtask } from "@/lib/planner";
 import { makeId, nowIso } from "@/lib/utils";
 import { pinPlugVersion } from "@/lib/plug/versioning";
-import { plugMemoryNamespace, type PlugDefinition } from "@/lib/plug/schema-v2";
+import { plugMemoryNamespace, worstPlugReversibility, type PlugDefinition } from "@/lib/plug/schema-v2";
 import { getDefaultWorkbenchProvider } from "@/lib/workbench-providers";
 
 export type PlugInstallRecord = {
@@ -163,9 +163,22 @@ function buildPlugSubtask(
       },
     },
     contextBundle: {},
-    classification: { type: "plug", complexity: plug.complexityTier === "advanced" ? "complex" : "standard", reversibility: "reversible" },
+    classification: {
+      type: "plug",
+      complexity: plug.complexityTier === "advanced" ? "complex" : "standard",
+      // Derived from the Plug's worst-case action reversibility. The Subtask
+      // classification enum uses "costly" for the compensable class.
+      reversibility: subtaskReversibility(plug),
+    },
     budgetCents: seat.budgetCents,
   };
+}
+
+function subtaskReversibility(plug: PlugDefinition): "reversible" | "costly" | "irreversible" {
+  const worst = worstPlugReversibility(plug);
+  if (worst === "irreversible") return "irreversible";
+  if (worst === "compensable") return "costly";
+  return "reversible";
 }
 
 function renderTemplate(template: string, variables: Record<string, string>) {

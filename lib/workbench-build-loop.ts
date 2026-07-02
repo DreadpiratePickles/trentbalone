@@ -6,7 +6,7 @@ import type { WorkbenchProviderAdapter } from "@/lib/workbench-provider";
 import { recordSessionSpend } from "@/lib/workbench-orchestrator";
 import { verifyWithRetries, type VerifyCheck, type VerifyVerdict } from "@/lib/workbench-verify";
 import { resolveWorkbenchVerificationCommands } from "@/lib/workbench-command-resolver";
-import { parseArtifact, type ArtifactAction } from "@/lib/workbench-artifact-parser";
+import { parseArtifact, type ArtifactAction, type ParsedArtifact } from "@/lib/workbench-artifact-parser";
 import { applyEditBlocks, fastApply, parseEditBlocks } from "@/lib/workbench-edit-apply";
 import { resolveWorkbenchTemplate } from "@/lib/workbench-templates";
 import { planBuild } from "@/lib/workbench-build-planner";
@@ -293,6 +293,97 @@ export function buildDeploymentPlanSummary(userMessage: string): string {
   ].join("\n");
 }
 
+/**
+ * Sent as a follow-up user turn when the executor narrates instead of emitting
+ * the required XML. Keep the "did not contain a <boltArtifact>" phrasing — it is
+ * asserted by tests and is the signal the model recovers from.
+ */
+export const STRICT_ARTIFACT_REPROMPT =
+  "Your previous response did not contain a <boltArtifact>. You MUST respond with a single " +
+  "<boltArtifact> block that contains <boltAction> elements (type=\"file\"/\"shell\"/\"start\"). " +
+  "Do not write any prose, explanation, or markdown outside the artifact. Re-emit the COMPLETE " +
+  "solution now as a <boltArtifact>.";
+
+export type ArtifactStreamResult = {
+  artifact: ParsedArtifact | null;
+  raw: string;
+  inputTokens: number;
+  outputTokens: number;
+  reprompted: boolean;
+};
+
+/**
+ * Stream one executor turn into a parsed <boltArtifact>. When the model returns
+ * prose (or an actionless artifact) instead of the required XML — an intermittent
+ * failure that used to kill the whole build on the spot — re-prompt strictly ONE
+ * time before giving up. Returns `artifact: null` on final failure so the caller
+ * keeps ownership of the attempt bookkeeping + error. Token counts include both
+ * turns because both were really spent.
+ */
+export async function* streamArtifactWithRetry(
+  streamArtifact: AgentDeps["streamArtifact"],
+  messages: StreamInput["messages"],
+): AsyncGenerator<WorkbenchAgentChunk, ArtifactStreamResult> {
+  async function* runSegments(
+    segMessages: StreamInput["messages"],
+  ): AsyncGenerator<WorkbenchAgentChunk, { raw: string; inputTokens: number; outputTokens: number }> {
+    let raw = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
+    for (let seg = 0; seg < MAX_SEGMENTS; seg++) {
+      let lengthTruncated = false;
+      for await (const tok of streamArtifact({ messages: segMessages })) {
+        if (tok.type === "token") {
+          raw += tok.content;
+          if (!tok.content.includes("<bolt")) yield { type: "content", content: tok.content };
+        } else if (tok.type === "finish") {
+          lengthTruncated = tok.reason === "length";
+        } else if (tok.type === "usage") {
+          inputTokens += tok.inputTokens;
+          outputTokens += tok.outputTokens;
+        }
+      }
+      if (!lengthTruncated) break;
+      segMessages.push({ role: "assistant", content: raw });
+      segMessages.push({ role: "user", content: CONTINUE_PROMPT });
+      yield { type: "status", phase: "continuing", detail: "Response continued" };
+    }
+    return { raw, inputTokens, outputTokens };
+  }
+
+  const first = yield* runSegments([...messages]);
+  let artifact = parseArtifact(first.raw);
+  if (artifact && artifact.actions.length > 0) {
+    return {
+      artifact,
+      raw: first.raw,
+      inputTokens: first.inputTokens,
+      outputTokens: first.outputTokens,
+      reprompted: false,
+    };
+  }
+
+  yield {
+    type: "status",
+    phase: "reprompting",
+    detail: "Model returned prose instead of a build artifact; re-prompting strictly.",
+  };
+  const second = yield* runSegments([
+    ...messages,
+    { role: "assistant", content: first.raw },
+    { role: "user", content: STRICT_ARTIFACT_REPROMPT },
+  ]);
+  artifact = parseArtifact(second.raw);
+  const recovered = Boolean(artifact && artifact.actions.length > 0);
+  return {
+    artifact,
+    raw: recovered ? second.raw : `${first.raw}\n${second.raw}`,
+    inputTokens: first.inputTokens + second.inputTokens,
+    outputTokens: first.outputTokens + second.outputTokens,
+    reprompted: true,
+  };
+}
+
 export async function* runBuildLoop(
   session:     WorkbenchSession,
   userMessage: string,
@@ -512,28 +603,10 @@ export async function* runBuildLoop(
         : `Repair cycle ${attempt}/${MAX_BUILD_ATTEMPTS}`,
     };
 
-    let fullResponse = "";
-    let inputTokens  = 0;
-    let outputTokens = 0;
-
-    for (let seg = 0; seg < MAX_SEGMENTS; seg++) {
-      let lengthTruncated = false;
-      for await (const tok of deps.streamArtifact({ messages })) {
-        if (tok.type === "token") {
-          fullResponse += tok.content;
-          if (!tok.content.includes("<bolt")) yield { type: "content", content: tok.content };
-        } else if (tok.type === "finish") {
-          lengthTruncated = tok.reason === "length";
-        } else if (tok.type === "usage") {
-          inputTokens  += tok.inputTokens;
-          outputTokens += tok.outputTokens;
-        }
-      }
-      if (!lengthTruncated) break;
-      messages.push({ role: "assistant", content: fullResponse });
-      messages.push({ role: "user",      content: CONTINUE_PROMPT });
-      yield { type: "status", phase: "continuing", detail: "Response continued" };
-    }
+    const streamed = yield* streamArtifactWithRetry(deps.streamArtifact, messages);
+    const fullResponse = streamed.raw;
+    const inputTokens  = streamed.inputTokens;
+    const outputTokens = streamed.outputTokens;
 
     const spendCents = Math.ceil((inputTokens / 1000) * 0.15 + (outputTokens / 1000) * 0.6);
     const chargedCents = Math.max(spendCents, 1);
@@ -544,7 +617,7 @@ export async function* runBuildLoop(
       costCents: chargedCents,
     }).catch(() => {});
 
-    const artifact = parseArtifact(fullResponse);
+    const artifact = streamed.artifact;
     if (!artifact || artifact.actions.length === 0) {
       await store.updateWorkbenchAttempt(attemptRecord.id, {
         status: "failed",

@@ -1,6 +1,16 @@
 import { z } from "zod";
 import type { AgentRole } from "@/lib/types";
 
+/**
+ * Per-action reversibility class:
+ * - reversible:    no compensation needed to undo (reads, idempotent writes).
+ * - compensable:   undoable via a paired compensation action (e.g. cancel_booking).
+ * - irreversible:  cannot be undone once executed (e.g. send, charge, launch).
+ */
+export const PLUG_ACTION_REVERSIBILITY = ["reversible", "compensable", "irreversible"] as const;
+export const plugActionReversibilitySchema = z.enum(PLUG_ACTION_REVERSIBILITY);
+export type PlugActionReversibility = (typeof PLUG_ACTION_REVERSIBILITY)[number];
+
 export const plugSchemaV2 = z.object({
   id: z.string(),
   slug: z.string(),
@@ -13,6 +23,10 @@ export const plugSchemaV2 = z.object({
     toolId: z.string(),
     allowedActions: z.array(z.string()),
     approvalRequiredActions: z.array(z.string()).default([]),
+    // Per-action reversibility keyed by action name — not one flag per Plug.
+    actionReversibility: z.record(z.string(), plugActionReversibilitySchema),
+    // Optional map: compensable action name -> the action that undoes it.
+    compensations: z.record(z.string(), z.string()).optional(),
   })),
   integrations: z.array(z.string()),
   seats: z.array(z.object({
@@ -43,9 +57,33 @@ export const plugSchemaV2 = z.object({
 });
 
 export type PlugDefinition = z.infer<typeof plugSchemaV2>;
+export type PlugDeclaredTool = PlugDefinition["declaredTools"][number];
 
 export function toolActionAllowed(plug: PlugDefinition, toolId: string, action: string) {
   return plug.declaredTools.some((tool) => tool.toolId === toolId && tool.allowedActions.includes(action));
+}
+
+/** Reversibility class for a declared action; defaults to reversible if unmapped. */
+export function actionReversibilityFor(tool: PlugDeclaredTool, action: string): PlugActionReversibility {
+  return tool.actionReversibility[action] ?? "reversible";
+}
+
+/** Compensation (undo) action name for a compensable action, if declared. */
+export function compensationFor(tool: PlugDeclaredTool, action: string): string | undefined {
+  return tool.compensations?.[action];
+}
+
+/** Worst-case reversibility across every declared action in a Plug. */
+export function worstPlugReversibility(plug: PlugDefinition): PlugActionReversibility {
+  let worst: PlugActionReversibility = "reversible";
+  for (const tool of plug.declaredTools) {
+    for (const action of tool.allowedActions) {
+      const cls = actionReversibilityFor(tool, action);
+      if (cls === "irreversible") return "irreversible";
+      if (cls === "compensable") worst = "compensable";
+    }
+  }
+  return worst;
 }
 
 export function plugMemoryNamespace(plug: PlugDefinition, companyId: string) {

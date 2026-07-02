@@ -21,7 +21,7 @@ describe("Plug marketplace primitives", () => {
   it("supports evals, versioning, security review, composition, telemetry, revenue share, and forks", async () => {
     const [a, b] = listLaunchPlugs();
     await expect(runPlugEval(a)).resolves.toMatchObject({ subjectType: "plug", subjectId: a.id });
-    expect(isBreakingPlugChange(a, { ...a, declaredTools: [...a.declaredTools, { toolId: "stripe", allowedActions: ["charge"], approvalRequiredActions: ["charge"] }] })).toBe(true);
+    expect(isBreakingPlugChange(a, { ...a, declaredTools: [...a.declaredTools, { toolId: "stripe", allowedActions: ["charge"], approvalRequiredActions: ["charge"], actionReversibility: { charge: "irreversible" } }] })).toBe(true);
     expect(pinPlugVersion(a, "co_1")).toMatchObject({ companyId: "co_1", plugId: a.id, version: a.version });
     expect(reviewPlugSecurity(a).status).toBe("approved");
     expect(composePlugs([a, b], { maxDepth: 3, budgetCents: 1000 }).handoffs[0].fromPlugId).toBe(a.id);
