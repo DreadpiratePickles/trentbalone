@@ -1,8 +1,38 @@
-# trent
+<div align="center">
 
-**The one hire who does it all.**
+# 🧑‍💼 Trent
 
-Trent is an AI cofounder OS for solo founders and small teams. Specialist agents run your company around the clock — shipping code, drafting strategy, handling customers — and surface only the decisions that need you.
+### **The one hire who does it all.**
+
+![typescript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![next](https://img.shields.io/badge/Next.js%2015-000?logo=nextdotjs&logoColor=white)
+![prisma](https://img.shields.io/badge/Prisma%20%2B%20Postgres-2D3748?logo=prisma&logoColor=white)
+![redis](https://img.shields.io/badge/BullMQ%20%2B%20Redis-DC382D?logo=redis&logoColor=white)
+![llm](https://img.shields.io/badge/LLM-Anthropic%20%2B%20OpenAI-8A63D2)
+![tests](https://img.shields.io/badge/tests-1731%20passing-brightgreen)
+![typecheck](https://img.shields.io/badge/typecheck-0%20errors-brightgreen)
+![license](https://img.shields.io/badge/license-MIT-blueviolet)
+
+*Most "AI employee" demos are a chat box with a job title. This one has a budget,
+an approval queue, and an audit log — because an agent you cannot stop, cannot
+bill, and cannot review is not an employee. It is a liability.*
+
+</div>
+
+---
+
+## 🧭 Read the status table first
+
+Below is a table that says **Not-yet-wired** in three places. That is deliberate.
+
+Nothing here is marked *Working* unless a named command proves it, and the command
+is printed next to the claim so you can run it yourself. The roadmap section lists
+what exists in code but has **not** been validated end-to-end — separately, and
+honestly, rather than blended into the feature list.
+
+If you only read one thing to judge this project, read those two tables.
+
+---
 
 **Full local setup:** [docs/RUN.md](docs/RUN.md) (authoritative). **Env reference:** [`.env.example`](.env.example).
 
@@ -39,7 +69,7 @@ These exist in code or docs but are **not** claimed as shipped until they pass r
 - Full provisioning stack beyond GitHub → Neon → Vercel (R2, DNS, Sentry, Render, Expo, teardown n8n workflows)
 - Real social/ad publish (`PLATFORM_ACTION_MODE=live` + OAuth)
 - Production cron heartbeat sweep on a live deploy
-- a competing product-style overnight autonomy without manual triggers
+- Unattended overnight autonomy without manual triggers
 - `backend/server.py` legacy split-port FastAPI ingress proxy (optional; **not** the default LLM path — see `lib/ai-client.ts` + `OPENAI_API_KEY`)
 
 ---
