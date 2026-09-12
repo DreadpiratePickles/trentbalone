@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { execFileSync, execSync } from "node:child_process";
 import { mkdtempSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir} from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,7 +32,13 @@ function findBun(): string {
       return onPath;
     }
   } catch {
-    // fall through to the explicit failure below
+    // fall through to the standard install location below
+  }
+  // The official installer puts bun here and appends the PATH line to the shell rc,
+  // so a non-login shell (vitest, CI, a hook) will not see it on PATH yet.
+  const standard = path.join(homedir(), ".bun", "bin", "bun");
+  if (existsSync(standard)) {
+    return standard;
   }
   throw new Error(
     "bun not found. The store adapter is bun:sqlite and cannot be exercised without it. " +

@@ -1,32 +1,48 @@
-import { ConfigManager } from "../config/ConfigManager.js";
-import { QuickSetup } from "./QuickSetup.js";
-import { FullSetup } from "./FullSetup.js";
+import { ConfigManager } from "../config/index.js";
+import { TrentError, EXIT } from "../errors/TrentError.js";
 import { BlankSlate } from "./BlankSlate.js";
-import type { SetupOptions, SetupResult } from "./types.js";
+import { FullSetup } from "./FullSetup.js";
+import { QuickSetup } from "./QuickSetup.js";
+import { InquirerPrompts } from "./InquirerPrompts.js";
+import { ConsoleOutput } from "./ports.js";
+import type { SetupContext, SetupOptions, SetupResult } from "./types.js";
 
+/**
+ * Entry point for the three setup modes.
+ *
+ * Everything external — config manager, prompts, output, environment — is injected, so the same code
+ * path serves a real terminal and a test with a scripted answer stream. Nothing here reads a TTY
+ * directly and nothing imports `@inquirer/prompts` except the adapter that wraps it.
+ */
 export class SetupWizard {
-  private configManager: ConfigManager;
+  private readonly ctx: SetupContext;
 
-  constructor(configManager?: ConfigManager) {
-    this.configManager = configManager || new ConfigManager();
+  constructor(context: Partial<SetupContext> = {}) {
+    this.ctx = {
+      configManager: context.configManager ?? new ConfigManager(),
+      prompts: context.prompts ?? new InquirerPrompts(),
+      output: context.output ?? new ConsoleOutput(),
+      env: context.env ?? process.env,
+      ...(context.runDoctor ? { runDoctor: context.runDoctor } : {}),
+    };
   }
 
-  public async run(options: SetupOptions): Promise<SetupResult> {
+  async run(options: SetupOptions): Promise<SetupResult> {
+    this.ctx.configManager.ensureDirs();
+
     switch (options.mode) {
-      case "quick": {
-        const quick = new QuickSetup(this.configManager);
-        return await quick.execute(options);
-      }
-      case "full": {
-        const full = new FullSetup(this.configManager);
-        return await full.execute(options);
-      }
-      case "blank-slate": {
-        const blank = new BlankSlate(this.configManager);
-        return await blank.execute(options);
-      }
+      case "quick":
+        return await new QuickSetup(this.ctx).execute(options);
+      case "full":
+        return await new FullSetup(this.ctx).execute(options);
+      case "blank-slate":
+        return await new BlankSlate(this.ctx).execute(options);
       default:
-        throw new Error(`Unknown setup mode: ${(options as any).mode}`);
+        throw new TrentError({
+          code: EXIT.USAGE,
+          operation: "setup.run",
+          message: `unknown setup mode: ${String((options as { mode?: unknown }).mode)}`,
+        });
     }
   }
 }

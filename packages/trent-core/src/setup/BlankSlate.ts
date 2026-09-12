@@ -1,69 +1,78 @@
-import { ConfigManager } from "../config/ConfigManager.js";
-import { BLANK_SLATE_CONFIG } from "../config/defaults.js";
+import { DEFAULT_MODELS, primaryEnvVar } from "./detect.js";
+import { FullSetup } from "./FullSetup.js";
+import { MINIMAL_TOOLSETS, applyToolsets, providerChoices, withFleet } from "./steps.js";
+import { SetupRun } from "./SetupRun.js";
+import type { Provider } from "../config/schema.js";
 import type { SetupOptions, SetupResult } from "./types.js";
 
-export class BlankSlate {
-  private configManager: ConfigManager;
+/**
+ * Blank Slate: provider, model, `file_ops` and `terminal`. Nothing else.
+ *
+ * The important part is what it writes DOWN rather than what it leaves out. `platform_toolsets.cli`
+ * and `agent.disabled_toolsets` are both written explicitly so that a later `trent update` reading
+ * either one cannot re-enable a toolset the user never asked for. A config that lists only what is on
+ * gives a future release permission to turn on whatever it adds next.
+ *
+ * The walkthrough is offered afterwards and is opt-in, never assumed.
+ */
+export class BlankSlate extends SetupRun {
+  async execute(options: Partial<SetupOptions> = {}): Promise<SetupResult> {
+    const { configManager, prompts } = this.ctx;
+    const current = configManager.loadConfig();
 
-  constructor(configManager?: ConfigManager) {
-    this.configManager = configManager || new ConfigManager();
-  }
+    const provider =
+      options.provider ??
+      (await prompts.select<Provider>({
+        id: "provider",
+        message: "Model provider",
+        choices: providerChoices(),
+        default: current.provider,
+      }));
 
-  public async execute(options?: Partial<SetupOptions>): Promise<SetupResult> {
-    this.configManager.ensureDirs();
+    const modelDefault =
+      current.provider === provider ? current.model : DEFAULT_MODELS[provider];
+    const model =
+      options.model ??
+      (await prompts.input({ id: "model", message: "Model", default: modelDefault }));
 
-    const provider = options?.provider || "openai";
-    const model = options?.model || "gpt-5.6-terra";
+    if (options.apiKey) this.saveSecret(primaryEnvVar(provider), options.apiKey);
 
-    const config = {
-      ...BLANK_SLATE_CONFIG,
-      provider,
-      model,
-      toolsets: ["file_ops", "terminal"] as any,
-      disabled_toolsets: [
-        "web",
-        "browser",
-        "code",
-        "vision",
-        "memory",
-        "delegation",
-        "cron",
-        "skills",
-        "plugins",
-        "mcp",
-      ] as any,
-      fleet: {
-        installed_agents: ["ceo"],
-        active_agents: ["ceo"],
-        default_agent: "ceo",
-      },
-    };
+    const base = { ...current, provider, model };
+    const config = withFleet(applyToolsets(base, MINIMAL_TOOLSETS), ["ceo"]);
+    configManager.saveConfig(config);
 
-    this.configManager.saveConfig(config);
+    this.say(`Provider: ${provider}`);
+    this.say(`Model: ${model}`);
+    this.say(`Enabled toolsets: ${MINIMAL_TOOLSETS.join(", ")}`);
+    this.say(
+      `Explicitly disabled: ${config.disabled_toolsets.join(", ")} (written to disabled_toolsets, agent.disabled_toolsets and platform_toolsets.cli)`,
+    );
+    this.say(`Config at ${configManager.getConfigPath()}.`);
 
-    const secretsConfigured: string[] = [];
-    if (options?.apiKey) {
-      const keyName =
-        provider === "anthropic"
-          ? "ANTHROPIC_API_KEY"
-          : provider === "google"
-          ? "GOOGLE_API_KEY"
-          : provider === "mistral"
-          ? "MISTRAL_API_KEY"
-          : provider === "openrouter"
-          ? "OPENROUTER_API_KEY"
-          : "OPENAI_API_KEY";
+    const walkthrough = await prompts.confirm({
+      id: "walkthrough",
+      message: "Walk through the full setup now to add toolsets, agents and budgets?",
+      default: false,
+    });
 
-      this.configManager.saveSecrets({ [keyName]: options.apiKey });
-      secretsConfigured.push(keyName);
+    if (walkthrough) {
+      this.say("Starting the full walkthrough. Press enter to keep any current value.");
+      const full = await new FullSetup(this.ctx).execute({ mode: "full" });
+      for (const line of full.output) this.lines.push(line);
+      return {
+        ...full,
+        mode: "blank-slate",
+        secretsConfigured: [...new Set([...this.secretsConfigured, ...full.secretsConfigured])],
+        output: [...this.lines],
+      };
     }
 
-    return {
-      mode: "blank-slate",
-      success: true,
-      message: `Blank Slate baseline configured. Minimal agent only (provider: ${provider}, model: ${model}, file_ops, terminal). All 10 extended toolsets explicitly disabled.`,
-      config,
-      secretsConfigured,
-    };
+    await this.doctor();
+
+    return this.ok(
+      "blank-slate",
+      `Blank Slate configured. Provider ${provider}, model ${model}, ${MINIMAL_TOOLSETS.length} toolsets enabled, ${config.disabled_toolsets.length} explicitly disabled.`,
+      configManager.loadConfig(),
+    );
   }
 }

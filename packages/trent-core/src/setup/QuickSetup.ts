@@ -1,77 +1,86 @@
-import { ConfigManager } from "../config/ConfigManager.js";
-import { DEFAULT_CONFIG } from "../config/defaults.js";
+import {
+  DEFAULT_MODELS,
+  detectProviderKeys,
+  missingKeyGuidance,
+  primaryEnvVar,
+} from "./detect.js";
+import { ALL_TOOLSETS, STARTER_AGENTS, applyToolsets, withFleet } from "./steps.js";
+import { SetupRun } from "./SetupRun.js";
 import type { SetupOptions, SetupResult } from "./types.js";
+import type { Provider } from "../config/schema.js";
 
-export class QuickSetup {
-  private configManager: ConfigManager;
+/**
+ * Quick: use what is already here.
+ *
+ * It detects provider keys, shows what it found by NAME, asks for one confirmation, writes the
+ * config and installs the three starter agents. There is deliberately no browser sign-in step: there
+ * is no portal to sign into, so the failure path names the exact variable and the exact file instead
+ * of miming an authorization flow.
+ */
+export class QuickSetup extends SetupRun {
+  async execute(options: Partial<SetupOptions> = {}): Promise<SetupResult> {
+    const { configManager, prompts, env } = this.ctx;
 
-  constructor(configManager?: ConfigManager) {
-    this.configManager = configManager || new ConfigManager();
-  }
-
-  public async execute(options?: Partial<SetupOptions>): Promise<SetupResult> {
-    this.configManager.ensureDirs();
-
-    const provider = options?.provider || "openai";
-    const model = options?.model || "gpt-5.6-terra";
-
-    const config = {
-      ...DEFAULT_CONFIG,
-      provider,
-      model,
-      toolsets: [
-        "file_ops",
-        "terminal",
-        "web",
-        "browser",
-        "code",
-        "vision",
-        "memory",
-        "delegation",
-        "cron",
-        "skills",
-        "plugins",
-        "mcp",
-      ] as any,
-      disabled_toolsets: [],
-      fleet: {
-        installed_agents: ["ceo", "eng-ai-engineer", "support-responder"],
-        active_agents: ["ceo"],
-        default_agent: "ceo",
-      },
-      budget: {
-        daily_cap: options?.dailyBudget || 10.0,
-        currency: "USD",
-        per_run_cap: 1.0,
-        alert_thresholds: [50, 80, 100],
-      },
-    };
-
-    this.configManager.saveConfig(config);
-
-    const secretsConfigured: string[] = [];
-    if (options?.apiKey) {
-      const keyName =
-        provider === "anthropic"
-          ? "ANTHROPIC_API_KEY"
-          : provider === "google"
-          ? "GOOGLE_API_KEY"
-          : provider === "mistral"
-          ? "MISTRAL_API_KEY"
-          : provider === "openrouter"
-          ? "OPENROUTER_API_KEY"
-          : "OPENAI_API_KEY";
-
-      this.configManager.saveSecrets({ [keyName]: options.apiKey });
-      secretsConfigured.push(keyName);
+    if (options.apiKey && options.provider) {
+      this.saveSecret(primaryEnvVar(options.provider), options.apiKey);
     }
 
-    return {
-      mode: "quick",
-      success: true,
-      message: `Quick setup complete! Configured ${provider} (${model}), Tool Gateway enabled, and 3 starter agents installed (CEO, Engineer, Support).`,
-      config,
-      secretsConfigured,
-    };
+    const detected = detectProviderKeys(configManager, env, options.provider);
+
+    if (detected.length === 0) {
+      for (const line of missingKeyGuidance(configManager)) this.say(line);
+      return this.abort(
+        "quick",
+        options.provider
+          ? `No key found for ${options.provider}. Set ${primaryEnvVar(options.provider)} in your environment or in ${configManager.getSecretsPath()}, then run setup again.`
+          : `No provider key found. Set OPENAI_API_KEY (or another provider variable listed above) in your environment or in ${configManager.getSecretsPath()}, then run setup again.`,
+      );
+    }
+
+    this.say("Found the following provider keys:");
+    for (const key of detected) {
+      this.say(`  ${key.provider}: ${key.envVar} (from your ${key.source})`);
+    }
+
+    const provider =
+      detected.length === 1
+        ? (detected[0] as (typeof detected)[number]).provider
+        : await prompts.select<Provider>({
+            id: "provider",
+            message: "Which provider should Trent use by default?",
+            choices: detected.map((d) => ({ name: `${d.provider} (${d.envVar})`, value: d.provider })),
+            default: (detected[0] as (typeof detected)[number]).provider,
+          });
+
+    const model = options.model ?? DEFAULT_MODELS[provider];
+
+    this.blank();
+    this.say(`Provider: ${provider}`);
+    this.say(`Model: ${model}`);
+    this.say(`Toolsets: all ${ALL_TOOLSETS.length} enabled`);
+    this.say(`Starter agents: ${STARTER_AGENTS.join(", ")}`);
+
+    const proceed = await prompts.confirm({
+      id: "confirm",
+      message: "Write this configuration?",
+      default: true,
+    });
+
+    if (!proceed) {
+      return this.abort("quick", "Setup cancelled. No configuration was written.");
+    }
+
+    const base = { ...configManager.loadConfig(), provider, model };
+    const config = withFleet(applyToolsets(base, ALL_TOOLSETS), STARTER_AGENTS);
+    configManager.saveConfig(config);
+
+    await this.doctor();
+
+    return this.ok(
+      "quick",
+      `Quick setup complete. Provider ${provider}, model ${model}, ${STARTER_AGENTS.length} starter agents, config at ${configManager.getConfigPath()}.`,
+      configManager.loadConfig(),
+    );
   }
 }
+
