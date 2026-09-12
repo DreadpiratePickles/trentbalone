@@ -1,0 +1,25 @@
+{
+  "name": "trent-cli",
+  "version": "1.0.0",
+  "type": "module",
+  "bin": {
+    "trent": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "start": "tsx src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@trent/core": "*",
+    "@types/react": "^19.3.0",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "ink": "^7.1.1",
+    "ora": "^8.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.6"
+  }
+}

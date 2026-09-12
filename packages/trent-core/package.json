@@ -1,0 +1,40 @@
+{
+  "name": "@trent/core",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./config": "./src/config/index.ts",
+    "./sessions": "./src/sessions/index.ts",
+    "./doctor": "./src/doctor/index.ts",
+    "./fleet": "./src/fleet/index.ts",
+    "./skills": "./src/skills/index.ts",
+    "./setup": "./src/setup/index.ts",
+    "./gateway": "./src/gateway/index.ts",
+    "./egress": "./src/egress/index.ts",
+    "./terminal": "./src/terminal/index.ts",
+    "./voice": "./src/voice/index.ts",
+    "./acp": "./src/acp/index.ts",
+    "./personalities": "./src/personalities/index.ts",
+    "./updater": "./src/updater/index.ts",
+    "./traces": "./src/traces/index.ts",
+    "./a2a": "./src/a2a/index.ts",
+    "./governance": "./src/governance/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^3.25.28",
+    "yaml": "^2.7.0",
+    "dotenv": "^16.4.7",
+    "chalk": "^5.4.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.6"
+  }
+}

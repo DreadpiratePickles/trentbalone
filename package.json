@@ -1,0 +1,26 @@
+{
+  "name": "trent-fleet-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "build": "npm run --workspaces --if-present build",
+    "cli": "tsx apps/cli/src/index.ts",
+    "tui": "tsx apps/cli/src/index.ts --tui",
+    "doctor": "tsx apps/cli/src/index.ts doctor"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.6"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "ora": "^9.4.1"
+  }
+}
