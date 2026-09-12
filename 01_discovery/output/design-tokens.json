@@ -1,0 +1,47 @@
+{
+  "source": "apps/web/app/styles/base.css (imported by apps/web/app/globals.css)",
+  "extractedAt": "2026-09-12",
+  "authority": "AUTHORITATIVE — do not invent colors. Anti-pattern #5.",
+  "color": {
+    "obsidian": "#0A0A0F",
+    "ink": "#11111A",
+    "steel": "#1B1B26",
+    "slate": "#262633",
+    "haze": "#4A4A57",
+    "mist": "#94A3B8",
+    "bone": "#F1ECE2",
+    "bone2": "#E6E0D3",
+    "pulse": "#6EE7B7",
+    "pulseDeep": "#10B981",
+    "ember": "#FB923C",
+    "emberDeep": "#EA580C",
+    "danger": "#F87171"
+  },
+  "roleMapping": {
+    "background": "obsidian",
+    "surface": "ink",
+    "surfaceRaised": "steel",
+    "surfaceOverlay": "slate",
+    "border": "slate",
+    "textPrimary": "bone",
+    "textSecondary": "mist",
+    "textMuted": "haze",
+    "accentPrimary": "pulse",
+    "accentSecondary": "ember",
+    "error": "danger"
+  },
+  "font": {
+    "display": "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
+    "mono": "JetBrains Mono, ui-monospace, monospace",
+    "serif": "Instrument Serif, Times New Roman, serif"
+  },
+  "radius": { "sm": "6px", "md": "14px", "lg": "22px", "xl": "32px" },
+  "spacing": { "padCard": "28px", "padRow": "12px" },
+  "motion": { "easeOutExpo": "cubic-bezier(0.16, 1, 0.3, 1)" },
+  "shadow": { "soft": "0 1px 0 rgba(255,255,255,.04) inset, 0 30px 80px -30px rgba(0,0,0,.6)" },
+  "notes": [
+    "The v1 spec documents called for #8B5CF6 purple and #0F1117. Those are NOT the app's tokens and must not be used.",
+    "'mint' in the master prompt maps to --pulse #6EE7B7.",
+    "Agent role colors must be derived from this palette, not from the v1 purple set."
+  ]
+}
