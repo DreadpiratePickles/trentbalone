@@ -134,3 +134,41 @@ against the verified Gemini key · 1.5 Prisma-on-SQLite store with the vendored 
 a restart-durability test · 1.6 orchestrator wrapper with an owned drain loop · 1.7 wrap the remaining
 eight lib modules plus the anti-pattern-2 import-graph test.
 Agents do not commit; the orchestrator reviews and commits.
+
+### Milestone 1 COMPLETE — 6 tasks, 145 tests, all test-first
+| task | tests | the evidence that makes it real |
+|---|---|---|
+| 1.1 env contract | 3 | a guard test REPRODUCED the double-execution bug before the fix |
+| 1.2 error taxonomy | 18 | secrets redacted by key name AND by value shape, recursively |
+| 1.3 config rebuild | 25 | loadSecrets never wrote process.env, silently defaulting every model name |
+| 1.4 live gateway | 13 | real Gemini tokens, real usage, asserted NOT to be the canned proxy string |
+| 1.6 orchestrator | 8 | a real 3-step run, 2 agent roles, exactly one run_done |
+| 1.7 wrappers | 47 | **19 lib modules wrapped, counted from the import graph, floor is 8** |
+| 1.5 sqlite store | 23 | **a run survives a process restart** — closes review finding C-1 |
+
+Notable finds during the milestone:
+- `apps/web/lib/ai-client.ts:73`'s hardcoded google default `gemini-2.0-flash` is **retired and 404s**;
+  `gemini-2.5-flash` is refused for new keys. Every new Google key on the platform hits a dead model.
+- The same file requests usage reporting only for openai, so Google streams carry no usage; the
+  wrapper estimates and marks `estimated: true` rather than pretending.
+- Upstream Prisma 6.19.3 defect: `migrate diff` emits SQLite Json defaults as bare `DEFAULT {}`, which
+  SQLite rejects. The derivation script quotes them and throws if any survive.
+- `better-sqlite3` cannot compile against Node 26 here, so the store is proven on the REAL bun runtime
+  as a child process rather than against a driver we do not ship.
+
+### Machine change
+Bun 1.4.2 installed to `~/.bun` (it is the SQLite runtime and the binary compiler). Its installer
+appended 6 lines to `~/.zshrc`; kept this time because bun is now a genuine project dependency.
+Backup at `<scratchpad>/zshrc.before-bun-install`.
+
+### Hermes source read (Layer 3 reference committed)
+Their repo: 272 MB, 12,778 files, Python agent + TS/TSX TUI and Electron desktop.
+**They have NO egress credential isolation at all** — no TLS interception, no CA injection, no
+allowlist, and docker-compose runs `network_mode: host`. That makes our egress proxy a differentiator
+rather than parity work. Also adopted: their subshell installer-frame guarantee, approval floors that
+fire before bypasses over deobfuscated command variants, and persist-before-execute in the tool round.
+Rejected: unpinned curl-to-bash with no checksums, two divergent installers, a doctor that exits 0 on
+failure, and an unbounded iteration default.
+
+### In flight (6 agents)
+doctor rebuild · setup wizard · CLI visual foundation · TLS egress proxy · CI pipeline · session privacy.
