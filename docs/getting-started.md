@@ -1,100 +1,174 @@
-# Getting Started with Trent Fleet
+# Getting started
 
-Trent Fleet is a hybrid AI cofounder platform combining an autonomous CLI binary, an Ink-based TUI, a high-performance Tauri desktop app, and an extensible multi-agent fleet with 164 pre-configured specialists.
+From a clone to a first real conversation. There is no installer yet, so every command below runs
+through the workspace.
 
-```
-  ████████╗██████╗ ███████╗███╗   ██╗████████╗
-  ╚══██╔══╝██╔══██╗██╔════╝████╗  ██║╚══██╔══╝
-     ██║   ██████╔╝█████╗  ██╔██╗ ██║   ██║   
-     ██║   ██╔══██╗██╔══╝  ██║╚██╗██║   ██║   
-     ██║   ██║  ██║███████╗██║ ╚████║   ██║   
-     ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═══╝   ╚═╝   
-       ⚡ F L E E T · A I   C O F O U N D E R ⚡
-```
+## 1. Requirements
 
----
+| Tool | Why | Checked by |
+|---|---|---|
+| Node 22 or newer | Runs the CLI and the test suite | `trent doctor`, Dependencies check |
+| npm | Workspace installs | `trent doctor`, Dependencies check |
+| git | Required by the dependencies check | `trent doctor`, Dependencies check |
+| Docker | Only for the `docker` sandbox backend | `trent doctor`, Workbench check |
+| bun | Only for the SQLite store and the binary build | Not yet checked by doctor |
 
-## 1. Quick Installation
+Docker is optional. Without it, set the terminal backend to `local` and everything else works. bun is
+optional today because there is no binary build step you need to run.
 
-### macOS / Linux (One-Line Installer)
-Install Trent to `~/.trent` without root/sudo:
+## 2. Clone and install
+
 ```bash
-curl -fsSL https://trent.ai/install.sh | bash
+git clone <your remote> trent && cd trent
+npm install
 ```
-Or run the local installer:
+
+`npm install` sets up the workspaces in `packages/*` and `apps/*`. It does not install anything into
+`~/.trent`.
+
+## 3. Check what is missing
+
 ```bash
-./scripts/install.sh
+npm run cli -- doctor
 ```
 
-### Windows (PowerShell)
-```powershell
-irm https://trent.ai/install.ps1 | iex
+On a fresh machine this reports failures, and that is the point. Real output from this repository:
+
 ```
-Or run locally:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+TRENT DOCTOR
+
+  ✓ Config Validity           Valid configuration (2 profiles loaded)
+  ✗ API Credentials           ANTHROPIC_API_KEY is not a usable Anthropic key: key is 16
+                              characters; an Anthropic key is at least 40. This looks like a
+                              placeholder.
+      fix: Replace it with a real key: `trent config set ANTHROPIC_API_KEY <your-api-key>`.
+  ✗ Standalone Environment Contract
+                              The standalone environment contract is violated
+                              (TRENT_QUEUE_FALLBACK must be "disabled"; ...).
+  ✓ Fleet Agents              5 installed agent(s) loaded, 4 active.
+  ...
+  total 13  passed 7  warnings 3  failed 2  skipped 1  in 880ms
+  2 check(s) failed — exit 3
 ```
 
-Once installed, ensure `~/.trent/bin` is in your `PATH`.
+Exit code 3 means configuration. See [doctor.md](doctor.md).
 
----
+## 4. Set the environment contract
 
-## 2. Running Setup
-
-Trent offers three distinct setup profiles matching your workflow:
-
-### Quick Setup (Fast-Path Bootstrap)
-Configures your default model provider and installs the core cofounder trio (CEO, Engineer, Support):
 ```bash
-trent setup --mode quick --provider anthropic --key sk-ant-...
+export TRENT_QUEUE_FALLBACK=disabled
+unset TRENT_EVAL_SYNC_QUEUE REDIS_URL UPSTASH_REDIS_REST_URL UPSTASH_REDIS_REST_TOKEN
 ```
 
-### Full Setup (Multi-Model & All Connectors)
-Interactive guided configuration for all 6 model providers, 8 messaging adapters, and developer toolsets:
+This is not optional and it is not a performance tweak. Without it the application's inline queue
+fallback races the CLI's own drain loop and every job executes twice. Measured on a three-step run:
+31 worker invocations, 13 step executions, `run_done` emitted ten times, nothing on stderr, final
+status `completed`. You would only find out from the bill.
+
+Put those lines in your shell profile, or in a `.envrc`, so a second terminal does not silently lose
+them.
+
+## 5. Run setup
+
 ```bash
-trent setup --mode full
+npm run cli -- setup --mode quick
 ```
 
-### Blank Slate (Minimal Zero-Extension Baseline)
-Sets up a strict minimal agent with no extra toolsets, no external skills, and no autonomous background daemons:
+Three modes exist:
+
+- `--mode quick` writes a default provider and model and the core seats. With no keys present it
+  names the environment variables and the `.env` path and writes no credentials. It does not fake an
+  OAuth flow.
+- `--mode full` walks every provider, messaging platform and toolset interactively.
+- `--mode blank-slate` writes explicit disable lists for toolsets, skills and background work.
+
+Setup writes `~/.trent/config.yaml`. Bare `npm run cli --` with no config on disk runs quick setup
+automatically. `doctor`, `setup`, `config` and `uninstall` never do, because those are what you run
+when the config is the broken thing.
+
+## 6. Add a model key
+
+The live model path is proven against Google Gemini. Get a key from Google AI Studio, then:
+
 ```bash
-trent setup --mode blank-slate
+npm run cli -- config set GEMINI_API_KEY <your-key>
+npm run cli -- config set provider google
 ```
 
----
+`config set` routes any key the secrets schema recognises to `~/.trent/.env` rather than
+`config.yaml`, and `config get` on a secret reports `[set]`, never the value:
 
-## 3. Starting Trent
+```
+$ npm run cli -- config get ANTHROPIC_API_KEY
+  ANTHROPIC_API_KEY [set]
+```
 
-### Classic Interactive REPL
-Launch the cofounder chat session in your terminal:
+Then confirm the key actually authenticates:
+
 ```bash
-trent
+npm run cli -- doctor
 ```
 
-### Full-Screen Interactive TUI
-Launch the split-screen terminal interface with the live fleet rail, approval prompts, and daily budget ticker:
+The credentials check does not test for presence. It checks the key's shape against the provider's
+real format, then makes one cheap authenticated call: a one-token completion for Anthropic, a models
+listing for OpenAI and Google. A placeholder that looks plausible fails here.
+
+### Pick a model that still exists
+
+Set `GOOGLE_MODEL_DEFAULT` explicitly. The hard-coded Google default in the wrapped application,
+`apps/web/lib/ai-client.ts:73`, is `gemini-2.0-flash`, which is retired and returns 404, and
+`gemini-2.5-flash` is refused for keys created recently. The live gateway test uses
+`gemini-3.6-flash`.
+
 ```bash
-trent --tui
+export GOOGLE_MODEL_DEFAULT=gemini-3.6-flash
 ```
 
-### Resume Previous Session
-Pick up exactly where you left off in your last cofounder discussion:
-```bash
-trent --continue
-# or
-trent -c
+Google streams do not carry usage numbers, because the wrapped client requests usage reporting for
+OpenAI only. The gateway estimates the cost and marks the record `estimated: true` rather than
+reporting a guess as measured.
+
+## 7. What happens with no key
+
+Trent still starts, and it tells you loudly what you are looking at. With no provider key present in
+any of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY` or
+`OPENROUTER_API_KEY`, the planner falls back to deterministic plans and the critic auto-passes. Both
+are silent upstream, so the REPL prints a banner before the first turn and marks every agent line
+`DEGRADED` for the rest of the session:
+
+```
+◆ DEGRADED MODE — no provider key is configured.
+  Plans are deterministic fallbacks and the critic auto-passes.
+  Nothing below is real model output. Run `trent doctor` to fix it.
 ```
 
-### System Diagnostics
-Verify your credentials, sandbox runtime, and agents:
+If you see `DEGRADED`, nothing on the screen came from a model.
+
+## 8. Start a conversation
+
 ```bash
-trent doctor
-trent doctor --fix
+npm run cli --          # REPL
+npm run tui             # full-screen Ink TUI
+npm run cli -- --continue
 ```
 
-### Desktop Application
-Run the native desktop app with system tray, notifications, and embedded terminal:
+Both surfaces run on the same session engine and the same model gateway. In the REPL, Ctrl+C aborts
+the in-flight stream and leaves the process alive; Ctrl+J inserts a newline.
+
+## 9. Verify
+
+Everything in this page is checkable:
+
 ```bash
-npm --prefix apps/desktop run tauri dev
+npm run cli -- --version        # 1.0.0
+npm run cli -- doctor --json    # machine-readable report, exit 3 on failure
+npm run cli -- fleet status     # active, installed, catalog, budget
+npm run cli -- sessions list
 ```
-Global toggle hotkey: `Cmd+Shift+T` (macOS) or `Ctrl+Shift+T` (Linux/Windows).
+
+## Not yet implemented
+
+- `curl … | bash` installation, and any hosted install script. `agent.let-trent.uk` is a DNS record
+  that serves nothing.
+- A `trent` binary on your `PATH`. Use `npm run cli --`.
+- Windows support. Nothing has been run there.

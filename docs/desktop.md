@@ -1,46 +1,90 @@
-# Trent Desktop Application
+# Desktop app
 
-The Trent Desktop App provides a companion workstation built with Tauri, React, and Tailwind CSS.
+`apps/desktop/` is a Tauri v1 shell with its own React 19 frontend. It is the least finished surface
+in the repository. Read this page before relying on any of it.
 
----
+## What it is today
 
-## Key Features
+- **Tauri v1**, not v2. `Cargo.toml` pins `tauri = "1.6"` and `tauri-build = "1.5"`; the npm side
+  pins `@tauri-apps/api` and `@tauri-apps/cli` at `^1.6`. The design calls for v2. The migration has
+  not happened.
+- **A separate React frontend**, built by Vite from `apps/desktop/src/`. It does not load, embed or
+  wrap `apps/web/`. There is no bundled Bun runtime and no `.next/standalone/` in
+  `tauri.conf.json`'s `resources`, which is empty.
+- **A global shortcut** registered as `CommandOrControl+Shift+T`, which shows or hides the main
+  window. This part works as described.
+- **A system tray** with a menu, built in `src-tauri/src/main.rs`.
 
-1. **System Tray Integration**:
-   - Dynamic tray icon reflects fleet activity:
-     - 🟢 **Active**: Agents are running subtasks.
-     - 🟡 **Idle**: Monitoring workspace and ready for input.
-     - 🔴 **Approval Required**: An agent has paused for human sign-off.
-   - Quick menu: Open chat, view pending approvals, run doctor diagnostics, quit.
-
-2. **Global Hotkey Overlay**:
-   - Press `Cmd+Shift+T` (macOS) or `Ctrl+Shift+T` (Linux/Windows) anywhere on your computer to toggle the Trent window.
-
-3. **Native Desktop Notifications**:
-   - Instant OS alerts when cofounders complete long-running tasks, encounter errors, or request action approvals.
-
-4. **Embedded Terminal**:
-   - Live interactive terminal running Trent's PTY engine. Execute `trent doctor`, `trent fleet`, or bash commands without switching apps.
-
-5. **Approval Bridge & Action Queue**:
-   - Visual inspection of proposed shell commands and file changes with one-click **Approve** or **Deny**.
-
-6. **164-Specialist Fleet Explorer**:
-   - Filter and deploy domain cofounders with instant category sorting and pack deployment.
-
----
-
-## Running in Development
+## The build does not work
 
 ```bash
-# In the repository root:
-npm run --prefix apps/desktop tauri dev
+cd apps/desktop && npx tauri build --debug
 ```
 
-## Building Native Installers
+```
+Error `tauri.conf.json` error on `tauri > allowlist`: Additional properties are not allowed
+('systemTray' was unexpected)
+```
+
+`systemTray` is not a v1 allowlist key. The configuration is rejected before compilation starts, so
+`tauri build` and `tauri dev` both fail. There is also no `src-tauri/icons/` directory, though
+`tauri.conf.json` lists five icon files, so the build would fail again on icons once the allowlist is
+fixed. No 1024x1024 application icon has been authored.
+
+The frontend alone does build:
 
 ```bash
-# Produces .dmg (macOS), .msi/.exe (Windows), or .AppImage/.deb (Linux):
-npm run --prefix apps/desktop tauri build
+cd apps/desktop && npm run build
 ```
-The compiled binaries will be output to `apps/desktop/src-tauri/target/release/bundle/`.
+
+```
+✓ 1611 modules transformed.
+dist/assets/index-S9D9lcqa.js  310.20 kB │ gzip: 90.30 kB
+✓ built in 9.69s
+```
+
+## The tray does not change colour
+
+`set_system_tray_state` takes `"active"`, `"idle"` or `"approval"` and calls `tray.set_tooltip`. That
+is the whole function. The icon is `icons/32x32.png` for every state, and that file does not exist.
+Any description of a green, amber or red tray icon is wrong.
+
+## The embedded terminal is a simulator
+
+`apps/desktop/src/terminal.ts` is a string matcher, not a terminal. It has no child process, no PTY,
+no shell. Typing `trent doctor` in it appends fixed lines:
+
+```
+Running 12 diagnostics across config, credentials, agents, and systems...
+✓ Config: valid configuration loaded
+✓ Credentials: key detected and verified
+✓ Agents: 3 installed cofounders, 1 active, 164 specialists ready
+✓ Doctor: All 12 diagnostics passed! Fleet system operational.
+```
+
+None of that is real. The real doctor has 13 checks, fails on this machine, and exits 3. Any other
+input falls through to `[PTY] Executed '<command>' successfully. Exit code: 0.`, which is printed
+regardless of what you typed. Use the CLI.
+
+## The "single binary" claim is retired for desktop
+
+Next.js cannot be compiled into one binary. A spike measured 20 unresolved specifiers, and building
+with `--external` produced a 169 MB binary that 404s its own chunks. The intended packaging is the
+Bun runtime plus `.next/standalone/` shipped as Tauri resources, which makes the honest claim **no
+external dependencies to install** — true, because the runtime is vendored — and not "a single
+binary".
+
+## Not yet implemented
+
+Everything below was previously documented as a feature and is not built:
+
+- The desktop app wrapping the web application. It renders its own React frontend instead.
+- Tauri v2.
+- A working `tauri dev` or `tauri build`.
+- Native OS notifications on task completion, error or approval. `notifications.ts` exists; nothing
+  drives it from a real run.
+- An embedded terminal that runs anything.
+- A tray icon that reflects fleet state.
+- An approval queue backed by the durable approval gate.
+- A fleet explorer backed by the real catalog.
+- Any signed installer: `.dmg`, `.msi`, `.AppImage` or `.deb`.

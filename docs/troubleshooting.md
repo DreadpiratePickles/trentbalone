@@ -1,0 +1,188 @@
+# Troubleshooting
+
+Failure modes that have actually happened here, with the command that identifies each one.
+
+## A placeholder key passes as configured
+
+Symptom: the doctor is green, live tests are skipped rather than failed, and every model response is
+a deterministic plan.
+
+Cause: a 16-character placeholder sat in `~/.trent/.env` under `ANTHROPIC_API_KEY`. The old
+credentials check tested for presence, so it reported green. A `skipIf(!KEY)` live test also reads as
+green when it is skipped, so nothing anywhere disagreed.
+
+Identify:
+
+```bash
+npm run cli -- doctor --json | grep -A4 '"category": "Credentials"'
+```
+
+```
+"status": "fail",
+"message": "ANTHROPIC_API_KEY is not a usable Anthropic key: key is 16 characters; an Anthropic key
+            is at least 40. This looks like a placeholder.",
+```
+
+Fix: `npm run cli -- config set ANTHROPIC_API_KEY <real key>`, then run the doctor again. It
+validates the shape and then makes one cheap authenticated call, so a plausible-looking string still
+fails.
+
+Related: if the REPL prints `DEGRADED MODE` or marks agent lines `DEGRADED`, no provider key was
+found at all and nothing on screen is model output.
+
+## Every job runs twice and the bill quadruples
+
+Symptom: no error, no warning, a run status of `completed`, and roughly four times the expected
+spend. `run_done` fires more than once.
+
+Cause: `TRENT_QUEUE_FALLBACK` is not `disabled`. The wrapped application's inline queue fallback at
+`apps/web/lib/queue.ts:189` fires each job through `setTimeout` while the CLI is also draining the
+queue explicitly. Both run. Under vitest, `NODE_ENV=test` suppresses the fallback, which is why this
+never shows up in a test run and always shows up in a real one.
+
+Measured on a three-step run: 31 worker invocations, 13 step executions, `run_done` emitted ten
+times, zero bytes on stderr.
+
+Identify:
+
+```bash
+npm run cli -- doctor --json | grep -A4 '"category": "Environment"'
+```
+
+Fix:
+
+```bash
+export TRENT_QUEUE_FALLBACK=disabled
+unset TRENT_EVAL_SYNC_QUEUE REDIS_URL UPSTASH_REDIS_REST_URL UPSTASH_REDIS_REST_TOKEN
+```
+
+Put these in your shell profile. A second terminal without them behaves differently from the first,
+which is the worst version of this bug.
+
+## The retired Google default model 404s
+
+Symptom: a valid Gemini key, a passing credentials check, and a 404 from the provider on the first
+real call.
+
+Cause: `apps/web/lib/ai-client.ts:73` hard-codes `gemini-2.0-flash` as the Google default. That model
+is retired. `gemini-2.5-flash` is refused for recently created keys. Every new Google key on the
+platform hits a dead model unless the default is overridden.
+
+Fix:
+
+```bash
+export GOOGLE_MODEL_DEFAULT=gemini-3.6-flash
+```
+
+The live gateway test reads the same variable and defaults to the same model. `apps/web/` is
+read-only in this repository, so this is reported rather than patched.
+
+Related: Google streams carry no usage numbers, because the wrapped client requests usage reporting
+for OpenAI only. The gateway estimates and marks the record `estimated: true`. A cost that says
+estimated is an estimate.
+
+## A 429 from the provider fails the live tests
+
+Symptom: `npm run test:live` fails with `429 status code (no body)` from `openai/src/core.ts`.
+
+Cause: rate limiting on a free-tier key, not a code defect. The live suite makes three real streaming
+calls back to back.
+
+Fix: wait, or use a key with a higher quota. The non-live suite is unaffected:
+
+```bash
+npx vitest run --exclude "**/*.live.test.ts"
+```
+
+## Docker is not running, or the sandbox image is missing
+
+Symptom: the Workbench check fails or warns, and the docker terminal backend does nothing useful.
+
+Identify:
+
+```bash
+docker info >/dev/null 2>&1 && echo "docker ok" || echo "docker down"
+npm run cli -- doctor | grep -A2 Workbench
+```
+
+Two distinct states, and the doctor distinguishes them:
+
+- Daemon down: `docker info` exits 1. Start Docker Desktop.
+- Daemon up, image absent: `Docker daemon is running (server 29.5.3) but the sandbox image
+  trent-sandbox:latest is not present locally.` The image is not published anywhere, so it cannot be
+  pulled. Either build one locally or point `terminal.docker.image` at an image you already have.
+
+To work without Docker entirely, set `terminal.backend` to `local` — and read the warning in
+[terminal.md](terminal.md) about what that gives up.
+
+## bun is not on PATH in a non-login shell
+
+Symptom: a bun-dependent step works in your terminal and fails in a script, a CI job, an editor task
+or a `sh -c` invocation.
+
+Cause: the bun installer appends its PATH lines to `~/.zshrc`. A non-login, non-interactive shell
+does not read `~/.zshrc`, so `bun` is simply absent. `which bun` in that context returns nothing.
+
+Identify:
+
+```bash
+which bun || echo "bun not found"
+sh -c 'command -v bun || echo "bun not on PATH in this shell"'
+```
+
+Fix: use the absolute path, `~/.bun/bin/bun`, in any script or CI step, or export the PATH inside the
+script rather than relying on the profile.
+
+Nothing in the default developer loop needs bun today. It is the SQLite runtime and the binary
+compiler, so you hit this when running the store tests or a build, not when running the CLI.
+
+## Two tests time out under load
+
+Symptom: `wrapped-modules.test.ts` and `derive-sqlite-schema.test.ts` fail with
+`Test timed out in 5000ms` during a full parallel run.
+
+Cause: contention. Run alone they pass in 7.2 seconds total:
+
+```bash
+npx vitest run packages/trent-core/src/wrapped-modules.test.ts \
+               packages/trent-core/src/store/derive-sqlite-schema.test.ts
+```
+
+```
+Test Files  2 passed (2)
+     Tests  12 passed (12)
+```
+
+If they fail alone, that is a real regression.
+
+## `trent: command not found`
+
+There is no installed binary and no installer. Use `npm run cli -- <args>` from the repository root,
+or `npm run tui`. `scripts/install.sh` is the previous agent's version: it downloads nothing and
+resolves paths relative to the author's home directory. Do not run it.
+
+## `trent web --start` refuses to start
+
+Expected. The command validates the target and reports readiness; starting the server is a later
+milestone, and it says so:
+
+```
+the web server entry point is not built yet (Milestone 5); run without --start to check readiness
+```
+
+Run it without `--start` to confirm the application directory is where the command expects it.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Success |
+| 2 | Usage error |
+| 3 | Configuration problem, including a failing doctor check |
+| 4 | Authentication failure |
+| 5 | Provider failure |
+| 6 | Budget exceeded |
+| 130 | Interrupted |
+
+Add `--json` to any command for a machine-readable error envelope. Secrets are redacted from it by
+key name and by value shape, recursively.

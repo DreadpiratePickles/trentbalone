@@ -1,61 +1,97 @@
-# Trent Skills Hub & Authoring
+# Skills
 
-Skills are modular capability extensions for your cofounder fleet. Each skill provides custom instructions, reusable scripts, tool bindings, and optional slash commands.
+A skill is a named block of instructions an agent can load. Skills are files in the profile's skills
+directory, and every one is scanned before it is written to disk.
 
----
-
-## The Skills Hub
-
-Browse skills available in the official catalog:
 ```bash
-trent skills browse
+npm run cli -- skills browse
+npm run cli -- skills search audit
+npm run cli -- skills install repo-audit
+npm run cli -- skills list
+npm run cli -- skills remove repo-audit
 ```
 
-Install a skill:
-```bash
-trent skills install git-release
-trent skills install seo-audit
+## The catalog
+
+`skills browse` lists the built-in catalog. Six entries today:
+
+```
+SKILLS (6)
+  repo-audit                 Deep codebase mapping, architectural dependency graph, and security hotspots check.
+  competitive-teardown       Evaluates competitor positioning, feature sets, pricing models, and defensive moats.
+  pr-reviewer                Reviews code changes against correctness, performance, test coverage, and security criteria.
+  landing-page-copy          Generates benefit-driven landing page headlines, feature grids, and founder notes.
+  financial-runway-forecast  Calculates burn rate, runway months, cash break-even scenarios, and budget caps.
+  customer-escalation-triage Classifies ticket urgency, synthesizes repro steps, and drafts polite empathetic replies.
 ```
 
----
+`skills search <term>` matches against name, description and tags. `skills list` shows what is
+installed in the active profile, which is a different list.
 
-## Pre-Installation Security Scanning
+## The pre-install scan
 
-Trent subjects every installed skill to an automated security audit before it is loaded:
-- **High-Risk Pattern Detection**: Scans for `rm -rf /`, raw shell execution of untrusted input, credential harvesting patterns, and arbitrary curl downloads.
-- **Permission Verification**: Checks required capabilities against the active workspace policy.
-- **Hash Verification**: Ensures integrity against the published manifest.
+`SkillsHub.install` scans the content before it writes anything. A skill that fails the scan is not
+written; installation throws and names every finding. There is no flag that overrides a failing scan.
 
-If a security warning is detected, installation is blocked until explicit human approval is granted.
+Patterns matched, from `packages/trent-core/src/skills/SecurityScan.ts`:
 
----
+| Pattern | Reason given |
+|---|---|
+| `rm -rf /` or `rm -rf ~` | Dangerous recursive root/home deletion |
+| `curl … \| bash` or `… \| sh` | Arbitrary remote code execution via pipe to shell |
+| `wget … \| bash` or `… \| sh` | Arbitrary remote code execution via pipe to shell |
+| `eval(… process.env …)` | Dynamic evaluation of environment secrets |
+| `cat ~/.ssh/…` or `cat ~/.trent/.env` | Unauthorized attempt to read secret files |
+| `ignore all previous instructions` | Prompt injection / jailbreak attempt |
+| `system override mode` | Prompt injection attempt |
+| `webhook: https://…` to a non-Trent host | Untrusted external exfiltration webhook |
 
-## Authoring Custom Skills
+The scan returns `{ safe, score, findings }`. The score starts at 1.0 and drops 0.35 per finding.
+Eight rules is a small ruleset — Hermes runs roughly 110 regexes across 12 categories — so treat this
+as a floor, not a guarantee, and read a skill before installing it from anywhere untrusted.
 
-Skills live in `~/.trent/skills/<slug>/` or `.trent/skills/<slug>/` in your repository.
+## Where skills live and what they look like
 
-Each skill folder contains:
-- `SKILL.md`: Metadata frontmatter and operational instructions.
-- `scripts/`: Optional shell or Node scripts executed by the skill.
-- `tools/`: Tool definitions exposed to agents.
+Skills live in the profile's skills directory: `~/.trent/skills/` for the default profile,
+`~/.trent/profiles/<name>/skills/` otherwise. One file per skill, named for its slug.
 
-### Example `SKILL.md`
+Markdown form, `<slug>.md`:
 
 ```markdown
----
-name: Database Migration Helper
-slug: db-migrate
-version: 1.0.0
-category: engineering
-author: Trent Engineering
-slash_command: /migrate
-description: Safe automated migration assistant for PostgreSQL and SQLite with dry-run rollbacks.
----
+# Repository Audit
+> Deep codebase mapping and dependency graph.
 
-# Instructions
-
-When invoked via `/migrate` or when schema changes are detected:
-1. Inspect `prisma/schema.prisma` or migration files.
-2. Generate a non-destructive dry-run preview.
-3. If changes drop columns or tables, trigger the Approval Gate before applying.
+Analyze package dependencies, circular imports, and API surface.
 ```
+
+The loader takes the name from the first `# ` heading and the description from the first `> ` line.
+Everything else is the instruction body. Version defaults to `1.0.0`, tags to `["general"]`, author
+to `community`.
+
+JSON form, `<slug>.json`, when you want the metadata explicit:
+
+```json
+{
+  "name": "Repository Audit",
+  "description": "Deep codebase mapping and dependency graph.",
+  "version": "1.2.0",
+  "tags": ["audit", "code"],
+  "author": "you",
+  "instructions": "Analyze package dependencies, circular imports, and API surface."
+}
+```
+
+`instructions` is read from the JSON, falling back to `content`. `skills install` always writes the
+markdown form; the JSON form is for skills you author by hand.
+
+Every skill gets a slash command derived from its slug: `repo-audit` becomes `/repo-audit`.
+
+## Not yet implemented
+
+- A remote skills registry. `skills install` installs from the built-in catalog or from content you
+  supply; there is no network fetch and therefore no manifest hash to verify.
+- A `<slug>/SKILL.md` directory layout with `scripts/` and `tools/` subdirectories. Earlier
+  documentation described this; the loader reads a single file per skill.
+- Repository-local `.trent/skills/` discovery. Only the profile directory is read.
+- A trust-and-verdict install table where a `dangerous` verdict cannot be forced. Today the scan is
+  simply pass or fail.

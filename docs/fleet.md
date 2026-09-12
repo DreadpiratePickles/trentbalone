@@ -1,81 +1,119 @@
-# Trent Fleet & Specialist Catalog
+# Fleet
 
-Trent differentiates from single-agent assistants by pairing you with a **complete cofounder fleet** comprising **9 core operating seats** and **164 domain-specialist agents**.
+The catalog holds 164 specialists across 13 divisions, plus 9 core seats. It is data in the wrapped
+application (`apps/web/lib/agent-catalog.ts`), not prompts generated at runtime.
 
-```
-   ███████╗██╗     ███████╗███████╗████████╗
-   ██╔════╝██║     ██╔════╝██╔════╝╚══██╔══╝
-   █████╗  ██║     █████╗  █████╗     ██║   
-   ██╔══╝  ██║     ██╔══╝  ██╔══╝     ██║   
-   ██║     ███████╗███████╗███████╗   ██║   
-   ╚═╝     ╚══════╝╚══════╝╚══════╝   ╚═╝   
-   164 SPECIALIST COFOUNDERS · READY TO DEPLOY
-```
-
----
-
-## 9 Core Operating Seats
-
-| Seat ID | Role | Key Responsibilities |
-|---------|------|----------------------|
-| `ceo` | Chief Executive | Strategic roadmap synthesis, milestone triage, cross-agent coordination. |
-| `engineer` | Lead Engineer | Full-stack architecture, refactoring, test suites, bug fixes. |
-| `growth` | Growth Lead | Traction, landing pages, referral mechanisms, distribution channels. |
-| `content` | Content Engine | Technical writing, documentation, launch blogs, marketing copy. |
-| `support` | Support Lead | Ticket triage, customer queries, bug reproduction, escalation paging. |
-| `analyst` | Data Analyst | SQL analytics, CAC/LTV forecasting, retention curves, funnel diagnostics. |
-| `finance` | Finance Controller | Daily token budget enforcement, burn rate tracking, Stripe auditing. |
-| `browser` | Web Navigator | Autonomous headless browsing, competitive intel, UI scraping. |
-| `escalation` | Incident Escalation| Production emergency triage, human-in-the-loop alerts, rollbacks. |
-
----
-
-## The 164-Specialist Catalog
-
-Specialists are organized into 7 functional domains:
-- **Engineering**: `eng-ai-engineer`, `eng-devops`, `eng-sec-auditor`, `eng-database-architect`, `eng-frontend-specialist`, etc.
-- **Marketing & Growth**: `mkt-growth-lead`, `mkt-agentic-search-optimizer`, `mkt-paid-acquisition`, `mkt-funnel-architect`, etc.
-- **Content & Copy**: `cnt-technical-writer`, `cnt-social-storyteller`, `cnt-newsletter-editor`, `cnt-video-scripter`, etc.
-- **Support & Success**: `sup-support-responder`, `sup-churn-preventer`, `sup-knowledge-base-maintainer`, etc.
-- **Finance & Operations**: `fin-bookkeeper-controller`, `fin-runway-forecaster`, `fin-pricing-strategist`, etc.
-- **Product & Design**: `prd-spec-author`, `prd-ui-designer`, `prd-user-researcher`, `prd-accessibility-auditor`, etc.
-- **Research & Strategy**: `res-competitor-tracker`, `res-patent-scout`, `res-market-sizer`, etc.
-
----
-
-## Fleet CLI Commands
-
-### List Available Specialists
 ```bash
-trent fleet list
-trent fleet list --json
+npm run cli -- fleet list
+npm run cli -- fleet list --json
+npm run cli -- fleet list --category engineering
+npm run cli -- fleet list --installed
+npm run cli -- fleet status
 ```
 
-### Install a Specialist
-Installs tools, policies, and system prompts for the specialist:
-```bash
-trent fleet install eng-ai-engineer
-trent fleet install mkt-growth-lead
+`fleet list --json` reports `{ count, total, agents }` with 173 agents: the 164 specialists plus the
+9 core seats. `fleet status` reports the catalog size on its own:
+
+```
+FLEET STATUS
+  active 4  installed 4  catalog 164
+  budget 0.00 / 10.00
 ```
 
-### Deploy to Active Duty
-Promotes an installed specialist into the active multi-agent execution loop:
+## The nine core seats
+
+From `CORE_ROLES` in `packages/trent-core/src/fleet/AgentInstaller.ts`. Descriptions are quoted from
+the source, not written for this page.
+
+| Id | Name | Division | Does |
+|---|---|---|---|
+| `ceo` | CEO Agent | executive | Prioritizes strategy, roadmap, risks, and operating cycle summaries |
+| `engineer` | Lead Engineer | engineering | Plans code changes, GitHub work, tests, and technical architecture |
+| `growth` | Growth Hacker | marketing | Designs acquisition experiments, campaigns, and funnel improvements |
+| `content` | Design & Content Lead | design | Creates design direction, landing copy, docs, and creative briefs |
+| `support` | Support & Ops Responder | support | Drafts replies, mines customer feedback, and handles operations |
+| `analyst` | Market & Data Analyst | product | Researches markets, competitors, and revenue metrics |
+| `finance` | Finance & Treasury Lead | finance | Tracks spend, margins, budget caps, and financial runways |
+| `browser` | Autonomous Web Navigator | specialized | Executes web research, scraping, and form automation |
+| `escalation` | Critic & Compliance Auditor | specialized | Critiques plans and audits risk before irreversible execution |
+
+Install them together with `fleet install core-roles --pack`.
+
+## Divisions
+
+Counted from `fleet list --json` on this repository. The counts cover all 173 rows, so each core seat
+appears inside its division.
+
+| Division | Agents |
+|---|---:|
+| specialized | 43 |
+| marketing | 31 |
+| engineering | 30 |
+| design | 9 |
+| sales | 8 |
+| testing | 8 |
+| support | 7 |
+| paid-media | 7 |
+| product | 6 |
+| finance | 6 |
+| project-management | 6 |
+| spatial-computing | 6 |
+| academic | 5 |
+
+That totals 173. Subtract the nine core seats and the catalog is exactly 164, asserted by
+`packages/trent-core/src/agents/catalog.test.ts`, which also checks the ids are unique and the
+per-division head counts sum correctly.
+
+Importing the agents wrapper runs `assertSkillsInstalled` at module evaluation time, so it also
+validates that every skill the catalog references exists in `lib/data/skill-agent-map.json`. That is
+a deliberate fail-fast: a catalog entry pointing at a missing skill breaks the import rather than
+failing later at run time.
+
+## Installing and deploying
+
 ```bash
-trent fleet deploy eng-ai-engineer
+npm run cli -- fleet install eng-ai-engineer
+npm run cli -- fleet deploy eng-ai-engineer
 ```
 
-### Install Fleet Packs
-Bulk deploy domain suites in a single command:
+`install` provisions the agent's tools, skills and model policy into the active profile. `deploy`
+promotes an installed agent onto active duty, which is what puts it in the orchestration loop.
+
+## Packs
+
 ```bash
-trent fleet install eng-trio --pack
-trent fleet install growth-engine --pack
-trent fleet install revops --pack
-trent fleet install security-audit --pack
-trent fleet install all --pack
+npm run cli -- fleet install engineering --pack
+npm run cli -- fleet install all --pack
 ```
 
-### Fleet Operational Status
+Available packs: `engineering`, `marketing`, `finance`, `support`, `executive`, `eng-trio`,
+`growth-engine`, `revops`, `security-audit`, `core-roles`, `all`.
+
+`all` installs the 164 specialists. It used to be labelled "164 specialists" and install nine core
+roles; the core roles are now their own pack, and a test asserts the `all` pack's agent list is
+exactly 164 long and that its name contains the number it promises.
+
+## Custom agents
+
 ```bash
-trent fleet status
+npm run cli -- fleet create my-analyst \
+  --name "Revenue Analyst" \
+  --role analyst \
+  --category finance \
+  --budget 1.00
 ```
-Shows active cofounder count, installed count, catalog capacity, and daily budget consumption.
+
+`--budget` is in USD at this boundary and is stored as integer cents. See
+[configuration.md](configuration.md).
+
+## Colour
+
+An agent line renders as `● [Name]`. The dot carries state colour, the name carries division colour,
+and state outranks identity: an agent waiting on a human turns ember regardless of its division. Two
+divisions collide with the state signals — `marketing` is the ember hex and `product` is the pulse
+hex — so those two are demoted to mist rather than being allowed to read as a state.
+
+## Not yet implemented
+
+- A marketplace install flow. `packages/trent-core/src/marketplace/` wraps the application's
+  marketplace module but no CLI command exposes it.
