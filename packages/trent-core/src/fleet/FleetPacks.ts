@@ -1,9 +1,16 @@
+import { AGENT_CATALOG } from "../agents/index.js";
+import { CORE_ROLE_IDS } from "./AgentInstaller.js";
+
 export interface FleetPack {
   id: string;
   name: string;
   description: string;
+  /** Every id here is installed by `installPack`. The label must match this length. */
   agents: string[];
 }
+
+/** All 164 specialist ids, in catalog order. */
+const ALL_SPECIALIST_IDS: string[] = AGENT_CATALOG.map((agent) => agent.id);
 
 export const FLEET_PACKS: Record<string, FleetPack> = {
   engineering: {
@@ -87,11 +94,19 @@ export const FLEET_PACKS: Record<string, FleetPack> = {
     description: "Code audit, dependency scan, and risk assessment.",
     agents: ["escalation", "eng-ai-engineer"],
   },
+  "core-roles": {
+    id: "core-roles",
+    name: "Core Roles",
+    description: "The nine built-in cofounder roles: CEO, engineer, growth, content, support, analyst, finance, browser, escalation.",
+    agents: [...CORE_ROLE_IDS],
+  },
+  // The label used to promise 164 specialists and install nine core roles. It now installs the
+  // 164; the nine core roles are their own pack above.
   all: {
     id: "all",
     name: "Full 164-Specialist Fleet",
-    description: "Deploy the complete cofounder fleet across all categories.",
-    agents: ["ceo", "engineer", "growth", "content", "support", "analyst", "finance", "browser", "escalation"],
+    description: "Deploy every specialist in the catalog, across all 13 divisions.",
+    agents: ALL_SPECIALIST_IDS,
   },
 };
 
