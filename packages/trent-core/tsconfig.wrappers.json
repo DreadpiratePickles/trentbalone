@@ -1,0 +1,18 @@
+{
+  // Scoped typecheck for the lib-wrapper directories (Task 1.7). The package
+  // tsconfig covers all of src/, which currently includes other agents'
+  // in-progress work; this file proves the wrappers alone are clean.
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/traces/**/*",
+    "src/evals/**/*",
+    "src/readiness/**/*",
+    "src/mcp/**/*",
+    "src/agents/**/*",
+    "src/marketplace/**/*",
+    "src/gepa/**/*",
+    "src/skills/foundry.ts",
+    "src/skills/foundry.test.ts",
+    "src/wrapped-modules.test.ts"
+  ]
+}

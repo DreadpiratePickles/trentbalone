@@ -21,17 +21,27 @@
     "./updater": "./src/updater/index.ts",
     "./traces": "./src/traces/index.ts",
     "./a2a": "./src/a2a/index.ts",
-    "./governance": "./src/governance/index.ts"
+    "./governance": "./src/governance/index.ts",
+    "./evals": "./src/evals/index.ts",
+    "./readiness": "./src/readiness/index.ts",
+    "./mcp": "./src/mcp/index.ts",
+    "./agents": "./src/agents/index.ts",
+    "./marketplace": "./src/marketplace/index.ts",
+    "./gepa": "./src/gepa/index.ts",
+    "./skills/foundry": "./src/skills/foundry.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "zod": "^3.25.28",
-    "yaml": "^2.7.0",
+    "@inquirer/prompts": "^8.7.2",
+    "@prisma/client": "6.19.3",
+    "@prisma/driver-adapter-utils": "6.19.3",
+    "chalk": "^5.4.1",
     "dotenv": "^16.4.7",
-    "chalk": "^5.4.1"
+    "yaml": "^2.7.0",
+    "zod": "^3.25.28"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
