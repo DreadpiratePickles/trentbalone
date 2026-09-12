@@ -1,0 +1,1333 @@
+// GENERATED FILE - DO NOT EDIT.
+// Produced by packages/trent-core/scripts/derive-sqlite-schema.mjs
+// Source of truth: apps/web/prisma/schema.prisma
+
+generator client {
+  provider   = "prisma-client"
+  engineType = "client"
+  runtime    = "bun"
+  output     = "../src/store/generated"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("TRENT_SQLITE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  timezone  String   @default("America/Toronto")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  members   CompanyMember[]
+}
+
+model Company {
+  id               String          @id @default(cuid())
+  name             String
+  slug             String          @unique
+  website          String?
+  status           CompanyStatus   @default(active)
+  autonomyLevel    AutonomyLevel   @default(autonomous_with_approvals)
+  publicVisibility Boolean         @default(true)
+  publicSubdomain  String?
+  timezone         String          @default("America/Toronto")
+  budgetCents      Int             @default(10000)
+  cycleFrequency   CycleFrequency  @default(daily)
+  lastCycleAt      DateTime?
+  nextCycleAt      DateTime?
+  brief                    Json
+  metrics                  Json
+  weeklyBudgetCents        Int?
+  nightlyRunHour           Int?
+  approvalExpiryOverrides  Json?
+  createdAt                DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  members          CompanyMember[]
+  agents           Agent[]
+  tasks            Task[]
+  recurringTasks   RecurringTaskTemplate[]
+  cycles           Cycle[]
+  goals            Goal[]
+  customSkills     CompanyCustomSkill[]
+  mcpServers       McpServer[]
+  executions       AgentExecution[]
+  connections      ToolConnection[]
+  approvals        Approval[]
+  documents        Document[]
+  artifacts        Artifact[]
+  workbenchSessions WorkbenchSession[]
+  workbenchEvents   WorkbenchEvent[]
+  workbenchArtifacts WorkbenchArtifact[]
+  workbenchAttempts WorkbenchAttempt[]
+  workbenchCheckpoints WorkbenchCheckpoint[]
+  orchestratorRuns OrchestratorRun[]
+  orchestratorSteps OrchestratorStep[]
+  orchestratorEvents OrchestratorEvent[]
+  contentMissionRuns ContentMissionRun[]
+  contentMissionActions ContentMissionAction[]
+  agentMissionRuns AgentMissionRun[]
+  agentMissionSteps AgentMissionStep[]
+  agentMissionEvents AgentMissionEvent[]
+  reports          Report[]
+  usage            UsageLedgerEntry[]
+  auditLogs        AuditLog[]
+  jobRuns          JobRun[]
+  agentPlugAssignments AgentPlugAssignment[]
+  agentEntitlements AgentEntitlement[]
+  ceoMessages      CeoMessage[]
+  ceoSuggestions   CeoSuggestion[]
+  comments         Comment[]
+  invoices         Invoice[]
+  ledgerEntries    LedgerEntry[]
+  payoutHolds      PayoutHold[]
+  stripeCustomers  StripeCustomer[]
+  stripeSubscriptions StripeSubscription[]
+  marketingAccounts MarketingAccount[]
+  conversionEvents ConversionEvent[]
+  adCampaigns      AdCampaign[]
+  adCreativeVariants AdCreativeVariant[]
+  audienceSegments AudienceSegment[]
+  adSpendCharges   AdSpendCharge[]
+  optimizationRuns OptimizationRun[]
+  creativePerformanceMemories CreativePerformanceMemory[]
+  socialAccounts   SocialAccount[]
+  socialPosts      SocialPost[]
+  socialConversations SocialConversation[]
+  socialContacts   SocialContact[]
+  socialMessages   SocialMessage[]
+  socialVoicePolicy SocialVoicePolicy?
+  socialAnalyticsSnapshots SocialAnalyticsSnapshot[]
+  socialOutreachDrafts SocialOutreachDraft[]
+  agentTraces          AgentTrace[]
+  skillDrafts          SkillDraft[]
+  selfImprovementIterations SelfImprovementIteration[]
+  companyPlaybookEntries    CompanyPlaybookEntry[]
+}
+
+enum CompanyMemberRole {
+  viewer
+  member
+  admin
+  owner
+}
+
+model CompanyMember {
+  id          String            @id @default(cuid())
+  companyId   String
+  userId      String
+  role        CompanyMemberRole @default(viewer)
+  permissions Json
+  company     Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+}
+
+model Agent {
+  id          String    @id @default(cuid())
+  companyId   String
+  role        AgentRole
+  name        String
+  description String
+  enabled     Boolean   @default(true)
+  modelPolicy String
+  permissions Json
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model AgentPlugAssignment {
+  id            String    @id @default(cuid())
+  companyId     String
+  role          AgentRole
+  profileId     String
+  profileSource String    @default("agency-agents")
+  environment   Json
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, role])
+  @@index([profileId])
+}
+
+model AgentEntitlement {
+  id        String    @id @default(cuid())
+  companyId String
+  productId String
+  profileId String?
+  source    String
+  status    String    @default("active")
+  createdAt DateTime  @default(now())
+  expiresAt DateTime?
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([productId])
+  @@index([profileId])
+}
+
+model Task {
+  id            String      @id @default(cuid())
+  companyId     String
+  title         String
+  prompt        String
+  status        TaskStatus  @default(draft)
+  priority      String      @default("medium")
+  agentRole     AgentRole
+  tags          Json
+  dueDate       DateTime?
+  approvalId    String?
+  recurringTemplateId String?
+  costCents     Int         @default(0)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  executions    AgentExecution[]
+}
+
+model RecurringTaskTemplate {
+  id                 String    @id @default(cuid())
+  companyId          String
+  title              String
+  prompt             String
+  agentRole          AgentRole
+  priority           String    @default("medium")
+  tags               Json
+  cadence            String
+  enabled            Boolean   @default(true)
+  lastMaterializedAt DateTime?
+  nextRunAt          DateTime
+  createdAt          DateTime  @default(now())
+  company            Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model Cycle {
+  id          String      @id @default(cuid())
+  companyId   String
+  trigger     String
+  kind        String      @default("scheduled")
+  status      CycleStatus @default(running)
+  phases      Json
+  summary     String
+  degraded    Boolean     @default(false)
+  startedAt   DateTime    @default(now())
+  completedAt DateTime?
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  executions  AgentExecution[]
+}
+
+/// §2 Goal Loop — a persistent goal with measurable success criteria. The Goal
+/// IS the external memory: every round reads it, nothing lives only in a
+/// context window. `successCriteria`, `constraints`, `rounds` and `progressLog`
+/// are JSON-typed (see lib/goal-types.ts for the Zod contracts).
+model Goal {
+  id              String     @id @default(cuid())
+  companyId       String
+  objective       String
+  status          GoalStatus @default(intake)
+  successCriteria Json       @default("[]")
+  constraints     Json       @default("{}")
+  rounds          Json       @default("[]")
+  progressLog     Json       @default("[]")
+  costCents       Int        @default(0)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  company         Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([companyId, status])
+}
+
+enum GoalStatus {
+  intake
+  active
+  round_running
+  awaiting_review
+  completed
+  stopped
+}
+
+/// §3.2 Client-added skills — instruction-style procedures a client authors in
+/// Settings. Flows through the same buildCompanySkillPrelude injection path as
+/// granted/distilled skills. Instruction-only (no client code → nothing to sandbox).
+model CompanyCustomSkill {
+  id          String   @id @default(cuid())
+  companyId   String
+  name        String
+  trigger     String   @default("")
+  instructions String
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+}
+
+/// §3.3 Client-added MCP servers — a remote MCP endpoint a client connects so
+/// Trent's seats can act in the client's own tools. Credentials are encrypted
+/// via the existing secret boundary. Every tool defaults to requires-approval.
+model McpServer {
+  id            String   @id @default(cuid())
+  companyId     String
+  name          String
+  url           String
+  transport     String   @default("http")
+  credentialRef String?
+  toolAllowlist Json     @default("[]")
+  reversibleTools Json   @default("[]")
+  status        String   @default("connected")
+  lastError     String?
+  discoveredTools Json   @default("[]")
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+}
+
+model AgentExecution {
+  id        String   @id @default(cuid())
+  companyId String
+  cycleId   String?
+  taskId    String?
+  agentRole AgentRole
+  input     String
+  output    String
+  toolCalls Json
+  status    String
+  model     String
+  tokens    Int
+  costCents Int
+  durationMs Int
+  createdAt DateTime @default(now())
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  cycle     Cycle?   @relation(fields: [cycleId], references: [id])
+  task      Task?    @relation(fields: [taskId], references: [id])
+}
+
+model ToolConnection {
+  id            String   @id @default(cuid())
+  companyId     String
+  provider      String
+  scopes        Json
+  status        String
+  encryptedData String?
+  lastCheckedAt DateTime @default(now())
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model Approval {
+  id             String         @id @default(cuid())
+  companyId      String
+  taskId         String?
+  action         String
+  reason         String
+  status         ApprovalStatus @default(pending)
+  createdAt      DateTime       @default(now())
+  resolvedAt     DateTime?
+  expiresAt      DateTime?
+  toolName       String?
+  previewContent String?
+  previewKind    String?
+  company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status, expiresAt])
+}
+
+model Document {
+  id           String    @id @default(cuid())
+  companyId    String
+  type         String
+  title        String
+  content      String
+  source       String
+  version      Int       @default(1)
+  memoryTier   String?
+  validFrom    DateTime?
+  validTo      DateTime?
+  supersedesId String?
+  createdAt    DateTime  @default(now())
+  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, memoryTier])
+  @@index([supersedesId])
+  @@index([validTo])
+}
+
+model Artifact {
+  id               String   @id @default(cuid())
+  companyId        String
+  sourceTaskId     String?
+  sourceCycleId    String?
+  sourceDocumentId String?
+  type             String
+  status           String   @default("ready")
+  title            String
+  summary          String
+  content          String
+  exportFormat     String
+  storageKey       String?
+  previewUrl       String?
+  createdByAgent   String
+  provenance       Json
+  approvalStatus   String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([sourceTaskId])
+  @@index([sourceCycleId])
+}
+
+model WorkbenchSession {
+  id           String   @id @default(cuid())
+  companyId    String
+  taskId       String?
+  agentRole    String
+  agentMode    String   @default("build")
+  messageCount Int      @default(0)
+  status       String   @default("queued")
+  provider     String   @default("mock_local")
+  objective    String
+  repoUrl      String?
+  branchName   String?
+  workdir      String?
+  previewUrl   String?
+  storageKey   String?
+  costCents    Int      @default(0)
+  startedAt    DateTime?
+  stoppedAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  metadata     Json
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  events       WorkbenchEvent[]
+  artifacts    WorkbenchArtifact[]
+  chatMessages WorkbenchChatMessage[]
+  attempts     WorkbenchAttempt[]
+  checkpoint   WorkbenchCheckpoint?
+
+  @@index([companyId, createdAt])
+  @@index([taskId])
+  @@index([status])
+}
+
+model WorkbenchEvent {
+  id         String   @id @default(cuid())
+  companyId  String
+  sessionId  String
+  seq        Int      @default(0)
+  type       String
+  status     String
+  title      String
+  content    String
+  command    String?
+  artifactId String?
+  attemptNo  Int?
+  durationMs Int?
+  agentRole  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  session    WorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([sessionId, createdAt])
+  @@unique([sessionId, seq])
+}
+
+model WorkbenchArtifact {
+  id         String   @id @default(cuid())
+  companyId  String
+  sessionId  String
+  kind       String
+  title      String
+  storageKey String
+  mimeType   String
+  sizeBytes  Int
+  createdByAgent String?
+  sourceEventId String?
+  path       String?
+  previewUrl String?
+  metadata  Json?
+  createdAt  DateTime @default(now())
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  session    WorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([sessionId])
+}
+
+model WorkbenchAttempt {
+  id           String   @id @default(cuid())
+  companyId    String
+  sessionId    String
+  attemptNo    Int
+  status       String
+  model        String
+  feedback     String?
+  rawArtifact  String?
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  costCents    Int      @default(0)
+  startedAt    DateTime @default(now())
+  completedAt  DateTime?
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  session      WorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, attemptNo])
+  @@index([companyId, startedAt])
+}
+
+model WorkbenchCheckpoint {
+  id                String   @id @default(cuid())
+  companyId         String
+  sessionId         String   @unique
+  provider          String
+  providerSessionId String?
+  workdir           String?
+  previewUrl        String?
+  activePort        Int?
+  fileTreeHash      String?
+  latestVerification Json?
+  sandboxExpiresAt  DateTime?
+  updatedAt         DateTime @updatedAt
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  session           WorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, updatedAt])
+}
+
+model OrchestratorRun {
+  id          String   @id
+  companyId   String
+  objective   String
+  trigger     String
+  status      String
+  modelPolicy Json
+  budgetCents Int      @default(0)
+  costCents   Int      @default(0)
+  replanCount Int      @default(0)
+  summary     String?
+  cycleId     String?
+  startedAt   DateTime @default(now())
+  completedAt DateTime?
+  updatedAt   DateTime @updatedAt
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  steps       OrchestratorStep[]
+  events      OrchestratorEvent[]
+
+  @@index([companyId, startedAt])
+  @@index([status])
+}
+
+model OrchestratorStep {
+  id             String   @id
+  runId          String
+  companyId      String
+  seq            Int
+  title          String
+  rationale      String
+  agentRole      String
+  dependsOn      Json
+  expectedOutput String
+  riskLevel      String
+  needsApproval  Boolean  @default(false)
+  status         String
+  output         String?
+  critique       Json?
+  model          String?
+  tokens         Int?
+  costCents      Int?
+  toolCalls      Json?
+  approvalId     String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  run            OrchestratorRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([runId, seq])
+}
+
+model OrchestratorEvent {
+  id        String   @id @default(cuid())
+  runId     String
+  companyId String
+  seq       Int
+  kind      String
+  stepId    String?
+  payload   Json
+  createdAt DateTime @default(now())
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  run       OrchestratorRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, seq])
+  @@index([companyId, createdAt])
+}
+
+model ContentMissionRun {
+  id                         String   @id
+  companyId                  String
+  runId                      String
+  cycleId                    String?
+  objective                  String
+  operatingMode              String   @default("draft_only_until_approval")
+  status                     String   @default("planning")
+  ownerSeat                  String   @default("ceo")
+  externalActionStatus       String   @default("DRAFT_ONLY")
+  requiredSocialPlatforms    Json
+  requiredMarketingPlatforms Json
+  socialPublishingRequested  Boolean  @default(false)
+  paidAdsRequested           Boolean  @default(false)
+  approvalGates              Json
+  memoryLogFields            Json
+  creativeApps               Json
+  budgetCents                Int      @default(0)
+  costCents                  Int      @default(0)
+  summary                    String?
+  memoryLogArtifactId        String?
+  startedAt                  DateTime @default(now())
+  completedAt                DateTime?
+  updatedAt                  DateTime @updatedAt
+  company                    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  actions                    ContentMissionAction[]
+
+  @@index([companyId, startedAt])
+  @@index([status])
+}
+
+model ContentMissionAction {
+  id               String   @id
+  runId            String
+  companyId        String
+  ledgerItemId     String
+  kind             String
+  owner            String
+  status           String
+  approvalGate     String
+  sourceStage      String
+  reason           String
+  relatedPlatforms Json
+  approvalId       String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  mission          ContentMissionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, ledgerItemId])
+  @@index([companyId, createdAt])
+  @@index([runId])
+}
+
+model AgentMissionRun {
+  id             String   @id
+  companyId      String
+  objective      String
+  missionType    String
+  status         String   @default("planning")
+  trigger        String
+  ownerSeat      String   @default("ceo")
+  budgetCents    Int      @default(0)
+  costCents      Int      @default(0)
+  approvalPolicy Json
+  modelPolicy    Json
+  finalSummary   String?
+  startedAt      DateTime @default(now())
+  completedAt    DateTime?
+  updatedAt      DateTime @updatedAt
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  steps          AgentMissionStep[]
+  events         AgentMissionEvent[]
+
+  @@index([companyId, startedAt])
+  @@index([status])
+}
+
+model AgentMissionStep {
+  id             String   @id
+  runId          String
+  companyId      String
+  seq            Int
+  agentRole      String
+  title          String
+  objective      String
+  status         String
+  dependsOn      Json
+  expectedOutput String
+  output         String?
+  toolCalls      Json?
+  costCents      Int      @default(0)
+  approvalId     String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  run            AgentMissionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([runId, seq])
+}
+
+model AgentMissionEvent {
+  id        String   @id @default(cuid())
+  runId     String
+  companyId String
+  seq       Int
+  kind      String
+  stepId    String?
+  payload   Json
+  createdAt DateTime @default(now())
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  run       AgentMissionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, seq])
+  @@index([companyId, createdAt])
+}
+
+model WorkbenchChatMessage {
+  id        String   @id @default(cuid())
+  companyId String
+  sessionId String
+  role      String
+  content   String
+  agentMode String?
+  createdAt DateTime @default(now())
+  session   WorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@index([companyId, createdAt])
+}
+
+model Report {
+  id              String   @id @default(cuid())
+  companyId       String
+  type            String
+  title           String
+  findings        Json
+  recommendations Json
+  createdAt       DateTime @default(now())
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model UsageLedgerEntry {
+  id          String   @id @default(cuid())
+  companyId   String
+  category    String
+  description String
+  amountCents Int
+  metadata    Json
+  createdAt   DateTime @default(now())
+  invoiceId   String?
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  companyId  String
+  actor      String
+  action     String
+  objectType String
+  objectId   String
+  summary    String
+  hash       String   // SHA-256(prevHash + id + actor + action + objectId + summary + createdAt)
+  prevHash   String   // "genesis" for first entry, prior entry's hash thereafter
+  createdAt  DateTime @default(now())
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+}
+
+model JobRun {
+  id          String    @id @default(cuid())
+  type        String
+  status      JobRunStatus @default(running)
+  companyId   String?
+  trigger     String
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  summary     String
+  resultCount Int       @default(0)
+  error       String?
+  metadata    Json
+  company     Company?  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, startedAt])
+  @@index([status, startedAt])
+}
+
+model CeoMessage {
+  id        String   @id @default(cuid())
+  companyId String
+  direction String
+  kind      String
+  content   String
+  createdAt DateTime @default(now())
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model CeoSuggestion {
+  id        String   @id @default(cuid())
+  companyId String
+  title     String
+  body      String
+  category  String
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model Comment {
+  id         String   @id @default(cuid())
+  companyId  String
+  entityType String
+  entityId   String
+  authorName String
+  agentRole  String?
+  content    String
+  createdAt  DateTime @default(now())
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, entityType, entityId])
+}
+
+enum CompanyStatus {
+  active
+  paused
+  archived
+}
+
+enum AutonomyLevel {
+  review_only
+  assisted
+  autonomous_with_approvals
+  autonomous_within_limits
+}
+
+enum CycleFrequency {
+  manual
+  daily
+  weekly
+}
+
+enum AgentRole {
+  ceo
+  engineer
+  growth
+  content
+  support
+  analyst
+  finance
+  browser
+  escalation
+  sales
+}
+
+enum TaskStatus {
+  draft
+  queued
+  running
+  waiting_approval
+  blocked
+  completed
+  failed
+  cancelled
+}
+
+enum CycleStatus {
+  running
+  completed
+  failed
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+}
+
+enum JobRunStatus {
+  running
+  completed
+  failed
+  cancelled
+}
+
+model Invoice {
+  id            String   @id @default(cuid())
+  companyId     String
+  billingPeriod String   // Format: "YYYY-MM"
+  amountCents   Int
+  status        String   // "unpaid" | "paid" | "void"
+  createdAt     DateTime @default(now())
+  paidAt        DateTime?
+  txHash        String?  // Reference to payment transaction
+  lineItems     Json     // Detail of categories, counts, and costs
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  usage         UsageLedgerEntry[]
+
+  @@unique([companyId, billingPeriod])
+  @@index([companyId])
+}
+
+model LedgerEntry {
+  id          String   @id @default(cuid())
+  companyId   String
+  type        String   // "debit" | "credit"
+  account     String   // "billing" | "payout" | "spend"
+  amountCents Int
+  txHash      String   // Blockchain or reference transaction hash
+  description String
+  createdAt   DateTime @default(now())
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, txHash, type, account])
+  @@index([companyId])
+}
+
+model PayoutHold {
+  id            String   @id @default(cuid())
+  companyId     String
+  creatorWallet String
+  amountCents   Int
+  status        String   // "held" | "released" | "extended" | "cancelled"
+  releaseAt     DateTime
+  reason        String
+  createdAt     DateTime @default(now())
+  releasedAt    DateTime?
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+}
+
+model StripeCustomer {
+  id                          String   @id @default(cuid())
+  companyId                   String
+  stripeCustomerId            String
+  defaultPaymentMethodId      String?
+  offSessionMandateAcceptedAt DateTime?
+  status                      String   @default("pending")
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+  company                     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId])
+  @@unique([stripeCustomerId])
+  @@index([companyId, status])
+}
+
+model StripeSubscription {
+  id                   String   @id @default(cuid())
+  companyId            String
+  stripeSubscriptionId String
+  stripePriceId        String
+  status               String
+  trialEndsAt          DateTime?
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  company              Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId])
+  @@unique([stripeSubscriptionId])
+  @@index([companyId, status])
+}
+
+model StripeWebhookEvent {
+  id            String   @id @default(cuid())
+  stripeEventId String   @unique
+  eventType     String
+  status        String   @default("processing")
+  processedAt   DateTime?
+  lastError     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([eventType])
+  @@index([status, updatedAt])
+}
+
+model MarketingAccount {
+  id                     String   @id @default(cuid())
+  companyId              String
+  platform               String
+  status                 String   @default("active")
+  externalAccountId      String
+  externalBusinessId     String?
+  currency               String   @default("USD")
+  dailyBudgetCents       Int?
+  paymentStatus          String   @default("ready")
+  consentForServerEvents Boolean  @default(false)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  company                Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  campaigns              AdCampaign[]
+  optimizationRuns       OptimizationRun[]
+
+  @@unique([companyId, platform])
+  @@index([companyId])
+}
+
+model AdCampaign {
+  id                  String   @id @default(cuid())
+  companyId           String
+  marketingAccountId  String
+  platform            String
+  externalCampaignId  String?
+  name                String
+  objective           String
+  status              String   @default("draft")
+  dailyBudgetCents    Int
+  approvalId          String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  company             Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  marketingAccount    MarketingAccount @relation(fields: [marketingAccountId], references: [id], onDelete: Cascade)
+  creativeVariants    AdCreativeVariant[]
+
+  @@index([companyId, status])
+  @@index([marketingAccountId])
+}
+
+model AdCreativeVariant {
+  id                 String   @id @default(cuid())
+  companyId          String
+  campaignId         String
+  variantKey         String
+  headline           String
+  primaryText        String
+  cta                String
+  assetUrl           String?
+  moderationStatus   String   @default("pending")
+  brandSafetyStatus  String   @default("pending")
+  externalCreativeId String?
+  metrics            Json
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  campaign           AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, variantKey])
+  @@index([companyId])
+}
+
+model ConversionEvent {
+  id              String   @id @default(cuid())
+  companyId       String
+  eventId         String   @unique
+  eventName       String
+  occurredAt      DateTime
+  sourceUrl       String?
+  userAgentHash   String?
+  fbp             String?
+  fbc             String?
+  hashedUserData  Json
+  deliveryStatus  String   @default("pending")
+  diagnostics     Json
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, occurredAt])
+}
+
+model AudienceSegment {
+  id                 String   @id @default(cuid())
+  companyId          String
+  name               String
+  kind               String
+  source             String
+  definition         Json
+  externalAudienceId String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, kind])
+}
+
+model AdSpendCharge {
+  id                    String   @id @default(cuid())
+  companyId             String
+  billingDate           DateTime
+  stripePaymentIntentId String?
+  adSpendCents          Int
+  platformFeeCents      Int
+  status                String
+  failureCode           String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  company               Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, billingDate])
+  @@index([companyId])
+}
+
+model OptimizationRun {
+  id                 String   @id @default(cuid())
+  companyId          String
+  marketingAccountId String
+  runDate            DateTime
+  status             String
+  inputMetrics       Json
+  decisions          Json
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  marketingAccount   MarketingAccount @relation(fields: [marketingAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([marketingAccountId, runDate])
+  @@index([companyId])
+}
+
+model CreativePerformanceMemory {
+  id                String   @id @default(cuid())
+  companyId         String
+  featureKey        String
+  outcome           String
+  sampleSize        Int
+  sourceCampaignIds Json
+  privacyScope      String
+  validFrom         DateTime
+  validTo           DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, featureKey])
+  @@index([validTo])
+}
+
+model SocialAccount {
+  id                 String   @id @default(cuid())
+  companyId          String
+  platform           String
+  status             String   @default("active")
+  externalAccountId  String
+  externalHandle     String?
+  displayName        String?
+  scopes             Json
+  credentialsRef     String?
+  autoPublishEnabled Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  posts              SocialPost[]
+  conversations      SocialConversation[]
+  analyticsSnapshots SocialAnalyticsSnapshot[]
+
+  @@unique([companyId, platform, externalAccountId])
+  @@index([companyId, platform])
+}
+
+model SocialPost {
+  id                String   @id @default(cuid())
+  companyId         String
+  socialAccountId   String
+  platform          String
+  status            String   @default("draft")
+  content           String
+  mediaUrls         Json
+  scheduledFor      DateTime?
+  publishedAt       DateTime?
+  externalPostId    String?
+  approvalId        String?
+  adaptedFromPostId String?
+  metadata          Json
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  socialAccount     SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status, createdAt])
+  @@index([socialAccountId, createdAt])
+}
+
+model SocialConversation {
+  id               String   @id @default(cuid())
+  companyId        String
+  socialAccountId  String
+  platform         String
+  externalThreadId String
+  contactId        String?
+  status           String   @default("open")
+  lastMessageAt    DateTime?
+  metadata         Json
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  socialAccount    SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  contact          SocialContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  messages         SocialMessage[]
+
+  @@unique([companyId, platform, externalThreadId])
+  @@index([companyId, status])
+}
+
+model SocialContact {
+  id                String   @id @default(cuid())
+  companyId         String
+  platform          String
+  externalContactId String
+  handle            String?
+  displayName       String?
+  profileUrl        String?
+  engagementState   String   @default("unknown")
+  optOutStatus      String   @default("not_opted_out")
+  lastOutboundAt    DateTime?
+  lastInboundAt     DateTime?
+  memory            Json
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversations     SocialConversation[]
+  messages          SocialMessage[]
+  outreachDrafts    SocialOutreachDraft[]
+
+  @@unique([companyId, platform, externalContactId])
+  @@index([companyId, platform])
+}
+
+model SocialMessage {
+  id                String   @id @default(cuid())
+  companyId         String
+  conversationId    String
+  contactId         String?
+  direction         String
+  kind              String
+  content           String
+  externalMessageId String?
+  sentAt            DateTime?
+  metadata          Json
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversation      SocialConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  contact           SocialContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, conversationId, createdAt])
+}
+
+model SocialVoicePolicy {
+  id               String   @id @default(cuid())
+  companyId        String   @unique
+  tone             String
+  hashtagPolicy    String
+  emojiPolicy      String
+  restrictedTerms  Json
+  platformGuidance Json
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model SocialAnalyticsSnapshot {
+  id              String   @id @default(cuid())
+  companyId       String
+  socialAccountId String
+  platform        String
+  periodStart     DateTime
+  periodEnd       DateTime
+  metrics         Json
+  report          Json
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  socialAccount   SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([socialAccountId, periodStart, periodEnd])
+  @@index([companyId, platform, periodStart])
+}
+
+model SocialOutreachDraft {
+  id         String   @id @default(cuid())
+  companyId  String
+  contactId  String
+  platform   String
+  purpose    String
+  message    String
+  status     String   @default("draft")
+  approvalId String?
+  riskFlags  Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contact    SocialContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+}
+
+model AgentTrace {
+  id              String    @id @default(cuid())
+  companyId       String
+  runId           String
+  taskType        String
+  agentRole       AgentRole
+  stepTitle       String
+  status          String
+  toolCalls       Json
+  toolCallCount   Int
+  critiqueVerdict String?
+  improvement     String?
+  evalScore       Float?
+  costCents       Int       @default(0)
+  latencyMs       Int?
+  humanCorrected  Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, taskType, createdAt])
+  @@index([runId])
+}
+
+model SkillDraft {
+  id         String    @id @default(cuid())
+  companyId  String
+  taskType   String
+  status     String    @default("quarantine")
+  content    String
+  createdAt  DateTime  @default(now())
+  promotedAt DateTime?
+  company    Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, taskType, status])
+}
+
+model SelfImprovementIteration {
+  id            String   @id @default(cuid())
+  companyId     String
+  taskType      String
+  candidateId   String?
+  candidateKind String?
+  score         Float?
+  delta         Float?
+  decision      String
+  triggers      Json
+  approvalId    String?
+  blockedBy     String?
+  createdAt     DateTime @default(now())
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+}
+
+model CompanyPlaybookEntry {
+  id          String   @id @default(cuid())
+  companyId   String
+  kind        String
+  topic       String
+  text        String
+  sourceRunId String?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+}

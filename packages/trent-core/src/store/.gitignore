@@ -1,0 +1,3 @@
+# Prisma client generated from prisma/schema.sqlite.prisma.
+# Reproduce with: node packages/trent-core/scripts/derive-sqlite-schema.mjs
+generated/
