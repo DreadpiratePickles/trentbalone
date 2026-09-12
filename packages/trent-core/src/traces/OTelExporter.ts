@@ -1,6 +1,8 @@
 // OpenTelemetry Tracing Exporter for Trent Fleet
 // Adheres to OpenTelemetry Semantic Conventions for Generative AI systems (gen_ai.*)
 
+import { redactTranscript } from "../telemetry/redact.js";
+
 export interface TraceStepInput {
   traceId: string;
   stepId: string;
@@ -52,16 +54,14 @@ export class OTelExporter {
     this.fetchImpl = options?.fetchImpl || (typeof fetch !== "undefined" ? fetch : (() => Promise.resolve({ ok: true, status: 200 } as any)));
   }
 
+  /**
+   * Delegates to the shared transcript redactor. This method used to carry its own regex pair,
+   * which meant a secret shape fixed here still leaked from a session export and vice versa.
+   * There is now exactly one definition, in `telemetry/redact.ts`, which itself keeps the error
+   * layer's definition as a floor. Kept as a method so existing callers and tests are unaffected.
+   */
   public redactSecrets(text: string): string {
-    if (!text) return "";
-    // Matches OpenAI / Anthropic / Gemini / Provider keys
-    const apiKeyRegex = /sk-(?:proj-|ant-|live-)?[a-zA-Z0-9_\-]{16,}/g;
-    // Matches Bearer JWT tokens
-    const jwtRegex = /eyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}/g;
-
-    return text
-      .replace(apiKeyRegex, "[REDACTED_SECRET]")
-      .replace(jwtRegex, "[REDACTED_SECRET]");
+    return redactTranscript(text);
   }
 
   public convertToSpan(input: TraceStepInput): OTelSpan {

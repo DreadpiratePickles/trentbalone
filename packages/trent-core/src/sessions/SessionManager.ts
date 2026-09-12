@@ -1,9 +1,12 @@
 import crypto from "node:crypto";
 import {
   SessionStore,
+  type PruneOptions,
+  type PruneResult,
   type SessionData,
   type SessionMessage,
 } from "./SessionStore.js";
+import { centsToDollars, dollarsToCents } from "./schema.js";
 import { ConfigManager } from "../config/ConfigManager.js";
 
 export class SessionManager {
@@ -64,6 +67,17 @@ export class SessionManager {
     return this.store.list();
   }
 
+  /**
+   * Retention sweep. The session currently loaded in this manager is always exempt, so a resume in
+   * progress cannot have its transcript pruned out from under it.
+   */
+  public pruneSessions(options: PruneOptions = {}): PruneResult {
+    const activeSessionId = options.activeSessionId ?? this.currentSession?.id;
+    return this.store.pruneSessions(
+      activeSessionId === undefined ? options : { ...options, activeSessionId },
+    );
+  }
+
   public deleteSession(sessionId: string): boolean {
     if (this.currentSession?.id === sessionId) {
       this.currentSession = null;
@@ -88,8 +102,15 @@ export class SessionManager {
 
     session.messages.push(newMessage);
 
-    if (newMessage.metadata?.cost) {
-      session.total_cost += newMessage.metadata.cost;
+    // Cents are canonical. A caller may still hand us legacy float dollars; convert once, here.
+    const messageCents =
+      newMessage.metadata?.cost_cents ?? dollarsToCents(newMessage.metadata?.cost ?? 0);
+    if (messageCents > 0) {
+      if (newMessage.metadata !== undefined) {
+        newMessage.metadata.cost_cents = messageCents;
+        newMessage.metadata.cost = centsToDollars(messageCents);
+      }
+      session.total_cost_cents += messageCents;
     }
     if (newMessage.metadata?.duration_ms) {
       session.total_duration_ms += newMessage.metadata.duration_ms;
