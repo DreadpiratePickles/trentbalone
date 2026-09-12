@@ -61,3 +61,45 @@ user data. Hermes has a three-tier version of this; we match it.
 ## Done when
 A clean machine goes from one command to a passing doctor, a tampered download is refused, and the
 whole thing is idempotent.
+
+---
+
+## Addendum — patterns adopted from reading Hermes's installer source
+
+**5.7 The subshell guarantee (adopt verbatim).** Their `install.sh:3841-3848` runs each stage body in a
+subshell so a helper that calls `exit 1` kills only the subshell and the parent still emits its result
+frame. "No frame emitted" becomes structurally impossible. Copy this exactly.
+
+**5.8 Frame shape.** Take the union of their two implementations, which disagree with each other:
+`{"ok":bool,"stage":str,"skipped":bool,"reason"?:str,"duration_ms":int}`. `duration_ms` exists only in
+their PowerShell version; include it in both of ours. Manifest:
+`{"protocol_version":1,"stages":[{name,title,category,needs_user_input}]}`.
+
+**5.9 Honest skips.** Stages that need user input report `{"ok":true,"skipped":true,"reason":...}` in
+non-interactive mode rather than silently doing nothing. Add a soft-skip channel so a stage can say
+"ran, but the capability is unavailable" without throwing.
+
+**5.10 Shims, not symlinks.** They write a generated wrapper script rather than a symlink, and it
+unsets `PYTHONPATH`/`PYTHONHOME` first — a symlink made `exec` recurse into the venv's own entry point.
+Our binary has no interpreter, but the lesson holds: write a wrapper we control, and do not mutate the
+user's shell rc for the binary itself. Install into a real bin directory and print the PATH line.
+
+**5.11 Never delete a broken install.** An interrupted clone is MOVED to `<dir>.broken-<utc-ts>`, never
+removed. Adopt this for any destructive step.
+
+**5.12 Refuse to move backwards.** A pinned version that is an ancestor of the installed one is ignored
+unless explicitly forced, so a stale bootstrap cannot silently downgrade a working install.
+
+**5.13 Idempotent stages instead of transactional rollback.** They have no rollback; every stage is
+re-runnable. That is the right trade for an installer, and it is what makes `--stage` resumable.
+
+### And the thing we do that they do not
+**Pin a SHA-256 for every downloaded artifact.** Their installer pipes an unpinned third-party script
+straight to bash, fetches a Node tarball unverified, and curls a driver into `/bin/bash` — no checksum
+or signature anywhere in either script. This is the single highest-risk thing in their repo and the
+easiest place for us to be plainly better.
+
+### Generate both installers from one manifest
+Their shell and PowerShell versions have different stage lists, different names and different frames,
+and a source comment concedes the shell one only "mirrors the Windows surface closely enough". One
+manifest, two rendered scripts, and a test asserting the two stage lists are identical.
