@@ -64,3 +64,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Generated Prisma client for the CLI's SQLite mode.
+# Regenerate with: node packages/trent-core/scripts/derive-sqlite-schema.mjs && npx prisma generate
+# Never commit: it is derived output and it embeds absolute build-machine paths.
+packages/trent-core/src/store/generated/
