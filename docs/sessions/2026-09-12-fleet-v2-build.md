@@ -172,3 +172,33 @@ failure, and an unbounded iteration default.
 
 ### In flight (6 agents)
 doctor rebuild · setup wizard · CLI visual foundation · TLS egress proxy · CI pipeline · session privacy.
+
+### Milestone 2 — doctor COMPLETE (63 tests, 13 checks)
+The proof is that it now FAILS on this machine where it used to be all green:
+`FAIL Credentials` (the 16-char placeholder), `FAIL Environment` (queue fallback not disabled),
+`FAIL Workbench` (Docker daemon down). Live exit code 3.
+
+Layered deadlines because Hermes's doctor is documented to hang: an AbortSignal on every fetch AND a
+Promise.race timer, 15s per check, 60s for the run. Three deliberately wedged checks still return a
+full report in under 5s. Added `doctorExitCode` (non-zero on failure) and `renderJsonReport` — Hermes
+has neither, which is why their doctor cannot gate CI.
+
+The phantom log-prune fix hint was deleted rather than implemented.
+
+### Milestone 2 — setup wizard COMPLETE (14 tests)
+Three real interactive modes behind a PromptPort so tests script answers with no TTY. The port makes
+`default` a REQUIRED field on every question, so forgetting to pre-fill is a compile error.
+Quick mode does not fake OAuth; with no keys it names the env vars and the .env path and writes nothing.
+Blank Slate writes all three explicit disable lists.
+Fixed the unit bug the config rebuild exposed: `10.0` in a cents field made a $10 cap into 10 cents.
+
+### CLI visual foundation COMPLETE (48 tests, mutation-checked)
+Inventing a hex fails 3 tests; deleting the state-outranks-identity rule fails 1; leaking a colour
+code into monochrome mode fails 11. Found a real palette collision: `marketing` is the ember hex and
+`product` is the pulse hex, so a category is demoted to mist when it would clash with the state signal.
+
+### Infrastructure
+`agent.let-trent.uk` created as a proxied CNAME to GitHub Pages. It serves nothing until Milestone 5;
+the record exists and is reversible.
+No VM needed — CI runners provide the one thing a single Mac cannot: running each cross-compiled
+binary on its real OS.
