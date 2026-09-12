@@ -1,97 +1,78 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "productName": "Trent Fleet",
+  "mainBinaryName": "Trent Fleet",
+  "version": "1.0.0",
+  "identifier": "com.trent.fleet",
   "build": {
-    "beforeBuildCommand": "npm run build",
-    "beforeDevCommand": "npm run dev",
-    "devPath": "http://localhost:1420",
-    "distDir": "../dist"
+    "beforeBuildCommand": "node scripts/prepare-resources.mjs",
+    "beforeDevCommand": "node scripts/prepare-resources.mjs",
+    "frontendDist": "../splash"
   },
-  "package": {
-    "productName": "Trent Fleet",
-    "version": "1.0.0"
-  },
-  "tauri": {
-    "allowlist": {
-      "all": false,
-      "shell": {
-        "all": false,
-        "open": true,
-        "execute": true,
-        "sidecar": true
-      },
-      "notification": {
-        "all": true
-      },
-      "globalShortcut": {
-        "all": true
-      },
-      "window": {
-        "all": true
-      },
-      "fs": {
-        "all": true,
-        "scope": ["$HOME/.trent/**", "$APPDATA/.trent/**"]
-      },
-      "path": {
-        "all": true
-      },
-      "systemTray": {
-        "all": true
-      }
-    },
-    "bundle": {
-      "active": true,
-      "category": "DeveloperTool",
-      "copyright": "Trent Fleet 2026",
-      "deb": {
-        "depends": []
-      },
-      "externalBin": [],
-      "icon": [
-        "icons/32x32.png",
-        "icons/128x128.png",
-        "icons/128x128@2x.png",
-        "icons/icon.icns",
-        "icons/icon.ico"
-      ],
-      "identifier": "com.trent.fleet",
-      "longDescription": "Autonomous AI Cofounder Platform with 164-Specialist Fleet Architecture",
-      "macOS": {
-        "frameworks": [],
-        "minimumSystemVersion": "10.15",
-        "exceptionDomain": "",
-        "signingIdentity": null,
-        "entitlements": null
-      },
-      "resources": [],
-      "shortDescription": "Trent AI Cofounder Fleet",
-      "targets": "all",
-      "windows": {
-        "certificateThumbprint": null,
-        "digestAlgorithm": "sha256",
-        "timestampUrl": ""
-      }
-    },
-    "security": {
-      "csp": null
-    },
-    "systemTray": {
-      "iconPath": "icons/32x32.png",
-      "iconAsTemplate": true
-    },
+  "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
-        "fullscreen": false,
-        "height": 860,
-        "resizable": true,
+        "label": "main",
         "title": "Trent Fleet — AI Cofounder",
+        "url": "index.html",
         "width": 1320,
+        "height": 860,
         "minWidth": 960,
         "minHeight": 640,
         "center": true,
+        "resizable": true,
         "decorations": true,
-        "transparent": false
+        "transparent": false,
+        "fullscreen": false,
+        "visible": false,
+        "backgroundColor": "#0A0A0F"
       }
-    ]
+    ],
+    "trayIcon": {
+      "id": "trent-fleet",
+      "iconPath": "icons/32x32.png",
+      "iconAsTemplate": true,
+      "tooltip": "Trent Fleet"
+    },
+    "security": {
+      "csp": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "copyright": "Trent Fleet 2026",
+    "shortDescription": "Trent AI Cofounder Fleet",
+    "longDescription": "Autonomous AI Cofounder Platform with 164-Specialist Fleet Architecture. Wraps the Trent web application and ships its server runtime, so there are no external dependencies to install.",
+    "externalBin": ["binaries/bun"],
+    "resources": {
+      "resources/server": "server"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "10.15",
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "entitlements": null
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    }
   }
 }

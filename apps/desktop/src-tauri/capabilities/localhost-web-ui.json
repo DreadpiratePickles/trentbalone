@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "localhost-web-ui",
+  "description": "The bundled Next.js UI, served by the Bun sidecar on the loopback interface. In Tauri v2 a `remote` capability grants the listed origin access to the IPC layer and therefore to local system capabilities, so this file is deliberately the narrowest thing that still works: the scheme is pinned to http, the host is pinned to the literal 127.0.0.1, and the ONLY variable component is the ephemeral port, written as the URLPattern named group `:port` rather than a wildcard. It grants one permission — listening for tray navigation events. It grants no window control, no filesystem, no shell, no notification.",
+  "local": false,
+  "remote": {
+    "urls": ["http://127.0.0.1::port"]
+  },
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

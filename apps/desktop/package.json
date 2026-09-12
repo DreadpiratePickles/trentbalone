@@ -4,27 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
+    "prepare:resources": "node scripts/prepare-resources.mjs",
+    "icon": "node scripts/make-icon.mjs && tauri icon src-tauri/icon-source.png",
+    "build": "tauri build",
+    "build:debug": "tauri build --debug",
+    "dev": "tauri dev",
+    "test": "vitest run",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "tauri": "tauri"
   },
-  "dependencies": {
-    "@tauri-apps/api": "^1.6.0",
-    "clsx": "^2.1.1",
-    "lucide-react": "^0.475.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
-  },
   "devDependencies": {
-    "@tauri-apps/cli": "^1.6.3",
-    "@types/react": "^19.0.10",
-    "@types/react-dom": "^19.0.4",
-    "@vitejs/plugin-react": "^4.3.4",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.5.3",
-    "tailwindcss": "^3.4.17",
-    "typescript": "^5.8.3",
-    "vite": "^6.2.0"
+    "@tauri-apps/cli": "^2.11.4",
+    "vitest": "^3.2.6"
   }
 }

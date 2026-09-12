@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Local (tauri://) content — the startup splash only. The splash makes exactly one IPC call: it listens for startup progress. Nothing else is granted, because nothing else is used: the tray, the global shortcut, the notifications and the sidecar spawn are all driven from Rust, and Rust-side plugin use is not mediated by the webview capability system.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "shell:allow-spawn",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "binaries/bun",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
+  ]
+}
