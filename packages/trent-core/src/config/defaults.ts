@@ -1,16 +1,18 @@
 import type { TrentConfig } from "./schema.js";
+import { CONFIG_SCHEMA_VERSION } from "./schema.js";
 
+/** Money fields are INTEGER CENTS. daily_cap 1000 = USD 10.00 per day. */
 export const DEFAULT_CONFIG: TrentConfig = {
-  version: "1.0.0",
+  version: CONFIG_SCHEMA_VERSION,
   profile: "default",
   provider: "openai",
   model: "gpt-5.6-terra",
   toolsets: ["file_ops", "terminal"],
   disabled_toolsets: [],
   budget: {
-    daily_cap: 10.0,
+    daily_cap: 1000,
     currency: "USD",
-    per_run_cap: 1.0,
+    per_run_cap: 100,
     alert_thresholds: [50, 80, 100],
   },
   terminal: {
@@ -78,3 +80,8 @@ export const BLANK_SLATE_CONFIG: TrentConfig = {
     default_agent: "ceo",
   },
 };
+
+/** Deep copy so callers can never mutate the shared default objects. */
+export function cloneConfig(config: TrentConfig): TrentConfig {
+  return structuredClone(config);
+}

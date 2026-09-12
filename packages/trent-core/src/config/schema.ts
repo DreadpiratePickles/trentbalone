@@ -33,10 +33,15 @@ export type Toolset = z.infer<typeof ToolsetSchema>;
 export const TerminalBackendSchema = z.enum(["docker", "ssh", "e2b", "local"]);
 export type TerminalBackendType = z.infer<typeof TerminalBackendSchema>;
 
+/**
+ * Money is INTEGER CENTS everywhere, never floating-point dollars — this matches the
+ * rule the rest of the platform already follows. `daily_cap: 1000` is USD 10.00.
+ * `alert_thresholds` stays a list of PERCENTAGES, not money.
+ */
 export const BudgetConfigSchema = z.object({
-  daily_cap: z.number().positive().default(10.0),
+  daily_cap: z.number().int().positive().default(1000),
   currency: z.string().default("USD"),
-  per_run_cap: z.number().positive().default(1.0),
+  per_run_cap: z.number().int().positive().default(100),
   alert_thresholds: z.array(z.number()).default([50, 80, 100]),
 });
 
@@ -84,8 +89,21 @@ export const FleetConfigSchema = z.object({
   default_agent: z.string().default("ceo"),
 });
 
+/**
+ * Integer on-disk schema version for `config.yaml`. Bump this and add a step to
+ * `migrate.ts` whenever the stored shape changes.
+ *   1 -> pre-versioned layout, budget in float dollars.
+ *   2 -> integer `version` key, budget in integer cents.
+ */
+export const CONFIG_SCHEMA_VERSION = 2;
+
+/**
+ * Unknown top-level keys pass through instead of being silently stripped, so
+ * `set("some.custom.key", value)` round-trips and a config written by a newer Trent is
+ * not destroyed by an older one.
+ */
 export const TrentConfigSchema = z.object({
-  version: z.string().default("1.0.0"),
+  version: z.number().int().nonnegative().default(CONFIG_SCHEMA_VERSION),
   profile: z.string().default("default"),
   provider: ProviderSchema.default("openai"),
   model: z.string().default("gpt-5.6-terra"),
@@ -99,11 +117,16 @@ export const TrentConfigSchema = z.object({
   fleet: FleetConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
-});
+}).passthrough();
 
 export type TrentConfig = z.infer<typeof TrentConfigSchema>;
 
+/**
+ * Known secret names. `catchall` keeps any other key found in `.env` (for example a
+ * provider key added by a newer release) instead of dropping it on parse.
+ */
 export const TrentSecretsSchema = z.object({
+  GEMINI_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
   GOOGLE_API_KEY: z.string().optional(),
@@ -126,6 +149,6 @@ export const TrentSecretsSchema = z.object({
   TEAMS_CLIENT_SECRET: z.string().optional(),
   TEAMS_TENANT_ID: z.string().optional(),
   TRENT_CLOUD_TOKEN: z.string().optional(),
-});
+}).catchall(z.string());
 
 export type TrentSecrets = z.infer<typeof TrentSecretsSchema>;
