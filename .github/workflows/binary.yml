@@ -1,0 +1,195 @@
+# binary.yml — the matrix that matters.
+#
+# Cross-compile the CLI with `bun build --compile` for four targets, then RUN each artifact
+# on its own native operating system.
+#
+# A BUILD-ONLY JOB IS NOT ACCEPTABLE HERE. This is the single capability a developer Mac
+# cannot provide, and it is the reason the answer to "do I need a virtual machine?" is no.
+# It is not theoretical: a native module in this project cross-compiled with exit 0 and
+# produced a Linux binary containing macOS headers. The compile was green; the binary was
+# dead. Compile success is not evidence. Execution on the target OS is.
+#
+# Also enforced here: `--external` may not appear anywhere in the build command. That flag
+# previously produced a binary that compiled cleanly and died at launch, because Ink declares
+# react-devtools-core as a peer dependency npm does not install and a compiled binary has no
+# node_modules to fall back to.
+
+name: Binary matrix
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+# No concurrency group here: this workflow is called by ci.yml, which owns the group. A
+# called workflow sharing its caller's group would deadlock against it.
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22.x"
+  BUN_VERSION: "1.4.2"
+  TRENT_QUEUE_FALLBACK: disabled
+
+jobs:
+  # --------------------------------------------------------------------------------------
+  guard:
+    name: guard - banned bundler external flag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Fail if the banned external flag appears in a build command
+        run: bash scripts/ci/assert-no-external.sh
+
+  # --------------------------------------------------------------------------------------
+  build:
+    name: build ${{ matrix.target }}
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-darwin-arm64
+            artifact: trent-darwin-arm64
+          - target: bun-darwin-x64
+            artifact: trent-darwin-x64
+          - target: bun-linux-x64
+            artifact: trent-linux-x64
+          - target: bun-windows-x64
+            artifact: trent-windows-x64.exe
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install
+        run: npm ci
+
+      - name: Derive the SQLite schema and generate the store client
+        # packages/trent-core/src/store/generated/ is gitignored derived output and is NEVER
+        # cached: a cached client embeds absolute build-machine paths and silently goes stale
+        # against apps/web/prisma/schema.prisma.
+        run: |
+          node packages/trent-core/scripts/derive-sqlite-schema.mjs
+          npx prisma generate --schema packages/trent-core/prisma/schema.sqlite.prisma
+
+      - name: Compile
+        run: bash scripts/ci/build-binary.sh "${{ matrix.target }}" "dist/binaries/${{ matrix.artifact }}"
+
+      - name: Upload the artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/binaries/${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # --------------------------------------------------------------------------------------
+  run-native:
+    # THE POINT OF THIS WORKFLOW. Each artifact is downloaded onto the operating system and
+    # architecture it was compiled for, and executed there.
+    #   darwin-arm64 -> macos-latest       (Apple silicon)
+    #   darwin-x64   -> macos-13           (the last Intel-hosted macOS image)
+    #   linux-x64    -> ubuntu-latest
+    #   windows-x64  -> windows-latest
+    name: RUN ${{ matrix.artifact }} on ${{ matrix.os }}
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: trent-darwin-arm64
+            os: macos-latest
+          - artifact: trent-darwin-x64
+            os: macos-13
+          - artifact: trent-linux-x64
+            os: ubuntu-latest
+          - artifact: trent-windows-x64.exe
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          # Node is used ONLY to run the verifier script. The binary under test is standalone
+          # and must not need a Node runtime — that is part of what is being proved.
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download the artifact built for this OS
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/binaries
+
+      - name: Make it executable (POSIX)
+        if: runner.os != 'Windows'
+        run: chmod +x "dist/binaries/${{ matrix.artifact }}"
+
+      - name: Confirm the file is really built for this platform
+        if: runner.os != 'Windows'
+        # `file` reads the actual object headers. This is the specific check that would have
+        # caught the ELF-with-macOS-headers artifact at build time.
+        run: |
+          set -euo pipefail
+          file "dist/binaries/${{ matrix.artifact }}"
+          case "${{ runner.os }}" in
+            Linux) file "dist/binaries/${{ matrix.artifact }}" | grep -q 'ELF 64-bit' ;;
+            macOS) file "dist/binaries/${{ matrix.artifact }}" | grep -q 'Mach-O' ;;
+          esac
+
+      - name: EXECUTE the binary and assert it works
+        # Asserts: it starts at all on this OS; `trent --version` prints a semver;
+        # `trent doctor --json` emits one parseable JSON document with a non-empty checks
+        # array (a doctor reporting zero checks is how "inspects nothing" looks green).
+        run: node scripts/ci/verify-binary.mjs "dist/binaries/${{ matrix.artifact }}"
+
+  # --------------------------------------------------------------------------------------
+  checksums:
+    name: SHA256SUMS
+    # Only after every binary has RUN on its own OS. Publishing a checksum for an artifact
+    # nobody executed just certifies the bytes of a broken binary.
+    needs: run-native
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download every artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist/binaries
+          merge-multiple: true
+
+      - name: Emit SHA256SUMS
+        working-directory: dist/binaries
+        run: |
+          set -euo pipefail
+          ls -la
+          sha256sum trent-* | tee SHA256SUMS
+          echo "### SHA256SUMS" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify the checksum file against the files it describes
+        working-directory: dist/binaries
+        run: sha256sum --check SHA256SUMS
+
+      - name: Upload SHA256SUMS
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: SHA256SUMS
+          path: dist/binaries/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30

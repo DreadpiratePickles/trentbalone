@@ -1,0 +1,112 @@
+# sandbox.yml — the Docker-dependent suites, on a Linux runner with a real daemon.
+#
+# THESE CANNOT PASS ON THE DEV MACHINE. Measured there: `docker --version` -> 29.5.3, exit 0,
+# but `docker info` -> exit 1, daemon not running. Every Docker-backed suite therefore skips
+# locally. A suite that only ever skips is not a suite; this workflow is the only place it is
+# actually executed.
+#
+# Covered here:
+#   * packages/trent-core/src/terminal/DockerBackend.ts  — the container terminal backend
+#   * the doctor's Docker dependency and workbench checks, against a real daemon
+#   * the TLS-intercepting egress proxy, exercised from inside a container so the CA
+#     injection path is real rather than mocked
+#
+# ubuntu-latest ships a running dockerd, so no third-party Docker action is needed. Fewer
+# third-party actions is fewer things to pin and fewer things to trust.
+
+name: Sandbox (Docker)
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22.x"
+  BUN_VERSION: "1.4.2"
+  TRENT_QUEUE_FALLBACK: disabled
+
+jobs:
+  docker-suites:
+    name: docker-dependent suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Assert a REAL Docker daemon is reachable
+        # Fail loudly and immediately if it is not. The whole value of this job is that the
+        # daemon is real; a silent fallback to the skip path would reproduce the exact
+        # local blind spot this workflow exists to close.
+        run: |
+          set -euo pipefail
+          docker --version
+          docker info --format '{{.ServerVersion}} / {{.OperatingSystem}}'
+          docker run --rm alpine:3.20 sh -c 'echo container-ok'
+
+      - name: Install
+        run: npm ci
+
+      - name: Derive the SQLite schema and generate the store client
+        # Gitignored derived output. Regenerated every run; never cached.
+        run: |
+          node packages/trent-core/scripts/derive-sqlite-schema.mjs
+          npx prisma generate --schema packages/trent-core/prisma/schema.sqlite.prisma
+
+      - name: Run the Docker-dependent suites
+        env:
+          # The flag the suites read to decide "a real daemon is present, do NOT skip".
+          TRENT_DOCKER_AVAILABLE: "1"
+          TRENT_REQUIRE_DOCKER_TESTS: "1"
+          TRENT_BUN_BIN: bun
+          TRENT_EVAL_SYNC_QUEUE: ""
+        run: |
+          npx vitest run \
+            packages/trent-core/src/terminal \
+            packages/trent-core/src/egress \
+            packages/trent-core/src/doctor
+
+      - name: Assert nothing skipped for "docker unavailable"
+        # A green run full of skips is the failure mode. If the suites still reported a
+        # Docker-unavailable skip on a runner with a live daemon, the gating is wrong and
+        # this job must not pass.
+        env:
+          TRENT_DOCKER_AVAILABLE: "1"
+          TRENT_REQUIRE_DOCKER_TESTS: "1"
+        run: |
+          set -euo pipefail
+          npx vitest run packages/trent-core/src/terminal --reporter=json --outputFile=sandbox-results.json || true
+          node --input-type=module - <<'JS'
+          import { readFileSync } from "node:fs";
+          const r = JSON.parse(readFileSync("sandbox-results.json", "utf8"));
+          const tests = (r.testResults ?? []).flatMap((f) => f.assertionResults ?? []);
+          const skipped = tests.filter((t) => t.status === "pending" || t.status === "skipped");
+          console.log(`${tests.length} tests, ${skipped.length} skipped`);
+          for (const t of skipped) console.log("  SKIPPED: " + t.fullName);
+          if (skipped.length > 0) {
+            console.error("\nFAIL: tests skipped on a runner WITH a real Docker daemon.");
+            console.error("These suites exist to be run here. A skip here proves nothing.");
+            process.exit(1);
+          }
+          JS
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sandbox-results
+          path: sandbox-results.json
+          if-no-files-found: ignore
+          retention-days: 7
