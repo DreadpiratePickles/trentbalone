@@ -7,14 +7,61 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { DockerBackend, buildCreateArgs, buildExecArgs } from "./DockerBackend.js";
 
 const NASTY_CWD = '/tmp/pwn"; touch /tmp/trent-escaped; echo "';
 const NASTY_ENV_VALUE = '$(touch /tmp/trent-env-escaped)`whoami`';
 
+/**
+ * Unique container name per backend, per test, per run.
+ *
+ * The production default is `trent-sandbox-${Date.now()}-${process.pid}`, which is only unique
+ * to the millisecond within a process. Two backends built in the same tick — or two workers that
+ * happen to share a pid namespace — would fight over one `--name`, and `docker create` fails hard
+ * on a duplicate name. Tests never rely on that default.
+ */
+function uniqueName(label: string): string {
+  return `trent-test-${label}-${randomUUID()}`;
+}
+
+/**
+ * Why this test does NOT gate on `new DockerBackend().isAvailable()`:
+ *
+ * `isAvailable()` shells out to `docker info` with a hard 5000 ms cap. `docker info` enumerates
+ * the daemon's entire state and is slow even on an idle Docker Desktop (measured 0.5 s - 3.2 s
+ * here). When the rest of the root suite runs in parallel, the machine is CPU-saturated by forked
+ * vitest workers and the same call was measured at 6045 ms — over the cap. `isAvailable()` then
+ * returns FALSE on a perfectly healthy daemon.
+ *
+ * That false negative is what made this file fail only when run alongside other suites:
+ *   - `describe.skipIf(!dockerAvailable)` silently skipped the live suite (a false PASS), and
+ *   - "reports unavailable ... instead of throwing" ran its body believing there was no daemon,
+ *     then `execute()` actually SUCCEEDED against the real daemon, so the assertion blew up.
+ *
+ * So the gate uses `docker version`, which only asks the daemon for its version string instead of
+ * dumping its whole state, with a generous timeout and retries. The gate is now a statement about
+ * the machine, not about how busy the machine happens to be.
+ */
+async function probeDockerDaemon(): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ok = await new Promise<boolean>((resolve) => {
+      execFile(
+        "docker",
+        ["version", "--format", "{{.Server.Version}}"],
+        { timeout: 60_000 },
+        (error, stdout) => resolve(!error && stdout.trim().length > 0)
+      );
+    });
+    if (ok) return true;
+  }
+  return false;
+}
+
 // Resolved at COLLECTION time via top-level await. A `beforeAll` would run after `describe.skipIf`
 // has already been evaluated, which would silently skip the live suite even where Docker exists.
-const dockerAvailable = await new DockerBackend().isAvailable();
+const dockerAvailable = await probeDockerDaemon();
 const liveSuiteTitle = dockerAvailable
   ? "DockerBackend live daemon lifecycle"
   : "DockerBackend live daemon lifecycle [SKIPPED: no Docker daemon - untested-on-this-platform]";
@@ -102,7 +149,11 @@ describe("DockerBackend without a daemon", () => {
 
 describe.skipIf(!dockerAvailable)(liveSuiteTitle, () => {
   it("creates, execs and removes a container", async () => {
-    const backend = new DockerBackend({ image: "alpine:3", network: "none" });
+    const backend = new DockerBackend({
+      containerName: uniqueName("lifecycle"),
+      image: "alpine:3",
+      network: "none",
+    });
     const id = await backend.create();
     expect(id).toMatch(/^[0-9a-f]{12,}$/);
     await backend.start();
@@ -116,7 +167,11 @@ describe.skipIf(!dockerAvailable)(liveSuiteTitle, () => {
   it("does not let shell metacharacters in the cwd escape into the host", async () => {
     const marker = path.join(os.tmpdir(), "trent-escaped");
     fs.rmSync(marker, { force: true });
-    const backend = new DockerBackend({ image: "alpine:3", network: "none" });
+    const backend = new DockerBackend({
+      containerName: uniqueName("nasty-cwd"),
+      image: "alpine:3",
+      network: "none",
+    });
     await backend.execute("pwd", { cwd: NASTY_CWD }).catch(() => undefined);
     await backend.cleanup();
     expect(fs.existsSync(marker)).toBe(false);
