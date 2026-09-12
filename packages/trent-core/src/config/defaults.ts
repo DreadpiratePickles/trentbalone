@@ -47,7 +47,7 @@ export const DEFAULT_CONFIG: TrentConfig = {
     routes: {},
   },
   fleet: {
-    installed_agents: ["ceo", "eng-ai-engineer", "support-responder"],
+    installed_agents: ["ceo", "eng-ai-engineer", "sup-support-responder"],
     active_agents: ["ceo"],
     default_agent: "ceo",
   },

@@ -28,7 +28,11 @@
     "./agents": "./src/agents/index.ts",
     "./marketplace": "./src/marketplace/index.ts",
     "./gepa": "./src/gepa/index.ts",
-    "./skills/foundry": "./src/skills/foundry.ts"
+    "./skills/foundry": "./src/skills/foundry.ts",
+    "./errors": "./src/errors/index.ts",
+    "./runtime": "./src/runtime/index.ts",
+    "./telemetry": "./src/telemetry/index.ts",
+    "./store": "./src/store/index.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
