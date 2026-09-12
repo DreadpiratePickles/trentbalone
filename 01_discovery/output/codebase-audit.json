@@ -1,0 +1,1178 @@
+{
+  "generatedAt": "2026-09-12",
+  "baselineCommit": "ed94ae8ea7297a3a86e7bf96c59539e578d11f2b",
+  "repoRoot": "/Users/bobbymeher/Desktop/trent",
+  "webLibPath": "apps/web/lib",
+  "modules": [
+    {
+      "file": "apps/web/lib/model-gateway.ts",
+      "wrapperTarget": "packages/trent-core/src/model-gateway",
+      "loc": 359,
+      "exports": {
+        "functions": [
+          {
+            "name": "clearModelGatewayCache",
+            "signature": "export function clearModelGatewayCache()",
+            "async": false
+          },
+          {
+            "name": "routeModel",
+            "signature": "export function routeModel(input: ModelRouteInput): ModelRoute",
+            "async": false
+          },
+          {
+            "name": "buildFallbackChain",
+            "signature": "export function buildFallbackChain(primary: ModelProvider): ModelProvider[]",
+            "async": false
+          },
+          {
+            "name": "inferProviderFromModel",
+            "signature": "export function inferProviderFromModel(model: string): ModelProvider | undefined",
+            "async": false
+          },
+          {
+            "name": "routeWorkbenchStream",
+            "signature": "export function routeWorkbenchStream( role: WorkbenchStreamRole, policy: ModelPolicySnapshot = buildModelPolicySnapshot(), ): WorkbenchStreamRoute",
+            "async": false
+          },
+          {
+            "name": "estimateModelCostCents",
+            "signature": "export function estimateModelCostCents(input: { modelTier: ModelTier; inputTokens: number; outputTokens: number })",
+            "async": false
+          },
+          {
+            "name": "semanticCacheKey",
+            "signature": "export function semanticCacheKey(input: { companyId: string; taskType: string; prompt: string })",
+            "async": false
+          },
+          {
+            "name": "executeSeatModel",
+            "signature": "export async function executeSeatModel(input: SeatModelExecutionInput): Promise<SeatModelExecutionResult>",
+            "async": true
+          }
+        ],
+        "types": [
+          "ModelProvider",
+          "WorkbenchStreamRole",
+          "ModelTier",
+          "TaskTier",
+          "Reversibility",
+          "ModelRouteInput",
+          "ModelRoute",
+          "SeatModelExecutionResult",
+          "ToolLoopTurn",
+          "ToolLoopContext",
+          "SeatModelExecutionInput",
+          "WorkbenchStreamRoute"
+        ],
+        "constants": []
+      },
+      "runtimeDeps": {
+        "npmImports": [
+          "node:crypto",
+          "openai"
+        ],
+        "internalImports": [
+          "@/lib/ai-client",
+          "@/lib/model-policy"
+        ],
+        "typeOnlyImports": [
+          "@/lib/planner",
+          "@/lib/types"
+        ],
+        "envVars": [],
+        "prismaModels": [],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": true
+      },
+      "cliImportable": "yes",
+      "notes": "Pure routing/cost logic plus an OpenAI-compatible seat execution path; no store or Next imports, so it ports directly once an API key is supplied."
+    },
+    {
+      "file": "apps/web/lib/orchestrator.ts",
+      "wrapperTarget": "packages/trent-core/src/orchestrator",
+      "loc": 514,
+      "exports": {
+        "functions": [
+          {
+            "name": "decideDelegation",
+            "signature": "export { decideDelegation } from \"@/lib/orchestrator-delegation\";",
+            "async": false
+          },
+          {
+            "name": "recallRelevantMemory",
+            "signature": "export { recallRelevantMemory } from \"@/lib/semantic-router\";",
+            "async": false
+          },
+          {
+            "name": "getOrcMaxConcurrency",
+            "signature": "export function getOrcMaxConcurrency(): number",
+            "async": false
+          },
+          {
+            "name": "buildCompletedStepOutputs",
+            "signature": "export function buildCompletedStepOutputs(steps: StepRecord[]): Record<string, string>",
+            "async": false
+          },
+          {
+            "name": "collectReadyOrchestrationSteps",
+            "signature": "export function collectReadyOrchestrationSteps(steps: StepRecord[]): StepRecord[]",
+            "async": false
+          },
+          {
+            "name": "countInFlightOrchestrationSteps",
+            "signature": "export function countInFlightOrchestrationSteps(steps: StepRecord[]): number",
+            "async": false
+          },
+          {
+            "name": "selectReadyStepsForEnqueue",
+            "signature": "export function selectReadyStepsForEnqueue( steps: StepRecord[], maxConcurrency = getOrcMaxConcurrency(), ): StepRecord[]",
+            "async": false
+          },
+          {
+            "name": "runOrchestrationDagPool",
+            "signature": "export async function runOrchestrationDagPool( steps: StepRecord[], executeStep: OrchestrationDagStepExecutor, opts?: { maxConcurrency?: number }, ): Promise<void>",
+            "async": true
+          },
+          {
+            "name": "handleStepCritique",
+            "signature": "export async function handleStepCritique(input: { run: OrchestrationRun; stepId: string; critique: OrchestrationCritique; revisedTail?: OrchestrationStep[]; proposedReplan?: OrchestrationPlan; }): Promise<StepCritiqueResult>",
+            "async": true
+          },
+          {
+            "name": "getOrchestrationRun",
+            "signature": "export function getOrchestrationRun(id: string): OrchestrationRun | undefined",
+            "async": false
+          },
+          {
+            "name": "listOrchestrationRuns",
+            "signature": "export function listOrchestrationRuns(companyId: string): OrchestrationRun[]",
+            "async": false
+          },
+          {
+            "name": "getOrchestrationRunSnapshot",
+            "signature": "export async function getOrchestrationRunSnapshot(id: string): Promise<OrchestrationRun | undefined>",
+            "async": true
+          },
+          {
+            "name": "listOrchestrationRunSnapshots",
+            "signature": "export async function listOrchestrationRunSnapshots(companyId: string): Promise<OrchestrationRun[]>",
+            "async": true
+          },
+          {
+            "name": "launchOrchestration",
+            "signature": "export async function launchOrchestration(opts: { companyId: string; objective: string; trigger?: OrchestrationRun[\"trigger\"]; fullTeam?: boolean; /** \"scheduled\" when RUN CYCLE routes through the durable engine (§1 P0-1). */ cycleKind?: \"scheduled\" | \"ad_hoc_dag\"; }): Promise<OrchestrationRun>",
+            "async": true
+          },
+          {
+            "name": "cancelOrchestration",
+            "signature": "export async function cancelOrchestration(runId: string): Promise<boolean>",
+            "async": true
+          },
+          {
+            "name": "buildRunMarkdownReport",
+            "signature": "export function buildRunMarkdownReport( run: OrchestrationRun, suggestions: Array<{ title: string; body: string }> = [], ): string",
+            "async": false
+          },
+          {
+            "name": "approveStep",
+            "signature": "export async function approveStep(runId: string, stepId: string): Promise<boolean>",
+            "async": true
+          },
+          {
+            "name": "rejectStep",
+            "signature": "export async function rejectStep(runId: string, stepId: string): Promise<boolean>",
+            "async": true
+          }
+        ],
+        "types": [
+          "OrchestrationDagStepExecutor",
+          "OrchestrationRun",
+          "StepCritiqueResult",
+          "OrchestrationCritique",
+          "OrchestrationPlan",
+          "OrchestrationStep",
+          "StepRecord"
+        ],
+        "constants": []
+      },
+      "runtimeDeps": {
+        "npmImports": [],
+        "internalImports": [
+          "@/lib/content-mission",
+          "@/lib/job-events",
+          "@/lib/model-policy",
+          "@/lib/orchestrator-cache",
+          "@/lib/orchestrator-events",
+          "@/lib/orchestrator-preflight",
+          "@/lib/orchestrator-replan",
+          "@/lib/orchestrator-run-queue",
+          "@/lib/orchestrator-run-worker",
+          "@/lib/orchestrator-runtime",
+          "@/lib/store",
+          "@/lib/utils"
+        ],
+        "typeOnlyImports": [],
+        "envVars": [
+          "ORC_MAX_CONCURRENCY"
+        ],
+        "prismaModels": [
+          "approval",
+          "artifact",
+          "auditLog",
+          "ceoMessage",
+          "company",
+          "cycle",
+          "document",
+          "orchestratorEvent",
+          "orchestratorRun",
+          "orchestratorStep"
+        ],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": true
+      },
+      "cliImportable": "database-required",
+      "notes": "Thin run-lifecycle wrapper over orchestrator-runtime that persists every run through store.*, so it needs the Prisma-backed store (or mem-store) to function."
+    },
+    {
+      "file": "apps/web/lib/trace-store.ts",
+      "wrapperTarget": "packages/trent-core/src/trace-store",
+      "loc": 193,
+      "exports": {
+        "functions": [
+          {
+            "name": "deriveTraceRecord",
+            "signature": "export function deriveTraceRecord(step: StepRecord, ctx: DeriveTraceContext): TraceRecord",
+            "async": false
+          },
+          {
+            "name": "shouldDistillSkill",
+            "signature": "export function shouldDistillSkill( traces: readonly TraceRecord[], options: DistillOptions = {}, ): DistillDecision",
+            "async": false
+          }
+        ],
+        "types": [
+          "TraceRecord",
+          "DeriveTraceContext",
+          "DistillTrigger",
+          "DistillDecision",
+          "DistillOptions",
+          "TraceStore"
+        ],
+        "constants": [
+          {
+            "name": "InMemoryTraceStore",
+            "kind": "class"
+          }
+        ]
+      },
+      "runtimeDeps": {
+        "npmImports": [],
+        "internalImports": [],
+        "typeOnlyImports": [
+          "@/lib/orchestrator-runtime",
+          "@/lib/types"
+        ],
+        "envVars": [],
+        "prismaModels": [],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": false
+      },
+      "cliImportable": "yes",
+      "notes": "Self-contained trace derivation plus a TraceStore interface and in-memory implementation; the Prisma implementation lives elsewhere."
+    },
+    {
+      "file": "apps/web/lib/skill-foundry.ts",
+      "wrapperTarget": "packages/trent-core/src/skill-foundry",
+      "loc": 374,
+      "exports": {
+        "functions": [
+          {
+            "name": "buildSkillFrontmatter",
+            "signature": "export function buildSkillFrontmatter( taskType: string, companyId: string, description: string, tags: string[], now: string, ): string",
+            "async": false
+          },
+          {
+            "name": "buildFallbackSkill",
+            "signature": "export function buildFallbackSkill( taskType: string, companyId: string, traces: readonly TraceRecord[], now: string, ): string",
+            "async": false
+          },
+          {
+            "name": "buildDistillPrompt",
+            "signature": "export function buildDistillPrompt( traces: readonly TraceRecord[], taskType: string, existingContent?: string, ): string",
+            "async": false
+          },
+          {
+            "name": "parseDistillResponse",
+            "signature": "export function parseDistillResponse(raw: string): LLMDistillResponse",
+            "async": false
+          },
+          {
+            "name": "distillSkillFromTraces",
+            "signature": "export async function distillSkillFromTraces( traces: readonly TraceRecord[], taskType: string, options: FoundryOptions, ): Promise<SkillDraft | null>",
+            "async": true
+          }
+        ],
+        "types": [
+          "SkillAction",
+          "SkillDraft",
+          "SkillDraftStore",
+          "FoundryOptions"
+        ],
+        "constants": [
+          {
+            "name": "InMemorySkillDraftStore",
+            "kind": "class"
+          }
+        ]
+      },
+      "runtimeDeps": {
+        "npmImports": [
+          "openai"
+        ],
+        "internalImports": [
+          "@/lib/audit-log",
+          "@/lib/trace-store",
+          "@/lib/utils"
+        ],
+        "typeOnlyImports": [],
+        "envVars": [
+          "FOUNDRY_MODEL",
+          "OPENAI_API_KEY",
+          "OPENAI_BASE_URL",
+          "OPENAI_MODEL"
+        ],
+        "prismaModels": [],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": true
+      },
+      "cliImportable": "yes",
+      "notes": "Prompt building and skill distillation with an optional OpenAI call and an in-memory draft store; degrades to a deterministic fallback skill without OPENAI_API_KEY."
+    },
+    {
+      "file": "apps/web/lib/mcp-connector-catalog.ts",
+      "wrapperTarget": "packages/trent-core/src/mcp-connector-catalog",
+      "loc": 247,
+      "exports": {
+        "functions": [
+          {
+            "name": "findMcpConnectorTemplateForServer",
+            "signature": "export function findMcpConnectorTemplateForServer(input: { name: string; url: string }): McpConnectorTemplate | undefined",
+            "async": false
+          },
+          {
+            "name": "mcpConnectorSourceLabel",
+            "signature": "export function mcpConnectorSourceLabel(source: McpConnectorSource): string",
+            "async": false
+          },
+          {
+            "name": "mcpConnectorGrantLabel",
+            "signature": "export function mcpConnectorGrantLabel(mode: McpConnectorGrantMode): string",
+            "async": false
+          }
+        ],
+        "types": [
+          "McpConnectorSource",
+          "McpConnectorAuthMode",
+          "McpConnectorGrantMode",
+          "McpConnectorTemplate"
+        ],
+        "constants": [
+          {
+            "name": "MCP_MARKETPLACE_SOURCES",
+            "kind": "const"
+          },
+          {
+            "name": "MCP_CONNECTOR_GALLERY",
+            "kind": "const"
+          }
+        ]
+      },
+      "runtimeDeps": {
+        "npmImports": [],
+        "internalImports": [],
+        "typeOnlyImports": [
+          "@/lib/mcp-policy",
+          "@/lib/mcp-transport"
+        ],
+        "envVars": [],
+        "prismaModels": [],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": false
+      },
+      "cliImportable": "yes",
+      "notes": "Static connector gallery plus lookup/label helpers with type-only imports; trivially importable."
+    },
+    {
+      "file": "apps/web/lib/heartbeat.ts",
+      "wrapperTarget": "packages/trent-core/src/heartbeat",
+      "loc": 366,
+      "exports": {
+        "functions": [
+          {
+            "name": "runSelfImprovementSweep",
+            "signature": "export async function runSelfImprovementSweep( companyId: string, deps: SelfImprovementDeps, ): Promise<SelfImprovementReport>",
+            "async": true
+          },
+          {
+            "name": "runCompanyHeartbeat",
+            "signature": "export async function runCompanyHeartbeat(company: Company): Promise<HeartbeatReport>",
+            "async": true
+          },
+          {
+            "name": "runHeartbeatSweep",
+            "signature": "export async function runHeartbeatSweep(): Promise<HeartbeatReport[]>",
+            "async": true
+          }
+        ],
+        "types": [
+          "HeartbeatReport",
+          "SelfImprovementReport",
+          "SelfImprovementDeps"
+        ],
+        "constants": []
+      },
+      "runtimeDeps": {
+        "npmImports": [],
+        "internalImports": [
+          "@/lib/eval-gate",
+          "@/lib/gepa",
+          "@/lib/orchestrator",
+          "@/lib/self-improvement/heartbeat-autoresearch",
+          "@/lib/self-improvement/iteration-log",
+          "@/lib/self-improvement/iteration-log.prisma",
+          "@/lib/self-improvement/skill-draft-store.prisma",
+          "@/lib/self-improvement/store-approval-sink",
+          "@/lib/self-improvement/trace-store.prisma",
+          "@/lib/skill-derive",
+          "@/lib/skill-foundry",
+          "@/lib/skill-health",
+          "@/lib/store",
+          "@/lib/tool-health",
+          "@/lib/tool-health-cache",
+          "@/lib/trace-store"
+        ],
+        "typeOnlyImports": [
+          "@/lib/eval-harness",
+          "@/lib/types"
+        ],
+        "envVars": [
+          "AUTORESEARCH_ENABLED",
+          "DATABASE_URL"
+        ],
+        "prismaModels": [
+          "agentTrace",
+          "approval",
+          "company",
+          "cycle",
+          "document",
+          "selfImprovementIteration",
+          "skillDraft",
+          "task"
+        ],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": true
+      },
+      "cliImportable": "database-required",
+      "notes": "Top-level scheduler that fans out to orchestration, GEPA, skill foundry and eval gate, and swaps in Prisma stores when DATABASE_URL is set."
+    },
+    {
+      "file": "apps/web/lib/eval-harness.ts",
+      "wrapperTarget": "packages/trent-core/src/eval-harness",
+      "loc": 112,
+      "exports": {
+        "functions": [
+          {
+            "name": "runEvalSuite",
+            "signature": "export async function runEvalSuite(input: EvalSuiteInput): Promise<EvalSuiteResult>",
+            "async": true
+          }
+        ],
+        "types": [
+          "EvalSubjectType",
+          "EvalGrader",
+          "EvalFixture",
+          "EvalSuiteInput",
+          "EvalFixtureResult",
+          "EvalSuiteResult"
+        ],
+        "constants": []
+      },
+      "runtimeDeps": {
+        "npmImports": [],
+        "internalImports": [],
+        "typeOnlyImports": [],
+        "envVars": [],
+        "prismaModels": [],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": false
+      },
+      "cliImportable": "yes",
+      "notes": "Fully deterministic grader/scoring module with zero imports; the safest module to wrap first."
+    },
+    {
+      "file": "apps/web/lib/readiness-controls.ts",
+      "wrapperTarget": "packages/trent-core/src/readiness-controls",
+      "loc": 499,
+      "exports": {
+        "functions": [
+          {
+            "name": "readinessControlBySlug",
+            "signature": "export function readinessControlBySlug(slug: string): ReadinessControl | undefined",
+            "async": false
+          }
+        ],
+        "types": [
+          "ReadinessControlStatus",
+          "ReadinessControlCategory",
+          "ReadinessControl"
+        ],
+        "constants": [
+          {
+            "name": "REQUIRED_READINESS_CONTROL_SLUGS",
+            "kind": "const"
+          },
+          {
+            "name": "READINESS_CONTROLS",
+            "kind": "const"
+          }
+        ]
+      },
+      "runtimeDeps": {
+        "npmImports": [],
+        "internalImports": [],
+        "typeOnlyImports": [],
+        "envVars": [],
+        "prismaModels": [],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": false
+      },
+      "cliImportable": "yes",
+      "notes": "Static readiness-control registry and a slug lookup; pure data, no runtime deps."
+    },
+    {
+      "file": "apps/web/lib/agent-catalog.ts",
+      "wrapperTarget": "packages/trent-core/src/agent-catalog",
+      "loc": 2142,
+      "exports": {
+        "functions": [
+          {
+            "name": "buildSlotEnvironment",
+            "signature": "export function buildSlotEnvironment(companyId: string, role: AgentRole): AgentEnvironmentConfig",
+            "async": false
+          },
+          {
+            "name": "getCatalogAgent",
+            "signature": "export function getCatalogAgent(profileId: string | null | undefined)",
+            "async": false
+          },
+          {
+            "name": "getCatalogAgentV3",
+            "signature": "export function getCatalogAgentV3(profileId: string | null | undefined)",
+            "async": false
+          }
+        ],
+        "types": [
+          "CatalogCategory",
+          "CatalogAgent",
+          "AgentSlot",
+          "AgentSlotContract"
+        ],
+        "constants": [
+          {
+            "name": "AGENT_CATALOG",
+            "kind": "const"
+          },
+          {
+            "name": "CATEGORY_LABELS",
+            "kind": "const"
+          },
+          {
+            "name": "CATEGORY_COLORS",
+            "kind": "const"
+          },
+          {
+            "name": "AGENT_SLOTS",
+            "kind": "const"
+          },
+          {
+            "name": "SLOT_CONTRACTS",
+            "kind": "const"
+          },
+          {
+            "name": "SLOT_ENVIRONMENTS",
+            "kind": "const"
+          }
+        ]
+      },
+      "runtimeDeps": {
+        "npmImports": [],
+        "internalImports": [
+          "@/lib/agent-skills"
+        ],
+        "typeOnlyImports": [
+          "@/lib/plug-evals",
+          "@/lib/types"
+        ],
+        "envVars": [],
+        "prismaModels": [],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": false
+      },
+      "cliImportable": "yes",
+      "notes": "Large static catalog of 164 specialists plus slot contracts and environments; imports only helpers and types."
+    },
+    {
+      "file": "apps/web/lib/agent-marketplace.ts",
+      "wrapperTarget": "packages/trent-core/src/agent-marketplace",
+      "loc": 191,
+      "exports": {
+        "functions": [
+          {
+            "name": "packProductId",
+            "signature": "export function packProductId(category: CatalogCategory)",
+            "async": false
+          },
+          {
+            "name": "agentMarketplaceProducts",
+            "signature": "export function agentMarketplaceProducts(): AgentProduct[]",
+            "async": false
+          },
+          {
+            "name": "findAgentProductForProfile",
+            "signature": "export function findAgentProductForProfile(profileId: string)",
+            "async": false
+          },
+          {
+            "name": "findProduct",
+            "signature": "export function findProduct(productId: string)",
+            "async": false
+          },
+          {
+            "name": "productUnlocksProfile",
+            "signature": "export function productUnlocksProfile(product: AgentProduct, profileId: string)",
+            "async": false
+          },
+          {
+            "name": "isIncludedProfile",
+            "signature": "export function isIncludedProfile(profileId: string)",
+            "async": false
+          },
+          {
+            "name": "hasProfileEntitlement",
+            "signature": "export function hasProfileEntitlement( profileId: string, entitlements: AgentEntitlement[], at = new Date() )",
+            "async": false
+          },
+          {
+            "name": "catalogWithAccess",
+            "signature": "export async function catalogWithAccess(companyId: string): Promise<CatalogAgentWithAccess[]>",
+            "async": true
+          },
+          {
+            "name": "sortCatalogByCapability",
+            "signature": "export function sortCatalogByCapability<T extends Pick<CatalogAgent, \"capability\" | \"name\">>(agents: T[]): T[]",
+            "async": false
+          },
+          {
+            "name": "grantMockEntitlement",
+            "signature": "export async function grantMockEntitlement(companyId: string, productId: string)",
+            "async": true
+          },
+          {
+            "name": "revokeMockEntitlement",
+            "signature": "export async function revokeMockEntitlement(companyId: string, productId: string)",
+            "async": true
+          }
+        ],
+        "types": [
+          "AgentProduct",
+          "AgentAccessState",
+          "CatalogAgentWithAccess"
+        ],
+        "constants": [
+          {
+            "name": "FREE_AGENT_PROFILE_IDS",
+            "kind": "const"
+          }
+        ]
+      },
+      "runtimeDeps": {
+        "npmImports": [],
+        "internalImports": [
+          "@/lib/agent-catalog",
+          "@/lib/store"
+        ],
+        "typeOnlyImports": [
+          "@/lib/types"
+        ],
+        "envVars": [],
+        "prismaModels": [
+          "agentEntitlement",
+          "auditLog"
+        ],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": false
+      },
+      "cliImportable": "database-required",
+      "notes": "Pack/entitlement logic built on the static catalog but reads and writes AgentEntitlement rows through store.*."
+    },
+    {
+      "file": "apps/web/lib/gepa.ts",
+      "wrapperTarget": "packages/trent-core/src/gepa",
+      "loc": 293,
+      "exports": {
+        "functions": [
+          {
+            "name": "buildReflectionPrompt",
+            "signature": "export function buildReflectionPrompt( role: AgentRole, currentPrompt: string, failingTraces: readonly TraceRecord[], ): string",
+            "async": false
+          },
+          {
+            "name": "parseReflectionResponse",
+            "signature": "export function parseReflectionResponse(raw: string, fallbackPrompt: string): ReflectionProposal",
+            "async": false
+          },
+          {
+            "name": "updateParetoFrontier",
+            "signature": "export function updateParetoFrontier( frontier: GEPAFrontier, incoming: GEPACandidate, maxSize = GEPA_DEFAULT_FRONTIER_SIZE, ): GEPAFrontier",
+            "async": false
+          },
+          {
+            "name": "worstPerformingRole",
+            "signature": "export function worstPerformingRole(traces: readonly TraceRecord[]): AgentRole | null",
+            "async": false
+          },
+          {
+            "name": "evolveRolePrompt",
+            "signature": "export async function evolveRolePrompt( roleId: AgentRole, currentPrompt: string, failingTraces: readonly TraceRecord[], frozenSuite: Omit<EvalSuiteInput, \"subjectId\" | \"previousScore\">, baseline: EvalGateBaseline, frontier: GEPAFrontier, options: EvolveOptions = {}, ): Promise<{ frontier: GEPAFront /*…*/",
+            "async": true
+          },
+          {
+            "name": "emptyFrontier",
+            "signature": "export function emptyFrontier(roleId: AgentRole, now?: string): GEPAFrontier",
+            "async": false
+          }
+        ],
+        "types": [
+          "GEPACandidate",
+          "GEPAFrontier",
+          "ReflectionProposal",
+          "EvolveOptions"
+        ],
+        "constants": []
+      },
+      "runtimeDeps": {
+        "npmImports": [],
+        "internalImports": [
+          "@/lib/ai-client",
+          "@/lib/eval-gate",
+          "@/lib/utils"
+        ],
+        "typeOnlyImports": [
+          "@/lib/eval-harness",
+          "@/lib/trace-store",
+          "@/lib/types"
+        ],
+        "envVars": [
+          "GEPA_MODEL",
+          "OPENAI_API_KEY"
+        ],
+        "prismaModels": [],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": true
+      },
+      "cliImportable": "yes",
+      "notes": "Pareto-frontier prompt evolution; reflection uses the shared AI client and returns an empty string without OPENAI_API_KEY."
+    },
+    {
+      "file": "apps/web/lib/orchestration-golden-capture.ts",
+      "wrapperTarget": "packages/trent-core/src/orchestration-golden-capture",
+      "loc": 183,
+      "exports": {
+        "functions": [
+          {
+            "name": "resolveGoldenDir",
+            "signature": "export function resolveGoldenDir(dir?: string): string",
+            "async": false
+          },
+          {
+            "name": "goldenCaptureEnabled",
+            "signature": "export function goldenCaptureEnabled(): boolean",
+            "async": false
+          },
+          {
+            "name": "sanitizeGoldenText",
+            "signature": "export function sanitizeGoldenText(raw: string): string",
+            "async": false
+          },
+          {
+            "name": "captureOrchestrationFailureGolden",
+            "signature": "export async function captureOrchestrationFailureGolden(input: { runId: string; reason: string; dir?: string; }): Promise<CapturedOrchestrationGolden | undefined>",
+            "async": true
+          },
+          {
+            "name": "listOrchestrationGoldens",
+            "signature": "export async function listOrchestrationGoldens(dir?: string): Promise<CapturedOrchestrationGolden[]>",
+            "async": true
+          },
+          {
+            "name": "promoteOrchestrationGolden",
+            "signature": "export async function promoteOrchestrationGolden( goldenId: string, dir?: string, ): Promise<CapturedOrchestrationGolden | undefined>",
+            "async": true
+          },
+          {
+            "name": "goldenObjectives",
+            "signature": "export function goldenObjectives( goldens: CapturedOrchestrationGolden[], options?: { statuses?: OrchestrationGoldenStatus[] }, ): OrchestrationGoldenObjective[]",
+            "async": false
+          }
+        ],
+        "types": [
+          "OrchestrationGoldenStatus",
+          "CapturedOrchestrationGolden"
+        ],
+        "constants": []
+      },
+      "runtimeDeps": {
+        "npmImports": [
+          "fs/promises",
+          "path"
+        ],
+        "internalImports": [
+          "@/lib/audit-log",
+          "@/lib/orchestration-eval-trajectory",
+          "@/lib/utils"
+        ],
+        "typeOnlyImports": [
+          "@/lib/orchestration-eval"
+        ],
+        "envVars": [
+          "NODE_ENV",
+          "ORCHESTRATION_GOLDENS_DIR",
+          "ORCHESTRATION_GOLDEN_CAPTURE",
+          "VITEST"
+        ],
+        "prismaModels": [],
+        "usesNextImports": false,
+        "usesFilesystem": true,
+        "usesNetwork": false
+      },
+      "cliImportable": "adapter",
+      "notes": "Reads and writes golden JSON files under a configurable directory, so it needs a filesystem adapter rather than direct import."
+    },
+    {
+      "file": "apps/web/lib/orchestrator-runtime.ts",
+      "wrapperTarget": "packages/trent-core/src/orchestrator-runtime",
+      "loc": 1643,
+      "exports": {
+        "functions": [
+          {
+            "name": "toActiveSeat",
+            "signature": "export function toActiveSeat(role: string): AgentRole",
+            "async": false
+          },
+          {
+            "name": "normalizePlannerAgentRole",
+            "signature": "export function normalizePlannerAgentRole(value: unknown): unknown",
+            "async": false
+          },
+          {
+            "name": "normalizePlannerRiskLevel",
+            "signature": "export function normalizePlannerRiskLevel(value: unknown): unknown",
+            "async": false
+          },
+          {
+            "name": "normalizePlannerBoolean",
+            "signature": "export function normalizePlannerBoolean(value: unknown): unknown",
+            "async": false
+          },
+          {
+            "name": "normalizePlannerStringList",
+            "signature": "export function normalizePlannerStringList(value: unknown): unknown",
+            "async": false
+          },
+          {
+            "name": "buildStepHandoff",
+            "signature": "export function buildStepHandoff( step: Pick<OrchestrationStep, \"id\" | \"agentRole\">, rawOutput: Record<string, unknown> | null, fallbackText: string, ): StepHandoff",
+            "async": false
+          },
+          {
+            "name": "renderDependencyHandoff",
+            "signature": "export function renderDependencyHandoff( depId: string, handoff: StepHandoff | undefined, prose: string | undefined, ): string",
+            "async": false
+          },
+          {
+            "name": "normalizePlan",
+            "signature": "export function normalizePlan(plan: RawOrchestrationPlan): OrchestrationPlan",
+            "async": false
+          },
+          {
+            "name": "isReadOnlyPlanObjective",
+            "signature": "export function isReadOnlyPlanObjective(objective: string): boolean",
+            "async": false
+          },
+          {
+            "name": "sanitizeReadOnlyApprovalGates",
+            "signature": "export function sanitizeReadOnlyApprovalGates(plan: OrchestrationPlan, founderObjective: string): OrchestrationPlan",
+            "async": false
+          },
+          {
+            "name": "repairOrchestrationPlanRoutes",
+            "signature": "export function repairOrchestrationPlanRoutes(plan: OrchestrationPlan): OrchestrationPlan",
+            "async": false
+          },
+          {
+            "name": "isBroadPlanningObjective",
+            "signature": "export function isBroadPlanningObjective(objective: string): boolean",
+            "async": false
+          },
+          {
+            "name": "generateOrchestrationPlan",
+            "signature": "export async function generateOrchestrationPlan( company: Company, objective: string, memory: string, options?: { fullTeam?: boolean; runId?: string; operatingState?: string }, ): Promise<OrchestrationPlan>",
+            "async": true
+          },
+          {
+            "name": "buildOrchestrationPlanningPrompts",
+            "signature": "export function buildOrchestrationPlanningPrompts( company: Company, objective: string, memory: string, options?: { fullTeam?: boolean; operatingState?: string; sourceCoverage?: string; sourceDocuments?: string }, ): { system: string; user: string }",
+            "async": false
+          },
+          {
+            "name": "criticRubricEnabled",
+            "signature": "export function criticRubricEnabled(): boolean",
+            "async": false
+          },
+          {
+            "name": "critiqueStepOutput",
+            "signature": "export async function critiqueStepOutput( step: OrchestrationStep, output: string, visibility?: { companyId?: string; runId?: string }, upstreamHandoffs?: StepHandoff[], ): Promise<OrchestrationCritique>",
+            "async": true
+          },
+          {
+            "name": "buildConsolidationUserPrompt",
+            "signature": "export function buildConsolidationUserPrompt( plan: OrchestrationPlan, steps: StepRecord[], contentApprovalPacket?: string | null, ): string",
+            "async": false
+          },
+          {
+            "name": "consolidateRun",
+            "signature": "export async function consolidateRun( plan: OrchestrationPlan, steps: StepRecord[], visibility?: { companyId?: string; runId?: string }, ): Promise<string>",
+            "async": true
+          },
+          {
+            "name": "saveCycleForRun",
+            "signature": "export async function saveCycleForRun( companyId: string, runId: string, objective: string, trigger: \"manual\" | \"scheduled\" = \"manual\", kind: Cycle[\"kind\"] = \"ad_hoc_dag\", ): Promise<string>",
+            "async": true
+          },
+          {
+            "name": "createTaskForStep",
+            "signature": "export async function createTaskForStep( companyId: string, runId: string, step: OrchestrationStep, ): Promise<Task>",
+            "async": true
+          },
+          {
+            "name": "createApprovalForStep",
+            "signature": "export async function createApprovalForStep( company: Company, runId: string, step: OrchestrationStep, ): Promise<Approval>",
+            "async": true
+          },
+          {
+            "name": "createApprovalForSeatTool",
+            "signature": "export async function createApprovalForSeatTool( company: Company, runId: string, step: OrchestrationStep, pendingTool: { adapter: string; action: string; summary: string }, ): Promise<Approval>",
+            "async": true
+          },
+          {
+            "name": "toolsForStep",
+            "signature": "export async function toolsForStep( stepText: string, environment: Pick<AgentEnvironmentConfig, \"tools\">, k = 3, ): Promise<ToolAdapter[]>",
+            "async": true
+          },
+          {
+            "name": "toolForStep",
+            "signature": "export async function toolForStep( stepText: string, environment: Pick<AgentEnvironmentConfig, \"tools\">, ): Promise<ToolAdapter | undefined>",
+            "async": true
+          },
+          {
+            "name": "executeStepWithRuntime",
+            "signature": "export async function executeStepWithRuntime(input: StepExecutionInput): Promise<StepExecutionResult>",
+            "async": true
+          },
+          {
+            "name": "auditTransition",
+            "signature": "export async function auditTransition( companyId: string, transition: OrchestrationTransition, runId: string, summary: string, ): Promise<void>",
+            "async": true
+          }
+        ],
+        "types": [
+          "OrchestrationStep",
+          "OrchestrationPlan",
+          "OrchestrationCritique",
+          "StepHandoff",
+          "SeatLoopResumeState",
+          "StepRecord",
+          "RuntimeStep",
+          "StepExecutionInput",
+          "StepExecutionResult",
+          "OrchestrationTransition"
+        ],
+        "constants": [
+          {
+            "name": "agentRoles",
+            "kind": "const"
+          },
+          {
+            "name": "ACTIVE_SEATS",
+            "kind": "const"
+          },
+          {
+            "name": "stepHandoffSchema",
+            "kind": "const"
+          },
+          {
+            "name": "SeatLoopAwaitingApprovalError",
+            "kind": "class"
+          }
+        ]
+      },
+      "runtimeDeps": {
+        "npmImports": [
+          "zod"
+        ],
+        "internalImports": [
+          "@/lib/agent-catalog",
+          "@/lib/agent-routing-context",
+          "@/lib/agent-runtime",
+          "@/lib/agent-skill-instructions",
+          "@/lib/ai-client",
+          "@/lib/autonomy-settings",
+          "@/lib/content-mission",
+          "@/lib/job-events",
+          "@/lib/logger",
+          "@/lib/mcp-tool-adapter",
+          "@/lib/orchestrator-critic-repair",
+          "@/lib/plan-validator",
+          "@/lib/platform-auth-readiness",
+          "@/lib/runtime-eval-overrides",
+          "@/lib/seat-agent-loop",
+          "@/lib/seat-manifest",
+          "@/lib/seat-output-schemas",
+          "@/lib/self-improvement/company-playbook",
+          "@/lib/self-improvement/company-playbook-log",
+          "@/lib/self-improvement/cross-company-learning",
+          "@/lib/self-improvement/cross-company-learning-loader",
+          "@/lib/self-improvement/skill-draft-store.prisma",
+          "@/lib/semantic-router",
+          "@/lib/skill-foundry",
+          "@/lib/source-coverage",
+          "@/lib/source-grounding",
+          "@/lib/spend",
+          "@/lib/store",
+          "@/lib/tool-health-cache",
+          "@/lib/tools",
+          "@/lib/utils"
+        ],
+        "typeOnlyImports": [
+          "@/lib/planner",
+          "@/lib/types"
+        ],
+        "envVars": [
+          "CRITIC_MODEL",
+          "CRITIC_RUBRIC_ENABLED",
+          "DATABASE_URL",
+          "ORCHESTRATION_PLAN_VALIDATOR_ENABLED",
+          "PLANNER_MODEL",
+          "SKILL_INJECTION_ENABLED",
+          "SPECIALIST_MODEL"
+        ],
+        "prismaModels": [
+          "approval",
+          "auditLog",
+          "cycle",
+          "document",
+          "marketingAccount",
+          "report",
+          "skillDraft",
+          "socialAccount",
+          "task",
+          "usageLedgerEntry"
+        ],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": true
+      },
+      "cliImportable": "database-required",
+      "notes": "The real orchestration engine (planning, critique, step execution, approvals); heavily coupled to store.*, tool adapters and the Prisma skill-draft store."
+    },
+    {
+      "file": "apps/web/lib/orchestrator-events.ts",
+      "wrapperTarget": "packages/trent-core/src/orchestrator-events",
+      "loc": 70,
+      "exports": {
+        "functions": [
+          {
+            "name": "emitOrcEvent",
+            "signature": "export function emitOrcEvent(event: OrcEvent): void",
+            "async": false
+          },
+          {
+            "name": "subscribeOrcEvents",
+            "signature": "export function subscribeOrcEvents(runId: string, listener: Listener): () => void",
+            "async": false
+          }
+        ],
+        "types": [
+          "OrcEventKind",
+          "OrcEvent"
+        ],
+        "constants": []
+      },
+      "runtimeDeps": {
+        "npmImports": [],
+        "internalImports": [],
+        "typeOnlyImports": [
+          "@/lib/orchestrator"
+        ],
+        "envVars": [],
+        "prismaModels": [],
+        "usesNextImports": false,
+        "usesFilesystem": false,
+        "usesNetwork": false
+      },
+      "cliImportable": "yes",
+      "notes": "Tiny in-process pub/sub for run events with a type-only import back to orchestrator; no I/O."
+    }
+  ],
+  "summary": {
+    "totalModules": 14,
+    "cliImportableCount": 9,
+    "adapterRequiredCount": 1,
+    "databaseRequiredCount": 4,
+    "distinctPrismaModels": [
+      "agentEntitlement",
+      "agentTrace",
+      "approval",
+      "artifact",
+      "auditLog",
+      "ceoMessage",
+      "company",
+      "cycle",
+      "document",
+      "marketingAccount",
+      "orchestratorEvent",
+      "orchestratorRun",
+      "orchestratorStep",
+      "report",
+      "selfImprovementIteration",
+      "skillDraft",
+      "socialAccount",
+      "task",
+      "usageLedgerEntry"
+    ],
+    "antiPattern2Satisfied": true,
+    "antiPattern2Note": "requires >= 8 lib files imported by @trent/core"
+  }
+}
