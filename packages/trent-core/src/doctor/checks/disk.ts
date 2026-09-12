@@ -32,8 +32,8 @@ export const checkDisk: DoctorCheck = {
         name: "Disk & Logs",
         status: "warn",
         message: `Logs directory size is large: ${logsMb} MB (${logFiles} files).`,
-        fix_hint: "Run `trent doctor --fix` to prune logs older than 14 days.",
-        auto_fixable: true,
+        fixHint: "Archive or delete old files in the logs directory yourself; `--fix` never deletes files.",
+        autoFixable: false,
         details: { logsBytes, logFiles },
       };
     }

@@ -25,8 +25,8 @@ export const checkConnectivity: DoctorCheck = {
         name: "Network & Cloud Connectivity",
         status: "warn",
         message: `Network connectivity check degraded or offline: ${err.message}`,
-        fix_hint: "Check your local internet connection or proxy settings.",
-        auto_fixable: false,
+        fixHint: "Check your local internet connection or proxy settings.",
+        autoFixable: false,
       };
     }
   },

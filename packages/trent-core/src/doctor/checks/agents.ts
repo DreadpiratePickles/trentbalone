@@ -16,8 +16,7 @@ export const checkAgents: DoctorCheck = {
           name: "Fleet Agents",
           status: "warn",
           message: "No agents installed in fleet.",
-          fix_hint: "Run `trent fleet install ceo` or `trent fleet install --pack engineering`.",
-          auto_fixable: true,
+          fixHint: "Run `trent fleet install ceo` or `trent fleet install --pack engineering`.",
         };
       }
 
@@ -25,17 +24,17 @@ export const checkAgents: DoctorCheck = {
         category: "Agents",
         name: "Fleet Agents",
         status: "ok",
-        message: `${installed.length} installed agent(s) loaded (${active.length} active). Catalog contains 164 available specialists.`,
+        message: `${installed.length} installed agent(s) loaded, ${active.length} active.`,
         details: { installed, active, defaultAgent: config.fleet?.default_agent },
       };
     } catch (err: any) {
       return {
         category: "Agents",
         name: "Fleet Agents",
-        status: "error",
+        status: "fail",
         message: `Agent validation failed: ${err.message}`,
-        fix_hint: "Check fleet settings in ~/.trent/config.yaml.",
-        auto_fixable: false,
+        fixHint: "Check fleet settings in ~/.trent/config.yaml.",
+        autoFixable: false,
       };
     }
   },

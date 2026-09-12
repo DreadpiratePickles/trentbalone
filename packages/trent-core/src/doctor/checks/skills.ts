@@ -47,8 +47,8 @@ export const checkSkills: DoctorCheck = {
           name: "Skills Hub",
           status: "warn",
           message: `Found ${orphanSymlinks} broken/orphan skill symlink(s).`,
-          fix_hint: "Run `trent doctor --fix` to remove broken symlinks.",
-          auto_fixable: true,
+          fixHint: "Run `trent doctor --fix` to remove broken symlinks.",
+          autoFixable: true,
           details: { validSkills, orphanSymlinks },
         };
       }
@@ -64,10 +64,10 @@ export const checkSkills: DoctorCheck = {
       return {
         category: "Skills",
         name: "Skills Hub",
-        status: "error",
+        status: "fail",
         message: `Skills verification error: ${err.message}`,
-        fix_hint: "Inspect ~/.trent/skills permissions and contents.",
-        auto_fixable: false,
+        fixHint: "Inspect ~/.trent/skills permissions and contents.",
+        autoFixable: false,
       };
     }
   },

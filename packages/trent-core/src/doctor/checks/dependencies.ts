@@ -33,10 +33,10 @@ export const checkDependencies: DoctorCheck = {
       return {
         category: "Dependencies",
         name: "System Binaries",
-        status: "error",
+        status: "fail",
         message: `Missing required system dependencies: ${missingRequired.join(", ")}`,
-        fix_hint: `Install ${missingRequired.join(", ")} and ensure they are on your system PATH.`,
-        auto_fixable: false,
+        fixHint: `Install ${missingRequired.join(", ")} and ensure they are on your system PATH.`,
+        autoFixable: false,
         details: { available, missingRequired },
       };
     }

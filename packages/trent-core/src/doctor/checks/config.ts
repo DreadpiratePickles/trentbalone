@@ -13,8 +13,8 @@ export const checkConfig: DoctorCheck = {
         name: "Config Validity",
         status: "warn",
         message: `Config file not found at ${configPath}; running with defaults.`,
-        fix_hint: "Run `trent setup` to generate an initial configuration.",
-        auto_fixable: true,
+        fixHint: "Run `trent setup` to generate an initial configuration.",
+        autoFixable: true,
       };
     }
 
@@ -33,8 +33,8 @@ export const checkConfig: DoctorCheck = {
           name: "Config Validity",
           status: "warn",
           message: `Config has missing required fields: ${missingFields.join(", ")}`,
-          fix_hint: "Run `trent doctor --fix` to populate missing fields with defaults.",
-          auto_fixable: true,
+          fixHint: "Run `trent doctor --fix` to populate missing fields with defaults.",
+          autoFixable: true,
         };
       }
 
@@ -50,10 +50,10 @@ export const checkConfig: DoctorCheck = {
       return {
         category: "Config",
         name: "Config Validity",
-        status: "error",
+        status: "fail",
         message: `Configuration syntax error: ${err.message}`,
-        fix_hint: "Inspect ~/.trent/config.yaml or reset with `trent setup`.",
-        auto_fixable: false,
+        fixHint: "Inspect ~/.trent/config.yaml or reset with `trent setup`.",
+        autoFixable: false,
       };
     }
   },

@@ -23,8 +23,8 @@ export const checkSelfImprovement: DoctorCheck = {
         category: "Self-Improvement",
         name: "Self-Improvement Loop",
         status: "ok",
-        message: "Trace store writable, GEPA evolutionary frontier & eval gate active.",
-        details: { tracesDir, evalGateActive: true },
+        message: `Trace store at ${tracesDir} is writable.`,
+        details: { tracesDir },
       };
     } catch (err: any) {
       return {
@@ -32,8 +32,8 @@ export const checkSelfImprovement: DoctorCheck = {
         name: "Self-Improvement Loop",
         status: "warn",
         message: `Trace store write check failed: ${err.message}`,
-        fix_hint: "Check filesystem write permissions for ~/.trent/traces.",
-        auto_fixable: true,
+        fixHint: "Check filesystem write permissions for ~/.trent/traces.",
+        autoFixable: true,
       };
     }
   },
