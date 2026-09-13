@@ -21,7 +21,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
-import { EgressProxy, TokenManager } from "@trent/core/egress/index.js";
+import { EgressProxy, TokenManager, egressBindHosts } from "@trent/core/egress/index.js";
 import type { ConfigManager } from "@trent/core/config/index.js";
 import { SANDBOX_IMAGE } from "@trent/core/terminal/index.js";
 import {
@@ -79,6 +79,11 @@ export interface StartEgressInput {
   /** 0 (the default) takes a free loopback port. */
   readonly port?: number;
   /**
+   * Addresses to listen on; loopback when absent. `wireTools` adds the Docker bridge gateway on
+   * Linux so a container's `host.docker.internal` reaches the proxy. Never a wildcard.
+   */
+  readonly bindHosts?: readonly string[];
+  /**
    * The token store. The REPL's default is ephemeral (the token dies with the session); the
    * `trent egress start` daemon passes the durable file-backed manager so tokens issued elsewhere resolve.
    */
@@ -97,6 +102,10 @@ export interface ToolWiringDeps {
   readonly buildTools?: typeof buildTrentTools;
   readonly startEgress?: (input: StartEgressInput) => Promise<EgressHandle>;
   readonly probeDocker?: (image: string) => Promise<DockerProbe>;
+  /** Defaults to `process.platform`; decides whether the proxy also binds the Docker bridge gateway. */
+  readonly platform?: NodeJS.Platform;
+  /** Bridge gateway discovery for Linux + Docker; defaults to `docker network inspect bridge`. */
+  readonly discoverBridgeGateway?: () => Promise<string>;
   /** The orchestrator's delegation path; without it `delegate_task` reports `not_available`. */
   readonly delegate?: DelegatePort;
 }
@@ -139,6 +148,7 @@ export async function startEgressProxy(input: StartEgressInput): Promise<EgressH
     tokenManager,
     configManager: input.configManager,
     ...(input.interceptDomains ? { interceptDomains: [...input.interceptDomains] } : {}),
+    ...(input.bindHosts ? { bindHosts: [...input.bindHosts] } : {}),
   });
   await proxy.start();
   const token = tokenManager.issueToken("trent-repl", input.credentials ?? {}, "repl");
@@ -187,10 +197,17 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
     egress = { state: "off" };
   } else {
     try {
+      // On Linux the bridge container reaches the host through the bridge gateway, not loopback.
+      const bindHosts = await egressBindHosts({
+        backend: sandbox.backend,
+        ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+        ...(deps.discoverBridgeGateway !== undefined ? { discover: deps.discoverBridgeGateway } : {}),
+      });
       handle = await (deps.startEgress ?? startEgressProxy)({
         configManager: deps.configManager,
         interceptDomains: deps.config.egress?.intercept_domains,
         credentials: providerCredentials(deps.config),
+        bindHosts,
       });
       egress = { state: "on", port: handle.port };
     } catch (error) {

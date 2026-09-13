@@ -49,3 +49,35 @@ depends on fetching a key.
    model, not the installer's.
 4. **Windows verification path** uses CNG with a hand-decoded DER signature and has not yet been
    executed on Windows in this repo (no `pwsh` here; milestone 5.4 requires CI on Windows).
+
+## Addendum: the egress proxy's bridge listener on Linux
+
+Not the installer's surface, but recorded here because it is the one place a Trent listener sits
+on a non-loopback address.
+
+On Linux, a sandbox container reaches the host through the Docker bridge gateway
+(`host.docker.internal:host-gateway` resolves to `172.17.0.1`, not `127.0.0.1`), so with the
+Docker backend the REPL's `EgressProxy` binds loopback **and** that gateway address, discovered
+from `docker network inspect bridge` (default `172.17.0.1`). On macOS and Windows the list stays
+loopback-only (Docker Desktop forwards the alias to host loopback), and on Linux with the local
+backend as well. Both are unit-tested (`packages/trent-core/src/egress/bind-hosts.test.ts`).
+
+Why this is not an open relay:
+
+- The gateway address is reachable only from processes on the host and from containers attached
+  to the bridge, never from the LAN; the proxy refuses to bind a wildcard (`0.0.0.0`, `::`) and
+  throws if asked (`EgressProxy.assertBindHosts`).
+- Every listener runs the same two gates as loopback. CONNECT to a host outside
+  `egress.intercept_domains` gets `403` before any upstream is dialled; a decrypted request
+  without a valid per-session broker token gets `407` and is never forwarded. The token is
+  ephemeral and dies with the REPL. `EgressProxy.test.ts` ("refuses a tokenless request on the
+  bridge listener and never forwards it") exercises a non-loopback listener directly.
+- A container that obtains the token can only reach allowlisted hosts with the broker
+  substituting the real credential at the boundary; that is the sandbox's designed capability,
+  not a new one. Another local user's container on the same bridge without the token gets `407`.
+
+Residual risk: any process on the host that can reach the bridge gateway and steals the
+session token from a running container's environment can use the allowlisted egress for the
+lifetime of that session. That is equivalent to reading the container's environment, which a
+same-host attacker with Docker access already can.
+

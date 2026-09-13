@@ -21,7 +21,7 @@ import { BudgetLedger } from "../budget.js";
 import { ApprovalGate } from "../approvals.js";
 import { TranscriptRenderer } from "../render.js";
 import type { ReplContext } from "../types.js";
-import { wireTools, toolsStatusLine, type ToolWiring } from "../tools.js";
+import { wireTools, toolsStatusLine, type ToolWiring, type ToolWiringDeps } from "../tools.js";
 import { MemoryStore } from "./harness.js";
 
 let profileDir = "";
@@ -232,6 +232,49 @@ describe("wireTools registers web, skills and cron", () => {
     } finally {
       await docker.cleanup();
     }
+  });
+});
+
+describe("where the proxy listens", () => {
+  const handle = (port: number) => ({
+    port, url: `http://127.0.0.1:${port}`, token: "tok", caCertPath: path.join(profileDir, "missing-ca.pem"),
+    isListening: () => true, stop: async () => undefined,
+  });
+  const build: typeof buildTrentToolAdapters = (config, deps) => buildTrentToolAdapters(config, deps);
+
+  it("on linux with the docker backend it also binds the bridge gateway; on darwin loopback only", async () => {
+    const dockerConfig = structuredClone(DEFAULT_CONFIG);
+    dockerConfig.toolsets = ["file_ops"];
+    const probeDocker = async () => ({ daemon: true, imagePresent: true });
+    const seen: Array<readonly string[] | undefined> = [];
+    const startEgress: ToolWiringDeps["startEgress"] = async (input) => { seen.push(input.bindHosts); return handle(4321); };
+
+    const linux = await wireTools({ config: dockerConfig, workspace, profileDir, buildAdapters: build, probeDocker, startEgress,
+      platform: "linux", discoverBridgeGateway: async () => "172.18.0.1" });
+    await linux.cleanup();
+    expect(seen[0]).toEqual(["127.0.0.1", "172.18.0.1"]);
+
+    const mac = await wireTools({ config: dockerConfig, workspace, profileDir, buildAdapters: build, probeDocker, startEgress,
+      platform: "darwin", discoverBridgeGateway: async () => "172.17.0.1" });
+    await mac.cleanup();
+    expect(seen[1]).toEqual(["127.0.0.1"]);
+
+    const local = await wireTools({ config: localConfig({ toolsets: ["file_ops"] }), workspace, profileDir, buildAdapters: build, startEgress,
+      platform: "linux", discoverBridgeGateway: async () => "172.17.0.1" });
+    await local.cleanup();
+    expect(seen[2]).toEqual(["127.0.0.1"]);
+  });
+
+  it("the real proxy honours the bind list and is never bound to every interface", async () => {
+    const { startEgressProxy } = await import("../tools.js");
+    const started = await startEgressProxy({ bindHosts: ["127.0.0.1"] });
+    try {
+      expect(started.isListening()).toBe(true);
+      expect(await portOpen(started.port)).toBe(true);
+    } finally {
+      await started.stop();
+    }
+    await expect(startEgressProxy({ bindHosts: ["0.0.0.0"] })).rejects.toThrow(/bind/i);
   });
 });
 

@@ -231,3 +231,63 @@ describe("EgressProxy — TLS interception and credential brokering", () => {
     expect(JSON.stringify(env)).not.toContain(REAL_SECRET);
   });
 });
+
+/** A non-loopback IPv4 of this machine, standing in for the Docker bridge gateway (172.17.0.1). */
+function secondaryHost(): string | undefined {
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === "IPv4" && !entry.internal) return entry.address;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * On Linux `host.docker.internal:host-gateway` is the bridge gateway, not loopback, so the proxy
+ * must also listen there for a container to reach it. That listener is not an open relay: the
+ * same two gates apply, and a request without the session token is refused.
+ */
+describe("EgressProxy — the bridge listener", () => {
+  it("listens on loopback only by default and never on every interface", () => {
+    expect(new EgressProxy({ port: 0, ca: proxyCa(), tokenManager: memoryTokens() }).getBindHosts()).toEqual(["127.0.0.1"]);
+    for (const wildcard of ["0.0.0.0", "::", "", "*"]) {
+      expect(() => new EgressProxy({ port: 0, bindHosts: ["127.0.0.1", wildcard], ca: proxyCa(), tokenManager: memoryTokens() })).toThrow(/bind/i);
+    }
+  });
+
+  it("refuses a tokenless request on the bridge listener and never forwards it", async () => {
+    const bridge = secondaryHost();
+    if (!bridge) return; // no non-loopback interface on this machine; the listener cannot be exercised
+    const ca = proxyCa();
+    const tokens = memoryTokens();
+    const proxy = new EgressProxy({
+      port: 0,
+      bindHosts: ["127.0.0.1", bridge],
+      ca,
+      tokenManager: tokens,
+      interceptDomains: [ALLOWED_HOST],
+      upstreamOverrides: { [ALLOWED_HOST]: { host: "127.0.0.1", port: 9 } },
+    });
+    await proxy.start();
+    try {
+      expect(proxy.getBindHosts()).toEqual(["127.0.0.1", bridge]);
+      const noToken = await proxyRequest({ proxyHost: bridge, proxyPort: proxy.getPort(), host: ALLOWED_HOST, path: "/v1/models", caPem: ca.getCertPem() });
+      expect(noToken.connectStatus).toBe(200);
+      expect(noToken.status).toBe(407);
+      const denied = await proxyRequest({ proxyHost: bridge, proxyPort: proxy.getPort(), host: DENIED_HOST, path: "/", caPem: ca.getCertPem() });
+      expect(denied.connectStatus).toBe(403);
+      // Both listeners share one port, so the sandbox env points at a single URL.
+      const loop = await proxyRequest({ proxyPort: proxy.getPort(), host: DENIED_HOST, path: "/", caPem: ca.getCertPem() });
+      expect(loop.connectStatus).toBe(403);
+    } finally {
+      await proxy.stop();
+    }
+  });
+});
+
+function proxyCa(): CertificateAuthority {
+  return new CertificateAuthority({ dir: tmpDir("trent-bridge-ca-") });
+}
+function memoryTokens(): TokenManager {
+  return new TokenManager({ filePath: path.join(tmpDir("trent-bridge-tok-"), "tokens.json") });
+}

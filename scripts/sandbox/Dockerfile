@@ -8,7 +8,9 @@
 #   - the package manager is removed after the install, so nothing can be added at runtime even
 #     if a seat finds a way to reach the network (the backend runs the container with
 #     --network none unless egress is proxied, --cap-drop=ALL and no-new-privileges);
-#   - a non-root user owns /workspace, the mount point the tools use.
+#   - a non-root user owns /workspace, the mount point the tools use. On Linux hosts DockerBackend
+#     overrides it with `--user <host uid>:<gid>` and `HOME=/tmp`, because a bind mount keeps the
+#     host's ownership and --cap-drop=ALL removes CAP_DAC_OVERRIDE; /home/sandbox stays uid 1000's.
 FROM alpine:3.20
 
 RUN apk add --no-cache python3 nodejs \

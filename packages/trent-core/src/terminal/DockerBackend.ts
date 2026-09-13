@@ -43,10 +43,41 @@ export interface DockerCreateOptions {
   readOnlyRootfs?: boolean;
   /** Extra hosts as `name:ip`, e.g. host.docker.internal:host-gateway. */
   extraHosts?: string[];
+  /**
+   * `--user uid:gid`. On Linux a bind mount keeps the host's ownership, and `--cap-drop=ALL`
+   * removes CAP_DAC_OVERRIDE, so the container can only write the workspace as its owner. Unset
+   * keeps the image's own user (Docker Desktop maps ownership; root owns what root mounts).
+   */
+  user?: string;
+}
+
+/** What the current process is, for `resolveContainerUser`. Injected by tests. */
+export interface HostIdentity {
+  platform: NodeJS.Platform;
+  uid?: number;
+  gid?: number;
 }
 
 export interface DockerBackendOptions extends Partial<DockerCreateOptions> {
   execTimeoutMs?: number;
+  /** Defaults to this process: `process.platform`, `process.getuid()`, `process.getgid()`. */
+  hostIdentity?: HostIdentity;
+}
+
+/**
+ * The `--user` for the sandbox: the host user's uid:gid on Linux when it is not root, so the
+ * bind-mounted workspace (owned by that user) is writable inside the container. Root keeps the
+ * image's user because it owns what it mounts; macOS and Windows keep it because Docker Desktop
+ * maps file ownership across the VM boundary.
+ */
+export function resolveContainerUser(host: HostIdentity): string | undefined {
+  if (host.platform !== "linux") return undefined;
+  if (host.uid === undefined || host.uid === 0) return undefined;
+  return `${host.uid}:${host.gid ?? host.uid}`;
+}
+
+function currentHostIdentity(): HostIdentity {
+  return { platform: process.platform, uid: process.getuid?.(), gid: process.getgid?.() };
 }
 
 /** The pinned build of `scripts/sandbox/Dockerfile`; see `sandbox-image.ts`. */
@@ -91,6 +122,7 @@ export function buildCreateArgs(options: DockerCreateOptions): string[] {
   if (options.memory) args.push("--memory", options.memory);
   if (options.pidsLimit) args.push("--pids-limit", String(options.pidsLimit));
   for (const host of options.extraHosts ?? []) args.push("--add-host", host);
+  if (options.user) args.push("--user", options.user);
 
   if (options.caCertPath) {
     args.push("-v", `${options.caCertPath}:${CONTAINER_CA_PATH}:ro`);
@@ -104,6 +136,8 @@ export function buildCreateArgs(options: DockerCreateOptions): string[] {
   if (options.workdir) args.push("-w", options.workdir);
 
   const env: Record<string, string> = { ...(options.env ?? {}) };
+  // The image's home directory belongs to its own user; an overridden uid needs a writable one.
+  if (options.user) env.HOME = "/tmp";
   if (options.proxyToken && options.proxyUrl) {
     Object.assign(
       env,
@@ -169,6 +203,7 @@ export class DockerBackend implements TerminalBackend {
       pidsLimit: options?.pidsLimit,
       readOnlyRootfs: options?.readOnlyRootfs,
       extraHosts: options?.extraHosts,
+      user: options?.user ?? resolveContainerUser(options?.hostIdentity ?? currentHostIdentity()),
     };
     this.execTimeoutMs = options?.execTimeoutMs ?? DEFAULT_TIMEOUT_MS;
   }

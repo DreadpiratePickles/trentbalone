@@ -43,6 +43,14 @@ Container flags applied on create:
 - `--read-only` when a read-only root filesystem is requested
 - `--memory` and `--pids-limit` when configured
 - Volume mounts, each with an explicit `:ro` when read-only
+- `--user <uid>:<gid>` of the `trent` process, **on Linux only, when it is not root**, together
+  with `-e HOME=/tmp`. A Linux bind mount keeps the host's ownership, and `--cap-drop=ALL` removes
+  `CAP_DAC_OVERRIDE`, so a container running as the image's uid 1000 (or even as root) cannot
+  write a workspace owned by uid 1001 with mode 755: every `write_file`, `patch` and `>`
+  redirect failed with `EACCES` on ubuntu-latest while passing on macOS, where Docker Desktop
+  maps ownership across its VM. Root keeps the image's user because root owns what it mounts;
+  macOS and Windows keep it because the mapping already makes the mount writable.
+  `HOME` moves to `/tmp` because `/home/sandbox` belongs to uid 1000.
 
 The environment handed to the container is built by `buildSandboxEnv` and contains broker tokens, not
 keys. See [security.md](security.md).
@@ -110,6 +118,20 @@ Egress credential brokering is documented on its own page: [security.md](securit
 version is that a sandboxed process holds `trnt_egress_…` tokens under the normal key names, routes
 through a local TLS-intercepting proxy, and cannot reach a host outside
 `egress.intercept_domains`.
+
+Where that proxy listens depends on the platform. The bridge container reaches it as
+`http://host.docker.internal:<port>` through `--add-host host.docker.internal:host-gateway`. On
+Docker Desktop (macOS, Windows) the VM forwards that alias to the host's loopback, so a
+`127.0.0.1` listener is enough. On Linux the alias resolves to the bridge **gateway**
+(`172.17.0.1` by default), and a loopback-only proxy is unreachable from the container:
+`curl: (7) Failed to connect to example.com:443 over proxy host.docker.internal`. So on Linux
+with the Docker backend the REPL also binds the gateway address, discovered with
+`docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}'` (falling back to
+`172.17.0.1`). The proxy never binds `0.0.0.0` or `::`; `EgressProxy` throws on a wildcard, and
+`egressBindHosts` never produces one. The extra listener enforces the same two gates as loopback
+(host allowlist at CONNECT, session token on every request), which
+`EgressProxy.test.ts` proves by sending a tokenless request to the non-loopback listener and
+getting `407`; see the threat model in `scripts/installer/THREAT-MODEL.md`.
 
 ## Not yet implemented
 

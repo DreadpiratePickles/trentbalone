@@ -9,6 +9,8 @@ import tls from "node:tls";
 import type { Socket } from "node:net";
 
 export interface ProxyRequestOptions {
+  /** Which proxy listener to dial; loopback unless a test exercises the bridge listener. */
+  proxyHost?: string;
   proxyPort: number;
   host: string;
   port?: number;
@@ -33,10 +35,10 @@ interface TunnelResult {
   connectStatus: number;
 }
 
-function openTunnel(proxyPort: number, authority: string): Promise<TunnelResult> {
+function openTunnel(proxyHost: string, proxyPort: number, authority: string): Promise<TunnelResult> {
   return new Promise((resolve, reject) => {
     const req = http.request({
-      host: "127.0.0.1",
+      host: proxyHost,
       port: proxyPort,
       method: "CONNECT",
       path: authority,
@@ -80,7 +82,7 @@ function parseHttpResponse(raw: string): { status: number; head: string; body: s
 /** Perform one request through the proxy exactly as a sandboxed client would. */
 export async function proxyRequest(options: ProxyRequestOptions): Promise<ProxyResponse> {
   const port = options.port ?? 443;
-  const { socket, connectStatus } = await openTunnel(options.proxyPort, `${options.host}:${port}`);
+  const { socket, connectStatus } = await openTunnel(options.proxyHost ?? "127.0.0.1", options.proxyPort, `${options.host}:${port}`);
   // Node emits 'connect' for any CONNECT response, refusals included. A refused tunnel has no TLS.
   if (!socket || connectStatus !== 200) {
     socket?.destroy();

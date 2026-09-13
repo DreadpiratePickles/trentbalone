@@ -4,3 +4,4 @@ export * from "./CertificateAuthority.js";
 export * from "./CredentialBroker.js";
 export * from "./SandboxEnvironment.js";
 export * from "./EgressProxy.js";
+export * from "./bind-hosts.js";

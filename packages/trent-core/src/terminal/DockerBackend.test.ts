@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { DockerBackend, buildCreateArgs, buildExecArgs } from "./DockerBackend.js";
+import { DockerBackend, buildCreateArgs, buildExecArgs, resolveContainerUser } from "./DockerBackend.js";
 
 const NASTY_CWD = '/tmp/pwn"; touch /tmp/trent-escaped; echo "';
 const NASTY_ENV_VALUE = '$(touch /tmp/trent-env-escaped)`whoami`';
@@ -134,6 +134,49 @@ describe("DockerBackend argument construction", () => {
       volumes: [{ hostPath: NASTY_CWD, containerPath: "/workspace", readOnly: false }],
     });
     expect(args).toContain(`${NASTY_CWD}:/workspace`);
+  });
+});
+
+/**
+ * Linux bind mounts keep the host's uid/gid: the workspace belongs to the host user (uid 1001 on
+ * a GitHub runner, mode 755) while the image runs as uid 1000 and `--cap-drop=ALL` removes
+ * CAP_DAC_OVERRIDE, so even a root image cannot write it. Docker Desktop on macOS maps ownership,
+ * which is why the sandbox suites pass there and fail on ubuntu-latest (run 34767631807).
+ */
+describe("DockerBackend runs as the host user on Linux", () => {
+  it("resolves to uid:gid on Linux when the process is not root", () => {
+    expect(resolveContainerUser({ platform: "linux", uid: 1001, gid: 1001 })).toBe("1001:1001");
+  });
+
+  it("keeps the image's user for root on Linux, on macOS and on Windows", () => {
+    expect(resolveContainerUser({ platform: "linux", uid: 0, gid: 0 })).toBeUndefined();
+    expect(resolveContainerUser({ platform: "darwin", uid: 501, gid: 20 })).toBeUndefined();
+    expect(resolveContainerUser({ platform: "win32" })).toBeUndefined();
+    expect(resolveContainerUser({ platform: "linux" })).toBeUndefined();
+  });
+
+  it("passes --user and HOME=/tmp on create, since the image's home belongs to uid 1000", () => {
+    const args = buildCreateArgs({
+      containerName: "trent-sandbox-user",
+      image: "trent-sandbox:1",
+      user: "1001:1001",
+    });
+    expect(args[args.indexOf("--user") + 1]).toBe("1001:1001");
+    expect(args).toContain("HOME=/tmp");
+    expect(args[args.indexOf("HOME=/tmp") - 1]).toBe("-e");
+  });
+
+  it("does not pass --user or override HOME when no user is resolved", () => {
+    const args = buildCreateArgs({ containerName: "trent-sandbox-nouser", image: "trent-sandbox:1" });
+    expect(args).not.toContain("--user");
+    expect(args).not.toContain("HOME=/tmp");
+  });
+
+  it("the backend derives the user from an injected host identity", () => {
+    const linux = new DockerBackend({ containerName: "x", hostIdentity: { platform: "linux", uid: 1001, gid: 1001 } });
+    expect(linux.getCreateArgs()).toContain("1001:1001");
+    const mac = new DockerBackend({ containerName: "y", hostIdentity: { platform: "darwin", uid: 501, gid: 20 } });
+    expect(mac.getCreateArgs()).not.toContain("--user");
   });
 });
 

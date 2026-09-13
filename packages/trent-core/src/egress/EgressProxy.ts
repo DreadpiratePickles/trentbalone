@@ -26,6 +26,13 @@ export interface UpstreamOverride {
 
 export interface EgressProxyOptions {
   port?: number;
+  /**
+   * Addresses to listen on, all on the same port. Default loopback only. On Linux the Docker
+   * bridge gateway is added so `host.docker.internal:host-gateway` inside a container reaches the
+   * proxy; a wildcard (`0.0.0.0`, `::`) is refused outright. Every listener enforces the same two
+   * gates, so a non-loopback listener is not an open relay: no token, no forwarding.
+   */
+  bindHosts?: string[];
   tokenManager?: TokenManager;
   configManager?: ConfigManager;
   ca?: CertificateAuthority;
@@ -58,6 +65,19 @@ const REFUSAL_HOST = {
     "The request was NOT forwarded.",
 };
 
+const WILDCARD_BIND = new Set(["0.0.0.0", "::", "", "*", "0:0:0:0:0:0:0:0", "[::]"]);
+
+/** Refuses to bind every interface. There is no configuration that turns this off. */
+export function assertBindHosts(hosts: readonly string[]): string[] {
+  if (hosts.length === 0) throw new Error("egress proxy: bindHosts must name at least one address");
+  for (const host of hosts) {
+    if (WILDCARD_BIND.has(host.trim())) {
+      throw new Error(`egress proxy: refusing to bind ${JSON.stringify(host)}; name a specific address, never every interface`);
+    }
+  }
+  return [...new Set(hosts.map((h) => h.trim()))];
+}
+
 function writeJson(res: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -88,7 +108,8 @@ export class EgressProxy {
   private readonly sockets = new Set<net.Socket>();
 
   private port: number;
-  private server: http.Server | null = null;
+  private readonly bindHosts: readonly string[];
+  private servers: http.Server[] = [];
   private interceptor: http.Server | null = null;
   private running = false;
 
@@ -96,6 +117,7 @@ export class EgressProxy {
     this.configManager = options?.configManager;
     const config = this.configManager?.loadConfig();
     this.port = options?.port ?? config?.egress?.proxy_port ?? 8089;
+    this.bindHosts = assertBindHosts(options?.bindHosts ?? ["127.0.0.1"]);
     this.tokenManager = options?.tokenManager ?? new TokenManager();
     this.ca = options?.ca ?? new CertificateAuthority();
     this.interceptDomains =
@@ -124,6 +146,10 @@ export class EgressProxy {
     return this.port;
   }
 
+  public getBindHosts(): readonly string[] {
+    return this.bindHosts;
+  }
+
   public getInterceptDomains(): readonly string[] {
     return this.interceptDomains;
   }
@@ -135,39 +161,49 @@ export class EgressProxy {
       void this.handleIntercepted(req, res);
     });
 
-    const server = http.createServer((req, res) => {
-      void this.handlePlain(req, res);
-    });
-    server.on("connect", (req, socket: net.Socket, head: Buffer) => {
-      this.handleConnect(req, socket, head);
-    });
-    server.on("connection", (socket) => {
-      this.sockets.add(socket);
-      socket.on("close", () => this.sockets.delete(socket));
-    });
-    this.server = server;
-
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(this.port, "127.0.0.1", () => {
-        const address = server.address();
-        if (typeof address === "object" && address) this.port = address.port;
-        this.running = true;
-        server.removeListener("error", reject);
-        resolve();
+    // One server per address, all on one port: the first listener fixes the port when it is 0.
+    for (const host of this.bindHosts) {
+      const server = http.createServer((req, res) => {
+        void this.handlePlain(req, res);
       });
-    });
+      server.on("connect", (req, socket: net.Socket, head: Buffer) => {
+        this.handleConnect(req, socket, head);
+      });
+      server.on("connection", (socket) => {
+        this.sockets.add(socket);
+        socket.on("close", () => this.sockets.delete(socket));
+      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(this.port, host, () => {
+            const address = server.address();
+            if (typeof address === "object" && address) this.port = address.port;
+            server.removeListener("error", reject);
+            resolve();
+          });
+        });
+      } catch (error) {
+        await this.closeServers();
+        throw error;
+      }
+      this.servers.push(server);
+    }
+    this.running = true;
+  }
+
+  private async closeServers(): Promise<void> {
+    for (const socket of this.sockets) socket.destroy();
+    this.sockets.clear();
+    await Promise.all(this.servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+    this.servers = [];
   }
 
   public async stop(): Promise<void> {
-    if (!this.running || !this.server) return;
-    for (const socket of this.sockets) socket.destroy();
-    this.sockets.clear();
-    const server = this.server;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (!this.running) return;
+    await this.closeServers();
     this.interceptor?.closeAllConnections?.();
     this.interceptor = null;
-    this.server = null;
     this.running = false;
   }
 

@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { probeDockerSandbox } from "../../terminal/docker-test-gate.js";
 import { CertificateAuthority } from "../../egress/CertificateAuthority.js";
 import { EgressProxy } from "../../egress/EgressProxy.js";
+import { egressBindHosts } from "../../egress/bind-hosts.js";
 import { TokenManager } from "../../egress/TokenManager.js";
 import { spilloverDir } from "../spillover.js";
 import type { TrentToolAdapter } from "../types.js";
@@ -50,7 +51,9 @@ describe.skipIf(!dockerAvailable)(`terminal on Docker${gate.skipNote}`, () => {
 
     const ca = new CertificateAuthority({ dir: path.join(root, "ca") });
     const tokens = new TokenManager({ filePath: path.join(root, "tokens.json") });
-    proxy = new EgressProxy({ port: 0, ca, tokenManager: tokens, interceptDomains: ["api.openai.com"] });
+    // Loopback, plus the bridge gateway on Linux: that is what host.docker.internal resolves to there.
+    const bindHosts = await egressBindHosts({ backend: "docker" });
+    proxy = new EgressProxy({ port: 0, bindHosts, ca, tokenManager: tokens, interceptDomains: ["api.openai.com"] });
     await proxy.start();
     proxyPort = proxy.getPort();
     const token = tokens.issueToken("eng-ai-engineer", { apiKey: "never-seen-by-the-sandbox" });
