@@ -236,3 +236,25 @@ Only Google's OpenAI-compatible endpoint works; native REST 404s. `gemini-3.5-fl
 
 ### Rules in force (memory files: work-autonomously, max-six-agents, use-opus-for-agents, escalation-options)
 Never ask permission to proceed. Opus subagents, max 6, Fable only at real forks. Failing test first. Explicit-file staging. apps/web read-only except a tested seam in its own commit. No emoji in output; brand palette only. Never log a secret.
+
+### In flight at compaction (2026-09-13) — pick these up from their reports, then commit
+1. **Improve-loop foundation** (Opus): tasks I.1-I.5 + I.17 from `01_discovery/references/cs329a-applied.md`
+   §6 — real cost accounting, budget cap, persisted baseline + judge caches, and **`blockedBy:"unverified"`
+   when nobody verified a candidate** (the vacuous-gate fix). Also `SKILL_INJECTION_ENABLED=1` in
+   `applyStandaloneEnv` so promoted skills reach seats, and `evalScore` populated in traces.
+   Owns `src/improve/`, improve tables in `src/store/`, `src/runtime/env.ts`.
+   **Next after it lands:** tasks I.6-I.16 (mechanical-grader overlay, evidence-cited judge +
+   meta-verification, judge/human agreement ledger, per-fixture cluster tags, saturation skip,
+   length guard, second-draw reliability, clean-trace distillation, rationalisation on goldens,
+   repetitive-loop tag, public/private suite split).
+2. **Fleet shared memory** (Opus): new `src/fleet-memory/`, `src/tools/memory/`, a prelude hook in
+   `src/orchestrator/index.ts`. One company memory read by every seat (subagents read-only),
+   cross-agent recall as a frozen budgeted snapshot (3,000 chars, config), `fleet_search` over all
+   agents' outputs, org-tier skills visible to all, entry-level merge for concurrent writers.
+   Not shared: seat prompts, per-agent GEPA frontiers, secrets.
+3. **REPL tools + egress wiring** (Opus): `apps/cli/src/repl/`, `commands/groups/servers.ts` — pass
+   `buildTrentToolAdapters` and a started `EgressProxy` to `createOrchestrator`; `/tools` lists real
+   adapters; proxy stops on exit including throw and Ctrl+C.
+
+Commit order once they land: seam-free core first (1 and 2 together if they typecheck), then REPL.
+Then push, check CI run on the latest sha, and start I.6-I.16.
