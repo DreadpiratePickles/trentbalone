@@ -12,7 +12,7 @@
 import { A2AServer, generateAgentCard } from "@trent/core/a2a/index.js";
 import { ACPServer } from "@trent/core/acp/index.js";
 import { GatewayManager } from "@trent/core/gateway/index.js";
-import { TokenManager } from "@trent/core/egress/index.js";
+import { egressBindHosts, TokenManager } from "@trent/core/egress/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import type { CommandContext } from "../context.js";
 import type { CommandSpec } from "../registry.js";
@@ -243,15 +243,20 @@ export const egressSpec: CommandSpec = {
         }
         // The same start path the REPL uses, on the CONFIGURED port with the DURABLE token store, so
         // tokens issued by other commands resolve here. The issued token is never printed.
+        // Same bind rule as the REPL: loopback, plus the Docker bridge gateway on Linux so the
+        // sandbox containers can reach the proxy (token-gated; wildcards are refused).
+        const bindHosts = await egressBindHosts({ backend: config.terminal.backend === "docker" ? "docker" : "local" });
         const proxy = await startEgressProxy({
           configManager: ctx.config(),
           port: config.egress.proxy_port,
           tokenManager: new TokenManager(),
+          bindHosts,
         });
         return {
           data: {
             server: "egress",
             port: proxy.port,
+            bindHosts,
             listening: proxy.isListening(),
             interceptDomains: [...config.egress.intercept_domains],
             caCertPath: proxy.caCertPath,
