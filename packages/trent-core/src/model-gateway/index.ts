@@ -259,3 +259,12 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
 
   return { stream, complete, resolveRoute, configuredProviders, estimateCostCents };
 }
+
+export {
+  createCompletionPort,
+  extractJsonObject,
+  NOT_CONFIGURED_MESSAGE,
+  type CompletionPortCall,
+  type CompletionPortOptions,
+  type CreateCompletionFn,
+} from "./completion-port.js";

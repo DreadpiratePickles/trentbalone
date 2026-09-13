@@ -13,6 +13,8 @@
  *   - `apps/web/lib/orchestrator-runtime.ts:216-345` (OrchestrationStep, StepRecord)
  */
 
+import type { ModelGateway } from "../model-gateway/types.js";
+
 /** The 20 event kinds carried on the in-process bus (`__trentOrcBus`). */
 export type OrcEventKind =
   | "run_preflight"
@@ -180,6 +182,14 @@ export const FALLBACK_PLANNER_APPROVAL_TRIGGERS: readonly string[] = [
 /** The `plan.reasoning` the fallback planner stamps on its plans. */
 export const FALLBACK_PLAN_REASONING = "LLM unavailable — using deterministic fallback plan.";
 
+/**
+ * The literal `consolidateRun` returns when its `callText` fails (`orchestrator-runtime.ts`,
+ * `callTextWithFallback`). `callText` has no injection seam and reads `OPENAI_API_KEY` directly,
+ * so on any other provider this literal IS the summary; the wrapper replaces it (see
+ * `provider-ports.ts`).
+ */
+export const FALLBACK_RUN_SUMMARY = "Run completed — see step outputs.";
+
 export interface OrchestratorDeps {
   /**
    * SQLite connection string for durable mode. Defaults to the in-memory store, which is what makes
@@ -188,7 +198,16 @@ export interface OrchestratorDeps {
   readonly databaseUrl?: string;
   /** The configured provider and model; see {@link OrchestratorModelConfig}. */
   readonly model?: OrchestratorModelConfig;
-  /** Planner/critic JSON completion port. Omit to use the real gateway. */
+  /**
+   * The model gateway the planner, critic and consolidator go through. Omit to build the real one
+   * (`createModelGateway()`), which routes to the configured provider and model; tests inject a
+   * recording fake.
+   */
+  readonly gateway?: ModelGateway;
+  /**
+   * Planner/critic JSON completion port. Omit to use the gateway-backed port
+   * (`createCompletionPort(gateway)`), which is the default for every surface, not only tests.
+   */
   readonly createCompletion?: InjectedModelPort;
   /** Seat execution port. Omit to use the real gateway (wrapped by the seat guard). */
   readonly executeSeatModelFn?: InjectedModelPort;

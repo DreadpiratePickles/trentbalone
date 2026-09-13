@@ -19,7 +19,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import type { OrcEvent, OrchestrationRunSnapshot, OrchestrationStepSnapshot } from "./types.js";
+import { FALLBACK_PLAN_REASONING, FALLBACK_RUN_SUMMARY, type OrcEvent, type OrchestrationRunSnapshot, type OrchestrationStepSnapshot } from "./types.js";
 
 const REPO_ROOT = path.resolve(__dirname, "../../../..");
 const LIVE_MODEL = process.env.GOOGLE_MODEL_DEFAULT ?? "gemini-3.5-flash-lite";
@@ -128,8 +128,30 @@ function excerptPrompt(messages: Array<{ role?: string; content?: string }>): st
   const user = messages.filter((m) => m.role === "user").map((m) => m.content ?? "").join("\n");
   return user
     .split("\n")
-    .filter((line) => /^(Seat:|Objective:|Tool guidance:|Available tools:|Tool-use step|- .*\("|Prior tool results)/.test(line))
+    // Planner: "Respond as JSON: { objective, reasoning, steps..."; critic: "Step: <title> (role=...";
+    // consolidator: "Completed (<n>):" — the three phases finding 1 said never reached the provider.
+    .filter((line) => /^(Seat:|Objective:|Tool guidance:|Available tools:|Tool-use step|- .*\("|Prior tool results|Respond as JSON:|Step: |Expected: |Completed \()/.test(line))
     .map((line) => line.slice(0, 400));
+}
+
+/** Reassembles an OpenAI-style SSE body into the assistant content; undefined when it is not SSE. */
+function parseSseContent(text: string): { content: string; usage?: ProviderCall["usage"] } | undefined {
+  if (!/^data:/m.test(text)) return undefined;
+  let content = "";
+  let usage: ProviderCall["usage"];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith("data:")) continue;
+    const payload = line.slice(5).trim();
+    if (payload === "" || payload === "[DONE]") continue;
+    try {
+      const chunk = JSON.parse(payload) as { choices?: Array<{ delta?: { content?: string } }>; usage?: ProviderCall["usage"] };
+      content += chunk.choices?.[0]?.delta?.content ?? "";
+      if (chunk.usage) usage = chunk.usage;
+    } catch {
+      /* not a JSON frame */
+    }
+  }
+  return { content, usage };
 }
 
 /**
@@ -179,7 +201,13 @@ async function startTracingProxy(calls: ProviderCall[]): Promise<{ baseUrl: stri
           call.content = json.choices?.[0]?.message?.content ?? undefined;
           if (json.error?.message) call.error = json.error.message.slice(0, 300);
         } catch {
-          call.error = text.slice(0, 300);
+          // The gateway path (planner/critic/consolidation) streams: reassemble the SSE deltas.
+          const sse = parseSseContent(text);
+          if (sse === undefined) call.error = text.slice(0, 300);
+          else {
+            call.content = sse.content;
+            call.usage = sse.usage;
+          }
         }
         res.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") ?? "application/json" });
         res.end(text);
@@ -210,6 +238,8 @@ describe.skipIf(!LIVE)("orchestrator — live agents and tools on gemini-3.5-fla
   let wallMs = 0;
   /** What the store really holds, read back after seeding, so the tool result is checked against truth. */
   let storedDocs = { total: 0, semantic: 0 };
+  /** Step ids the test had to approve because the live critic escalated them. */
+  const approvals: string[] = [];
   let closeProxy: () => Promise<void> = async () => undefined;
   let unsubscribeJobs: () => void = () => undefined;
 
@@ -257,8 +287,13 @@ describe.skipIf(!LIVE)("orchestrator — live agents and tools on gemini-3.5-fla
 
     const started = Date.now();
     const handle = orchestrator.run({ companyId, objective, trigger: "manual" });
-    for await (const _event of handle) {
-      /* the traceSink already collects; iterating just keeps the handle honest */
+    for await (const event of handle) {
+      // The traceSink already collects. Now that the critic is a real model, a live verdict of
+      // "escalate" parks the run on a founder gate; answer it so the proof terminates, and record it.
+      if (event.kind === "run_awaiting_approval" && event.step?.id) {
+        approvals.push(event.step.id);
+        await orchestrator.approve(event.runId, event.step.id);
+      }
     }
     snapshot = await handle.result();
     wallMs = Date.now() - started;
@@ -274,7 +309,7 @@ describe.skipIf(!LIVE)("orchestrator — live agents and tools on gemini-3.5-fla
       writeFileSync(
         out,
         JSON.stringify(
-          { model: LIVE_MODEL, companyId, objective, storedDocs, wallMs, events, jobFrames, providerCalls, snapshot },
+          { model: LIVE_MODEL, companyId, objective, storedDocs, wallMs, approvals, events, jobFrames, providerCalls, snapshot },
           null,
           2,
         ),
@@ -324,6 +359,30 @@ describe.skipIf(!LIVE)("orchestrator — live agents and tools on gemini-3.5-fla
     const steps = snapshot.steps as StepWithTools[];
     const withTool = steps.find((step) => (step.toolCalls ?? []).some((call) => call.adapter === "memory:read"));
     expect(withTool?.output ?? "").toMatch(new RegExp(`\\b${storedDocs.total}\\b|\\b${storedDocs.semantic}\\b`));
+  });
+
+  it("the PLAN and the CRITIQUES came from Gemini too, not the deterministic fallback (finding 1)", () => {
+    // Before the fix a 3-step run made exactly 4 provider calls: the seats only. Now the planner,
+    // one critique per step and the consolidation are provider calls as well.
+    expect(snapshot.plan?.reasoning).not.toBe(FALLBACK_PLAN_REASONING);
+    expect(providerCalls.length).toBeGreaterThan(4);
+    expect(providerCalls.length).toBeGreaterThanOrEqual(1 + snapshot.steps.length * 2 + 1);
+    const byLine = (pattern: RegExp) => providerCalls.filter((call) => (call.promptExcerpt ?? []).some((line) => pattern.test(line)));
+    const plannerCalls = byLine(/^Respond as JSON: \{ objective, reasoning, steps/);
+    const criticCalls = byLine(/^Step: .*\(role=/);
+    const consolidationCalls = byLine(/^Completed \(\d+\):/).filter((call) => !(call.promptExcerpt ?? []).some((line) => /^Seat:/.test(line)));
+    expect(plannerCalls.length, "planner call reached Gemini").toBe(1);
+    expect(plannerCalls[0]!.status).toBe(200);
+    expect(criticCalls.length, "one critique per step reached Gemini").toBeGreaterThanOrEqual(snapshot.steps.length);
+    expect(consolidationCalls.length, "the wrapper's consolidation reached Gemini").toBeGreaterThanOrEqual(1);
+    const critiqued = snapshot.steps as ReadonlyArray<{ critique?: { verdict: string; reason: string } }>;
+    for (const step of critiqued) {
+      expect(step.critique?.reason ?? "").not.toMatch(/supervisor offline/);
+      expect(step.critique?.verdict).toBeTypeOf("string");
+    }
+    expect(snapshot.summary).not.toBe(FALLBACK_RUN_SUMMARY);
+    const end = events.find((event) => event.kind === "consolidate_end");
+    expect(end?.run?.summary).not.toBe(FALLBACK_RUN_SUMMARY);
   });
 
   it("reports integer cents per step and in total", () => {

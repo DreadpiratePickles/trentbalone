@@ -26,15 +26,27 @@
  *     produces, so a surface can render it as an answerable gate (F4 / D4);
  *   - the self-improvement loop's bus hook (`deps.improve`, see `../improve/hook.ts`): every event
  *     is handed to it and its writes are awaited before the run settles, so traces and failure
- *     goldens are durable by the time a caller sweeps.
+ *     goldens are durable by the time a caller sweeps;
+ *   - the planner and the critic reach the CONFIGURED provider: the gateway-backed
+ *     `createCompletion` port is installed through the overrides seam by default (finding 1 of the
+ *     live proof: `callJson` is OpenAI-only, so on Gemini the plan was canned and the critic
+ *     auto-passed). A planner failure with a provider configured fails the run instead of
+ *     silently substituting the canned plan (`provider-ports.ts`);
+ *   - the consolidator has no seam at all (`callText` takes no options), so the wrapper detects
+ *     the literal fallback summary on `consolidate_end` and writes the real brief through the
+ *     gateway, replacing it in the snapshot, the store and the emitted events.
  */
 
+import { createCompletionPort } from "../model-gateway/completion-port.js";
+import { createModelGateway } from "../model-gateway/index.js";
+import type { ModelGateway } from "../model-gateway/types.js";
 import { IN_MEMORY_DATABASE, applyStandaloneEnv, assertStandaloneEnv } from "../runtime/env.js";
 import { EventChannel } from "./event-channel.js";
+import { loadLibs, type Libs } from "./libs.js";
 import { applyModelEnv } from "./model-env.js";
+import { PortShaper, PortTally } from "./provider-ports.js";
 import { SeatTally, guardSeatModel, shapeEvent, type SeatModelFn } from "./seat-guard.js";
 import {
-  FALLBACK_PLAN_REASONING,
   type OrcEvent,
   type Orchestrator,
   type OrchestratorDeps,
@@ -44,7 +56,8 @@ import {
 } from "./types.js";
 
 export type * from "./types.js";
-export { FALLBACK_PLANNER_APPROVAL_TRIGGERS, FALLBACK_PLAN_REASONING } from "./types.js";
+export { FALLBACK_PLANNER_APPROVAL_TRIGGERS, FALLBACK_PLAN_REASONING, FALLBACK_RUN_SUMMARY } from "./types.js";
+export { buildConsolidationPrompt, isFallbackSummary, WRAPPER_CONSOLIDATED_DETAIL } from "./provider-ports.js";
 export { applyModelEnv, modelEnvKeys } from "./model-env.js";
 export { resolveToolName, normaliseSeatTurn } from "./tool-names.js";
 
@@ -67,122 +80,6 @@ export type OrchestratorDepsWithImprove = OrchestratorDeps & {
   readonly improve?: RunBusHook;
 };
 
-// --- Structural views of the wrapped modules ------------------------------------------------
-// Declared locally and cast at the single `await import` boundary below, so `tsc` never has to load
-// the apps/web type graph to type-check this package.
-
-interface JobRunRow {
-  readonly id: string;
-  readonly type: string;
-  readonly status: string;
-  readonly startedAt: string;
-  readonly metadata?: { runId?: string; action?: string; stepId?: string } | null;
-}
-
-interface CompanyRow {
-  readonly id: string;
-  readonly slug: string;
-}
-
-interface StoreModule {
-  readonly store: {
-    listCompanies(): Promise<readonly CompanyRow[]>;
-    createCompany(input: { name: string; brief: { vision: string } }): Promise<CompanyRow>;
-    listJobRuns(companyId: string): Promise<readonly JobRunRow[]>;
-    updateOrchestratorRun(id: string, patch: { status?: string; summary?: string; completedAt?: string }): Promise<unknown>;
-  };
-}
-
-interface LaunchedRun {
-  readonly id: string;
-  readonly objective: string;
-  readonly status: string;
-  readonly trigger: string;
-  readonly startedAt: string;
-}
-
-/** The live, mutable run object the pipeline caches; mutations are visible to the next snapshot. */
-interface LiveRun {
-  status: string;
-  summary?: string;
-  completedAt?: string;
-  steps: Array<{ id: string; status: string; output?: string; completedAt?: string }>;
-}
-
-interface OrchestratorModule {
-  launchOrchestration(opts: {
-    companyId: string;
-    objective: string;
-    trigger?: string;
-    fullTeam?: boolean;
-  }): Promise<LaunchedRun>;
-  cancelOrchestration(runId: string): Promise<boolean>;
-  approveStep(runId: string, stepId: string): Promise<boolean>;
-  rejectStep(runId: string, stepId: string): Promise<boolean>;
-  getOrchestrationRunSnapshot(runId: string): Promise<unknown>;
-  getOrchestrationRun(runId: string): LiveRun | undefined;
-}
-
-interface CacheModule {
-  cacheOrchestrationRun(run: LiveRun): void;
-}
-
-interface EventsModule {
-  subscribeOrcEvents(runId: string, listener: (event: OrcEvent) => void): () => void;
-}
-
-interface QueueModule {
-  processJobData(
-    type: string,
-    data: { jobRunId: string; companyId: string; runId: string; action?: string; stepId?: string },
-  ): Promise<unknown>;
-}
-
-interface OverridesModule {
-  setRuntimeEvalOverrides(overrides: {
-    orchestration?: { createCompletion?: unknown; executeSeatModelFn?: unknown };
-  } | null): void;
-  clearRuntimeEvalOverrides(): void;
-}
-
-interface GatewayModule {
-  executeSeatModel: SeatModelFn;
-}
-
-interface Libs {
-  readonly store: StoreModule["store"];
-  readonly orchestrator: OrchestratorModule;
-  readonly cache: CacheModule;
-  readonly events: EventsModule;
-  readonly queue: QueueModule;
-  readonly overrides: OverridesModule;
-  readonly gateway: GatewayModule;
-}
-
-async function loadLibs(): Promise<Libs> {
-  // Imported lazily: `applyStandaloneEnv` and `applyModelEnv` must have written process.env before
-  // `ai-client.ts` is evaluated, because that module freezes its model registry and token limits at
-  // import time.
-  const [storeMod, orchestratorMod, cacheMod, eventsMod, queueMod, overridesMod, gatewayMod] = await Promise.all([
-    import("@/lib/store") as unknown as Promise<StoreModule>,
-    import("@/lib/orchestrator") as unknown as Promise<OrchestratorModule>,
-    import("@/lib/orchestrator-cache") as unknown as Promise<CacheModule>,
-    import("@/lib/orchestrator-events") as unknown as Promise<EventsModule>,
-    import("@/lib/queue") as unknown as Promise<QueueModule>,
-    import("@/lib/runtime-eval-overrides") as unknown as Promise<OverridesModule>,
-    import("@/lib/model-gateway") as unknown as Promise<GatewayModule>,
-  ]);
-  return {
-    store: storeMod.store,
-    orchestrator: orchestratorMod,
-    cache: cacheMod,
-    events: eventsMod,
-    queue: queueMod,
-    overrides: overridesMod,
-    gateway: gatewayMod,
-  };
-}
-
 // --- The drain loop -----------------------------------------------------------------------------
 
 type DrainExit = "drained" | "interrupted" | "bounded";
@@ -191,6 +88,8 @@ interface DrainControl {
   isInterrupted(): boolean;
   /** Resolves when approve()/reject()/cancel() or an abort wakes a parked run. */
   waitForResume(): Promise<void>;
+  /** Resolves once every event received so far has been shaped, so verdicts made there are visible. */
+  settle(): Promise<void>;
 }
 
 /**
@@ -203,6 +102,7 @@ interface DrainControl {
  */
 async function drainRun(libs: Libs, companyId: string, runId: string, maxJobs: number, control: DrainControl): Promise<DrainExit> {
   for (let i = 0; i < maxJobs; i += 1) {
+    await control.settle();
     if (control.isInterrupted()) return "interrupted";
 
     const next = (await libs.store.listJobRuns(companyId))
@@ -276,12 +176,25 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
     });
   }
 
-  function installPorts(libs: Libs, tally: SeatTally): void {
+  /**
+   * The gateway the planner, critic and consolidator go through. Built lazily — AFTER the env
+   * writes above, because `createModelGateway` imports apps/web and freezes its policy — and once
+   * per orchestrator, so every run routes the same way.
+   */
+  let gatewayPromise: Promise<ModelGateway> | undefined;
+  function loadGateway(): Promise<ModelGateway> {
+    if (deps.gateway) return Promise.resolve(deps.gateway);
+    gatewayPromise ??= createModelGateway();
+    return gatewayPromise;
+  }
+
+  function installPorts(libs: Libs, gateway: ModelGateway, tally: SeatTally, ports: PortTally): void {
     const underlying = (deps.executeSeatModelFn as SeatModelFn | undefined) ?? libs.gateway.executeSeatModel;
     const chat = deps.executeSeatModelFn ? undefined : deps.createChatCompletion;
     libs.overrides.setRuntimeEvalOverrides({
       orchestration: {
-        createCompletion: deps.createCompletion,
+        // Default, not test-only: the planner and the critic reach the configured provider.
+        createCompletion: deps.createCompletion ?? createCompletionPort(gateway, { onCall: (call) => ports.record(call) }),
         executeSeatModelFn: guardSeatModel(underlying, chat, tally),
       },
     });
@@ -319,15 +232,46 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
     await libs.store.updateOrchestratorRun(runId, { status: "failed", summary, completedAt }).catch(() => undefined);
   }
 
+  /**
+   * With a provider configured, a planner failure is an error, not a canned plan: the pipeline's
+   * `callJsonWithFallback` swallowed it, so the wrapper fails the run — live cache and store — with
+   * the provider's own message. Returns the summary written.
+   */
+  async function applyPlannerFailure(libs: Libs, runId: string, message: string): Promise<{ summary: string; completedAt: string }> {
+    const summary = `Run failed: planner call failed: ${message}`;
+    const completedAt = new Date().toISOString();
+    const live = libs.orchestrator.getOrchestrationRun(runId);
+    if (live) {
+      live.status = "failed";
+      live.summary = summary;
+      live.completedAt = live.completedAt ?? completedAt;
+      libs.cache.cacheOrchestrationRun(live);
+    }
+    await libs.store.updateOrchestratorRun(runId, { status: "failed", summary, completedAt }).catch(() => undefined);
+    return { summary, completedAt };
+  }
+
+  /** Writes the wrapper's consolidated brief where the snapshot and the store read it. */
+  async function applyConsolidation(libs: Libs, runId: string, summary: string): Promise<void> {
+    const live = libs.orchestrator.getOrchestrationRun(runId);
+    if (live) {
+      live.summary = summary;
+      libs.cache.cacheOrchestrationRun(live);
+    }
+    await libs.store.updateOrchestratorRun(runId, { summary }).catch(() => undefined);
+  }
+
   function run(options: OrchestratorRunOptions): OrchestratorRunHandle {
     const channel = new EventChannel();
     const maxJobs = options.maxJobs ?? defaultMaxJobs;
     const tally = new SeatTally();
+    const ports = new PortTally();
+    let shaper: PortShaper | undefined;
     let runId: string | undefined;
     let cancelRequested = false;
-    let fallbackPlan = false;
 
-    const isInterrupted = (): boolean => cancelRequested || options.signal?.aborted === true;
+    const isInterrupted = (): boolean =>
+      cancelRequested || options.signal?.aborted === true || shaper?.plannerFailure !== undefined;
 
     const deliver = (event: OrcEvent): void => {
       deps.traceSink?.(event);
@@ -337,8 +281,9 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
 
     const started: Promise<string> = (async () => {
       const libs = await loadLibs();
+      const gateway = await loadGateway();
       assertStandaloneEnv();
-      installPorts(libs, tally);
+      installPorts(libs, gateway, tally, ports);
       try {
         const launched = await libs.orchestrator.launchOrchestration({
           companyId: options.companyId,
@@ -370,19 +315,42 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
 
     const finished: Promise<OrchestrationRunSnapshot> = (async () => {
       const libs = await loadLibs();
+      const gateway = await loadGateway();
       let unsubscribe: (() => void) | undefined;
+      // Events are shaped in order; a consolidation in flight holds everything behind it.
+      let chain: Promise<void> = Promise.resolve();
+      const enqueue = (work: () => Promise<void>): void => {
+        chain = chain.then(work, work);
+      };
       try {
         const id = await started;
+        const portShaper = new PortShaper(ports, gateway, {
+          objective: options.objective,
+          liveRun: () => libs.orchestrator.getOrchestrationRun(id),
+          persistSummary: (summary) => applyConsolidation(libs, id, summary),
+        });
+        shaper = portShaper;
         // Subscribed before the first job is drained, so no phase event is lost.
         unsubscribe = libs.events.subscribeOrcEvents(id, (event) => {
-          if (event.kind === "plan_end" && event.run?.plan?.reasoning === FALLBACK_PLAN_REASONING) fallbackPlan = true;
-          const shaped = shapeEvent(event, tally, fallbackPlan);
-          if (shaped) deliver(shaped);
+          enqueue(async () => {
+            const withPorts = await portShaper.shape(event);
+            if (!withPorts) return;
+            const shaped = shapeEvent(withPorts, tally, portShaper.fallbackPlan);
+            if (shaped) deliver(shaped);
+          });
         });
         await drainRun(libs, options.companyId, id, maxJobs, {
           isInterrupted,
           waitForResume: () => waitForResume(id, options.signal, isInterrupted),
+          settle: () => chain,
         });
+        await chain;
+        if (portShaper.plannerFailure !== undefined) {
+          const { summary, completedAt } = await applyPlannerFailure(libs, id, portShaper.plannerFailure);
+          deliver(portShaper.plannerFailedEvent(id, summary, completedAt));
+        } else if (portShaper.consolidated !== undefined) {
+          await applyConsolidation(libs, id, portShaper.consolidated);
+        }
         await applyFailureOverride(libs, id, tally);
         // The loop's writes are part of the run: a caller that sweeps right after must see them.
         await deps.improve?.flush();
