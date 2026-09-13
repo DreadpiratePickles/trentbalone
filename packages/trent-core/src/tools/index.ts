@@ -5,6 +5,7 @@
  * the router advertises the top three catalog entries per step, so a family must be one entry.
  */
 import type { TrentConfig } from "../config/schema.js";
+import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import { createCodeExecutionAdapter } from "./code_execution/index.js";
 import { createDelegateAdapter } from "./delegate/index.js";
 import type { DelegatePort } from "./delegate/types.js";
@@ -62,7 +63,7 @@ export function buildTrentToolAdapters(config: ToolBuildConfig, deps: ToolBuildD
     workspace: deps.workspace,
     profileDir: deps.profileDir,
     backend,
-    docker: { image: deps.dockerImage ?? config.terminal?.docker?.image ?? "trent-sandbox:latest" },
+    docker: { image: deps.dockerImage ?? config.terminal?.docker?.image ?? SANDBOX_IMAGE },
     egress: deps.egress,
     autoApproveWrites: deps.autoApproveWrites,
   };

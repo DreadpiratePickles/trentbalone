@@ -8,7 +8,7 @@
 
 import process from "node:process";
 import { ConfigManager, SessionManager } from "@trent/core";
-import { createOrchestrator as createRealOrchestrator } from "@trent/core/orchestrator/index.js";
+import { createAppDelegatedChildRunner, createOrchestrator as createRealOrchestrator, createOrchestratorDelegatePort } from "@trent/core/orchestrator/index.js";
 import { InMemoryTraceStore } from "@trent/core/traces/index.js";
 import { autoTheme, canUseRawMode, terminalWidth, type Theme } from "../ui/index.js";
 import { playBoot, type BootStdin } from "../ui/boot.js";
@@ -141,6 +141,10 @@ export class ClassicRepl {
 
     const profileDir = this.#configManager.getProfileDir();
 
+    // `delegate_task` binds to the orchestrator's own delegated child step: the port is built
+    // here so the same object is both the tool's port and the orchestrator's hook.
+    const delegate = createOrchestratorDelegatePort({ runner: createAppDelegatedChildRunner() });
+
     // The seats' toolsets and the egress proxy, before the first turn. The workspace is where
     // `trent` was launched, never the home directory. Everything from here on is released by
     // `tools.cleanup()` on every exit path: stdin end, a throw, and Ctrl+C.
@@ -152,6 +156,7 @@ export class ClassicRepl {
       buildAdapters: this.#deps.buildAdapters,
       startEgress: this.#deps.startEgress,
       probeDocker: this.#deps.probeDocker,
+      delegate,
     });
     writeLine(toolsStatusLine(tools, theme));
 
@@ -180,6 +185,7 @@ export class ClassicRepl {
         model: { provider: config.provider, model: config.model },
         tools: tools.adapters,
         fleetMemory,
+        delegate,
         ...improve,
       });
       // `launchOrchestration` throws "Company not found" for an id nothing created; an explicit

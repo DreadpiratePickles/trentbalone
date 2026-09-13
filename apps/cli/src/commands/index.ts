@@ -30,6 +30,7 @@ import { a2aSpec, acpSpec, egressSpec, gatewaySpec, webSpec } from "./groups/ser
 import { serveShimSpec, uninstallSpec } from "./groups/maintenance.js";
 import { desktopSpec, updateSpec } from "./desktop.js";
 import { improveSpec } from "./improve.js";
+import { sandboxSpec } from "./groups/sandbox.js";
 
 export { CLI_VERSION } from "./registry.js";
 export type { CommandContext, CliOverrides } from "./context.js";
@@ -43,6 +44,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   skillsSpec,
   improveSpec,
   toolsSpec,
+  sandboxSpec,
   sessionsSpec,
   configSpec,
   mcpSpec,

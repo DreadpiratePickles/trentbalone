@@ -7,7 +7,8 @@
  *   2. with `config.egress.enabled` (the default) an `EgressProxy` is started on a free loopback
  *      port and its URL, token and CA path are handed to the tools. If it fails to start the
  *      tools run with NO network — never with an open one — and the status line says so;
- *   3. the adapters for `config.toolsets - config.disabled_toolsets` are built.
+ *   3. the adapters for `config.toolsets - config.disabled_toolsets` are built, with the
+ *      orchestrator's `DelegatePort` bound to `delegation` and `plugins` reading `<profile>/plugins`.
  * `cleanup()` releases the sandboxes and stops the proxy; `index.ts` calls it on every exit path.
  *
  * Every collaborator is injectable so the tests can record what was built without Docker or a
@@ -15,10 +16,12 @@
  */
 
 import { execFile } from "node:child_process";
+import path from "node:path";
 import process from "node:process";
 import { EgressProxy, TokenManager } from "@trent/core/egress/index.js";
 import type { ConfigManager } from "@trent/core/config/index.js";
-import { buildTrentToolAdapters, enabledToolsets, type ToolBuildConfig, type ToolBuildDeps, type TrentToolAdapter } from "@trent/core/tools/index.js";
+import { SANDBOX_IMAGE } from "@trent/core/terminal/index.js";
+import { buildTrentToolAdapters, enabledToolsets, type DelegatePort, type ToolBuildConfig, type ToolBuildDeps, type TrentToolAdapter } from "@trent/core/tools/index.js";
 import type { Theme } from "../ui/index.js";
 import type { ReplEgressStatus, ReplSandbox } from "./types.js";
 
@@ -79,6 +82,8 @@ export interface ToolWiringDeps {
   readonly buildAdapters?: typeof buildTrentToolAdapters;
   readonly startEgress?: (input: StartEgressInput) => Promise<EgressHandle>;
   readonly probeDocker?: (image: string) => Promise<DockerProbe>;
+  /** The orchestrator's delegation path; without it `delegate_task` reports `not_available`. */
+  readonly delegate?: DelegatePort;
 }
 
 export interface ToolWiring {
@@ -139,7 +144,7 @@ export async function startEgressProxy(input: StartEgressInput): Promise<EgressH
 async function resolveSandbox(deps: ToolWiringDeps): Promise<ReplSandbox> {
   const configured = deps.config.terminal?.backend;
   if (configured === "local") return { backend: "local", note: "configured" };
-  const image = deps.config.terminal?.docker?.image ?? "trent-sandbox:latest";
+  const image = deps.config.terminal?.docker?.image ?? SANDBOX_IMAGE;
   const probe = await (deps.probeDocker ?? probeDockerCli)(image);
   if (!probe.daemon) {
     return { backend: "local", note: "docker unavailable; local backend, confined to the workspace" };
@@ -179,7 +184,9 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
   const buildDeps: ToolBuildDeps = {
     workspace: deps.workspace,
     profileDir: deps.profileDir,
+    pluginsDir: path.join(deps.profileDir, "plugins"),
     backend: sandbox.backend,
+    ...(deps.delegate !== undefined ? { delegate: deps.delegate } : {}),
     ...(sandbox.image !== undefined ? { dockerImage: sandbox.image } : {}),
     ...(handle !== undefined
       ? {

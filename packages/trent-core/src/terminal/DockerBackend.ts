@@ -17,6 +17,7 @@ import {
   buildSandboxEnv,
   toDockerEnvArgs,
 } from "../egress/SandboxEnvironment.js";
+import { SANDBOX_IMAGE } from "./sandbox-image.js";
 
 export interface DockerVolumeMount {
   hostPath: string;
@@ -48,7 +49,8 @@ export interface DockerBackendOptions extends Partial<DockerCreateOptions> {
   execTimeoutMs?: number;
 }
 
-const DEFAULT_IMAGE = "trent-sandbox:latest";
+/** The pinned build of `scripts/sandbox/Dockerfile`; see `sandbox-image.ts`. */
+const DEFAULT_IMAGE = SANDBOX_IMAGE;
 const DEFAULT_NETWORK = "none";
 const DEFAULT_TIMEOUT_MS = 120_000;
 
@@ -169,6 +171,10 @@ export class DockerBackend implements TerminalBackend {
       extraHosts: options?.extraHosts,
     };
     this.execTimeoutMs = options?.execTimeoutMs ?? DEFAULT_TIMEOUT_MS;
+  }
+
+  public getImage(): string {
+    return this.createOptions.image;
   }
 
   public getContainerName(): string {

@@ -47,16 +47,50 @@ Container flags applied on create:
 The environment handed to the container is built by `buildSandboxEnv` and contains broker tokens, not
 keys. See [security.md](security.md).
 
-The default image is `trent-sandbox:latest`. It is not published anywhere, so `doctor` reports it
-missing until you build one locally:
+The default image is the pinned `trent-sandbox:<version>` build described in the next section. It
+is not published anywhere, so `doctor` reports it missing until you build it locally:
 
 ```
 ◆ Sandbox & Workbench   Docker daemon is running (server 29.5.3) but the sandbox image
-                        trent-sandbox:latest is not present locally.
+                        trent-sandbox:1 is not present locally, so execute_code has no
+                        python3 or node until it is built.
+                        Run `trent sandbox build` to build trent-sandbox:1 from
+                        scripts/sandbox/Dockerfile.
 ```
 
 Point `terminal.docker.image` at any image you already have if you want to try the backend before
-that image exists.
+that image exists; the REPL falls back to `alpine:3` on its own when the configured image is absent,
+which runs `terminal` but makes `execute_code` report "python3 is not available in this sandbox".
+
+## The sandbox image and `trent sandbox build`
+
+`scripts/sandbox/Dockerfile` is the image the seats' `terminal` and `execute_code` tools run inside:
+`alpine:3.20` plus `python3` and `nodejs` from its repositories, nothing else. No pip, no npm, and
+`apk` is deleted after the install, so nothing can be added at runtime even if a seat found a way to
+the network (the backend runs the container with `--network none` unless egress is proxied,
+`--cap-drop=ALL` and `no-new-privileges`). A non-root user, `sandbox` (uid 1000), owns
+`/workspace`, the mount point the tools use.
+
+The tag is `trent-sandbox:<version>`, never `latest`. The version lives in one place,
+`packages/trent-core/src/terminal/sandbox-image.ts` (`SANDBOX_IMAGE`), and `DockerBackend`, the
+config default, the tool builder and the doctor all read it from there. Change the Dockerfile,
+bump the version: the doctor then reports the old build as absent instead of running stale.
+
+```
+trent sandbox build              # docker build -t trent-sandbox:1 -f scripts/sandbox/Dockerfile scripts/sandbox
+trent sandbox build --dry-run    # print the argv, run nothing
+trent sandbox build --json       # {"image":"trent-sandbox:1","dockerfile":"...","built":true,...}
+```
+
+The build ran in about 3 seconds on the dev machine once `alpine:3.20` was local. It is not
+`--pull`: BuildKit's registry lookup hit its deadline behind Docker Desktop's proxy there, while a
+plain `docker pull alpine:3.20` took minutes and succeeded. The compiled binary has no source tree,
+so `TRENT_SANDBOX_DOCKERFILE=<path>` (or `--dockerfile <path>`) names the file to build from.
+
+`.github/workflows/sandbox.yml` builds the image the same way and then runs the gated suite
+`packages/trent-core/src/tools/code_execution/sandbox-image.docker.test.ts`, which builds the image
+and runs `execute_code` in python and javascript inside it, as uid 1000, with no `apk` and
+`NetworkMode=none`. Without a daemon that suite skips, and says so in its title.
 
 ## Local
 
@@ -81,7 +115,7 @@ through a local TLS-intercepting proxy, and cannot reach a host outside
 
 - Real SSH execution, host key verification, key-based authentication.
 - Real E2B microVM execution.
-- A published `trent-sandbox` image.
+- A published `trent-sandbox` image (it is built locally by `trent sandbox build`).
 - A PTY backend of any kind.
 - Automatic mounting of the egress CA into a running container. The certificate and the environment
   are built; the mount is not wired into every path.

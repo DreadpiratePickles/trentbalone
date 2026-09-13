@@ -48,6 +48,7 @@ import { PortShaper, PortTally } from "./provider-ports.js";
 import { SeatTally, guardSeatModel, shapeEvent, type SeatModelFn } from "./seat-guard.js";
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
 import type { FleetMemoryHook } from "../fleet-memory/orchestrator-hook.js";
+import type { OrchestratorDelegatePort } from "./delegate-port.js";
 import type { TrentToolAdapter } from "../tools/types.js";
 import {
   type OrcEvent,
@@ -64,6 +65,9 @@ export { buildConsolidationPrompt, isFallbackSummary, WRAPPER_CONSOLIDATED_DETAI
 export { applyModelEnv, modelEnvKeys } from "./model-env.js";
 export { resolveToolName, normaliseSeatTurn } from "./tool-names.js";
 export { wireSeatTools, toolsetEnvironment, SEAT_ROLES } from "./seat-wiring.js";
+export { createOrchestratorDelegatePort, DELEGATE_MAX_CHILDREN, DELEGATE_MAX_DEPTH } from "./delegate-port.js";
+export type { OrchestratorDelegatePort, DelegatedChildRunner, DelegatedChildSpec, DelegatedChildOutcome } from "./delegate-port.js";
+export { createAppDelegatedChildRunner } from "./delegate-child.js";
 
 /**
  * Default drain bound. A 12-step plan (the planner's Zod maximum) costs one plan job, up to 12
@@ -95,6 +99,12 @@ export type OrchestratorDepsWithImprove = OrchestratorDeps & {
    * the next run sees this run's writes.
    */
   readonly fleetMemory?: FleetMemoryHook;
+  /**
+   * The `delegate_task` binding (`./delegate-port.ts`): the same port object handed to
+   * `buildTrentToolAdapters({ delegate })`. Every seat call is wrapped so the port knows which
+   * step is delegating, and the run boundaries are reported so a child lands in the right run.
+   */
+  readonly delegate?: OrchestratorDelegatePort;
 };
 
 // --- The drain loop -----------------------------------------------------------------------------
@@ -209,6 +219,9 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
   const allTools: readonly TrentToolAdapter[] = [...(deps.tools ?? []), ...(deps.fleetMemory?.adapters ?? [])];
   const withFleetPrelude = (seat: SeatModelFn): SeatModelFn => (deps.fleetMemory ? deps.fleetMemory.wrapSeatModel(seat) : seat);
   // ── end fleet-memory hook ────────────────────────────────────────────────────────────────────
+  // ── delegate-port hook (owned by ./delegate-port.ts) ─────────────────────────────────────────
+  const withDelegateCaller = (seat: SeatModelFn): SeatModelFn => (deps.delegate ? deps.delegate.wrapSeatModel(seat) : seat);
+  // ── end delegate-port hook ───────────────────────────────────────────────────────────────────
 
   const seatInstructions = toolInstructions(allTools);
 
@@ -219,7 +232,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       orchestration: {
         // Default, not test-only: the planner and the critic reach the configured provider.
         createCompletion: deps.createCompletion ?? createCompletionPort(gateway, { onCall: (call) => ports.record(call) }),
-        executeSeatModelFn: withFleetPrelude(guardSeatModel(underlying, chat, tally, seatInstructions)),
+        executeSeatModelFn: withDelegateCaller(withFleetPrelude(guardSeatModel(underlying, chat, tally, seatInstructions))),
       },
     });
   }
@@ -320,6 +333,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
         runId = launched.id;
         // fleet-memory hook: the prelude for this run is built on the first seat call.
         deps.fleetMemory?.runStarted({ runId: launched.id, companyId: options.companyId, objective: options.objective });
+        deps.delegate?.runStarted({ runId: launched.id, companyId: options.companyId, objective: options.objective });
         // The bus emits run_start inside launchOrchestration, before anyone can subscribe. The
         // launch result carries the same fields, so the stream starts with it after all (D2).
         deliver({
@@ -391,6 +405,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
         libs.overrides.clearRuntimeEvalOverrides();
         // fleet-memory hook: this run's memory writes become visible to the next run.
         if (runId !== undefined) deps.fleetMemory?.runFinished(runId);
+        if (runId !== undefined) deps.delegate?.runFinished(runId);
       }
     })();
     // The handle exposes this through result(); nothing is unhandled if the caller only iterates.

@@ -13,6 +13,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { DockerBackend } from "../terminal/DockerBackend.js";
 import { LocalBackend } from "../terminal/LocalBackend.js";
+import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import type { TerminalBackend, TerminalExecutionResult } from "../terminal/types.js";
 import { spilloverDir } from "./spillover.js";
 import type { ToolContext } from "./types.js";
@@ -85,7 +86,7 @@ class DockerSandbox implements Sandbox {
     const egress = withEgress ? this.ctx.egress : undefined;
     return new DockerBackend({
       containerName: `trent-seat-${withEgress ? "egress" : "isolated"}-${process.pid}-${this.label}`,
-      image: this.ctx.docker?.image ?? "trent-sandbox:latest",
+      image: this.ctx.docker?.image ?? SANDBOX_IMAGE,
       network,
       workdir: WORKSPACE_MOUNT,
       volumes: [

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 
 export const ProviderSchema = z.enum([
   "openai",
@@ -49,7 +50,7 @@ export const TerminalConfigSchema = z.object({
   backend: TerminalBackendSchema.default("docker"),
   docker: z
     .object({
-      image: z.string().default("trent-sandbox:latest"),
+      image: z.string().default(SANDBOX_IMAGE),
       network: z.string().default("bridge"),
     })
     .default({}),

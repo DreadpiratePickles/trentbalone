@@ -30,6 +30,8 @@ export interface CliOverrides {
   startRepl?: (opts: { profile: string; continueSession: boolean }) => Promise<void>;
   /** Replace `now` so a rendered timestamp is stable. */
   now?: () => Date;
+  /** Replace the docker CLI `trent sandbox build` runs (a fake needs no daemon). */
+  sandboxExec?: (command: string, args: readonly string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
 export interface CommandContext {

@@ -10,7 +10,9 @@ import { ConfigManager } from "../../config/ConfigManager.js";
 import { checkMcp } from "./mcp.js";
 import { checkCron } from "./cron.js";
 import { checkWorkbench } from "./workbench.js";
+import { SANDBOX_IMAGE } from "../../terminal/sandbox-image.js";
 import type { DoctorContext } from "../types.js";
+import { runCommand } from "../probe.js";
 
 let tempDir: string;
 let configManager: ConfigManager;
@@ -140,10 +142,15 @@ describe("workbench check", () => {
     expect(result.message).toMatch(/Docker/);
   });
 
-  it("never reports ok on this machine, where the Docker daemon is down", async () => {
+  it("a real probe reports what this machine's daemon reports: not ok when it is down, ok only with the image present", async () => {
+    // An independent probe with the same commands, so the expected status is measured, not assumed.
+    const daemon = await runCommand("docker", ["info", "--format", "{{.ServerVersion}}"], 5000).catch(() => undefined);
+    const up = daemon !== undefined && daemon.code === 0 && daemon.stdout.trim() !== "";
+    const image = configManager.loadConfig().terminal.docker.image;
+    const present = up && (await runCommand("docker", ["inspect", "--type", "image", "--format", "{{.Id}}", image], 5000).catch(() => undefined))?.code === 0;
     const result = await checkWorkbench.run(context());
-    expect(result.status).not.toBe("ok");
     expect(result.message).toMatch(/Docker/i);
+    expect(result.status).toBe(!up ? "fail" : present ? "ok" : "warn");
   }, 20000);
 
   it("warns that the local backend has no isolation", async () => {
@@ -198,6 +205,25 @@ describe("workbench check", () => {
     expect(result.details).toMatchObject({ image, serverVersion: "29.1.0" });
     expect(shim.calls.some((call) => call[1] === "inspect" && call[2] === "--type" && call[3] === "image")).toBe(true);
     expect(shim.calls.some((call) => call[1] === "image" && call[2] === "inspect")).toBe(false);
+  });
+
+  it("with the default config it probes the pinned trent-sandbox image: warn naming `trent sandbox build` when absent", async () => {
+    const shim = dockerShim([]);
+    const result = await checkWorkbench.run(context({ execImpl: shim.execImpl }));
+    expect(result.status).toBe("warn");
+    expect(result.message).toContain(SANDBOX_IMAGE);
+    expect(result.message).toMatch(/execute_code/);
+    expect(result.fixHint).toContain("trent sandbox build");
+    expect(result.details).toMatchObject({ image: SANDBOX_IMAGE, sandboxImage: SANDBOX_IMAGE });
+    expect(shim.calls.some((call) => call[1] === "inspect" && call[call.length - 1] === SANDBOX_IMAGE)).toBe(true);
+  });
+
+  it("with the default config it reports ok when the pinned trent-sandbox image is present", async () => {
+    const shim = dockerShim([SANDBOX_IMAGE]);
+    const result = await checkWorkbench.run(context({ execImpl: shim.execImpl }));
+    expect(result.status).toBe("ok");
+    expect(result.message).toContain(SANDBOX_IMAGE);
+    expect(result.details).toMatchObject({ image: SANDBOX_IMAGE });
   });
 
   it("warns, naming the image, when the daemon runs but the image is absent", async () => {

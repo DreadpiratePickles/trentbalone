@@ -7,6 +7,7 @@ export * from "./types.js";
 export * from "./LocalBackend.js";
 export * from "./DockerBackend.js";
 export * from "./SSHBackend.js";
+export * from "./sandbox-image.js";
 
 export function createTerminalBackend(type: "docker" | "ssh" | "e2b" | "local"): TerminalBackend {
   switch (type) {

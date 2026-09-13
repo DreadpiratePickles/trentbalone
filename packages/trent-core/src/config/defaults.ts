@@ -1,3 +1,4 @@
+import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import type { TrentConfig } from "./schema.js";
 import { CONFIG_SCHEMA_VERSION } from "./schema.js";
 
@@ -21,7 +22,7 @@ export const DEFAULT_CONFIG: TrentConfig = {
   terminal: {
     backend: "docker",
     docker: {
-      image: "trent-sandbox:latest",
+      image: SANDBOX_IMAGE,
       network: "bridge",
     },
     ssh: {

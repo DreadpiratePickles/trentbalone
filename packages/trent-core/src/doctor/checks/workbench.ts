@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { CheckResult, DoctorCheck, DoctorContext, ExecResult } from "../types.js";
 import { DEFAULT_PROBE_TIMEOUT_MS, runCommand } from "../probe.js";
+import { isTrentSandboxImage, SANDBOX_IMAGE } from "../../terminal/sandbox-image.js";
 
 /**
  * This check used to report the configured backend as if configuring it made it work. A backend
@@ -106,23 +107,29 @@ export const checkWorkbench: DoctorCheck = {
       });
     }
 
-    const image = config.terminal?.docker?.image;
+    // The configured image defaults to the pinned build of scripts/sandbox/Dockerfile; the check
+    // asks for THAT exact reference, so an older trent-sandbox build reads as absent.
+    const image = config.terminal?.docker?.image ?? SANDBOX_IMAGE;
     const serverVersion = info.stdout.trim();
-    const imageMissing = image !== undefined ? await imageAbsent(ctx, image, timeoutMs) : false;
+    const imageMissing = await imageAbsent(ctx, image, timeoutMs);
+    const details = { backend, serverVersion, image, sandboxImage: SANDBOX_IMAGE };
 
     if (imageMissing) {
+      const ours = isTrentSandboxImage(image);
       return result({
         status: "warn",
-        message: `Docker daemon is running (server ${serverVersion}) but the sandbox image ${image} is not present locally.`,
-        fixHint: `Build or pull the image: \`docker pull ${image}\`.`,
-        details: { backend, serverVersion, image },
+        message: ours
+          ? `Docker daemon is running (server ${serverVersion}) but the sandbox image ${image} is not present locally, so execute_code has no python3 or node until it is built.`
+          : `Docker daemon is running (server ${serverVersion}) but the sandbox image ${image} is not present locally.`,
+        fixHint: ours ? `Run \`trent sandbox build\` to build ${image} from scripts/sandbox/Dockerfile.` : `Build or pull the image: \`docker pull ${image}\`.`,
+        details,
       });
     }
 
     return result({
       status: "ok",
-      message: `Docker daemon answered${serverVersion ? ` (server ${serverVersion})` : ""}; the sandbox can start.`,
-      details: { backend, serverVersion, image },
+      message: `Docker daemon answered${serverVersion ? ` (server ${serverVersion})` : ""}; the sandbox image ${image} is present and the sandbox can start.`,
+      details,
     });
   },
 };

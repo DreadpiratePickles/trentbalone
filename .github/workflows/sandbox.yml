@@ -10,6 +10,8 @@
 #   * the doctor's Docker dependency and workbench checks, against a real daemon
 #   * the TLS-intercepting egress proxy, exercised from inside a container so the CA
 #     injection path is real rather than mocked
+#   * the pinned sandbox image (scripts/sandbox/Dockerfile, `trent-sandbox:<version>`): built
+#     here the way `trent sandbox build` builds it, then `execute_code` runs python and node in it
 #
 # ubuntu-latest ships a running dockerd, so no third-party Docker action is needed. Fewer
 # third-party actions is fewer things to pin and fewer things to trust.
@@ -65,6 +67,16 @@ jobs:
           node packages/trent-core/scripts/derive-sqlite-schema.mjs
           npx prisma generate --schema packages/trent-core/prisma/schema.sqlite.prisma
 
+      - name: Build the pinned sandbox image the way `trent sandbox build` does
+        # Seconds on a runner: alpine plus python3 and nodejs from its repositories. The tag is
+        # read from the source of truth so a version bump in sandbox-image.ts is picked up here.
+        run: |
+          set -euo pipefail
+          TAG=$(npx tsx -e "import { SANDBOX_IMAGE } from './packages/trent-core/src/terminal/sandbox-image.ts'; console.log(SANDBOX_IMAGE)")
+          echo "building $TAG"
+          docker build -t "$TAG" -f scripts/sandbox/Dockerfile scripts/sandbox
+          docker run --rm "$TAG" sh -c 'python3 -c "print(\"python-ok\")" && node -e "console.log(\"node-ok\")" && id -u'
+
       - name: Run the Docker-dependent suites
         env:
           # The flag the suites read to decide "a real daemon is present, do NOT skip".
@@ -76,7 +88,8 @@ jobs:
           npx vitest run \
             packages/trent-core/src/terminal \
             packages/trent-core/src/egress \
-            packages/trent-core/src/doctor
+            packages/trent-core/src/doctor \
+            packages/trent-core/src/tools/code_execution
 
       - name: Assert nothing skipped for "docker unavailable"
         # A green run full of skips is the failure mode. If the suites still reported a
