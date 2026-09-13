@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SkillDraftRow } from "../store/StorePort.js";
 import { InMemoryImproveStore } from "./memory-store.js";
-import { contentHash, improveStatus, promoteDraft, recoverDraft, rejectDraft, retireSkills, rollback } from "./index.js";
+import { SweepMeter, contentHash, createMemoryExemplarStore, improveStatus, promoteDraft, recoverDraft, rejectDraft, retireSkills, rollback } from "./index.js";
 
 const COMPANY = "co_life";
 const T = (day: number) => `2026-09-${String(day).padStart(2, "0")}T00:00:00.000Z`;
@@ -167,5 +167,61 @@ describe("judge-versus-human agreement ledger (I.8)", () => {
 
     const status = await improveStatus(store, COMPANY);
     expect(status.judgeAgreement).toEqual({ agreed: 1, disagreed: 2, rate: 0.33 });
+  });
+});
+
+describe("promotion distils a clean exemplar and rationalises it (I.13, I.14)", () => {
+  it("promoteDraft writes one golden per clean run, successful steps only, pointing at the run, with one metered rationale call", async () => {
+    const store = new InMemoryImproveStore();
+    const row = (id: string, runId: string, status: string, verdict: string | null, at: string) =>
+      store.appendTrace({
+        id,
+        companyId: COMPANY,
+        agentRole: "engineer",
+        agentId: "engineer",
+        runId,
+        taskType: "ship-feature",
+        stepTitle: `step ${id}`,
+        status,
+        toolCalls: ["GitHub"],
+        toolCallCount: 1,
+        critiqueVerdict: verdict,
+        improvement: null,
+        evalScore: null,
+        costCents: 1,
+        latencyMs: null,
+        humanCorrected: false,
+        skillApplied: false,
+        createdAt: at,
+      });
+    await row("a1", "run_clean", "completed", "pass", T(1));
+    await row("a2", "run_clean", "completed", "retry", T(2));
+    await row("a3", "run_clean", "completed", "pass", T(3));
+    await row("b1", "run_blocked", "blocked", null, T(1));
+    await row("b2", "run_blocked", "completed", "pass", T(2));
+    await store.createDraft(draft({ id: "d_exemplar", taskType: "ship-feature" }));
+
+    const exemplars = createMemoryExemplarStore();
+    const meter = new SweepMeter(undefined);
+    let asked = 0;
+    await promoteDraft(store, "d_exemplar", {
+      actor: "human",
+      now: T(5),
+      distill: {
+        exemplars,
+        meter,
+        rationalise: async () => {
+          asked += 1;
+          return { text: '{"steps":[{"index":1,"why":"first"},{"index":2,"why":"then"}]}', costCents: 1 };
+        },
+      },
+    });
+    const goldens = await exemplars.list();
+    expect(goldens.map((g) => g.distilledFrom)).toEqual(["run_clean"]);
+    expect(goldens[0]?.steps.map((s) => s.title)).toEqual(["step a1", "step a3"]);
+    expect(goldens[0]?.candidateId).toBe("d_exemplar");
+    expect(goldens[0]?.rationale).toEqual(["first", "then"]);
+    expect(asked).toBe(1);
+    expect(meter.phases.rationalise.calls).toBe(1);
   });
 });

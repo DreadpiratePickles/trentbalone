@@ -5,6 +5,7 @@
  */
 
 import type { GateCache } from "./gate-cache.js";
+import type { ToolInvocation } from "./repetitive-loop.js";
 import type { FrozenSuite } from "./suites.js";
 
 export interface ActualsInput {
@@ -20,6 +21,11 @@ export interface ActualsInput {
 export interface ActualsOutput {
   readonly text: string;
   readonly toolCalls?: readonly string[];
+  /**
+   * The same calls WITH their arguments, in order, when the runner can report them; the
+   * repetitive-loop check (task I.15) reads these, falling back to `toolCalls` when absent.
+   */
+  readonly toolInvocations?: readonly ToolInvocation[];
   /** Observable state for `state_check` graders, when the runner can report one. */
   readonly state?: Record<string, unknown>;
   /** Integer cents. */
@@ -76,6 +82,8 @@ export type GateBlockReason =
   | "new_failure_cluster"
   | "unverified"
   | "unstable"
+  | "repetitive_loop"
+  | "private_regression"
   | "budget_exhausted";
 
 /** What the reliability re-draw did: which fixtures it re-ran, what it cost, which did not hold. */
@@ -104,6 +112,8 @@ export interface GateVerdict {
   costCents: number;
   /** Present when a second draw ran on flipped fixtures (task I.12). */
   redraw?: RedrawReport;
+  /** Private fixtures the baseline passed and this candidate failed (task I.16). */
+  privateRegressions?: string[];
 }
 
 export interface ExecuteGateInput {

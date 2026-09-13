@@ -1,12 +1,15 @@
 /**
  * `trent improve status` — what the loop knows right now, as data. Traces per agent, drafts in
  * quarantine, the last sweep, each agent's frontier best, whether an agent's suite is saturated
- * (task I.10) and the running judge-versus-human agreement rate (task I.8). Reads only.
+ * (task I.10), the running judge-versus-human agreement rate (task I.8), and the two failure-mode
+ * counters: gate rejections for a repetitive loop (I.15, plus the traces carrying the tag) and for
+ * a private regression (I.16). Reads only.
  */
 
 import type { ImproveStorePort, IterationRow, SkillDraftRow, SkillLedgerRow } from "../store/StorePort.js";
 import { SUITE_SATURATED } from "./gepa-pass.js";
 import { SEAT_PROMPT_TASK_TYPE } from "./protected-prompt.js";
+import { isRepetitiveLoopTag } from "./repetitive-loop.js";
 
 export interface QuarantineEntry {
   id: string;
@@ -45,6 +48,12 @@ export interface ImproveStatus {
   /** Agents whose last GEPA pass found the baseline at 1.0: the suite can teach them nothing. */
   suiteSaturated: Record<string, boolean>;
   judgeAgreement: JudgeAgreement;
+  /** Candidates the gate refused because their fixture run looped on one tool (I.15). */
+  repetitiveLoops: number;
+  /** Traces on record that carry a `repetitive_loop:<tool>` tag (I.15). */
+  repetitiveLoopTraces: number;
+  /** Candidates the gate refused because they regressed a held-out private fixture (I.16). */
+  privateRegressions: number;
 }
 
 export function judgeAgreementOf(ledger: readonly SkillLedgerRow[]): JudgeAgreement {
@@ -68,18 +77,23 @@ function saturationOf(iterations: readonly IterationRow[]): Record<string, boole
   return out;
 }
 
+function blockedCount(iterations: readonly IterationRow[], reason: string): number {
+  return iterations.filter((i) => i.blockedBy === reason).length;
+}
+
 function gateOf(iterations: readonly IterationRow[], draftId: string): QuarantineEntry["gate"] {
   const row = iterations.find((i) => i.candidateId === draftId);
   return row ? { decision: row.decision, score: row.score, delta: row.delta, blockedBy: row.blockedBy } : null;
 }
 
 export async function improveStatus(store: ImproveStorePort, companyId: string): Promise<ImproveStatus> {
-  const [tracesPerAgent, quarantine, live, iterations, ledger] = await Promise.all([
+  const [tracesPerAgent, quarantine, live, iterations, ledger, traces] = await Promise.all([
     store.countTracesByAgent(companyId),
     store.listDrafts(companyId, { status: "quarantine" }),
     store.listDrafts(companyId, { status: "live" }),
     store.listIterations(companyId),
     store.listLedger(companyId),
+    store.listTraces(companyId),
   ]);
 
   const latest = iterations[0];
@@ -118,5 +132,8 @@ export async function improveStatus(store: ImproveStorePort, companyId: string):
     frontierBest,
     suiteSaturated: saturationOf(iterations),
     judgeAgreement: judgeAgreementOf(ledger),
+    repetitiveLoops: blockedCount(iterations, "repetitive_loop"),
+    repetitiveLoopTraces: traces.filter((t) => (t.failureTags ?? []).some(isRepetitiveLoopTag)).length,
+    privateRegressions: blockedCount(iterations, "private_regression"),
   };
 }

@@ -57,6 +57,47 @@ export {
 } from "./gate.js";
 export { JUDGE_UNVERIFIED_TAG } from "./gate-score.js";
 export { DEFAULT_REDRAW_TEMPERATURE, flippedFixtures } from "./gate-redraw.js";
+export {
+  DEFAULT_LOOP_LENGTH,
+  REPETITIVE_LOOP_TAG,
+  detectRepetitiveLoops,
+  invocationKey,
+  isRepetitiveLoopTag,
+  type ToolCallLike,
+  type ToolInvocation,
+} from "./repetitive-loop.js";
+export {
+  PRIVATE_SHARE,
+  buildPublicReflectionPrompt,
+  isPrivateFixture,
+  privateRegressions,
+  splitSuite,
+  type SuiteSplit,
+} from "./suite-split.js";
+export {
+  distillCleanTrace,
+  goldenId,
+  goldenStepsHash,
+  groupRowsByRun,
+  rawTraceFromRows,
+  type CleanGolden,
+  type CleanStep,
+  type DistillContext,
+  type RawStep,
+  type RawTrace,
+} from "./clean-trace.js";
+export {
+  buildRationalePrompt,
+  createFileExemplarStore,
+  createGatewayRationale,
+  createMemoryExemplarStore,
+  parseRationaleReply,
+  rationaliseGolden,
+  type ExemplarStore,
+  type RationaleFn,
+  type RationaliseOptions,
+  type RationaliseResult,
+} from "./rationalise.js";
 export { createGatewayJudge, parseJudgeReply, type GatewayJudgeOptions } from "./judge.js";
 export {
   BUNDLED_MECHANICAL_OVERLAYS_DIR,
@@ -78,12 +119,15 @@ export {
   type WriteSeatPromptInput,
 } from "./protected-prompt.js";
 export {
+  distillExemplars,
   promoteDraft,
   readLiveSkills,
   recoverDraft,
   rejectDraft,
   retireSkills,
   rollback,
+  type DistillOnPromote,
+  type DistillReport,
   type PromoteOptions,
   type RetirementOptions,
   type RetirementReport,
@@ -101,6 +145,6 @@ export {
   type GepaPassResult,
   type ReflectFn,
 } from "./gepa-pass.js";
-export { runImprovementSweep, toTraceRecord, type AgentSweepReport, type SweepDeps, type SweepReport } from "./sweep.js";
+export { cleanTraces, runImprovementSweep, toTraceRecord, type AgentSweepReport, type SweepDeps, type SweepReport } from "./sweep.js";
 export { ORG_TIER_AGENT, promoteOrgSkill, type PromoteOrgSkillInput, type PromoteOrgSkillResult } from "./org-tier.js";
 export { improveStatus, judgeAgreementOf, type FrontierBest, type ImproveStatus, type JudgeAgreement, type QuarantineEntry } from "./status.js";

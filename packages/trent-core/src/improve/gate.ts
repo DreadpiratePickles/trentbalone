@@ -15,7 +15,10 @@
  *   - a judge verdict is memoised by (fixture, rubric, sha256(output)) through `GateCache`;
  *   - a judge that cites evidence not in the output is not believed (`judge_unverified`);
  *   - rubric failures are tagged per fixture so the frontier has a real profile;
- *   - a promotion must survive a second draw on the fixtures it flipped (`gate-redraw.ts`).
+ *   - a promotion must survive a second draw on the fixtures it flipped (`gate-redraw.ts`);
+ *   - a candidate whose fixture run loops on one tool cannot be promoted (`repetitive_loop`);
+ *   - a candidate that regresses a private fixture the reflection never saw cannot be promoted
+ *     (`private_regression`, `suite-split.ts`).
  *
  * Model access is injected (`ActualsRunner`, `JudgeFn`), so the whole gate is testable offline.
  * `createGatewayActuals` binds it to the real model gateway; `judge.ts` binds the judge. Every
@@ -26,6 +29,8 @@ import type { GatewayMessage, ModelGateway } from "../model-gateway/types.js";
 import { redrawFlipped } from "./gate-redraw.js";
 import { scoreUnder } from "./gate-score.js";
 import type { ActualsRunner, ExecuteGateInput, GateCandidate, GateVerdict, MeasuredBaseline } from "./gate-types.js";
+import { isRepetitiveLoopTag } from "./repetitive-loop.js";
+import { privateRegressions } from "./suite-split.js";
 
 export type * from "./gate-types.js";
 
@@ -45,6 +50,10 @@ export async function executeGate(input: ExecuteGateInput): Promise<GateVerdict>
   const systemPrompt = composeSystemPrompt(input.seatPrompt, input.candidate);
   const verdict = await scoreUnder(input.suite, systemPrompt, input.actuals, input.judge, input.cache, input.candidate.id, input.baseline.score);
   if (verdict.stage === "deterministic") return verdict;
+  // The two most specific reasons first, so a human reads the failure mode, not its symptom.
+  if (verdict.fixtures.some((f) => f.failureTags.some(isRepetitiveLoopTag))) return { ...verdict, blockedBy: "repetitive_loop" };
+  const regressed = privateRegressions(input.suite, input.baseline, verdict);
+  if (regressed.length > 0) return { ...verdict, blockedBy: "private_regression", privateRegressions: regressed };
   if (verdict.delta < 0) return { ...verdict, blockedBy: "regression" };
   if (hasNewFailureCluster(verdict.failureClusters, input.baseline.failureClusters)) return { ...verdict, blockedBy: "new_failure_cluster" };
   // A rubric nobody judged scored 0.75 on both sides; that is not a measurement, so it cannot promote.

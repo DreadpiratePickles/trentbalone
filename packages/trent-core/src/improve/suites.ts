@@ -25,6 +25,11 @@ export interface FrozenFixture {
   prompt: string;
   goldenOutput?: string;
   graders: FrozenGrader[];
+  /**
+   * Task I.16: a private fixture is scored by the gate but never shown to the GEPA reflection.
+   * Omitted means "decided by the deterministic hash split" (`suite-split.ts`).
+   */
+  private?: boolean;
 }
 
 export interface FrozenSuite {

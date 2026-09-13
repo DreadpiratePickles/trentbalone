@@ -14,6 +14,7 @@
 import type { OrcEvent, TraceSink } from "../orchestrator/types.js";
 import type { AgentTraceRow, ImproveStorePort } from "../store/StorePort.js";
 import { deriveTrace, type OrchestratorStepLike } from "../traces/trace-store.js";
+import { detectRepetitiveLoops } from "./repetitive-loop.js";
 
 /** The nine resident seats (design doc section 12). */
 export const CORE_SEATS = ["ceo", "engineer", "growth", "content", "support", "analyst", "finance", "browser", "escalation"] as const;
@@ -141,6 +142,8 @@ export function createTraceWriter(options: TraceWriterOptions): BusHook {
       latencyMs: record.latencyMs ?? null,
       humanCorrected: record.humanCorrected,
       skillApplied: record.skillApplied ?? false,
+      // I.15: the repetitive-loop failure mode, read off the step's own tool calls, no model call.
+      failureTags: detectRepetitiveLoops(record.toolCalls),
       createdAt: record.createdAt,
     };
     await options.store.appendTrace(row);

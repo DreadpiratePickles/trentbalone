@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AgentTraceRow, ImproveStorePort } from "../store/StorePort.js";
 import { InMemoryImproveStore } from "./memory-store.js";
-import { CORE_SEATS, runImprovementSweep } from "./index.js";
+import { CORE_SEATS, improveStatus, runImprovementSweep } from "./index.js";
 
 const COMPANY = "co_sweep";
 
@@ -285,5 +285,49 @@ describe("fleet scope", () => {
     await seedEngineer(store);
     const report = await runImprovementSweep(COMPANY, { store, installedAgents: [], skipLLM: true, agentFilter: "engineer" });
     expect(report.agents.map((a) => a.agentId)).toEqual(["engineer"]);
+  });
+});
+
+describe("clean traces and the tagged blocks (I.13, I.15, I.16)", () => {
+  it("I.13: a group with one retry step and a clean finish distils only the clean steps, with error_recovery recorded on the iteration", async () => {
+    const store = new InMemoryImproveStore();
+    await seedEngineer(store);
+    await runImprovementSweep(COMPANY, { store, installedAgents: [], skipLLM: true, agentFilter: "engineer" });
+    const draft = (await store.listDrafts(COMPANY, { agentId: "engineer" }))[0]!;
+    const numbered = draft.content.split("\n").filter((line) => /^\d+\. /.test(line));
+    expect(numbered.length).toBe(2);
+    expect(draft.content).not.toContain("## Recovery patterns");
+    const iteration = (await store.listIterations(COMPANY, { agentId: "engineer" }))[0]!;
+    expect(iteration.triggers).toContain("error_recovery");
+    expect(draft.triggers).toContain("error_recovery");
+  });
+
+  it("I.15: a draft whose fixture run loops on one tool is rejected repetitive_loop, with a ledger row and a status counter", async () => {
+    const store = new InMemoryImproveStore();
+    await seedEngineer(store);
+    const loop = { name: "read_file", args: { path: "a" } };
+    const report = await runImprovementSweep(COMPANY, {
+      store,
+      installedAgents: [],
+      skipLLM: true,
+      agentFilter: "engineer",
+      seatPrompt: async () => "SEAT",
+      suiteFor: () => ({ id: "s", version: "v1", fixtures: [{ id: "s:1", prompt: "go", graders: [{ type: "contains", weight: 1, values: ["ok"] }] }] }),
+      actuals: async ({ systemPrompt }) => ({
+        text: "ok",
+        toolCalls: [],
+        toolInvocations: systemPrompt.includes("Company skill") ? [loop, loop, loop] : [loop],
+        costCents: 0,
+      }),
+    });
+    const engineer = report.agents.find((a) => a.agentId === "engineer")!;
+    expect(engineer.skillsRejected).toBe(1);
+    const iteration = (await store.listIterations(COMPANY, { agentId: "engineer", taskType: "ship-feature" }))[0]!;
+    expect(iteration.blockedBy).toBe("repetitive_loop");
+    const ledger = await store.listLedger(COMPANY, { artifactId: iteration.candidateId! });
+    expect(ledger.map((l) => [l.action, l.actor])).toEqual([["reject", "gate:repetitive_loop"]]);
+    const status = await improveStatus(store, COMPANY);
+    expect(status.repetitiveLoops).toBe(1);
+    expect(status.privateRegressions).toBe(0);
   });
 });

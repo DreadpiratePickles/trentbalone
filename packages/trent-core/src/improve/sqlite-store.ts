@@ -44,6 +44,7 @@ type Row = Record<string, unknown>;
 const ADDED_COLUMNS: ReadonlyArray<readonly [table: string, column: string, ddl: string]> = [
   ["AgentTrace", "agentId", "TEXT"],
   ["AgentTrace", "skillApplied", "INTEGER NOT NULL DEFAULT 0"],
+  ["AgentTrace", "failureTags", "TEXT"],
   ["SkillDraft", "agentId", "TEXT"],
   ["SkillDraft", "kind", "TEXT NOT NULL DEFAULT 'skill'"],
   ["SkillDraft", "contentHash", "TEXT"],
@@ -157,6 +158,7 @@ function traceRow(r: Row): AgentTraceRow {
     latencyMs: num(r.latencyMs),
     humanCorrected: bool(r.humanCorrected),
     skillApplied: bool(r.skillApplied),
+    failureTags: stringArray(r.failureTags),
     createdAt: iso(r.createdAt),
   };
 }
@@ -252,8 +254,8 @@ export class SqliteImproveStore implements ImproveStorePort {
   async appendTrace(row: AgentTraceRow): Promise<void> {
     await this.ensure();
     await this.raw.execute(
-      `INSERT INTO "AgentTrace" ("id","companyId","runId","taskType","agentRole","agentId","stepTitle","status","toolCalls","toolCallCount","critiqueVerdict","improvement","evalScore","costCents","latencyMs","humanCorrected","skillApplied","createdAt")
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO "AgentTrace" ("id","companyId","runId","taskType","agentRole","agentId","stepTitle","status","toolCalls","toolCallCount","critiqueVerdict","improvement","evalScore","costCents","latencyMs","humanCorrected","skillApplied","failureTags","createdAt")
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       row.id,
       row.companyId,
       row.runId,
@@ -271,6 +273,7 @@ export class SqliteImproveStore implements ImproveStorePort {
       row.latencyMs,
       row.humanCorrected ? 1 : 0,
       row.skillApplied ? 1 : 0,
+      JSON.stringify(row.failureTags ?? []),
       row.createdAt,
     );
   }

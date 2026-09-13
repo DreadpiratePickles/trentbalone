@@ -34,7 +34,7 @@ export class InMemoryImproveStore implements ImproveStorePort {
   readonly #gateCache = new Map<string, GateCacheRow>();
 
   async appendTrace(row: AgentTraceRow): Promise<void> {
-    this.#traces.push({ ...row, toolCalls: [...row.toolCalls] });
+    this.#traces.push({ ...row, toolCalls: [...row.toolCalls], failureTags: [...(row.failureTags ?? [])] });
   }
 
   async listTraces(companyId: string, filter: TraceFilter = {}): Promise<AgentTraceRow[]> {

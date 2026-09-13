@@ -7,13 +7,17 @@
  *   - I.7: a judge that cites `evidence` is believed only if the substring really is in the
  *     output; otherwise the grader scores 0 and is tagged `judge_unverified` (no extra call);
  *   - I.9: a failed rubric is tagged `rubric_failed:<fixtureId>`, so two candidates that fail
- *     different fixtures have different failure profiles on the Pareto frontier.
- * The app's harness is read-only, so both are applied by relabelling its per-fixture tags.
+ *     different fixtures have different failure profiles on the Pareto frontier;
+ *   - I.15: a fixture whose run called one tool identically three times in a row is tagged
+ *     `repetitive_loop:<tool>` from the tool calls alone, no model involved, and the fixture
+ *     fails; `gate.ts` turns the tag into `blockedBy: "repetitive_loop"`.
+ * The app's harness is read-only, so all are applied by relabelling its per-fixture tags.
  */
 
 import { runEvalSuite, type EvalFixture, type EvalGrader } from "../evals/index.js";
 import { judgeCacheKey, type GateCache } from "./gate-cache.js";
 import type { ActualsRunner, GateVerdict, JudgeFn, JudgeVerdict } from "./gate-types.js";
+import { detectRepetitiveLoops } from "./repetitive-loop.js";
 import type { FrozenSuite } from "./suites.js";
 
 export const DETERMINISTIC = new Set(["contains", "tool_call", "state_check"]);
@@ -29,6 +33,8 @@ interface Executed {
   fixture: FrozenSuite["fixtures"][number];
   actual: { text: string; toolCalls: string[]; state?: Record<string, unknown> };
   costCents: number;
+  /** I.15: `repetitive_loop:<tool>` per tool the run looped on; empty when it did not. */
+  loopTags: string[];
 }
 
 async function executeAll(suite: FrozenSuite, systemPrompt: string, actuals: ActualsRunner, draw: DrawOptions): Promise<Executed[]> {
@@ -45,6 +51,7 @@ async function executeAll(suite: FrozenSuite, systemPrompt: string, actuals: Act
       fixture,
       actual: { text: result.text, toolCalls: [...(result.toolCalls ?? [])], ...(result.state === undefined ? {} : { state: result.state }) },
       costCents: Math.max(0, Math.trunc(result.costCents)),
+      loopTags: detectRepetitiveLoops(result.toolInvocations ?? result.toolCalls ?? []),
     });
   }
   return out;
@@ -132,6 +139,19 @@ function relabel(tags: readonly string[], labels: readonly string[]): string[] {
   return tags.map((tag) => (tag === RUBRIC_FAILED_TAG ? (queue.shift() ?? tag) : tag));
 }
 
+/** I.15: a looping fixture fails outright, whatever its graders said, and carries the loop tags. */
+function applyLoops<T extends { id: string; score: number; passed: boolean; failureTags: string[] }>(fixtures: T[], executed: readonly Executed[]): T[] {
+  const loops = new Map(executed.map((e) => [e.fixture.id, e.loopTags] as const));
+  return fixtures.map((f) => {
+    const tags = loops.get(f.id) ?? [];
+    return tags.length === 0 ? f : { ...f, score: 0, passed: false, failureTags: [...f.failureTags, ...tags] };
+  });
+}
+
+function round(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
 function clustersOf(fixtures: ReadonlyArray<{ failureTags: string[] }>): Record<string, number> {
   const clusters: Record<string, number> = {};
   for (const tag of fixtures.flatMap((f) => f.failureTags)) clusters[tag] = (clusters[tag] ?? 0) + 1;
@@ -189,15 +209,21 @@ export async function scoreUnder(
     ...(previousScore === undefined ? {} : { previousScore }),
     fixtures: full,
   });
-  const fixtures = result.fixtures.map((f) => ({
-    ...f,
-    failureTags: relabel(f.failureTags, stage.failLabels.get(f.id) ?? []),
-    costCents: costOf.get(f.id) ?? 0,
-  }));
+  const fixtures = applyLoops(
+    result.fixtures.map((f) => ({
+      ...f,
+      failureTags: relabel(f.failureTags, stage.failLabels.get(f.id) ?? []),
+      costCents: costOf.get(f.id) ?? 0,
+    })),
+    executed,
+  );
+  // Re-derived only when a loop zeroed a fixture; otherwise the harness's own rounding stands.
+  const looped = executed.some((e) => e.loopTags.length > 0);
+  const score = looped ? round(fixtures.reduce((sum, f) => sum + f.score, 0) / Math.max(1, fixtures.length)) : result.score;
   return {
     promoted: false,
-    score: result.score,
-    delta: result.delta ?? 0,
+    score,
+    delta: looped ? (previousScore === undefined ? 0 : round(score - previousScore)) : (result.delta ?? 0),
     stage: "judge",
     actualsCalls: executed.length,
     judgeCalls: stage.judgeCalls,

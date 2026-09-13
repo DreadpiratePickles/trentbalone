@@ -3,7 +3,9 @@
  *
  *   status                 traces per agent, drafts in quarantine, last sweep, frontier best per agent
  *   sweep [--agent <id>]   one sweep over the nine seats and installed specialists (`--live` executes the gate)
- *   promote <draftId>      quarantine -> live; the only way an artifact reaches an agent (human command)
+ *   promote <draftId>      quarantine -> live; the only way an artifact reaches an agent (human command).
+ *                          Distils the clean exemplars of the promoted (agent, taskType) into
+ *                          `<profile>/exemplars/` (I.13); `--live` rationalises each once (I.14).
  *   reject <draftId>       quarantine -> rejected
  *   rollback <iterationId> restore what an iteration replaced, byte-for-byte from the ledger
  *   history                iterations and ledger rows, newest first
@@ -24,8 +26,10 @@ import { BUNDLED_SKILLS_DIR } from "@trent/core/fleet/index.js";
 import {
   BUNDLED_MECHANICAL_OVERLAYS_DIR,
   InMemoryImproveStore,
+  createFileExemplarStore,
   createGatewayActuals,
   createGatewayJudge,
+  createGatewayRationale,
   createImproveHook,
   fileSuiteProvider,
   improveStatus,
@@ -37,6 +41,7 @@ import {
   type ImproveHook,
   type ImproveStatus,
   type JudgeFn,
+  type RationaleFn,
   type SweepReport,
 } from "@trent/core/improve/index.js";
 import type { ModelProvider } from "@trent/core/model-gateway/index.js";
@@ -169,8 +174,8 @@ function storeInfo(opened: OpenedStore): { durable: boolean; reason?: string } {
   return opened.reason === undefined ? { durable: opened.durable } : { durable: opened.durable, reason: opened.reason };
 }
 
-/** The gate's model access for `--live`: the configured provider through the real gateway, executor and evidence-cited judge. */
-async function liveModel(ctx: CommandContext, cfg: LoopConfig): Promise<{ actuals: ActualsRunner; judge: JudgeFn }> {
+/** The loop's model access for `--live`: the configured provider through the real gateway, executor, evidence-cited judge and rationale. */
+async function liveModel(ctx: CommandContext, cfg: LoopConfig): Promise<{ actuals: ActualsRunner; judge: JudgeFn; rationalise: RationaleFn }> {
   ctx.config().loadSecrets();
   const { createModelGateway } = await import("@trent/core/model-gateway/index.js");
   const gateway = await createModelGateway({
@@ -180,7 +185,12 @@ async function liveModel(ctx: CommandContext, cfg: LoopConfig): Promise<{ actual
   if (gateway.configuredProviders().length === 0) {
     throw new TrentError({ code: EXIT.AUTH, operation: "improve.sweep", message: `no API key configured for provider ${cfg.provider}` });
   }
-  return { actuals: createGatewayActuals(gateway), judge: createGatewayJudge(gateway) };
+  return { actuals: createGatewayActuals(gateway), judge: createGatewayJudge(gateway), rationalise: createGatewayRationale(gateway) };
+}
+
+/** Where a promotion's clean exemplars go: one JSON per golden under the profile. */
+function exemplarDir(ctx: CommandContext): string {
+  return path.join(ctx.config().getProfileDir(), "exemplars");
 }
 
 const statusSpec: CommandSpec = {
@@ -204,6 +214,9 @@ const statusSpec: CommandSpec = {
     if (saturated.length > 0) lines.push(`  ${ctx.theme.meta("suite saturated")} ${saturated.join("  ")} (baseline 1.0: the suite can teach nothing; add goldens)`);
     const ja = d.judgeAgreement;
     lines.push(`  ${ctx.theme.meta("judge agreement")} ${ja.rate === null ? "no gated human decision yet" : `${ja.rate} (${ja.agreed} agreed, ${ja.disagreed} disagreed)`}`);
+    lines.push(
+      `  ${ctx.theme.meta("blocked")} repetitive loops=${d.repetitiveLoops} (traces tagged ${d.repetitiveLoopTraces})   private regressions=${d.privateRegressions}`,
+    );
     return lines;
   },
 };
@@ -247,15 +260,36 @@ const sweepSpec: CommandSpec = {
 function draftCommand(name: "promote" | "reject"): CommandSpec {
   return {
     name: `${name} <draftId>`,
-    description: name === "promote" ? "Promote a quarantined draft to live (human command)" : "Reject a quarantined draft",
-    run: (ctx, _opts, args) =>
-      withStore(ctx, async (opened) => {
+    description: name === "promote" ? "Promote a quarantined draft to live (human command); distils clean exemplars" : "Reject a quarantined draft",
+    options: name === "promote" ? [{ flags: "--live", description: "Rationalise each distilled exemplar through the configured model (one call per exemplar)" }] : [],
+    run: (ctx, opts, args) =>
+      withStore(ctx, async (opened, cfg) => {
         const draftId = args[0] ?? "";
         const draft = await opened.store.getDraft(draftId);
         if (ctx.dryRun) return { data: { dryRun: true, command: `improve ${name}`, draftId, exists: draft !== null, from: draft?.status ?? null } };
         if (!draft) throw new TrentError({ code: EXIT.USAGE, operation: `improve.${name}`, message: `no draft ${draftId}` });
-        const result = name === "promote" ? await promoteDraft(opened.store, draftId, { actor: "human" }) : await rejectDraft(opened.store, draftId, "human");
-        return { data: { draftId: result.id, agentId: result.agentId, taskType: result.taskType, kind: result.kind, status: result.status } };
+        if (name === "reject") {
+          const rejected = await rejectDraft(opened.store, draftId, "human");
+          return { data: { draftId: rejected.id, agentId: rejected.agentId, taskType: rejected.taskType, kind: rejected.kind, status: rejected.status } };
+        }
+        const live = opts.live === true ? await liveModel(ctx, cfg) : undefined;
+        const exemplars = createFileExemplarStore(exemplarDir(ctx));
+        const before = (await exemplars.list()).length;
+        const result = await promoteDraft(opened.store, draftId, {
+          actor: "human",
+          distill: { exemplars, ...(live === undefined ? {} : { rationalise: live.rationalise }) },
+        });
+        const goldens = await exemplars.list();
+        return {
+          data: {
+            draftId: result.id,
+            agentId: result.agentId,
+            taskType: result.taskType,
+            kind: result.kind,
+            status: result.status,
+            exemplars: { dir: exemplarDir(ctx), distilled: goldens.length - before, rationalised: goldens.filter((g) => g.rationale !== undefined).length },
+          },
+        };
       }),
     render: (data, ctx) => [`  ${ctx.theme.success(name)} ${ctx.theme.value(String((data as { draftId?: string }).draftId ?? ""))} -> ${String((data as { status?: string }).status ?? "(dry run)")}`],
   };

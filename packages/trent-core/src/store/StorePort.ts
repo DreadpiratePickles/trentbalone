@@ -228,6 +228,11 @@ export interface AgentTraceRow {
   latencyMs: number | null;
   humanCorrected: boolean;
   skillApplied: boolean;
+  /**
+   * Trace-level failure-mode tags, e.g. `repetitive_loop:<tool>` (improve/repetitive-loop.ts).
+   * Optional and additive: a row written before the column existed reads as absent.
+   */
+  failureTags?: string[];
   createdAt: string;
 }
 

@@ -7,7 +7,9 @@
  * `forbidden_tools` and `state_check` graders onto the app's fixtures by eval id. Mechanical
  * graders run first in the gate and short-circuit it, so a missed term costs the executor calls
  * only, never a judge call. The merged suite's version folds the overlay in, so a baseline
- * measured without it is never reused with it.
+ * measured without it is never reused with it. An overlay may also name the eval ids held
+ * PRIVATE (task I.16): scored by the gate, never shown to the reflection; without it the split is
+ * the deterministic hash in `suite-split.ts`.
  */
 
 import { createHash } from "node:crypto";
@@ -20,6 +22,8 @@ import type { FrozenFixture, FrozenGrader, FrozenSuite } from "./suites.js";
 /** Shape of `evals/mechanical.json`: one entry per app eval id, mechanical fields only. */
 export interface MechanicalOverlayJson {
   skill_name: string;
+  /** Eval ids held out of the GEPA reflection (task I.16). Overrides the hash split for the suite. */
+  private?: Array<number | string>;
   evals: Array<{
     id: number | string;
     contains?: string[];
@@ -64,14 +68,21 @@ function gradersOf(entry: MechanicalOverlayJson["evals"][number]): FrozenGrader[
  */
 export function applyMechanicalOverlay(suite: FrozenSuite, overlay: MechanicalOverlayJson): FrozenSuite {
   const byId = new Map<string, FrozenGrader[]>(overlay.evals.map((entry) => [`${overlay.skill_name}:${entry.id}`, gradersOf(entry)]));
+  const privateIds = new Set((overlay.private ?? []).map((id) => `${overlay.skill_name}:${id}`));
   let applied = 0;
   const fixtures: FrozenFixture[] = suite.fixtures.map((fixture) => {
-    const extra = byId.get(fixture.id);
-    if (!extra || extra.length === 0) return fixture;
+    const extra = byId.get(fixture.id) ?? [];
+    // An overlay that names any private id decides the whole suite's split: the rest are public.
+    const visibility = privateIds.size === 0 ? {} : { private: privateIds.has(fixture.id) };
+    const changed = extra.length > 0 || (privateIds.size > 0 && fixture.private !== privateIds.has(fixture.id));
+    if (!changed) return fixture;
     applied += 1;
-    return { ...fixture, graders: [...extra, ...fixture.graders] };
+    return { ...fixture, graders: [...extra, ...fixture.graders], ...visibility };
   });
   if (applied === 0) return suite;
-  const version = createHash("sha256").update(`${suite.version}|overlay:${JSON.stringify(overlay.evals)}`).digest("hex").slice(0, 16);
+  const version = createHash("sha256")
+    .update(`${suite.version}|overlay:${JSON.stringify(overlay.evals)}|private:${JSON.stringify([...privateIds].sort())}`)
+    .digest("hex")
+    .slice(0, 16);
   return { ...suite, version, fixtures };
 }

@@ -12,6 +12,9 @@ export interface StoreContractResult {
   tracesForOtherAgent: number;
   tracesForTaskType: number;
   tracesByRun: number;
+  /** I.15: a trace's failure tags round-trip, and a row written without any reads as empty. */
+  traceFailureTags: string[];
+  traceFailureTagsMissing: string[];
   countsByAgent: Record<string, number>;
   draftAfterUpdate: { status: string; promotedAt: string | null; content: string } | null;
   quarantineDrafts: number;
@@ -55,7 +58,7 @@ export async function runStoreContract(store: ImproveStorePort): Promise<StoreCo
     skillApplied: false,
     createdAt,
   });
-  await store.appendTrace(trace("tr_1", "engineer", "ship-feature", "run_a", t0));
+  await store.appendTrace({ ...trace("tr_1", "engineer", "ship-feature", "run_a", t0), failureTags: ["repetitive_loop:GitHub"] });
   await store.appendTrace(trace("tr_2", "engineer", "ship-feature", "run_a", t1));
   await store.appendTrace(trace("tr_3", "engineer", "triage-bug", "run_b", t1));
   await store.appendTrace(trace("tr_4", "eng-ai-engineer", "ship-feature", "run_c", t1));
@@ -176,6 +179,8 @@ export async function runStoreContract(store: ImproveStorePort): Promise<StoreCo
     tracesForOtherAgent: (await store.listTraces(companyId, { agentId: "eng-ai-engineer" })).length,
     tracesForTaskType: (await store.listTraces(companyId, { agentId: "engineer", taskType: "ship-feature" })).length,
     tracesByRun: (await store.tracesByRun("run_a")).length,
+    traceFailureTags: (await store.tracesByRun("run_a")).find((t) => t.id === "tr_1")?.failureTags ?? ["<absent>"],
+    traceFailureTagsMissing: (await store.tracesByRun("run_a")).find((t) => t.id === "tr_2")?.failureTags ?? ["<absent>"],
     countsByAgent: await store.countTracesByAgent(companyId),
     draftAfterUpdate: draft ? { status: draft.status, promotedAt: draft.promotedAt, content: draft.content } : null,
     quarantineDrafts: (await store.listDrafts(companyId, { status: "quarantine" })).length,
@@ -200,6 +205,8 @@ export function expectedStoreContract(): StoreContractResult {
     tracesForOtherAgent: 1,
     tracesForTaskType: 2,
     tracesByRun: 2,
+    traceFailureTags: ["repetitive_loop:GitHub"],
+    traceFailureTagsMissing: [],
     countsByAgent: { engineer: 3, "eng-ai-engineer": 1 },
     draftAfterUpdate: { status: "live", promotedAt: "2026-09-12T10:00:01.000Z", content: "# skill v1 live" },
     quarantineDrafts: 1,

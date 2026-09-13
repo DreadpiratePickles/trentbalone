@@ -8,14 +8,68 @@
  */
 
 import type { ImproveStorePort, SkillDraftRow } from "../store/StorePort.js";
+import { distillCleanTrace, groupRowsByRun, rawTraceFromRows, type CleanGolden } from "./clean-trace.js";
 import { contentHash, judgeAgreementFor, newId, nowIso, recordLedger } from "./ledger.js";
+import { SweepMeter } from "./meter.js";
 import { ProtectedPromptError } from "./protected-prompt.js";
+import { rationaliseGolden, type ExemplarStore, type RationaleFn } from "./rationalise.js";
+
+/** Tasks I.13 and I.14: where a promotion's clean exemplars go, and the model that explains them. */
+export interface DistillOnPromote {
+  readonly exemplars: ExemplarStore;
+  /** Omit to distil without a rationale (no model call). */
+  readonly rationalise?: RationaleFn;
+  /** Counts the rationale calls under the `rationalise` phase. A fresh unbudgeted meter when omitted. */
+  readonly meter?: SweepMeter;
+  readonly onError?: (message: string) => void;
+}
 
 export interface PromoteOptions {
   readonly actor: string;
   /** The iteration that produced the draft; found from the draft id when omitted. */
   readonly iterationId?: string;
   readonly now?: string;
+  readonly distill?: DistillOnPromote;
+}
+
+export interface DistillReport {
+  goldens: CleanGolden[];
+  /** Runs that were not clean (blocked, or did not finish on a successful step). */
+  skippedRuns: string[];
+  rationaleCalls: number;
+}
+
+/**
+ * Task I.13: every run of the promoted draft's (agent, taskType) that is clean on process and
+ * outcome becomes one exemplar of its successful steps only; a blocked run never does. Task I.14:
+ * each exemplar is rationalised once, content-addressed on its step list. Never throws: a failed
+ * distillation is reported, and the promotion it followed stands.
+ */
+export async function distillExemplars(store: ImproveStorePort, draft: SkillDraftRow, options: DistillOnPromote, now: string): Promise<DistillReport> {
+  const meter = options.meter ?? new SweepMeter(undefined);
+  const report: DistillReport = { goldens: [], skippedRuns: [], rationaleCalls: 0 };
+  const rows = await store.listTraces(draft.companyId, { agentId: draft.agentId, taskType: draft.taskType });
+  for (const [runId, runRows] of groupRowsByRun(rows)) {
+    const golden = distillCleanTrace(rawTraceFromRows(runRows), { candidateId: draft.id, now });
+    if (!golden) {
+      report.skippedRuns.push(runId);
+      continue;
+    }
+    try {
+      if (options.rationalise) {
+        const before = meter.phases.rationalise.calls;
+        const { golden: stored } = await rationaliseGolden(golden, { ask: options.rationalise, meter, store: options.exemplars });
+        report.rationaleCalls += meter.phases.rationalise.calls - before;
+        report.goldens.push(stored);
+      } else {
+        await options.exemplars.put(golden);
+        report.goldens.push(golden);
+      }
+    } catch (error) {
+      options.onError?.(`exemplar for run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return report;
 }
 
 async function iterationFor(store: ImproveStorePort, draft: SkillDraftRow): Promise<string | null> {
@@ -58,6 +112,7 @@ export async function promoteDraft(store: ImproveStorePort, draftId: string, opt
     judgeAgreement: await judgeAgreementFor(store, iterationId, true),
     now,
   });
+  if (options.distill) await distillExemplars(store, promoted, options.distill, now);
   return promoted;
 }
 

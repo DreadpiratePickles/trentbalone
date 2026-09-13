@@ -10,13 +10,15 @@
  *
  * Phases: `baseline` (the seat prompt as it is), `candidate` (a skill draft under gate),
  * `gepa` (the reflection call and the proposal under gate), `judge` (every judge call, whichever
- * phase asked for it). Cache hits are not calls and cost nothing.
+ * phase asked for it), `rationalise` (one call per distilled golden, task I.14). Cache hits are
+ * not calls and cost nothing.
  */
 
 import type { ActualsRunner, JudgeFn } from "./gate.js";
 import type { ReflectFn } from "./gepa-pass.js";
+import type { RationaleFn } from "./rationalise.js";
 
-export type SweepPhase = "baseline" | "candidate" | "gepa" | "judge";
+export type SweepPhase = "baseline" | "candidate" | "gepa" | "judge" | "rationalise";
 
 export interface PhaseTally {
   calls: number;
@@ -46,6 +48,7 @@ export function emptyPhases(): PhaseReport {
     candidate: { calls: 0, costCents: 0 },
     gepa: { calls: 0, costCents: 0 },
     judge: { calls: 0, costCents: 0 },
+    rationalise: { calls: 0, costCents: 0 },
   };
 }
 
@@ -65,7 +68,7 @@ export class SweepMeter {
   }
 
   /** Sweep phases run strictly one after another, so the current phase is a single value. */
-  enter(phase: Exclude<SweepPhase, "judge">): void {
+  enter(phase: Exclude<SweepPhase, "judge" | "rationalise">): void {
     this.#phase = phase;
   }
 
@@ -74,7 +77,7 @@ export class SweepMeter {
   }
 
   /** Runs `fn` as `phase`, then restores the phase the caller was in (the baseline is measured on demand). */
-  async within<T>(phase: Exclude<SweepPhase, "judge">, fn: () => Promise<T>): Promise<T> {
+  async within<T>(phase: Exclude<SweepPhase, "judge" | "rationalise">, fn: () => Promise<T>): Promise<T> {
     const previous = this.#phase;
     this.#phase = phase;
     try {
@@ -123,6 +126,16 @@ export class SweepMeter {
       const verdict = await inner(input);
       this.record("judge", verdict.costCents);
       return verdict;
+    };
+  }
+
+  /** The rationale call of task I.14: one per golden, always under its own phase. */
+  rationale(inner: RationaleFn): RationaleFn {
+    return async (prompt) => {
+      this.assertBudget();
+      const out = await inner(prompt);
+      this.record("rationalise", out.costCents);
+      return out;
     };
   }
 

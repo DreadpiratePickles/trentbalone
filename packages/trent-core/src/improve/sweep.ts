@@ -14,18 +14,25 @@
  * `SweepMeter`, so `report.costCents` is the sum of what the gateway charged, per phase, and an
  * optional `budgetCents` stops the sweep. The baseline is content-addressed in the store's
  * GateCache, so a seat prompt is executed once per suite version, not once per sweep.
+ *
+ * Imitation reads clean data only (task I.13): the distill TRIGGERS are decided on the whole
+ * trace group, so `error_recovery` still fires, but the Foundry is handed the process-clean
+ * traces alone (completed, critic pass, no repetitive loop); a group with nothing clean distils
+ * nothing. A draft the gate blocks for a repetitive loop or a private regression is rejected
+ * with a ledger row under actor `gate:<reason>`, so the decision is visible in `history`.
  */
 
 import type { AgentTraceRow, ImproveStorePort, IterationRow, JsonValue, SkillDraftRow } from "../store/StorePort.js";
 import { createSkillFoundry, type SkillDraftStore } from "../skills/foundry.js";
-import type { TraceRecord } from "../traces/trace-store.js";
+import { shouldDistillSkill, type TraceRecord } from "../traces/trace-store.js";
 import { storeGateCache, type GateCache } from "./gate-cache.js";
 import { executeGate, type ActualsRunner, type GateBaseline, type GateVerdict, type JudgeFn } from "./gate.js";
 import { runGepaPass, type ReflectFn } from "./gepa-pass.js";
-import { contentHash, newId, nowIso, setHash } from "./ledger.js";
+import { contentHash, newId, nowIso, recordLedger, setHash } from "./ledger.js";
 import { retireSkills, type RetirementReport } from "./lifecycle.js";
 import { cachedOrMeasuredBaseline } from "./sweep-baseline.js";
 import { isBudgetExhausted, SweepMeter, type PhaseReport } from "./meter.js";
+import { isRepetitiveLoopTag } from "./repetitive-loop.js";
 import { resolveSweepScope, type SkippedSpecialist } from "./scope.js";
 import { defaultSeatPromptProvider, type SeatPromptProvider } from "./seat-prompt.js";
 import type { SuiteProvider } from "./suites.js";
@@ -99,6 +106,16 @@ export function toTraceRecord(row: AgentTraceRow): TraceRecord {
     skillApplied: row.skillApplied,
     createdAt: row.createdAt,
   };
+}
+
+/** Blocks the gate turns into a visible rejection row: a human reads the failure mode in `history`. */
+const LEDGERED_BLOCKS = new Set<string>(["repetitive_loop", "private_regression"]);
+
+/** I.13: process-clean traces only: completed, critic pass (or none), no repetitive-loop tag. */
+export function cleanTraces(rows: readonly AgentTraceRow[]): AgentTraceRow[] {
+  return rows.filter(
+    (r) => r.status === "completed" && (r.critiqueVerdict === null || r.critiqueVerdict === "pass") && !(r.failureTags ?? []).some(isRepetitiveLoopTag),
+  );
 }
 
 /** Adapts the per-agent draft rows to the Foundry's store port. Writes are captured, not persisted. */
@@ -200,12 +217,16 @@ async function gateDraft(ctx: AgentContext, draft: SkillDraftRow): Promise<Pick<
     return { decision: "pending_approval", score: verdict.score, delta: verdict.delta, blockedBy: null, verdicts: verdictJson(verdict) };
   }
   ctx.report.skillsRejected += 1;
-  await ctx.deps.store.updateDraft(draft.id, { status: "rejected", retiredAt: ctx.now });
+  const rejected = await ctx.deps.store.updateDraft(draft.id, { status: "rejected", retiredAt: ctx.now });
+  if (verdict.blockedBy !== undefined && LEDGERED_BLOCKS.has(verdict.blockedBy)) {
+    await recordLedger(ctx.deps.store, { action: "reject", artifact: rejected, before: null, after: null, iterationId: null, actor: `gate:${verdict.blockedBy}`, now: ctx.now });
+  }
   return { decision: "rejected", score: verdict.score, delta: verdict.delta, blockedBy: verdict.blockedBy ?? null, verdicts: verdictJson(verdict) };
 }
 
-async function sweepTaskType(ctx: AgentContext, taskType: string, group: TraceRecord[], live: Set<string>, degraded: boolean): Promise<void> {
+async function sweepTaskType(ctx: AgentContext, taskType: string, rows: AgentTraceRow[], live: Set<string>, degraded: boolean): Promise<void> {
   const { store, skipLLM } = ctx.deps;
+  const group = rows.map(toTraceRecord);
   const inputHash = setHash(group.map((t) => t.id), degraded ? "degraded" : "");
   const previous = await store.listIterations(ctx.companyId, { agentId: ctx.agentId, taskType, limit: 1 });
   if (previous[0]?.inputHash === inputHash) {
@@ -219,7 +240,15 @@ async function sweepTaskType(ctx: AgentContext, taskType: string, group: TraceRe
     draftStore: foundryDraftStore(store, ctx.agentId, (content) => (captured = content)),
     skipLLM: skipLLM ?? true,
   });
-  const distilled = await foundry.distill(group, taskType, { existingSkillTaskTypes: live, degradedHealth: degraded, now: ctx.now });
+  // Triggers on the whole group; the Foundry imitates the clean traces only (I.13). The threshold
+  // is lifted for that call because the decision to distil has already been made here.
+  const decision = shouldDistillSkill(group, { existingSkillTaskTypes: live, degradedHealth: degraded });
+  const clean = cleanTraces(rows).map(toTraceRecord);
+  const distilled =
+    decision.shouldDistill && clean.length > 0
+      ? await foundry.distill(clean, taskType, { existingSkillTaskTypes: live, degradedHealth: degraded, now: ctx.now, toolCallThreshold: 0 })
+      : null;
+  const triggers = distilled ? decision.triggers : [];
 
   const iteration: IterationRow = {
     id: newId("iter"),
@@ -231,8 +260,8 @@ async function sweepTaskType(ctx: AgentContext, taskType: string, group: TraceRe
     score: null,
     delta: null,
     decision: "no_candidate",
-    triggers: distilled?.triggeredBy ?? [],
-    blockedBy: null,
+    triggers,
+    blockedBy: decision.shouldDistill && clean.length === 0 ? "no_clean_trace" : null,
     inputHash,
     verdicts: null,
     createdAt: ctx.now,
@@ -247,7 +276,7 @@ async function sweepTaskType(ctx: AgentContext, taskType: string, group: TraceRe
       status: "quarantine",
       content: captured,
       contentHash: contentHash(captured),
-      triggers: distilled.triggeredBy,
+      triggers,
       createdAt: ctx.now,
       promotedAt: null,
       lastUsedAt: null,
@@ -284,7 +313,9 @@ async function sweepAgent(
   if (rows.length === 0) return report;
   const traces = rows.map(toTraceRecord);
   const byTaskType = new Map<string, TraceRecord[]>();
+  const rowsByTaskType = new Map<string, AgentTraceRow[]>();
   for (const t of traces) byTaskType.set(t.taskType, [...(byTaskType.get(t.taskType) ?? []), t]);
+  for (const r of rows) rowsByTaskType.set(r.taskType, [...(rowsByTaskType.get(r.taskType) ?? []), r]);
 
   const liveSkills = new Map((await deps.store.listDrafts(companyId, { agentId, kind: "skill", status: "live" })).map((d) => [d.taskType, d.content]));
   const health = await assessHealth(traces, byTaskType, liveSkills);
@@ -315,7 +346,7 @@ async function sweepAgent(
       })),
   };
 
-  for (const [taskType, group] of byTaskType) {
+  for (const [taskType, group] of rowsByTaskType) {
     try {
       await sweepTaskType(ctx, taskType, group, new Set(liveSkills.keys()), health.degraded.has(taskType));
     } catch (error) {

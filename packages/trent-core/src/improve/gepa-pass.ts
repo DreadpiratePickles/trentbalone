@@ -13,9 +13,11 @@
  *     `suite_saturated` with no reflection and no gate call, and an iteration row says so;
  *   - a proposal more than 25 percent longer than the current prompt is length explosion, not
  *     learning, so it is skipped as `proposal_too_long` before the gate runs.
+ * The reflection reads the failing traces plus the baseline's failing PUBLIC fixtures only; the
+ * private partition is scored by the gate and never shown (task I.16, `suite-split.ts`).
  */
 
-import { buildReflectionPrompt, emptyFrontier, parseReflectionResponse, updateParetoFrontier, type GEPACandidate, type GEPAFrontier } from "../gepa/index.js";
+import { emptyFrontier, parseReflectionResponse, updateParetoFrontier, type GEPACandidate, type GEPAFrontier } from "../gepa/index.js";
 import type { ImproveStorePort, IterationRow, JsonObject } from "../store/StorePort.js";
 import type { TraceRecord } from "../traces/trace-store.js";
 import type { GateCache } from "./gate-cache.js";
@@ -23,6 +25,7 @@ import { executeGate, type ActualsRunner, type GateBaseline, type JudgeFn } from
 import { newId, setHash } from "./ledger.js";
 import { isBudgetExhausted } from "./meter.js";
 import { SEAT_PROMPT_TASK_TYPE, stagePromptProposal } from "./protected-prompt.js";
+import { buildPublicReflectionPrompt } from "./suite-split.js";
 import type { FrozenSuite } from "./suites.js";
 
 /**
@@ -137,7 +140,7 @@ async function gepaPass(input: GepaPassInput): Promise<GepaPassResult> {
     proposal = { rationale: "Offline mode: minimal prompt change.", proposedPrompt: `${currentPrompt}${OFFLINE_EDIT}` };
   } else {
     if (!input.reflect) return { passed: false, skipped: "no_reflection_model", costCents: 0 };
-    const raw = await input.reflect(buildReflectionPrompt(input.role, currentPrompt, failing));
+    const raw = await input.reflect(buildPublicReflectionPrompt(input.role, currentPrompt, failing, input.suite, baseline));
     proposal = parseReflectionResponse(typeof raw === "string" ? raw : raw.text, currentPrompt);
   }
 
