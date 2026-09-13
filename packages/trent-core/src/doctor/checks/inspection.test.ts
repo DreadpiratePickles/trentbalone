@@ -144,14 +144,17 @@ describe("workbench check", () => {
 
   it("a real probe reports what this machine's daemon reports: not ok when it is down, ok only with the image present", async () => {
     // An independent probe with the same commands, so the expected status is measured, not assumed.
-    const daemon = await runCommand("docker", ["info", "--format", "{{.ServerVersion}}"], 5000).catch(() => undefined);
+    // Both sides get the same generous budget: under a saturated fork pool `docker info` has taken
+    // >6 s, and a 5 s check against a 5 s probe turned that into a "fail != ok" flake.
+    const budgetMs = 20_000;
+    const daemon = await runCommand("docker", ["info", "--format", "{{.ServerVersion}}"], budgetMs).catch(() => undefined);
     const up = daemon !== undefined && daemon.code === 0 && daemon.stdout.trim() !== "";
     const image = configManager.loadConfig().terminal.docker.image;
-    const present = up && (await runCommand("docker", ["inspect", "--type", "image", "--format", "{{.Id}}", image], 5000).catch(() => undefined))?.code === 0;
-    const result = await checkWorkbench.run(context());
+    const present = up && (await runCommand("docker", ["inspect", "--type", "image", "--format", "{{.Id}}", image], budgetMs).catch(() => undefined))?.code === 0;
+    const result = await checkWorkbench.run(context({ probeTimeoutMs: budgetMs }));
     expect(result.message).toMatch(/Docker/i);
     expect(result.status).toBe(!up ? "fail" : present ? "ok" : "warn");
-  }, 20000);
+  }, 60_000);
 
   it("warns that the local backend has no isolation", async () => {
     configManager.saveConfig({
