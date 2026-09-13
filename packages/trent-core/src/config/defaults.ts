@@ -58,6 +58,7 @@ export const DEFAULT_CONFIG: TrentConfig = {
     active_agents: ["ceo"],
     default_agent: "ceo",
   },
+  mcp_servers: {},
   personality: "default",
   theme: "dark",
 };
