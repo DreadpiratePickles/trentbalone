@@ -8,7 +8,7 @@
  */
 
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
-import { GLYPHS, type AgentCategory, type AgentState, type Theme } from "../ui/index.js";
+import { GLYPHS, truncate, type AgentCategory, type AgentState, type Theme } from "../ui/index.js";
 import { DEGRADED_MARK } from "./degraded.js";
 
 export interface AgentIdentity {
@@ -105,6 +105,8 @@ export class TranscriptRenderer {
   readonly #degraded: boolean;
   readonly #steps = new Map<string, LiveStep>();
   readonly #awaiting = new Set<string>();
+  /** Tool calls already drawn per step: `step_output` carries the whole list on every emission. */
+  readonly #toolCallsDrawn = new Map<string, number>();
   readonly #lines: string[] = [];
 
   constructor(options: RenderOptions) {
@@ -154,6 +156,29 @@ export class TranscriptRenderer {
     return emitted;
   }
 
+  /**
+   * One line per tool call the step has recorded and this transcript has not yet shown:
+   * `· file_ops read_file {"path":"package.json"} · completed`. The step's `toolCalls` list is
+   * cumulative, so only the tail past the count already drawn is new. A completed call gets the
+   * idle dot, not the done check: the check means the RUN succeeded, and a failed run may still
+   * have completed calls in it (D1).
+   */
+  #toolActivity(event: OrcEvent): string[] {
+    const stepId = event.step?.id ?? "unknown";
+    const calls = (event.step as { toolCalls?: ToolCallLike[] } | undefined)?.toolCalls;
+    if (!Array.isArray(calls) || calls.length === 0) return [];
+    const drawn = this.#toolCallsDrawn.get(stepId) ?? 0;
+    if (calls.length <= drawn) return [];
+    this.#toolCallsDrawn.set(stepId, calls.length);
+    return calls.slice(drawn).map((call) => {
+      const failed = call.status === "failed" || call.status === "blocked";
+      const glyph = failed ? this.#theme.error(GLYPHS.failed) : this.#theme.meta(GLYPHS.idle);
+      const action = truncate((call.action ?? "").replace(/\s+/g, " "), TOOL_ACTION_WIDTH);
+      const status = call.status === undefined ? "" : ` ${this.#theme.meta(`· ${call.status}`)}`;
+      return `    ${glyph} ${this.#theme.emphasis(call.adapter ?? "tool")} ${this.#theme.body(action)}${status}`;
+    });
+  }
+
   #linesFor(event: OrcEvent): string[] {
     switch (event.kind) {
       case "run_start":
@@ -176,8 +201,10 @@ export class TranscriptRenderer {
       case "step_output": {
         // The step's output is printed HERE and only here. step_critic carries the same
         // `step.output`, so reading it there printed every output twice (live proof, F6).
+        const lines = this.#toolActivity(event);
         const detail = event.detail ?? event.step?.output;
-        return detail === undefined || detail === "" ? [] : [`    ${this.#theme.body(detail)}`];
+        if (detail !== undefined && detail !== "") lines.push(`    ${this.#theme.body(detail)}`);
+        return lines;
       }
       case "step_note":
       case "step_critic": {
@@ -225,6 +252,16 @@ export class TranscriptRenderer {
     }
   }
 }
+
+/** What the seat loop records per tool call (`apps/web/lib/types.ts` ToolCallRecord). */
+interface ToolCallLike {
+  adapter?: string;
+  action?: string;
+  status?: string;
+  summary?: string;
+}
+
+const TOOL_ACTION_WIDTH = 60;
 
 function detailSuffix(event: OrcEvent): string {
   return event.detail === undefined || event.detail === "" ? "" : `: ${event.detail}`;

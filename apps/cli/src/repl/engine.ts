@@ -15,7 +15,7 @@ import { renderDegradedBanner } from "./degraded.js";
 import { rememberRun } from "./memory.js";
 import { KeyDecoder, NEWLINE_HINT, type KeyEvent } from "./keys.js";
 import { ABORT_REASON, InterruptController } from "./interrupt.js";
-import type { ReplConfig, ReplContext, ReplStore, ReplTraceStore } from "./types.js";
+import type { ReplConfig, ReplContext, ReplEgressStatus, ReplSandbox, ReplStore, ReplToolListing, ReplTraceStore } from "./types.js";
 
 /** The prompt prefix. The mark is a mint dot; read the product name as `trent·`. */
 export const PROMPT = "● ";
@@ -39,6 +39,10 @@ export interface ReplEngineDeps {
   degraded?: boolean;
   traces?: ReplTraceStore;
   width?: number;
+  /** The registered toolset adapters, the sandbox they run in and the egress state, for `/tools` and `/status`. */
+  tools?: readonly ReplToolListing[];
+  sandbox?: ReplSandbox;
+  egress?: ReplEgressStatus;
   /**
    * Told when the human answers, so the orchestrator can release the step. `runId` is the run the
    * gate belongs to — taken from the event itself, never from a side list (live proof, F5).
@@ -127,6 +131,9 @@ export class ReplEngine {
       approvals: this.approvals,
       degraded: this.#deps.degraded ?? false,
       runIds: [...this.#runIds],
+      tools: this.#deps.tools,
+      sandbox: this.#deps.sandbox,
+      egress: this.#deps.egress,
     };
   }
 

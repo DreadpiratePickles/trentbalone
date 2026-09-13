@@ -8,7 +8,7 @@
 
 import process from "node:process";
 import { ConfigManager, SessionManager } from "@trent/core";
-import { createOrchestrator } from "@trent/core/orchestrator/index.js";
+import { createOrchestrator as createRealOrchestrator } from "@trent/core/orchestrator/index.js";
 import { InMemoryTraceStore } from "@trent/core/traces/index.js";
 import { autoTheme, canUseRawMode, terminalWidth, type Theme } from "../ui/index.js";
 import { playBoot, type BootStdin } from "../ui/boot.js";
@@ -17,6 +17,7 @@ import { EphemeralStore } from "./ephemeral-store.js";
 import { isDegraded } from "./degraded.js";
 import { ESCAPE_TIMEOUT_MS, withKittyProtocol } from "./keys.js";
 import { withRawMode } from "./interrupt.js";
+import { toolsStatusLine, wireTools, type ToolWiring, type ToolWiringDeps } from "./tools.js";
 import type { ReplConfig, ReplStore } from "./types.js";
 
 export { ReplEngine, bindApprovalAnswers } from "./engine.js";
@@ -26,7 +27,9 @@ export { ApprovalGate, renderApprovalCard } from "./approvals.js";
 export { REPL_COMMANDS, runCommand, commandNames } from "./commands.js";
 export { isDegraded, renderDegradedBanner } from "./degraded.js";
 export { KeyDecoder, NEWLINE_HINT } from "./keys.js";
-export type { ReplContext, ReplStore } from "./types.js";
+export { wireTools, toolsStatusLine, startEgressProxy, probeDockerCli, FLOOR_IMAGE } from "./tools.js";
+export type { ToolWiring, ToolWiringDeps, EgressHandle, StartEgressInput, DockerProbe } from "./tools.js";
+export type { ReplContext, ReplStore, ReplToolListing, ReplSandbox, ReplEgressStatus } from "./types.js";
 
 /** Exit code for Ctrl+C during the boot sequence: 128 + SIGINT, the shell convention. */
 export const BOOT_INTERRUPT_EXIT_CODE = 130;
@@ -52,10 +55,24 @@ export interface ReplIo {
   sleep?: (ms: number) => Promise<void>;
 }
 
+/**
+ * The collaborators `start()` builds the session from. Defaults are the real ones; the tests
+ * inject a recording orchestrator factory, an observed proxy and a Docker probe that needs no daemon.
+ */
+export interface ReplDeps {
+  /** The directory `trent` was launched in. Defaults to `process.cwd()`; never the home directory. */
+  workspace?: string;
+  createOrchestrator?: typeof createRealOrchestrator;
+  buildAdapters?: ToolWiringDeps["buildAdapters"];
+  startEgress?: ToolWiringDeps["startEgress"];
+  probeDocker?: ToolWiringDeps["probeDocker"];
+}
+
 export interface ReplOptions {
   continueSession?: boolean;
   profile?: string;
   io?: ReplIo;
+  deps?: ReplDeps;
 }
 
 /** The company a local session runs against when config names none. Found again by slug on restart. */
@@ -86,11 +103,13 @@ export class ClassicRepl {
   readonly #configManager: ConfigManager;
   readonly #sessions: SessionManager;
   readonly #io: ReplIo;
+  readonly #deps: ReplDeps;
 
   constructor(options: ReplOptions = {}) {
     this.#configManager = new ConfigManager({ profile: options.profile });
     this.#sessions = new SessionManager(this.#configManager);
     this.#io = options.io ?? processIo();
+    this.#deps = options.deps ?? {};
     if (options.continueSession === true) this.#sessions.resumeLastSession();
   }
 
@@ -116,45 +135,78 @@ export class ClassicRepl {
       return;
     }
 
-    const databaseUrl = `file:${this.#configManager.getProfileDir()}/trent.db`;
-    const { store, durable } = await openStore(databaseUrl);
+    const profileDir = this.#configManager.getProfileDir();
 
-    // The configured provider/model travel with the orchestrator, which maps them into the env
-    // its model resolver reads before the first apps/web import (live proof, F2).
-    const orchestrator = createOrchestrator({
-      ...(durable ? { databaseUrl } : {}),
-      model: { provider: config.provider, model: config.model },
+    // The seats' toolsets and the egress proxy, before the first turn. The workspace is where
+    // `trent` was launched, never the home directory. Everything from here on is released by
+    // `tools.cleanup()` on every exit path: stdin end, a throw, and Ctrl+C.
+    const tools: ToolWiring = await wireTools({
+      config: config as unknown as ToolWiringDeps["config"],
+      workspace: this.#deps.workspace ?? process.cwd(),
+      profileDir,
+      configManager: this.#configManager,
+      buildAdapters: this.#deps.buildAdapters,
+      startEgress: this.#deps.startEgress,
+      probeDocker: this.#deps.probeDocker,
     });
-    // `launchOrchestration` throws "Company not found" for an id nothing created; an explicit
-    // config id is trusted, otherwise the local company is found by slug or created.
-    const configuredId = (config as { company?: { id?: string } }).company?.id;
-    const companyId = configuredId !== undefined ? String(configuredId) : await orchestrator.ensureCompany(DEFAULT_COMPANY);
-    const runner: ReplRunner = ({ objective, signal }) =>
-      orchestrator.run({ companyId, objective, trigger: "manual", signal });
+    writeLine(toolsStatusLine(tools, theme));
 
-    const engine = new ReplEngine({
-      theme,
-      config,
-      store,
-      companyId,
-      runner,
-      traces: new InMemoryTraceStore(),
-      degraded,
-      width,
-      write: writeLine,
-      exit: (code) => io.exit(code),
-      onApprovalAnswer: bindApprovalAnswers(orchestrator),
-    });
+    let exiting: Promise<void> | undefined;
+    const exit = (code: number): void => {
+      // Ctrl+C is a key here (raw mode), so the proxy and the sandboxes are stopped BEFORE the
+      // process goes; `process.exit` would otherwise leave the listener and the containers behind.
+      exiting ??= tools.cleanup().finally(() => io.exit(code));
+    };
 
-    if (!durable) {
-      writeLine(
-        theme.needsApproval(
-          "This session is not durable: the SQLite store needs Bun. Approvals will not survive a restart.",
-        ),
-      );
+    try {
+      const databaseUrl = `file:${profileDir}/trent.db`;
+      const { store, durable } = await openStore(databaseUrl);
+
+      // The configured provider/model travel with the orchestrator, which maps them into the env
+      // its model resolver reads before the first apps/web import (live proof, F2).
+      const createOrchestrator = this.#deps.createOrchestrator ?? createRealOrchestrator;
+      const orchestrator = createOrchestrator({
+        ...(durable ? { databaseUrl } : {}),
+        model: { provider: config.provider, model: config.model },
+        tools: tools.adapters,
+      });
+      // `launchOrchestration` throws "Company not found" for an id nothing created; an explicit
+      // config id is trusted, otherwise the local company is found by slug or created.
+      const configuredId = (config as { company?: { id?: string } }).company?.id;
+      const companyId = configuredId !== undefined ? String(configuredId) : await orchestrator.ensureCompany(DEFAULT_COMPANY);
+      const runner: ReplRunner = ({ objective, signal }) =>
+        orchestrator.run({ companyId, objective, trigger: "manual", signal });
+
+      const engine = new ReplEngine({
+        theme,
+        config,
+        store,
+        companyId,
+        runner,
+        traces: new InMemoryTraceStore(),
+        degraded,
+        width,
+        write: writeLine,
+        exit,
+        tools: tools.adapters.map((adapter) => ({ name: adapter.name, scopes: adapter.scopes })),
+        sandbox: tools.sandbox,
+        egress: tools.egress,
+        onApprovalAnswer: bindApprovalAnswers(orchestrator),
+      });
+
+      if (!durable) {
+        writeLine(
+          theme.needsApproval(
+            "This session is not durable: the SQLite store needs Bun. Approvals will not survive a restart.",
+          ),
+        );
+      }
+
+      await this.#drive(engine);
+    } finally {
+      // A throw or stdin ending: release now. After Ctrl+C the exit path already owns the cleanup.
+      await (exiting ?? tools.cleanup());
     }
-
-    await this.#drive(engine);
   }
 
   /**

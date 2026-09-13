@@ -39,6 +39,23 @@ function mcpServers(ctx: ReplContext): McpServerConfig[] {
   return Array.isArray(raw) ? (raw as McpServerConfig[]) : [];
 }
 
+/** The sandbox as resolved at start; the configured backend only when nothing resolved it. */
+function sandboxLabel(ctx: ReplContext): string {
+  const sandbox = ctx.sandbox;
+  if (sandbox === undefined) return ctx.config.terminal.backend;
+  const image = sandbox.image === undefined ? "" : ` ${sandbox.image}`;
+  const note = sandbox.note === undefined || sandbox.note === "configured" ? "" : ` (${sandbox.note})`;
+  return `${sandbox.backend}${image}${note}`;
+}
+
+function egressLabel(ctx: ReplContext): string {
+  const egress = ctx.egress;
+  if (egress === undefined) return "not started";
+  if (egress.state === "on") return `on, 127.0.0.1:${egress.port ?? "?"}`;
+  if (egress.state === "off") return "off (network none)";
+  return `failed, network none: ${egress.error ?? "unknown"}`;
+}
+
 export const REPL_COMMANDS: Record<string, ReplCommand> = {
   help: {
     name: "help",
@@ -62,7 +79,9 @@ export const REPL_COMMANDS: Record<string, ReplCommand> = {
         heading("session", ctx.theme),
         bullet(ctx.theme, "Provider", `${ctx.config.provider} / ${ctx.config.model}`),
         bullet(ctx.theme, "Fleet", ctx.config.fleet.active_agents.join(", ") || "(none active)"),
-        bullet(ctx.theme, "Sandbox", ctx.config.terminal.backend),
+        bullet(ctx.theme, "Sandbox", sandboxLabel(ctx)),
+        bullet(ctx.theme, "Tools", (ctx.tools ?? []).map((tool) => tool.name).join(", ") || "(none registered)"),
+        bullet(ctx.theme, "Egress", egressLabel(ctx)),
         bullet(ctx.theme, "Spend", ctx.budget.render(ctx.theme)),
         bullet(ctx.theme, "Approvals", `${pending.length} pending`),
         bullet(ctx.theme, "Mode", ctx.degraded ? DEGRADED_MARK : "live"),
@@ -93,6 +112,30 @@ export const REPL_COMMANDS: Record<string, ReplCommand> = {
         bullet(ctx.theme, "Cap", formatCents(ctx.config.budget.daily_cap)),
         bullet(ctx.theme, "Alerts", ctx.config.budget.alert_thresholds.map((t) => `${t}%`).join(" · ")),
       ].join("\n");
+    },
+  },
+
+  tools: {
+    name: "tools",
+    description: "The toolsets registered with the orchestrator, and the tool names each answers to",
+    async run(_args, ctx) {
+      const tools = ctx.tools ?? [];
+      const lines = [heading("tools", ctx.theme)];
+      lines.push(bullet(ctx.theme, "Sandbox", sandboxLabel(ctx)));
+      lines.push(bullet(ctx.theme, "Egress", egressLabel(ctx)));
+      if (tools.length === 0) {
+        lines.push(empty(ctx.theme, "No toolset is registered. Add them under `toolsets` in config."));
+        return lines.join("\n");
+      }
+      for (const tool of tools) {
+        const names = tool.scopes.filter((scope) => scope !== tool.name);
+        lines.push(
+          `  ${ctx.theme.success(GLYPHS.running)} ${ctx.theme.emphasis(tool.name.padEnd(12))}${ctx.theme.body(
+            names.length === 0 ? tool.name : names.join(", "),
+          )}`,
+        );
+      }
+      return lines.join("\n");
     },
   },
 

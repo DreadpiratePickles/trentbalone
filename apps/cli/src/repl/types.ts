@@ -125,6 +125,29 @@ export interface McpServerConfig {
   trust?: string;
 }
 
+// ── tools slice ─────────────────────────────────────────────────────────────
+
+/** A registered toolset adapter as `/tools` lists it: the catalog name and the tool names it answers to. */
+export interface ReplToolListing {
+  readonly name: string;
+  readonly scopes: readonly string[];
+}
+
+/** Where the toolsets run this session, as resolved at start (not as configured). */
+export interface ReplSandbox {
+  readonly backend: "docker" | "local";
+  readonly image?: string;
+  /** Why this is not what config said, if it is not. */
+  readonly note?: string;
+}
+
+/** The egress proxy for this session: on (with its loopback port), off by config, or failed to start. */
+export interface ReplEgressStatus {
+  readonly state: "on" | "off" | "failed";
+  readonly port?: number;
+  readonly error?: string;
+}
+
 // ── the shared context every slash command reads ────────────────────────────
 
 export interface ReplContext {
@@ -138,4 +161,8 @@ export interface ReplContext {
   degraded: boolean;
   /** Ids of the runs this session has started, newest last. */
   runIds?: string[];
+  /** The adapters actually registered with the orchestrator; `/tools` lists these, not the config. */
+  tools?: readonly ReplToolListing[];
+  sandbox?: ReplSandbox;
+  egress?: ReplEgressStatus;
 }

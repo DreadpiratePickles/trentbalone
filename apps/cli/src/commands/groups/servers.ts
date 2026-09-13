@@ -14,10 +14,11 @@ import path from "node:path";
 import { A2AServer, generateAgentCard } from "@trent/core/a2a/index.js";
 import { ACPServer } from "@trent/core/acp/index.js";
 import { GatewayManager } from "@trent/core/gateway/index.js";
-import { EgressProxy } from "@trent/core/egress/index.js";
+import { TokenManager } from "@trent/core/egress/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import type { CommandContext } from "../context.js";
 import type { CommandSpec } from "../registry.js";
+import { startEgressProxy } from "../../repl/tools.js";
 
 const A2A_DEFAULT_PORT = "7895";
 const ACP_DEFAULT_PORT = "7890";
@@ -227,21 +228,26 @@ export const egressSpec: CommandSpec = {
     },
     {
       name: "start",
-      description: "Start the egress credential proxy daemon",
+      description: "Start the egress credential proxy daemon (the REPL starts its own, session-scoped, on a free port)",
       async run(ctx) {
+        const config = ctx.config().loadConfig();
         if (ctx.dryRun) {
-          const config = ctx.config().loadConfig();
           return { data: { dryRun: true, command: "egress start", port: config.egress.proxy_port } };
         }
-        const proxy = new EgressProxy({ configManager: ctx.config() });
-        await proxy.start();
+        // The same start path the REPL uses, on the CONFIGURED port with the DURABLE token store, so
+        // tokens issued by other commands resolve here. The issued token is never printed.
+        const proxy = await startEgressProxy({
+          configManager: ctx.config(),
+          port: config.egress.proxy_port,
+          tokenManager: new TokenManager(),
+        });
         return {
           data: {
             server: "egress",
-            port: proxy.getPort(),
-            listening: true,
-            interceptDomains: [...proxy.getInterceptDomains()],
-            caCertPath: proxy.getCaCertPath(),
+            port: proxy.port,
+            listening: proxy.isListening(),
+            interceptDomains: [...config.egress.intercept_domains],
+            caCertPath: proxy.caCertPath,
           },
           keepAlive: true,
         };
