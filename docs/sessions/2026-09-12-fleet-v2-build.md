@@ -202,3 +202,37 @@ code into monochrome mode fails 11. Found a real palette collision: `marketing` 
 the record exists and is reversible.
 No VM needed — CI runners provide the one thing a single Mac cannot: running each cross-compiled
 binary on its real OS.
+
+---
+
+## Late session, 2026-09-12 -> 2026-09-13 — state at context compaction
+
+### Everything shipped since the last log entry (all on `feature/trent-fleet-v2`, 52 commits, pushed)
+| piece | evidence |
+|---|---|
+| REPL wiring fixes | 116 tests; shipped `trent` reaches the configured model with only the key set; can approve; a run where every call fails says failed |
+| Boot-sequence banner | 72 ui tests; animated, skippable, static when piped; installer banners pre-rendered from the same fn |
+| Installer | 33 tests, real script in a scrubbed shell against a signed local release; tamper/wrong-signer/redirect/truncation/root refused; minisign + ECDSA co-sig because stock macOS LibreSSL has no Ed25519; one manifest renders sh and ps1 |
+| `trent desktop` + real updater | 315 tests; same embedded key as the installer; correct checksum + invalid signature REFUSED; real DMG mounted in test; versioned layout `versions/<v>/` + `current` pointer, aligned installer/updater |
+| Messaging gateway | 8 real transports, 67 tests against local servers speaking each platform's wire protocol; nonced approvals need a paired admin; pairing codes; circuit breaker; durable queue |
+| Self-improvement loop | all four disconnected pipes wired from the wrapper (`src/improve/`): traces per step, sweep on real stores, eval gate that EXECUTES candidates (deterministic graders first, LLM judge second), golden capture, stale/archive/rollback + hash ledger, protected seat prompts, fleet scope (9 seats continuous, specialists while installed). Live sweep ran: 3 Gemini calls. `trent improve` CLI |
+| Planner/critic/consolidator on the configured model | 8 calls for a 3-step run (was 4); live: Gemini planned, critiqued, consolidated. Consolidator had no seam -> wrapper-side replacement on the fallback literal |
+| **Tools — the user's top priority** | 35-line sanctioned seam in `apps/web/lib/{tools,semantic-router}.ts` (own commit, +4 web tests, suite 2747). `src/tools/`: approval-floors (deobfuscated matching), file_ops, terminal (Docker cap-drop ALL, network none, egress via proxy), web (SSRF floors, metadata IPs refused with zero connections), memory, skills, cron. 129 tests. **Live: Gemini itself emitted `read_file {"path":"package.json"}`** and got real bytes. LocalBackend was forwarding the ENTIRE env to children — now scrubbed |
+| CI | all 4 binaries build; native runs died on launch with `@prisma/client did not initialize` because the web client was never generated before compile (41 MB vs 97 MB). Fixed in workflow + a build preflight that refuses without generated clients. Guard fixed (GNU grep -H), lint scoped to CLI typecheck, scanner uses `\p{Extended_Pictographic}` and reads the style contract; core roles recoloured off the forbidden purple |
+| Test infra | root vitest is allow-list; two exclusive-resource suites (prisma generate, hdiutil) in their own sequential project; live suites behind `TRENT_TEST_LIVE=1`; no double collection; stale DMGs detached |
+
+### Model facts (verified on this key)
+Only Google's OpenAI-compatible endpoint works; native REST 404s. `gemini-3.5-flash-lite` -> 200 (default). `gemini-3.6-flash` -> 429 free-tier. `gemini-2.5-flash` -> 404 retired for new users. Free tier rate-limits; live tests skip on 429.
+
+### Still open
+- REPL tools+egress wiring (agent in flight): pass `buildTrentToolAdapters` + a started `EgressProxy` to `createOrchestrator`; `/tools` lists real adapters.
+- Stanford CS329A applied brief (agent in flight) -> `01_discovery/references/cs329a-applied.md`; then implement the ranked additions in `src/improve/`.
+- TUI: still canned replies; the user's own session owns the rewrite; the repo scan fails on it by design until it lands.
+- Remaining Hermes toolsets: delegation alias, vision/browser (need services), code_execution (phase 2), plugins (phase 3).
+- Pre-existing apps/web quirk: `checkExternalActionInputGuardrail` blocks any action containing "post"/"send"/"dm" — e.g. `read_file` on `posthog-*.ts`. Not fixed; outside the sanctioned edit.
+- Cost ledger prices at Anthropic tier (~100x over on Gemini); needs a Gemini row.
+- `trent-sandbox:latest` image does not exist; tests use `alpine:3`.
+- CI run 34733200522 pending on 85bfb12.
+
+### Rules in force (memory files: work-autonomously, max-six-agents, use-opus-for-agents, escalation-options)
+Never ask permission to proceed. Opus subagents, max 6, Fable only at real forks. Failing test first. Explicit-file staging. apps/web read-only except a tested seam in its own commit. No emoji in output; brand palette only. Never log a secret.
