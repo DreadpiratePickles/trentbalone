@@ -157,14 +157,15 @@ If they fail alone, that is a real regression.
 
 ## `trent: command not found`
 
-There is no installed binary and no installer. Use `npm run cli -- <args>` from the repository root,
-or `npm run tui`. `scripts/install.sh` is the previous agent's version: it downloads nothing and
-resolves paths relative to the author's home directory. Do not run it.
+No release has been published yet, so nothing has installed a binary on your PATH. Use
+`npm run cli -- <args>` from the repository root, or `npm run tui`. `scripts/install.sh` is the
+real installer, but it downloads from GitHub Releases and there is no release to download; it will
+stop at `resolve-version`.
 
 ## `trent web --start` refuses to start
 
-Expected. The command validates the target and reports readiness; starting the server is a later
-milestone, and it says so:
+Expected. The command validates the target and reports readiness; starting the server from the CLI
+is not built, and it says so (the desktop app starts its own sidecar instead):
 
 ```
 the web server entry point is not built yet (Milestone 5); run without --start to check readiness

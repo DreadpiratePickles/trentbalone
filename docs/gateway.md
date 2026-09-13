@@ -1,8 +1,9 @@
 # Messaging gateway
 
-The gateway is meant to let an agent reach you on a messaging platform, and let you answer an
-approval from your phone. Read the status table below before planning around it: one adapter of eight
-has any implementation, and none of them send a message yet.
+The gateway lets an agent reach you on a messaging platform, and lets you answer an approval from
+your phone. Eight adapters are implemented against each platform's real protocol, and each is tested
+against a local server speaking that protocol. Live tests against the real services are gated behind
+`TRENT_TEST_LIVE=1` plus a per-platform credential and skip without one.
 
 ```bash
 npm run cli -- gateway status
@@ -13,24 +14,23 @@ npm run cli -- gateway start --dry-run
 
 ## Platform status
 
-| Platform | Secret it reads | Adapter state |
+| Platform | Secret it reads | Transport (`packages/trent-core/src/gateway/platforms/`) |
 |---|---|---|
-| telegram | `TELEGRAM_BOT_TOKEN` | Tracks configured and running state. `sendMessage` has no body |
-| discord | `DISCORD_BOT_TOKEN` | Stub. `start`, `stop`, `sendMessage`, `onMessage` are all empty |
-| slack | `SLACK_BOT_TOKEN` | Stub |
-| whatsapp | `WHATSAPP_TOKEN` | Stub |
-| signal | `SIGNAL_NUMBER` | Stub |
-| email | `EMAIL_SMTP_*` | Stub |
-| teams | `TEAMS_CLIENT_ID`, `TEAMS_CLIENT_SECRET`, `TEAMS_TENANT_ID` | Stub |
-| homeassistant | — | Stub |
+| telegram | `TELEGRAM_BOT_TOKEN` | Bot API over HTTPS; inline keyboards for approvals |
+| discord | `DISCORD_BOT_TOKEN` | Gateway WebSocket |
+| slack | `SLACK_BOT_TOKEN` | Web API plus Socket Mode WebSocket; Block Kit messages |
+| whatsapp | `WHATSAPP_TOKEN` | Graph API |
+| signal | `SIGNAL_NUMBER` | signal-cli JSON-RPC and SSE |
+| email | `EMAIL_SMTP_*` | Own thin SMTP and IMAP clients |
+| teams | `TEAMS_CLIENT_ID`, `TEAMS_CLIENT_SECRET`, `TEAMS_TENANT_ID` | Microsoft Graph with OAuth token fetch |
+| homeassistant | — | REST notify services and webhooks |
 
-"Stub" means the class exists, implements the `PlatformAdapter` interface, and correctly reports
-whether its credential is present — and its `start`, `stop`, `sendMessage` and `onMessage` methods
-have empty bodies. `gateway start` will report those platforms as started. Nothing will arrive.
-
-This is a known anti-pattern in this project's own checklist: seven adapters with empty method
-bodies previously passed their tests. The tests are the reason the state is visible; the
-implementations are outstanding work.
+Each adapter has a `*.wire.test.ts` (local HTTP, WebSocket or TCP server speaking the platform's
+protocol) and a `*.live.test.ts`. The registry test asserts exactly these eight platforms. Around
+the adapters sit a durable file-backed gateway store (queue, pairing and approval rows), device
+pairing (default deny, random codes with a one-hour expiry, rate limited, admin and regular tiers),
+a per-platform circuit breaker and health, and approvals that are checked against the durable row so
+a forged or replayed callback is rejected.
 
 ## What does work
 
@@ -49,19 +49,17 @@ MESSAGING GATEWAY
 returns the name of the secret it configured, never the value.
 
 Routing configuration is real. `gateway.routes` in `config.yaml` maps a platform id to an agent id,
-and `gateway.platforms` lists the enabled ones. An incoming message would be dispatched to the
-designated agent's context; nothing delivers one yet.
+and `gateway.platforms` lists the enabled ones. An incoming message is dispatched to the designated
+agent's context.
 
 ## The approval bridge
 
 `packages/trent-core/src/gateway/ApprovalBridge.ts` exists and is wired to the approval gate, which
-is durable and survives a restart. See [security.md](security.md) for how approvals persist. Since no
-adapter can send a message, an approval card cannot currently reach a phone. Approvals work in the
-REPL and the TUI.
+is durable and survives a restart. See [security.md](security.md) for how approvals persist.
+Approvals also work in the REPL and the TUI.
 
 ## Not yet implemented
 
-- Sending or receiving a message on any platform.
-- Interactive approval cards, inline keyboards, Slack modals, Discord thread mapping.
-- Device pairing.
-- Anything reachable from a phone.
+- A published run against every live platform. The live tests exist but skip without credentials;
+  only the wire tests run in CI.
+- A `gateway` check in `trent doctor` that probes a configured platform end to end.

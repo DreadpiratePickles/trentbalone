@@ -179,7 +179,9 @@ Every skill is scanned before it loads. See [skills.md](skills.md).
 
 ## Not yet implemented
 
-- Signed release artifacts and checksum-pinned downloads. There is no installer to pin yet.
+- A signed release. The installer, `trent update` and `trent desktop install` verify `SHA256SUMS`
+  against embedded Ed25519 (minisign) and ECDSA P-256 public keys and refuse unsigned artefacts,
+  and CI emits `SHA256SUMS`; but no workflow signs it and no release has been cut.
 - Approval floors matched over deobfuscated command variants. The design calls for them; they are not
   built.
 - Automatic CA injection into a running container. The certificate path and the environment are

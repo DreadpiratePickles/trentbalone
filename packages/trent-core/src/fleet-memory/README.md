@@ -49,8 +49,8 @@ createOrchestrator({ fleetMemory, tools, ... });
 
 The hook contributes the `memory` and `fleet_search` adapters to seat wiring, wraps the seat
 executor so the run's prelude rides in `dynamicPrompt` (after the pipeline's own "Previous step
-outputs"), and is told `runStarted` / `runFinished` by the wrapper. The REPL's `wireTools`
-(`apps/cli/src/repl/tools.ts`) does not build the hook yet; that wiring is outside this module.
+outputs"), and is told `runStarted` / `runFinished` by the wrapper. The REPL builds the hook in
+`apps/cli/src/repl/fleet-memory.ts` (`wireFleetMemory`) and passes it to `createOrchestrator`.
 
 ## Rules kept
 

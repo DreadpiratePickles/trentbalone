@@ -1,6 +1,7 @@
 # Getting started
 
-From a clone to a first real conversation. There is no installer yet, so every command below runs
+From a clone to a first real conversation. The one-line installer (`scripts/install.sh`) is written
+and tested but no release has been published for it to download yet, so every command below runs
 through the workspace.
 
 ## 1. Requirements
@@ -11,10 +12,10 @@ through the workspace.
 | npm | Workspace installs | `trent doctor`, Dependencies check |
 | git | Required by the dependencies check | `trent doctor`, Dependencies check |
 | Docker | Only for the `docker` sandbox backend | `trent doctor`, Workbench check |
-| bun | Only for the SQLite store and the binary build | Not yet checked by doctor |
+| bun | Only for the SQLite store and `npm run build:binary` | Not yet checked by doctor |
 
 Docker is optional. Without it, set the terminal backend to `local` and everything else works. bun is
-optional today because there is no binary build step you need to run.
+optional unless you want to compile the single-file binary yourself.
 
 ## 2. Clone and install
 
@@ -168,7 +169,10 @@ npm run cli -- sessions list
 
 ## Not yet implemented
 
-- `curl … | bash` installation, and any hosted install script. `agent.let-trent.uk` is a DNS record
-  that serves nothing.
-- A `trent` binary on your `PATH`. Use `npm run cli --`.
-- Windows support. Nothing has been run there.
+- A published release for `curl … | bash` installation. The installer exists and is tested;
+  `agent.let-trent.uk/install.sh` returns 404 and no GitHub release has been cut, so it has nothing
+  to download.
+- A `trent` binary on your `PATH` without building it yourself (`npm run build:binary`). Use
+  `npm run cli --`.
+- Windows outside CI. The `windows-x64` binary is built and executed on a Windows runner in
+  `.github/workflows/binary.yml`; nothing has been run on a Windows desktop by hand.
