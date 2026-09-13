@@ -29,7 +29,8 @@ const DEFAULT_TIMEOUT_S = 180;
 const MAX_TIMEOUT_S = 600;
 const PWD_MARKER = "__TRENT_PWD__:";
 const PWD_MARKER_END = "__END__";
-const ALWAYS_APPROVE: ReadonlyArray<readonly [RegExp, string]> = [
+/** Hermes's always-approve list; shared with `code_execution`, which sits on the same floor. */
+export const ALWAYS_APPROVE: ReadonlyArray<readonly [RegExp, string]> = [
   [/(?:^|[\s;&|(`])sudo\b/, "sudo"],
   [/\brm\s+(?:-[^\s]*r|--recursive)/i, "rm -r"],
   [/\bgit\s+push\b/, "git push"],
@@ -55,7 +56,7 @@ export const TERMINAL_ROUTING_TEXT =
  * returned. The command runs as its own session leader (`setsid`), a watchdog session kills
  * that group at the deadline, and the watchdog's own group is killed when the command finishes.
  */
-function withGroupTimeout(inner: string, timeoutS: number): string {
+export function withGroupTimeout(inner: string, timeoutS: number): string {
   return [
     `setsid sh -c ${shellQuote(inner)} & __p=$!`,
     `setsid sh -c 'sleep ${timeoutS}; kill -9 -- -'"$__p"' 2>/dev/null; kill -9 '"$__p"' 2>/dev/null' & __w=$!`,
