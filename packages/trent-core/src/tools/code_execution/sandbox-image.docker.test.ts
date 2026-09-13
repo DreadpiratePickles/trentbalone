@@ -31,13 +31,19 @@ describe.skipIf(!dockerAvailable)(`the pinned sandbox image on Docker${dockerAva
     const adapter = createCodeExecutionAdapter({ workspace: root, profileDir: path.join(root, "profile"), backend: "docker", docker: { image: SANDBOX_IMAGE } });
     try {
       const marker = `marker-${Date.now().toString(36)}`;
+      // The container user is the image's uid 1000 on macOS/Windows and the HOST uid on Linux
+      // (DockerBackend passes --user so bind-mounted writes work under --cap-drop=ALL); on the
+      // ubuntu runner that is 1001. The invariant is "never root", not a specific number.
+      const hostUid = process.platform === "linux" && typeof process.getuid === "function" ? process.getuid() : 1000;
+      const expectedUid = hostUid === 0 ? 1000 : hostUid;
+      expect(expectedUid).not.toBe(0);
       const python = await adapter.execute(`execute_code ${JSON.stringify({ code: `import os, sys\nprint("py-${marker}", sys.version_info[0], os.getuid())` })}`, {});
       expect(python.status, python.summary).toBe("completed");
-      expect(python.summary).toContain(`py-${marker} 3 1000`);
+      expect(python.summary).toContain(`py-${marker} 3 ${expectedUid}`);
 
       const javascript = await adapter.execute(`execute_code ${JSON.stringify({ code: `console.log("js-${marker}", process.versions.node.split(".")[0], process.getuid())`, language: "javascript" })}`, {});
       expect(javascript.status, javascript.summary).toBe("completed");
-      expect(javascript.summary).toMatch(new RegExp(`js-${marker} \\d+ 1000`));
+      expect(javascript.summary).toMatch(new RegExp(`js-${marker} \\d+ ${expectedUid}`));
 
       // No package manager survives in the image, and the isolated container has no network.
       const apk = await adapter.execute('execute_code {"code":"import subprocess\\nprint(subprocess.run([\\"sh\\",\\"-c\\",\\"command -v apk || echo no-apk\\"],capture_output=True,text=True).stdout.strip())"}', {});
