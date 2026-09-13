@@ -61,6 +61,9 @@ describe("registerExternalAdapters", () => {
 });
 
 describe("TRENT_TOOL_ADAPTERS_MODULE", () => {
+  // next/types/global.d.ts augments ProcessEnv with a required NODE_ENV, so an env literal
+  // must carry it to satisfy `AdapterRegistryOptions.env`.
+  const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({ NODE_ENV: "test", ...extra });
   let dir = "";
   afterEach(() => {
     if (dir) fs.rmSync(dir, { recursive: true, force: true });
@@ -75,13 +78,13 @@ describe("TRENT_TOOL_ADAPTERS_MODULE", () => {
         healthCheck: async () => "connected", estimateCost: () => 0, requiresApproval: () => false,
         execute: async (action) => ({ adapter: "module_tool", action, status: "completed", summary: "ok" }) }] };`,
     );
-    const registry = buildAdapterRegistry({ env: { TRENT_TOOL_ADAPTERS_MODULE: file } });
+    const registry = buildAdapterRegistry({ env: env({ TRENT_TOOL_ADAPTERS_MODULE: file }) });
     expect(registry.map((adapter) => adapter.name)).toContain("module_tool");
   });
 
   it("falls back to the base registry when the module cannot be loaded", () => {
-    const base = buildAdapterRegistry({ env: {} }).length;
-    const registry = buildAdapterRegistry({ env: { TRENT_TOOL_ADAPTERS_MODULE: "/nonexistent/trent-adapters.cjs" } });
+    const base = buildAdapterRegistry({ env: env() }).length;
+    const registry = buildAdapterRegistry({ env: env({ TRENT_TOOL_ADAPTERS_MODULE: "/nonexistent/trent-adapters.cjs" }) });
     expect(registry.length).toBe(base);
   });
 });

@@ -104,7 +104,8 @@ jobs:
     # THE POINT OF THIS WORKFLOW. Each artifact is downloaded onto the operating system and
     # architecture it was compiled for, and executed there.
     #   darwin-arm64 -> macos-latest       (Apple silicon)
-    #   darwin-x64   -> macos-13           (the last Intel-hosted macOS image)
+    #   darwin-x64   -> macos-15-intel     (Intel-hosted; macos-13 was retired and a job
+    #                                       pinned to it queues forever, never failing)
     #   linux-x64    -> ubuntu-latest
     #   windows-x64  -> windows-latest
     name: RUN ${{ matrix.artifact }} on ${{ matrix.os }}
@@ -118,7 +119,7 @@ jobs:
           - artifact: trent-darwin-arm64
             os: macos-latest
           - artifact: trent-darwin-x64
-            os: macos-13
+            os: macos-15-intel
           - artifact: trent-linux-x64
             os: ubuntu-latest
           - artifact: trent-windows-x64.exe

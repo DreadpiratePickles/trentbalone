@@ -17,7 +17,7 @@
  * Wraps: apps/web/lib/skill-foundry.ts
  */
 
-import { InMemorySkillDraftStore as LibInMemorySkillDraftStore } from "@/lib/skill-foundry";
+import type { InMemorySkillDraftStore as LibInMemorySkillDraftStore } from "@/lib/skill-foundry";
 // Trace types come from the traces wrapper; import them from "@trent/core/traces"
 // rather than re-exporting here, so the package barrel has one home per type.
 import type { DistillOptions, DistillTrigger, TraceRecord } from "../traces/trace-store.js";
@@ -63,28 +63,43 @@ export type AuditLogWriter = (
   summary: string,
 ) => Promise<unknown>;
 
-/** In-memory quarantine/live store for standalone mode and tests. */
+/**
+ * In-memory quarantine/live store for standalone mode and tests.
+ *
+ * The lib class is loaded lazily on first use, not at module load. A static import of
+ * `@/lib/skill-foundry` drags `@/lib/audit-log` -> `@/lib/db` into the graph, and `db.ts` runs
+ * `new PrismaClient()` at load time; inside the compiled binary that constructor eagerly loads
+ * the web Postgres query-engine library, which is never shipped, and the rejected promise killed
+ * `trent doctor` before it printed (`PrismaClientInitializationError: could not locate the
+ * Query Engine`). It only worked on the build machine because Prisma fell back to the absolute
+ * node_modules path there. Same fix shape as the pipeline import in createSkillFoundry below.
+ */
 export class InMemorySkillDraftStore implements SkillDraftStore {
-  private readonly inner = new LibInMemorySkillDraftStore();
+  private innerPromise: Promise<LibInMemorySkillDraftStore> | undefined;
 
-  writeQuarantine(companyId: string, taskType: string, content: string): Promise<string> {
-    return this.inner.writeQuarantine(companyId, taskType, content);
+  private inner(): Promise<LibInMemorySkillDraftStore> {
+    this.innerPromise ??= import("@/lib/skill-foundry").then((m) => new m.InMemorySkillDraftStore());
+    return this.innerPromise;
   }
 
-  readQuarantine(companyId: string, taskType: string): Promise<string | undefined> {
-    return this.inner.readQuarantine(companyId, taskType);
+  async writeQuarantine(companyId: string, taskType: string, content: string): Promise<string> {
+    return (await this.inner()).writeQuarantine(companyId, taskType, content);
   }
 
-  promote(companyId: string, taskType: string): Promise<void> {
-    return this.inner.promote(companyId, taskType);
+  async readQuarantine(companyId: string, taskType: string): Promise<string | undefined> {
+    return (await this.inner()).readQuarantine(companyId, taskType);
   }
 
-  readLive(companyId: string, taskType: string): Promise<string | undefined> {
-    return this.inner.readLive(companyId, taskType);
+  async promote(companyId: string, taskType: string): Promise<void> {
+    return (await this.inner()).promote(companyId, taskType);
   }
 
-  listLiveTaskTypes(companyId: string): Promise<string[]> {
-    return this.inner.listLiveTaskTypes(companyId);
+  async readLive(companyId: string, taskType: string): Promise<string | undefined> {
+    return (await this.inner()).readLive(companyId, taskType);
+  }
+
+  async listLiveTaskTypes(companyId: string): Promise<string[]> {
+    return (await this.inner()).listLiveTaskTypes(companyId);
   }
 }
 

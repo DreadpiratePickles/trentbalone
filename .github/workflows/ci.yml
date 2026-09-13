@@ -254,6 +254,17 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
+      - name: Generate both Prisma clients
+        # apps/cli/tsconfig.json maps `@/*` onto apps/web, so the CLI typecheck pulls in
+        # apps/web/lib modules that import the web app's generated `@prisma/client` (and the
+        # core store imports the derived SQLite client). Without either generated client tsc
+        # sees the uninitialised stub and reports dozens of implicit-any / missing-export
+        # errors in read-only apps/web files that pass the web typecheck. Same recipe as
+        # core-typecheck; never cached (absolute build-machine paths, silently stale).
+        run: |
+          node packages/trent-core/scripts/derive-sqlite-schema.mjs
+          npx prisma generate --schema packages/trent-core/prisma/schema.sqlite.prisma
+          npm run prisma:generate --workspace=apps/web
       # apps/web has no ESLint config, so `next lint` prompts interactively to create one and
       # exits 1 under CI. `next lint` is also deprecated. The web app's own quality gate is its
       # test suite and typecheck, both run above. Lint here covers OUR code: a typecheck of the
