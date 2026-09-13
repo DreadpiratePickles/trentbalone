@@ -5,8 +5,11 @@ import { CONFIG_SCHEMA_VERSION } from "./schema.js";
 export const DEFAULT_CONFIG: TrentConfig = {
   version: CONFIG_SCHEMA_VERSION,
   profile: "default",
-  provider: "openai",
-  model: "gpt-5.6-terra",
+  // Cheapest tier that answers on a fresh Google key today. Verified 2026-09-12 through the
+  // OpenAI-compatible endpoint the gateway actually uses: gemini-2.5-flash is retired for new
+  // users (404), gemini-3.6-flash is rate-limited on the free tier (429), this one returns 200.
+  provider: "google",
+  model: "gemini-3.5-flash-lite",
   toolsets: ["file_ops", "terminal"],
   disabled_toolsets: [],
   budget: {
