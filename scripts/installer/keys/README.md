@@ -36,8 +36,11 @@ openssl dgst -sha256 -sign "$RUNNER_TEMP/ecdsa-p256.key.pem" -out dist/SHA256SUM
 Upload to the GitHub Release, next to the binaries: `SHA256SUMS`, `SHA256SUMS.minisig`,
 `SHA256SUMS.sig`. `node sign-sums.mjs dist/SHA256SUMS` produces byte-compatible output with both
 commands and is what the tests use; the real tools are preferred in CI. `minisign` reads
-`minisign.key` as generated here (unencrypted, `-W` style; opslimit 0); to add a password run
-`minisign -R -s minisign.key` on a trusted machine.
+`minisign.key` as generated here: kdf_alg `\0\0`, the same bytes `minisign -G -W` writes. (An
+earlier revision wrote kdf_alg `Sc` with opslimit 0; real minisign keys off kdf_alg alone and
+prompted for a password. `scripts/release/minisign-plain-key.mjs` converts such a key in place;
+the release job still runs it defensively.) To add a password run `minisign -R -s minisign.key`
+on a trusted machine and remove the conversion step.
 
 ## Formats (for the TypeScript verifier)
 

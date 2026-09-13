@@ -15,8 +15,11 @@
 //
 // The formats follow minisign's documented layout so the real `minisign` tool interoperates:
 //   public key : "Ed" || key_id(8, LE) || pk(32)
-//   secret key : "Ed" "Sc" "B2" || kdf_salt(32) || opslimit(8) || memlimit(8)
-//                || key_id(8) || sk(64) || blake2b-256("Ed" || key_id || sk)      (opslimit=memlimit=0: stored in clear)
+//   secret key : "Ed" kdf_alg(2) "B2" || kdf_salt(32) || opslimit(8) || memlimit(8)
+//                || key_id(8) || sk(64) || blake2b-256("Ed" || key_id || sk)
+//                kdf_alg is "\0\0" = stored in clear, exactly what `minisign -G -W` writes.
+//                ("Sc" with opslimit 0 is NOT equivalent: minisign 0.12 keys off kdf_alg alone and
+//                prompts for a password; measured 2026-09-13, `minisign -S` produced no signature.)
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { blake2b } from "./blake2b.mjs";
 import { existsSync, writeFileSync, chmodSync } from "node:fs";
@@ -45,7 +48,7 @@ const pubText = `untrusted comment: minisign public key ${keyIdHex}\n${pubBlob.t
 // minisign checks this on load: BLAKE2b-256 of sig_alg || key_id || sk.
 const chk = blake2b(Buffer.concat([Buffer.from("Ed"), keyId, sk]), 32);
 const secBlob = Buffer.concat([
-  Buffer.from("Ed"), Buffer.from("Sc"), Buffer.from("B2"),
+  Buffer.from("Ed"), Buffer.alloc(2), Buffer.from("B2"),
   Buffer.alloc(32), Buffer.alloc(8), Buffer.alloc(8),
   keyId, sk, chk,
 ]);
