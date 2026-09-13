@@ -47,12 +47,14 @@ export const CORE_ROLE_TOOLS: readonly InstalledAgentTool[] = [
   { name: "terminal", purpose: "Sandboxed terminal execution" },
 ];
 
+// Colours come from the brand category palette (apps/cli/src/ui/theme.ts), never the v1 purple
+// set. The CEO seat takes pulse, per the style contract; state colour still outranks identity.
 export const CORE_ROLES: Record<string, CoreRole> = {
   ceo: {
     name: "CEO Agent",
     emoji: "👑",
     category: "executive",
-    color: "#8B5CF6",
+    color: "#6EE7B7",
     modelPolicy: "best-reasoning",
     description: "Prioritizes strategy, roadmap, risks, and operating cycle summaries.",
     // Runs on the most expensive tier by policy, so it gets twice the default per-run cap.
@@ -62,7 +64,7 @@ export const CORE_ROLES: Record<string, CoreRole> = {
     name: "Lead Engineer",
     emoji: "⚡",
     category: "engineering",
-    color: "#06B6D4",
+    color: "#67E8F9",
     modelPolicy: "code-capable",
     description: "Plans code changes, GitHub work, tests, and technical architecture.",
   },
@@ -70,7 +72,7 @@ export const CORE_ROLES: Record<string, CoreRole> = {
     name: "Growth Hacker",
     emoji: "📈",
     category: "marketing",
-    color: "#10B981",
+    color: "#FB923C",
     modelPolicy: "growth-generalist",
     description: "Designs acquisition experiments, campaigns, and funnel improvements.",
   },
@@ -78,7 +80,7 @@ export const CORE_ROLES: Record<string, CoreRole> = {
     name: "Design & Content Lead",
     emoji: "🎨",
     category: "design",
-    color: "#F59E0B",
+    color: "#F9A8D4",
     modelPolicy: "copywriter",
     description: "Creates design direction, landing copy, docs, and creative briefs.",
   },
@@ -86,7 +88,7 @@ export const CORE_ROLES: Record<string, CoreRole> = {
     name: "Support & Ops Responder",
     emoji: "💬",
     category: "support",
-    color: "#3B82F6",
+    color: "#C4B5FD",
     modelPolicy: "support-safe",
     description: "Drafts replies, mines customer feedback, and handles operational queues.",
   },
@@ -94,7 +96,7 @@ export const CORE_ROLES: Record<string, CoreRole> = {
     name: "Market & Data Analyst",
     emoji: "📊",
     category: "product",
-    color: "#EC4899",
+    color: "#A5B4FC",
     modelPolicy: "analyst",
     description: "Researches markets, competitors, and revenue metrics.",
   },
@@ -102,7 +104,7 @@ export const CORE_ROLES: Record<string, CoreRole> = {
     name: "Finance & Treasury Lead",
     emoji: "💰",
     category: "finance",
-    color: "#EF4444",
+    color: "#A5F3D2",
     modelPolicy: "cost-aware",
     description: "Tracks spend, margins, budget caps, and financial runways.",
   },
@@ -110,7 +112,7 @@ export const CORE_ROLES: Record<string, CoreRole> = {
     name: "Autonomous Web Navigator",
     emoji: "🌐",
     category: "specialized",
-    color: "#6366F1",
+    color: "#7DD3FC",
     modelPolicy: "balanced",
     description: "Executes web research, scraping, and form automation.",
   },
@@ -118,7 +120,7 @@ export const CORE_ROLES: Record<string, CoreRole> = {
     name: "Critic & Compliance Auditor",
     emoji: "🛡️",
     category: "specialized",
-    color: "#F97316",
+    color: "#FDBA74",
     modelPolicy: "safety",
     description: "Critiques plans and audits risk before irreversible execution.",
     // A critique pass is short by design; a runaway auditor is a pure cost with no output.
@@ -229,7 +231,7 @@ export class AgentInstaller {
       name: found.name,
       emoji: found.emoji,
       category: found.category,
-      color: found.color || "#8B5CF6",
+      color: found.color || "#94A3B8", // mist: the neutral for an uncategorised specialist, never the v1 purple
       modelPolicy: found.modelPolicy || "balanced",
       installed_at: new Date().toISOString(),
       active: true,

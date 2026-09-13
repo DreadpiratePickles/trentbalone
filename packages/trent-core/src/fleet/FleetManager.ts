@@ -120,7 +120,7 @@ export class FleetManager {
           name: agent.name,
           emoji: agent.emoji,
           category: agent.category,
-          color: agent.color || "#8B5CF6",
+          color: agent.color || "#94A3B8", // mist, the neutral fallback
           modelPolicy: agent.modelPolicy || "balanced",
           specialties: agent.specialties,
           toolsCount: (agent.designedTools || []).length,
