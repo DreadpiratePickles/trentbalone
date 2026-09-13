@@ -9,13 +9,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { probeDockerSandbox } from "../../terminal/docker-test-gate.js";
 import { buildSandboxImage, SANDBOX_IMAGE } from "../../terminal/sandbox-image.js";
 import { createCodeExecutionAdapter } from "./index.js";
 
 function dockerCli(args: string[]): Promise<string> {
   return new Promise((resolve) => execFile("docker", args, { timeout: 60_000 }, (_e, stdout) => resolve(String(stdout ?? ""))));
 }
-const dockerAvailable = (await dockerCli(["version", "--format", "{{.Server.Version}}"])).trim().length > 0;
+// This suite BUILDS the image, so it needs only the daemon.
+const gate = await probeDockerSandbox();
+const dockerAvailable = gate.daemon;
 
 describe.skipIf(!dockerAvailable)(`the pinned sandbox image on Docker${dockerAvailable ? "" : " [SKIPPED: no Docker daemon]"}`, () => {
   it(`builds ${SANDBOX_IMAGE} and runs execute_code in python and javascript as a non-root user with no network`, async () => {

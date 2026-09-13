@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { probeDockerSandbox } from "../../terminal/docker-test-gate.js";
 import { createFileOpsAdapter } from "./index.js";
 import type { ToolContext, TrentToolAdapter } from "../types.js";
 
@@ -22,13 +23,8 @@ const DRIFTED_SOURCE = [
   "",
 ].join("\n");
 
-async function dockerAnswers(): Promise<boolean> {
-  return new Promise((resolve) => {
-    execFile("docker", ["version", "--format", "{{.Server.Version}}"], { timeout: 60_000 }, (error, stdout) =>
-      resolve(!error && stdout.trim().length > 0));
-  });
-}
-const dockerAvailable = await dockerAnswers();
+const gate = await probeDockerSandbox();
+const dockerAvailable = gate.ready;
 
 function makeWorkspace(): { workspace: string; profileDir: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "trent-fileops-"));
@@ -51,7 +47,7 @@ const backends: Array<{ backend: ToolContext["backend"]; skip: boolean }> = [
 ];
 
 for (const { backend, skip } of backends) {
-  describe.skipIf(skip)(`file_ops on the ${backend} backend${skip ? " [SKIPPED: no Docker daemon]" : ""}`, () => {
+  describe.skipIf(skip)(`file_ops on the ${backend} backend${skip ? gate.skipNote : ""}`, () => {
     let workspace = "";
     let profileDir = "";
     let adapter: TrentToolAdapter;

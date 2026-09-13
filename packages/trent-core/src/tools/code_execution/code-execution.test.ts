@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { probeDockerSandbox } from "../../terminal/docker-test-gate.js";
 import { spilloverDir, SUMMARY_LIMIT } from "../spillover.js";
 import type { TrentToolAdapter } from "../types.js";
 import { CODE_EXECUTION_NAME, CODE_EXECUTION_SCHEMAS, createCodeExecutionAdapter } from "./index.js";
@@ -142,9 +143,10 @@ describe("code_execution on the local backend", () => {
 function dockerCli(args: string[]): Promise<string> {
   return new Promise((resolve) => execFile("docker", args, { timeout: 60_000 }, (_e, stdout) => resolve(String(stdout ?? ""))));
 }
-const dockerAvailable = (await dockerCli(["version", "--format", "{{.Server.Version}}"])).trim().length > 0;
+const gate = await probeDockerSandbox();
+const dockerAvailable = gate.ready;
 
-describe.skipIf(!dockerAvailable)(`code_execution on Docker${dockerAvailable ? "" : " [SKIPPED: no Docker daemon]"}`, () => {
+describe.skipIf(!dockerAvailable)(`code_execution on Docker${gate.skipNote}`, () => {
   it("runs in the isolated container (NetworkMode=none) and reports a missing interpreter honestly", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "trent-code-docker-"));
     fs.mkdirSync(path.join(root, "profile"), { recursive: true });

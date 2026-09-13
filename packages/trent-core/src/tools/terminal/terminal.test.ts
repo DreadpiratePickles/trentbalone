@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { probeDockerSandbox } from "../../terminal/docker-test-gate.js";
 import { CertificateAuthority } from "../../egress/CertificateAuthority.js";
 import { EgressProxy } from "../../egress/EgressProxy.js";
 import { TokenManager } from "../../egress/TokenManager.js";
@@ -22,7 +23,8 @@ function dockerCli(args: string[]): Promise<{ code: number; stdout: string; stde
       resolve({ code: error ? 1 : 0, stdout: stdout ?? "", stderr: stderr ?? "" }));
   });
 }
-const dockerAvailable = (await dockerCli(["version", "--format", "{{.Server.Version}}"])).stdout.trim().length > 0;
+const gate = await probeDockerSandbox();
+const dockerAvailable = gate.ready;
 
 async function inspect(name: string): Promise<{ networkMode: string; capDrop: string; noNewPrivileges: boolean }> {
   const res = await dockerCli(["inspect", "--format", "{{.HostConfig.NetworkMode}}|{{json .HostConfig.CapDrop}}|{{json .HostConfig.SecurityOpt}}", name]);
@@ -30,7 +32,7 @@ async function inspect(name: string): Promise<{ networkMode: string; capDrop: st
   return { networkMode, capDrop, noNewPrivileges: securityOpt.includes("no-new-privileges") };
 }
 
-describe.skipIf(!dockerAvailable)(`terminal on Docker${dockerAvailable ? "" : " [SKIPPED: no Docker daemon]"}`, () => {
+describe.skipIf(!dockerAvailable)(`terminal on Docker${gate.skipNote}`, () => {
   let workspace = "";
   let profileDir = "";
   let adapter: TrentToolAdapter;

@@ -89,7 +89,9 @@ jobs:
             packages/trent-core/src/terminal \
             packages/trent-core/src/egress \
             packages/trent-core/src/doctor \
-            packages/trent-core/src/tools/code_execution
+            packages/trent-core/src/tools/code_execution \
+            packages/trent-core/src/tools/file_ops \
+            packages/trent-core/src/tools/terminal
 
       - name: Assert nothing skipped for "docker unavailable"
         # A green run full of skips is the failure mode. If the suites still reported a
@@ -100,7 +102,12 @@ jobs:
           TRENT_REQUIRE_DOCKER_TESTS: "1"
         run: |
           set -euo pipefail
-          npx vitest run packages/trent-core/src/terminal --reporter=json --outputFile=sandbox-results.json || true
+          npx vitest run \
+            packages/trent-core/src/terminal \
+            packages/trent-core/src/tools/code_execution \
+            packages/trent-core/src/tools/file_ops \
+            packages/trent-core/src/tools/terminal \
+            --reporter=json --outputFile=sandbox-results.json || true
           node --input-type=module - <<'JS'
           import { readFileSync } from "node:fs";
           const r = JSON.parse(readFileSync("sandbox-results.json", "utf8"));
