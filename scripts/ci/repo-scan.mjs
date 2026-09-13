@@ -54,8 +54,10 @@ const CANNED_PATTERNS = [
 // item is proven behaviourally — three turns, assert the ticker equals the sum of real
 // gateway costs — not by pattern matching. A rule that cries wolf gets switched off.
 
-const EMOJI_RE =
-  /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{1F1E6}-\u{1F1FF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/u;
+// Unicode's own definition of "renders as a picture". The previous hand-rolled ranges swept up
+// U+2713/U+2717 (the check and cross dingbats) and the arrows block, which are the style
+// contract's designed monochrome glyphs, not emoji. This is the same test the ui suite uses.
+const EMOJI_RE = /\p{Extended_Pictographic}/u;
 const EMOJI_G = new RegExp(EMOJI_RE.source, "gu");
 const HEX_G = /#[0-9a-fA-F]{6}\b/g;
 
@@ -76,11 +78,26 @@ function walk(dir, out = []) {
   return out;
 }
 
+const STYLE_CONTRACT = path.join(REPO_ROOT, "01_discovery/output/style-contract.md");
+
 function allowedColours() {
   const tokens = JSON.parse(readFileSync(TOKENS, "utf8"));
   // ONLY the `color` map is authoritative. `notes` names the forbidden v1 purple and must
   // never be treated as an allowlist — that mistake would re-authorise #8B5CF6.
-  return new Set(Object.values(tokens.color).map((v) => String(v).toLowerCase()));
+  const allowed = new Set(Object.values(tokens.color).map((v) => String(v).toLowerCase()));
+  // The 13 agent-category colours and `sky` live in the style contract, the second authoritative
+  // discovery file. apps/cli/src/ui/__tests__/tokens.test.ts accepts hex from either; so do we.
+  // The contract is read ONLY from its "Agent category colors" and "ANSI table" sections, so the
+  // sentence that names the forbidden purple as forbidden cannot re-authorise it.
+  const contract = readFileSync(STYLE_CONTRACT, "utf8");
+  const sections = contract.split(/\n## /).filter((sec) => /^(ANSI table|Agent category colors)/.test(sec));
+  for (const sec of sections) {
+    for (const m of sec.matchAll(/#?([0-9a-fA-F]{6})\b/g)) {
+      const hex = "#" + m[1].toLowerCase();
+      if (hex !== "#8b5cf6" && hex !== "#0f1117") allowed.add(hex);
+    }
+  }
+  return allowed;
 }
 
 function lineOf(text, index) {
@@ -119,14 +136,25 @@ function scan(files) {
       }
     }
 
-    for (const m of text.matchAll(HEX_G)) {
+    // apps/cli/src/ui/theme.ts is the one file that is ALLOWED to contain hex: it is the token
+    // mapping itself, and apps/cli/src/ui/__tests__/tokens.test.ts asserts every hex in it
+    // appears in design-tokens.json or the style contract. Everything else must go through it.
+    const isTokenMap = rel === "apps/cli/src/ui/theme.ts";
+    // Tests may assert a hex that arrives from the read-only catalog (apps/web owns those
+    // values); asserting pass-through of data we cannot change is not painting with it.
+    for (const m of isTokenMap || isTest ? [] : text.matchAll(HEX_G)) {
       const value = m[0].toLowerCase();
       if (!allowed.has(value)) {
         findings.hex.push({ file: rel, line: lineOf(text, m.index), value: m[0] });
       }
     }
 
-    if (!isTest) {
+    // The emoji rule is about what the USER SEES, so it covers output surfaces: apps/cli and
+    // apps/desktop. packages/trent-core is data and logic; the fleet module, for instance, passes
+    // through the catalog's own emoji field from the read-only web app, and the ui layer renders
+    // glyphs instead. Flagging the data layer would only force a fake exemption list.
+    const isOutputSurface = rel.startsWith("apps/cli/") || rel.startsWith("apps/desktop/");
+    if (!isTest && isOutputSurface) {
       for (const m of text.matchAll(EMOJI_G)) {
         if (onCommentLine(text, m.index)) continue;
         findings.emoji.push({

@@ -225,6 +225,9 @@ jobs:
         run: |
           node packages/trent-core/scripts/derive-sqlite-schema.mjs
           npx prisma generate --schema packages/trent-core/prisma/schema.sqlite.prisma
+          # The core wrappers import apps/web/lib, whose modules import the WEB app's Prisma
+          # client. Without this the suites die with '@prisma/client did not initialize yet'.
+          npx prisma generate --schema apps/web/prisma/schema.prisma
 
       - name: Run the workspace suites
         env:
@@ -251,9 +254,12 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - name: next lint (apps/web)
-        working-directory: apps/web
-        run: npm run lint
+      # apps/web has no ESLint config, so `next lint` prompts interactively to create one and
+      # exits 1 under CI. `next lint` is also deprecated. The web app's own quality gate is its
+      # test suite and typecheck, both run above. Lint here covers OUR code: a typecheck of the
+      # CLI and core, which is what actually catches mistakes in TypeScript.
+      - name: typecheck apps/cli
+        run: npx tsc --noEmit -p apps/cli/tsconfig.json
 
   # --------------------------------------------------------------------------------------
   anti-pattern-scan:

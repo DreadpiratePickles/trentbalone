@@ -32,7 +32,7 @@ found=0
 for t in "${TARGETS[@]}"; do
   [ -e "$t" ] || continue
   # -I skips binary files; --exclude-dir keeps us out of vendored trees.
-  matches="$(grep -rInI --exclude-dir=node_modules --exclude-dir=dist -e '--external' "$t" 2>/dev/null || true)"
+  matches="$(grep -rInIH --exclude-dir=node_modules --exclude-dir=dist -e '--external' "$t" 2>/dev/null || true)"
   [ -n "$matches" ] && matches="$(
     printf '%s\n' "$matches" \
       | grep -v 'scripts/ci/assert-no-external.sh' \
