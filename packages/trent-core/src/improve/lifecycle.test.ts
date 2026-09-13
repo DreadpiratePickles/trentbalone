@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SkillDraftRow } from "../store/StorePort.js";
 import { InMemoryImproveStore } from "./memory-store.js";
-import { contentHash, promoteDraft, recoverDraft, retireSkills, rollback } from "./index.js";
+import { contentHash, improveStatus, promoteDraft, recoverDraft, rejectDraft, retireSkills, rollback } from "./index.js";
 
 const COMPANY = "co_life";
 const T = (day: number) => `2026-09-${String(day).padStart(2, "0")}T00:00:00.000Z`;
@@ -120,5 +120,52 @@ describe("rollback", () => {
   it("refuses an unknown iteration", async () => {
     const store = new InMemoryImproveStore();
     await expect(rollback(store, "nope", "human")).rejects.toThrow(/iteration nope/);
+  });
+});
+
+describe("judge-versus-human agreement ledger (I.8)", () => {
+  async function gated(store: InMemoryImproveStore, id: string, promoted: boolean): Promise<void> {
+    await store.createDraft(draft({ id, taskType: id }));
+    await store.appendIteration({
+      id: `iter_${id}`,
+      companyId: COMPANY,
+      agentId: "engineer",
+      taskType: id,
+      candidateId: id,
+      candidateKind: "skill",
+      score: 0.9,
+      delta: promoted ? 0.1 : -0.1,
+      decision: promoted ? "pending_approval" : "rejected",
+      triggers: [],
+      blockedBy: promoted ? null : "regression",
+      inputHash: "x",
+      verdicts: { promoted, score: 0.9 },
+      createdAt: T(2),
+    });
+  }
+
+  it("a human reject after a judge pass writes judgeAgreement: false; a promote after a judge pass writes true", async () => {
+    const store = new InMemoryImproveStore();
+    await gated(store, "judge-passed-rejected", true);
+    await rejectDraft(store, "judge-passed-rejected", "human", T(3));
+    const [reject] = await store.listLedger(COMPANY, { artifactId: "judge-passed-rejected" });
+    expect(reject?.action).toBe("reject");
+    expect(reject?.judgeAgreement).toBe(false);
+
+    await gated(store, "judge-passed-promoted", true);
+    await promoteDraft(store, "judge-passed-promoted", { actor: "human", now: T(3) });
+    const [promote] = await store.listLedger(COMPANY, { artifactId: "judge-passed-promoted" });
+    expect(promote?.judgeAgreement).toBe(true);
+
+    // A human promote over a judge REJECT is a disagreement too; a draft nobody gated records null.
+    await gated(store, "judge-failed-promoted", false);
+    await promoteDraft(store, "judge-failed-promoted", { actor: "human", now: T(3) });
+    expect((await store.listLedger(COMPANY, { artifactId: "judge-failed-promoted" }))[0]?.judgeAgreement).toBe(false);
+    await store.createDraft(draft({ id: "ungated" }));
+    await rejectDraft(store, "ungated", "human", T(3));
+    expect((await store.listLedger(COMPANY, { artifactId: "ungated" }))[0]?.judgeAgreement).toBeNull();
+
+    const status = await improveStatus(store, COMPANY);
+    expect(status.judgeAgreement).toEqual({ agreed: 1, disagreed: 2, rate: 0.33 });
   });
 });

@@ -19,6 +19,7 @@ import { ESCAPE_TIMEOUT_MS, withKittyProtocol } from "./keys.js";
 import { withRawMode } from "./interrupt.js";
 import { toolsStatusLine, wireTools, type ToolWiring, type ToolWiringDeps } from "./tools.js";
 import { fleetMemoryToolListing, wireFleetMemory } from "./fleet-memory.js";
+import { wireImproveLoop } from "./improve-loop.js";
 import type { ReplConfig, ReplStore } from "./types.js";
 
 export { ReplEngine, bindApprovalAnswers } from "./engine.js";
@@ -168,6 +169,8 @@ export class ClassicRepl {
       // The company memory every seat shares: MEMORY.md / USER.md under the profile, recall over
       // this company's runs, and the shared skills index when the store carries the improve tables.
       const fleetMemory = wireFleetMemory({ profileDir, store });
+      // The self-improvement loop: traces from every run, and promoted skills back into every seat.
+      const improve = wireImproveLoop({ store, config });
 
       // The configured provider/model travel with the orchestrator, which maps them into the env
       // its model resolver reads before the first apps/web import (live proof, F2).
@@ -177,6 +180,7 @@ export class ClassicRepl {
         model: { provider: config.provider, model: config.model },
         tools: tools.adapters,
         fleetMemory,
+        ...improve,
       });
       // `launchOrchestration` throws "Company not found" for an id nothing created; an explicit
       // config id is trusted, otherwise the local company is found by slug or created.

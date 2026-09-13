@@ -1,0 +1,11 @@
+{
+  "skill_name": "ads",
+  "evals": [
+    { "id": 1, "contains": ["linkedin", "google"] },
+    { "id": 2, "contains": ["conversion"] },
+    { "id": 3, "contains": ["frequency"] },
+    { "id": 4, "contains": ["tiktok"] },
+    { "id": 5, "contains": ["negative"] },
+    { "id": 6, "contains": ["ad-creative"] }
+  ]
+}

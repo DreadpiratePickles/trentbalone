@@ -33,7 +33,25 @@ export interface LedgerEntry {
   readonly after: string | null;
   readonly iterationId: string | null;
   readonly actor: string;
+  /** Human decision rows only: did the gate's verdict agree? Null when nothing was gated. */
+  readonly judgeAgreement?: boolean | null;
   readonly now?: string;
+}
+
+/**
+ * Task I.8: the judge-versus-human agreement signal. The gate's verdict on the iteration that
+ * produced the draft is `verdicts.promoted`; a human `promote` agrees with `true`, a human
+ * `reject` agrees with `false`. Null when the draft was never gated (no iteration, or none with a
+ * verdict), so an ungated decision never counts as agreement either way.
+ */
+export async function judgeAgreementFor(store: ImproveStorePort, iterationId: string | null, humanPromoted: boolean): Promise<boolean | null> {
+  if (iterationId === null) return null;
+  const iteration = await store.getIteration(iterationId);
+  const verdicts = iteration?.verdicts;
+  if (!verdicts || typeof verdicts !== "object" || Array.isArray(verdicts)) return null;
+  const judgePromoted = (verdicts as { promoted?: unknown }).promoted;
+  if (typeof judgePromoted !== "boolean") return null;
+  return judgePromoted === humanPromoted;
 }
 
 export async function recordLedger(store: ImproveStorePort, entry: LedgerEntry): Promise<SkillLedgerRow> {
@@ -51,6 +69,7 @@ export async function recordLedger(store: ImproveStorePort, entry: LedgerEntry):
     after: entry.after,
     iterationId: entry.iterationId,
     actor: entry.actor,
+    judgeAgreement: entry.judgeAgreement ?? null,
     createdAt: entry.now ?? nowIso(),
   };
   await store.appendLedger(row);

@@ -7,9 +7,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { EXIT } from "@trent/core/errors/index.js";
-import { InMemoryImproveStore } from "@trent/core/improve/index.js";
+import { CORE_SEATS, InMemoryImproveStore, contentHash, newId } from "@trent/core/improve/index.js";
+import { bootOffline, imitateCompiledBinary, restoreEnv } from "@trent/core/improve/offline-harness.js";
 import { runCli } from "../index.js";
-import { setImproveStoreForTests } from "../improve.js";
+import { createImproveRunDeps, setImproveStoreForTests } from "../improve.js";
 
 let home: string;
 let store: InMemoryImproveStore;
@@ -127,4 +128,47 @@ describe("trent improve", () => {
     const result = await runCli(["improve", "promote", "draft_nope", "--json"]);
     expect(result.exitCode).toBe(EXIT.USAGE);
   });
+});
+
+describe("the run path carries the loop's output back to the seat (I.17 wiring)", () => {
+  it("after `trent improve promote`, a run through the CLI's orchestrator deps records skillApplied: true", async () => {
+    imitateCompiledBinary();
+    try {
+      const harness = await bootOffline("CliImproveWiring");
+      for (const agentId of CORE_SEATS) {
+        const content = `# Skill for ${agentId}\nSENTINEL-${agentId.toUpperCase()}: read memory before acting.`;
+        await store.createDraft({
+          id: newId("skill"),
+          companyId: harness.companyId,
+          agentId,
+          taskType: "general",
+          kind: "skill",
+          status: "quarantine",
+          content,
+          contentHash: contentHash(content),
+          triggers: [],
+          createdAt: "2026-09-12T10:00:00.000Z",
+          promotedAt: null,
+          lastUsedAt: null,
+          retiredAt: null,
+        });
+      }
+      for (const draft of await store.listDrafts(harness.companyId, { status: "quarantine" })) {
+        expect((await runCli(["improve", "promote", draft.id, "--json"])).exitCode).toBe(EXIT.OK);
+      }
+      const { createOrchestrator } = await import("@trent/core/orchestrator/index.js");
+      const deps = createImproveRunDeps({ store, installedAgents: [], executeSeatModelFn: harness.executeSeatModelFn });
+      const orchestrator = createOrchestrator({ createCompletion: harness.createCompletion, ...deps });
+      const handle = orchestrator.run({ companyId: harness.companyId, objective: harness.objective });
+      for await (const _ of handle) {
+        /* drain */
+      }
+      const snapshot = await handle.result();
+      const traces = await store.tracesByRun(snapshot.id);
+      expect(traces.length).toBeGreaterThan(0);
+      for (const t of traces) expect(t.skillApplied, `trace ${t.id}`).toBe(true);
+    } finally {
+      restoreEnv();
+    }
+  }, 120_000);
 });

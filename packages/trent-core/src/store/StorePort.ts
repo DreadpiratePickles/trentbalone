@@ -315,6 +315,11 @@ export interface SkillLedgerRow {
   after: string | null;
   iterationId: string | null;
   actor: string;
+  /**
+   * On a human promote/fix/reject: whether the gate's verdict agreed with the human. Null when
+   * the artifact was never gated, or the action is not a human decision (improve/ledger.ts).
+   */
+  judgeAgreement?: boolean | null;
   createdAt: string;
 }
 

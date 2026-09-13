@@ -40,6 +40,6 @@ describe("improve store contract — real SQLite through PrismaStore (Bun)", () 
     });
     const parsed = JSON.parse(stdout) as { first: StoreContractResult; reopened: { traces: number; drafts: number; ledger: number; gateCache: number } };
     expect(parsed.first).toEqual(expectedStoreContract());
-    expect(parsed.reopened).toEqual({ traces: 4, drafts: 2, ledger: 1, gateCache: 1 });
+    expect(parsed.reopened).toEqual({ traces: 4, drafts: 2, ledger: 2, gateCache: 1 });
   });
 });

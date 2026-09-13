@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ModelGateway } from "../model-gateway/types.js";
+import { emptyFrontier, updateParetoFrontier } from "../gepa/index.js";
 import { createGatewayActuals, createMemoryGateCache, executeGate, measureBaseline, type FrozenSuite } from "./index.js";
 
 const SUITE: FrozenSuite = {
@@ -114,7 +115,7 @@ describe("executeGate", () => {
     });
     expect(newCluster.promoted).toBe(false);
     expect(newCluster.blockedBy).toBe("new_failure_cluster");
-    expect(newCluster.failureClusters).toEqual({ rubric_failed: 1 });
+    expect(newCluster.failureClusters).toEqual({ "rubric_failed:ads:1": 1 });
   });
 
   it("a prompt candidate is swapped in for the seat prompt rather than appended", async () => {
@@ -206,6 +207,121 @@ describe("executeGate", () => {
     expect(verdict.actualsCalls).toBe(2);
     expect(verdict.judgeCalls).toBe(1);
     expect(verdict.costCents).toBe(2 + 3);
+  });
+});
+
+describe("evidence-cited judge (I.7)", () => {
+  it("a pass whose cited evidence is not in the output scores 0 with tag judge_unverified, in the same call", async () => {
+    const { actuals } = scriptedActuals(GOOD);
+    let judgeCalls = 0;
+    const verdict = await executeGate({
+      candidate: { id: "c", kind: "skill", content: "CANDIDATE" },
+      seatPrompt: "seat",
+      suite: SUITE,
+      baseline: { score: 0.5, failureClusters: {} },
+      actuals,
+      judge: async () => {
+        judgeCalls += 1;
+        return { pass: true, evidence: "not in output" };
+      },
+    });
+    expect(judgeCalls).toBe(1);
+    const first = verdict.fixtures.find((f) => f.id === "ads:1")!;
+    expect(first.score).toBe(0.5);
+    expect(first.failureTags).toEqual(["judge_unverified"]);
+    expect(verdict.failureClusters).toEqual({ judge_unverified: 1 });
+    expect(verdict.promoted).toBe(false);
+  });
+
+  it("a pass whose evidence IS a substring of the output is accepted", async () => {
+    const { actuals } = scriptedActuals(GOOD);
+    const verdict = await executeGate({
+      candidate: { id: "c", kind: "skill", content: "CANDIDATE" },
+      seatPrompt: "seat",
+      suite: SUITE,
+      baseline: { score: 0.5, failureClusters: {} },
+      actuals,
+      judge: async () => ({ pass: true, evidence: "split 60/40" }),
+    });
+    expect(verdict.fixtures.find((f) => f.id === "ads:1")!.score).toBe(1);
+    expect(verdict.promoted).toBe(true);
+  });
+});
+
+describe("per-fixture failure tags (I.9)", () => {
+  const TWO: FrozenSuite = {
+    id: "two",
+    version: "v1",
+    fixtures: [
+      { id: "two:a", prompt: "A", graders: [{ type: "llm_rubric", weight: 1, rubric: "ok" }] },
+      { id: "two:b", prompt: "B", graders: [{ type: "llm_rubric", weight: 1, rubric: "ok" }] },
+    ],
+  };
+
+  it("two candidates failing DIFFERENT fixtures occupy two frontier slots", async () => {
+    const { actuals } = scriptedActuals(() => ({ text: "x" }));
+    const failOn = (fixture: string) => async (input: { prompt: string }) => ({ pass: input.prompt !== fixture });
+    const a = await executeGate({ candidate: { id: "a", kind: "prompt", content: "A" }, seatPrompt: "s", suite: TWO, baseline: { score: 0, failureClusters: {} }, actuals, judge: failOn("A") });
+    const b = await executeGate({ candidate: { id: "b", kind: "prompt", content: "B" }, seatPrompt: "s", suite: TWO, baseline: { score: 0, failureClusters: {} }, actuals, judge: failOn("B") });
+    expect(a.failureClusters).toEqual({ "rubric_failed:two:a": 1 });
+    expect(b.failureClusters).toEqual({ "rubric_failed:two:b": 1 });
+    const toCandidate = (id: string, v: typeof a) => ({ id, roleId: "growth" as const, proposedPrompt: id, reflectionRationale: "", score: v.score, delta: v.delta, failureClusters: v.failureClusters, createdAt: "t" });
+    const frontier = updateParetoFrontier(updateParetoFrontier(emptyFrontier("growth", "t"), toCandidate("a", a)), toCandidate("b", b));
+    expect(frontier.candidates.length).toBe(2);
+  });
+});
+
+describe("second-draw reliability (I.12)", () => {
+  const RUBRIC_SUITE: FrozenSuite = {
+    id: "r",
+    version: "v1",
+    fixtures: [
+      { id: "r:1", prompt: "one", graders: [{ type: "llm_rubric", weight: 1, rubric: "ok" }] },
+      { id: "r:2", prompt: "two", graders: [{ type: "llm_rubric", weight: 1, rubric: "ok" }] },
+    ],
+  };
+
+  it("a fixture that flipped to pass on draw 1 and fails on draw 2 blocks with 'unstable'; unflipped fixtures are not re-run", async () => {
+    const calls: Array<{ prompt: string; temperature?: number }> = [];
+    const actuals = async (input: { prompt: string; temperature?: number }) => {
+      calls.push({ prompt: input.prompt, ...(input.temperature === undefined ? {} : { temperature: input.temperature }) });
+      // Fixture "one": draw 1 says GOOD, draw 2 says BAD. Fixture "two": always GOOD.
+      const draws = calls.filter((c) => c.prompt === input.prompt).length;
+      return { text: input.prompt === "one" && draws > 1 ? "BAD" : "GOOD", costCents: 1 };
+    };
+    let judgeCalls = 0;
+    const judge = async (input: { actual: { text: string } }) => {
+      judgeCalls += 1;
+      return { pass: input.actual.text === "GOOD", evidence: input.actual.text, costCents: 1 };
+    };
+    // Baseline: fixture one failed, fixture two passed. The candidate flips ONLY fixture one.
+    const baseline = { score: 0.5, failureClusters: { "rubric_failed:r:1": 1 }, fixtures: [{ id: "r:1", passed: false }, { id: "r:2", passed: true }] };
+    const verdict = await executeGate({ candidate: { id: "c", kind: "prompt", content: "P" }, seatPrompt: "s", suite: RUBRIC_SUITE, baseline, actuals, judge });
+    expect(verdict.promoted).toBe(false);
+    expect(verdict.blockedBy).toBe("unstable");
+    expect(calls.filter((c) => c.prompt === "one").length).toBe(2);
+    expect(calls.filter((c) => c.prompt === "two").length).toBe(1);
+    expect(calls[2]?.temperature).toBe(0.7);
+    expect(verdict.redraw).toEqual({ fixtures: ["r:1"], actualsCalls: 1, judgeCalls: 1, unstable: ["r:1"] });
+    expect(verdict.actualsCalls).toBe(3);
+    expect(judgeCalls).toBe(3);
+    expect(verdict.costCents).toBe(3 + 3);
+  });
+
+  it("a flip that holds on the second draw promotes", async () => {
+    const actuals = async (input: { prompt: string }) => ({ text: "GOOD", costCents: 1 });
+    const judge = async () => ({ pass: true, evidence: "GOOD" });
+    const baseline = { score: 0.5, failureClusters: { "rubric_failed:r:1": 1 }, fixtures: [{ id: "r:1", passed: false }, { id: "r:2", passed: true }] };
+    const verdict = await executeGate({ candidate: { id: "c", kind: "prompt", content: "P" }, seatPrompt: "s", suite: RUBRIC_SUITE, baseline, actuals, judge });
+    expect(verdict.promoted).toBe(true);
+    expect(verdict.redraw?.fixtures).toEqual(["r:1"]);
+    expect(verdict.redraw?.unstable).toEqual([]);
+  });
+
+  it("measureBaseline reports per-fixture pass/fail so flips can be computed", async () => {
+    const actuals = async (input: { prompt: string }) => ({ text: input.prompt === "one" ? "BAD" : "GOOD", costCents: 1 });
+    const baseline = await measureBaseline({ seatPrompt: "s", suite: RUBRIC_SUITE, actuals, judge: async (i) => ({ pass: i.actual.text === "GOOD" }) });
+    expect(baseline.fixtures).toEqual([{ id: "r:1", passed: false }, { id: "r:2", passed: true }]);
   });
 });
 

@@ -8,7 +8,7 @@
  */
 
 import type { ImproveStorePort, SkillDraftRow } from "../store/StorePort.js";
-import { contentHash, newId, nowIso, recordLedger } from "./ledger.js";
+import { contentHash, judgeAgreementFor, newId, nowIso, recordLedger } from "./ledger.js";
 import { ProtectedPromptError } from "./protected-prompt.js";
 
 export interface PromoteOptions {
@@ -55,6 +55,7 @@ export async function promoteDraft(store: ImproveStorePort, draftId: string, opt
     after: promoted.content,
     iterationId,
     actor: options.actor,
+    judgeAgreement: await judgeAgreementFor(store, iterationId, true),
     now,
   });
   return promoted;
@@ -66,13 +67,16 @@ export async function rejectDraft(store: ImproveStorePort, draftId: string, acto
   if (!draft) throw new Error(`draft ${draftId} not found`);
   if (draft.status === "rejected") return draft;
   const rejected = await store.updateDraft(draft.id, { status: "rejected", retiredAt: now });
+  const iterationId = await iterationFor(store, draft);
   await recordLedger(store, {
     action: "reject",
     artifact: rejected,
     before: draft.status === "live" ? draft.content : null,
     after: null,
-    iterationId: await iterationFor(store, draft),
+    iterationId,
     actor,
+    // Only a human decision measures the judge; the sweep's own rejections are the judge.
+    judgeAgreement: actor === "human" ? await judgeAgreementFor(store, iterationId, false) : null,
     now,
   });
   return rejected;

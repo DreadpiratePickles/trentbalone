@@ -21,8 +21,14 @@ export interface GateCache {
   put(key: string, value: JsonValue): Promise<void>;
 }
 
+/**
+ * Bumped when what a cached baseline carries changes shape: v2 added per-fixture pass/fail (I.12)
+ * and per-fixture rubric tags (I.9), so a v1 entry would block every candidate as a new cluster.
+ */
+export const BASELINE_CACHE_SCHEMA = "v2";
+
 export function baselineCacheKey(suiteId: string, suiteVersion: string, judged: boolean, seatPrompt: string): string {
-  return `baseline:${suiteId}:${suiteVersion}:${judged ? "judged" : "unjudged"}:${contentHash(seatPrompt)}`;
+  return `baseline:${BASELINE_CACHE_SCHEMA}:${suiteId}:${suiteVersion}:${judged ? "judged" : "unjudged"}:${contentHash(seatPrompt)}`;
 }
 
 export function judgeCacheKey(fixtureId: string, rubric: string, outputText: string): string {

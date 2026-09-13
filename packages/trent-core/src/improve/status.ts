@@ -1,9 +1,11 @@
 /**
  * `trent improve status` — what the loop knows right now, as data. Traces per agent, drafts in
- * quarantine, the last sweep, and each agent's frontier best. Reads only.
+ * quarantine, the last sweep, each agent's frontier best, whether an agent's suite is saturated
+ * (task I.10) and the running judge-versus-human agreement rate (task I.8). Reads only.
  */
 
-import type { ImproveStorePort, IterationRow, SkillDraftRow } from "../store/StorePort.js";
+import type { ImproveStorePort, IterationRow, SkillDraftRow, SkillLedgerRow } from "../store/StorePort.js";
+import { SUITE_SATURATED } from "./gepa-pass.js";
 import { SEAT_PROMPT_TASK_TYPE } from "./protected-prompt.js";
 
 export interface QuarantineEntry {
@@ -25,6 +27,14 @@ export interface FrontierBest {
   updatedAt: string;
 }
 
+/** How often the gate's verdict matched the human's decision, over every human promote/reject that was gated. */
+export interface JudgeAgreement {
+  agreed: number;
+  disagreed: number;
+  /** agreed / (agreed + disagreed), two decimals; null until a gated human decision exists. */
+  rate: number | null;
+}
+
 export interface ImproveStatus {
   companyId: string;
   tracesPerAgent: Record<string, number>;
@@ -32,6 +42,30 @@ export interface ImproveStatus {
   live: Array<{ id: string; agentId: string; taskType: string; kind: SkillDraftRow["kind"]; promotedAt: string | null }>;
   lastSweep: { at: string; iterations: number } | null;
   frontierBest: Record<string, FrontierBest>;
+  /** Agents whose last GEPA pass found the baseline at 1.0: the suite can teach them nothing. */
+  suiteSaturated: Record<string, boolean>;
+  judgeAgreement: JudgeAgreement;
+}
+
+export function judgeAgreementOf(ledger: readonly SkillLedgerRow[]): JudgeAgreement {
+  let agreed = 0;
+  let disagreed = 0;
+  for (const row of ledger) {
+    if (row.judgeAgreement === true) agreed += 1;
+    else if (row.judgeAgreement === false) disagreed += 1;
+  }
+  const total = agreed + disagreed;
+  return { agreed, disagreed, rate: total === 0 ? null : Math.round((agreed / total) * 100) / 100 };
+}
+
+/** Per agent, whether the LATEST seat-prompt iteration was a saturation skip. */
+function saturationOf(iterations: readonly IterationRow[]): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const row of iterations) {
+    if (row.taskType !== SEAT_PROMPT_TASK_TYPE || row.agentId in out) continue;
+    out[row.agentId] = row.blockedBy === SUITE_SATURATED;
+  }
+  return out;
 }
 
 function gateOf(iterations: readonly IterationRow[], draftId: string): QuarantineEntry["gate"] {
@@ -40,11 +74,12 @@ function gateOf(iterations: readonly IterationRow[], draftId: string): Quarantin
 }
 
 export async function improveStatus(store: ImproveStorePort, companyId: string): Promise<ImproveStatus> {
-  const [tracesPerAgent, quarantine, live, iterations] = await Promise.all([
+  const [tracesPerAgent, quarantine, live, iterations, ledger] = await Promise.all([
     store.countTracesByAgent(companyId),
     store.listDrafts(companyId, { status: "quarantine" }),
     store.listDrafts(companyId, { status: "live" }),
     store.listIterations(companyId),
+    store.listLedger(companyId),
   ]);
 
   const latest = iterations[0];
@@ -81,5 +116,7 @@ export async function improveStatus(store: ImproveStorePort, companyId: string):
     live: live.map((d) => ({ id: d.id, agentId: d.agentId, taskType: d.taskType, kind: d.kind, promotedAt: d.promotedAt })),
     lastSweep,
     frontierBest,
+    suiteSaturated: saturationOf(iterations),
+    judgeAgreement: judgeAgreementOf(ledger),
   };
 }

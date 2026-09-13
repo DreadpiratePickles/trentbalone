@@ -21,6 +21,9 @@ export interface StoreContractResult {
   frontierMissing: boolean;
   ledgerForIteration: number;
   ledgerBeforeBytes: string | null;
+  /** I.8: the judge-agreement flag round-trips as a boolean and a missing one reads as null. */
+  ledgerJudgeAgreement: boolean | null;
+  ledgerJudgeAgreementMissing: boolean | null;
   /** I.3: the gate cache round-trips JSON, overwrites on the same key, and misses cleanly. */
   gateCacheRoundTrip: unknown;
   gateCacheOtherCompany: unknown;
@@ -139,6 +142,23 @@ export async function runStoreContract(store: ImproveStorePort): Promise<StoreCo
     after: "# skill v1 live",
     iterationId: "iter_1",
     actor: "human",
+    judgeAgreement: false,
+    createdAt: t1,
+  });
+  await store.appendLedger({
+    id: "led_2",
+    companyId,
+    agentId: "engineer",
+    taskType: "ship-feature",
+    action: "retire",
+    artifactKind: "skill",
+    artifactId: "draft_1",
+    beforeHash: "h1b",
+    afterHash: "h1b",
+    before: "# skill v1 live",
+    after: "# skill v1 live",
+    iterationId: null,
+    actor: "curator",
     createdAt: t1,
   });
 
@@ -165,6 +185,8 @@ export async function runStoreContract(store: ImproveStorePort): Promise<StoreCo
     frontierMissing: (await store.getFrontier(companyId, "nobody")) === null,
     ledgerForIteration: ledger.length,
     ledgerBeforeBytes: ledger[0]?.before ?? null,
+    ledgerJudgeAgreement: ledger[0]?.judgeAgreement ?? null,
+    ledgerJudgeAgreementMissing: (await store.listLedger(companyId, { artifactId: "draft_1" })).find((row) => row.id === "led_2")?.judgeAgreement ?? null,
     gateCacheRoundTrip: (await store.getGateCache(companyId, "baseline:s:v1:h1"))?.value ?? null,
     gateCacheOtherCompany: (await store.getGateCache("co_other", "baseline:s:v1:h1"))?.value ?? null,
     gateCacheMissing: (await store.getGateCache(companyId, "baseline:s:v1:nope")) === null,
@@ -187,6 +209,8 @@ export function expectedStoreContract(): StoreContractResult {
     frontierMissing: true,
     ledgerForIteration: 1,
     ledgerBeforeBytes: "# skill v1",
+    ledgerJudgeAgreement: false,
+    ledgerJudgeAgreementMissing: null,
     gateCacheRoundTrip: { score: 0.75, failureClusters: { rubric_failed: 1 } },
     gateCacheOtherCompany: { score: 1 },
     gateCacheMissing: true,

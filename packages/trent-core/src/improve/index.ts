@@ -41,6 +41,7 @@ export {
   type ActualsInput,
   type ActualsOutput,
   type ActualsRunner,
+  type BaselineFixture,
   type ExecuteGateInput,
   type GateBaseline,
   type GateBlockReason,
@@ -52,9 +53,20 @@ export {
   type JudgeInput,
   type JudgeVerdict,
   type MeasuredBaseline,
+  type RedrawReport,
 } from "./gate.js";
-export { contentHash, newId, recordLedger, setHash, type LedgerEntry } from "./ledger.js";
-export { baselineCacheKey, createMemoryGateCache, judgeCacheKey, storeGateCache, type GateCache } from "./gate-cache.js";
+export { JUDGE_UNVERIFIED_TAG } from "./gate-score.js";
+export { DEFAULT_REDRAW_TEMPERATURE, flippedFixtures } from "./gate-redraw.js";
+export { createGatewayJudge, parseJudgeReply, type GatewayJudgeOptions } from "./judge.js";
+export {
+  BUNDLED_MECHANICAL_OVERLAYS_DIR,
+  applyMechanicalOverlay,
+  loadMechanicalOverlay,
+  mechanicalOverlayPath,
+  type MechanicalOverlayJson,
+} from "./mechanical-overlay.js";
+export { contentHash, judgeAgreementFor, newId, recordLedger, setHash, type LedgerEntry } from "./ledger.js";
+export { BASELINE_CACHE_SCHEMA, baselineCacheKey, createMemoryGateCache, judgeCacheKey, storeGateCache, type GateCache } from "./gate-cache.js";
 export { BudgetExhaustedError, SweepMeter, emptyPhases, isBudgetExhausted, type PhaseReport, type PhaseTally, type SweepPhase } from "./meter.js";
 export {
   ProtectedPromptError,
@@ -79,7 +91,16 @@ export {
 } from "./lifecycle.js";
 export { DEFAULT_DISTILL_THRESHOLD, resolveSweepScope, type ResolveScopeInput, type SkippedSpecialist, type SweepScope } from "./scope.js";
 export { defaultSeatPromptProvider, seatRoleFor, type SeatPromptProvider } from "./seat-prompt.js";
-export { runGepaPass, type GepaPassInput, type GepaPassResult, type ReflectFn } from "./gepa-pass.js";
+export {
+  MAX_PROPOSAL_GROWTH,
+  PROPOSAL_TOO_LONG,
+  SUITE_SATURATED,
+  isProposalTooLong,
+  runGepaPass,
+  type GepaPassInput,
+  type GepaPassResult,
+  type ReflectFn,
+} from "./gepa-pass.js";
 export { runImprovementSweep, toTraceRecord, type AgentSweepReport, type SweepDeps, type SweepReport } from "./sweep.js";
 export { ORG_TIER_AGENT, promoteOrgSkill, type PromoteOrgSkillInput, type PromoteOrgSkillResult } from "./org-tier.js";
-export { improveStatus, type FrontierBest, type ImproveStatus, type QuarantineEntry } from "./status.js";
+export { improveStatus, judgeAgreementOf, type FrontierBest, type ImproveStatus, type JudgeAgreement, type QuarantineEntry } from "./status.js";

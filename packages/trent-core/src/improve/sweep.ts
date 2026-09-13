@@ -19,11 +19,12 @@
 import type { AgentTraceRow, ImproveStorePort, IterationRow, JsonValue, SkillDraftRow } from "../store/StorePort.js";
 import { createSkillFoundry, type SkillDraftStore } from "../skills/foundry.js";
 import type { TraceRecord } from "../traces/trace-store.js";
-import { baselineCacheKey, storeGateCache, type GateCache } from "./gate-cache.js";
-import { executeGate, measureBaseline, type ActualsRunner, type GateBaseline, type GateVerdict, type JudgeFn } from "./gate.js";
+import { storeGateCache, type GateCache } from "./gate-cache.js";
+import { executeGate, type ActualsRunner, type GateBaseline, type GateVerdict, type JudgeFn } from "./gate.js";
 import { runGepaPass, type ReflectFn } from "./gepa-pass.js";
 import { contentHash, newId, nowIso, setHash } from "./ledger.js";
 import { retireSkills, type RetirementReport } from "./lifecycle.js";
+import { cachedOrMeasuredBaseline } from "./sweep-baseline.js";
 import { isBudgetExhausted, SweepMeter, type PhaseReport } from "./meter.js";
 import { resolveSweepScope, type SkippedSpecialist } from "./scope.js";
 import { defaultSeatPromptProvider, type SeatPromptProvider } from "./seat-prompt.js";
@@ -259,28 +260,6 @@ async function sweepTaskType(ctx: AgentContext, taskType: string, group: TraceRe
   await store.appendIteration(iteration);
 }
 
-/** The baseline, content-addressed: (suite, version, judged?, sha256(seat prompt)) -> score and clusters. */
-async function cachedOrMeasuredBaseline(ctx: AgentContext): Promise<GateBaseline | undefined> {
-  const { suite, deps } = ctx;
-  if (!suite || !deps.actuals) return undefined;
-  const actuals = deps.actuals;
-  const seatPrompt = await ctx.seatPrompt();
-  const key = baselineCacheKey(suite.id, suite.version, deps.judge !== undefined, seatPrompt);
-  const hit = await ctx.cache.get(key);
-  if (hit !== undefined && typeof hit === "object" && hit !== null && !Array.isArray(hit) && typeof hit.score === "number") {
-    const clusters = hit.failureClusters;
-    return {
-      score: hit.score,
-      failureClusters: clusters !== null && typeof clusters === "object" && !Array.isArray(clusters) ? (clusters as Record<string, number>) : {},
-    };
-  }
-  const measured = await ctx.meter.within("baseline", () =>
-    measureBaseline({ seatPrompt, suite, actuals, cache: ctx.cache, ...(deps.judge === undefined ? {} : { judge: deps.judge }) }),
-  );
-  await ctx.cache.put(key, { score: measured.score, failureClusters: measured.failureClusters });
-  return { score: measured.score, failureClusters: measured.failureClusters };
-}
-
 async function sweepAgent(
   companyId: string,
   agentId: string,
@@ -325,7 +304,15 @@ async function sweepAgent(
     report,
     suite,
     seatPrompt: () => (cachedPrompt ??= seatPrompt(agentId)),
-    baseline: () => (cachedBaseline ??= cachedOrMeasuredBaseline(ctx)),
+    baseline: () =>
+      (cachedBaseline ??= cachedOrMeasuredBaseline({
+        suite,
+        actuals: deps.actuals,
+        judge: deps.judge,
+        cache: ctx.cache,
+        meter,
+        seatPrompt: ctx.seatPrompt,
+      })),
   };
 
   for (const [taskType, group] of byTaskType) {

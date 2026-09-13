@@ -53,6 +53,7 @@ const ADDED_COLUMNS: ReadonlyArray<readonly [table: string, column: string, ddl:
   ["SelfImprovementIteration", "agentId", "TEXT"],
   ["SelfImprovementIteration", "inputHash", "TEXT"],
   ["SelfImprovementIteration", "verdicts", "TEXT"],
+  ["SkillLedger", "judgeAgreement", "INTEGER"],
 ];
 
 const NEW_TABLES: readonly string[] = [
@@ -77,6 +78,7 @@ const NEW_TABLES: readonly string[] = [
     "after" TEXT,
     "iterationId" TEXT,
     "actor" TEXT NOT NULL,
+    "judgeAgreement" INTEGER,
     "createdAt" TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS "GateCache" (
@@ -211,6 +213,7 @@ function ledgerRow(r: Row): SkillLedgerRow {
     after: text(r.after),
     iterationId: text(r.iterationId),
     actor: String(r.actor),
+    judgeAgreement: r.judgeAgreement === null || r.judgeAgreement === undefined ? null : Boolean(Number(r.judgeAgreement)),
     createdAt: iso(r.createdAt),
   };
 }
@@ -239,7 +242,8 @@ export class SqliteImproveStore implements ImproveStorePort {
   private async bootstrap(): Promise<void> {
     for (const [table, column, ddl] of ADDED_COLUMNS) {
       const columns = await this.raw.query<{ name: string }>(`PRAGMA table_info("${table}")`);
-      if (columns.some((c) => c.name === column)) continue;
+      // A table this module creates itself (below) carries the column already; only an older copy needs the ALTER.
+      if (columns.length === 0 || columns.some((c) => c.name === column)) continue;
       await this.raw.execute(`ALTER TABLE "${table}" ADD COLUMN "${column}" ${ddl}`);
     }
     for (const statement of NEW_TABLES) await this.raw.execute(statement);
@@ -421,8 +425,8 @@ export class SqliteImproveStore implements ImproveStorePort {
   async appendLedger(row: SkillLedgerRow): Promise<void> {
     await this.ensure();
     await this.raw.execute(
-      `INSERT INTO "SkillLedger" ("id","companyId","agentId","taskType","action","artifactKind","artifactId","beforeHash","afterHash","before","after","iterationId","actor","createdAt")
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO "SkillLedger" ("id","companyId","agentId","taskType","action","artifactKind","artifactId","beforeHash","afterHash","before","after","iterationId","actor","judgeAgreement","createdAt")
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       row.id,
       row.companyId,
       row.agentId,
@@ -436,6 +440,7 @@ export class SqliteImproveStore implements ImproveStorePort {
       row.after,
       row.iterationId,
       row.actor,
+      row.judgeAgreement === undefined || row.judgeAgreement === null ? null : row.judgeAgreement ? 1 : 0,
       row.createdAt,
     );
   }

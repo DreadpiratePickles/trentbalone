@@ -104,9 +104,10 @@ describe("runImprovementSweep", () => {
         version: "v1",
         fixtures: [{ id: "f1", prompt: "say ok", graders: [{ type: "contains", weight: 1, values: ["ok"] }] }],
       }),
+      // The bare seat prompt fails the fixture, so the suite is not saturated (I.10) and every candidate flips it.
       actuals: async ({ systemPrompt }) => {
         gateCalls.push(systemPrompt);
-        return { text: "ok", toolCalls: [], costCents: 0 };
+        return { text: systemPrompt.includes("gepa evolved") || systemPrompt.includes("Company skill") ? "ok" : "nope", toolCalls: [], costCents: 0 };
       },
     });
 
@@ -145,20 +146,26 @@ function suiteOf(n: number, version = "v1") {
   };
 }
 
-/** One-cent-per-call model access, with every call counted by the system prompt it saw. */
+/**
+ * One-cent-per-call model access, with every call counted by the system prompt it saw. The bare
+ * seat prompt is "ok, whatever" on fixture 1 and the judge fails that, so the baseline is below
+ * 1.0 (a saturated suite skips GEPA, I.10) and each candidate flips exactly one fixture, which
+ * the gate re-draws once (I.12): a candidate phase is N + 1 executor calls for N fixtures.
+ */
 function centGateway(reply = "ok") {
   const calls: string[] = [];
   let judgeCalls = 0;
   return {
     calls,
-    judge: async () => {
+    judge: async ({ actual }: { actual: { text: string } }) => {
       judgeCalls += 1;
-      return { pass: true, costCents: 1 };
+      return { pass: !actual.text.includes("whatever"), costCents: 1 };
     },
     judgeCalls: () => judgeCalls,
-    actuals: async ({ systemPrompt }: { systemPrompt: string }) => {
+    actuals: async ({ systemPrompt, fixtureId }: { systemPrompt: string; fixtureId: string }) => {
       calls.push(systemPrompt);
-      return { text: reply, toolCalls: [], costCents: 1 };
+      const bare = !systemPrompt.includes("gepa evolved") && !systemPrompt.includes("Company skill");
+      return { text: bare && fixtureId === "f1" ? `${reply}, whatever` : reply, toolCalls: [], costCents: 1 };
     },
   };
 }
@@ -183,10 +190,10 @@ describe("cost accounting and budget (I.1-I.3)", () => {
     const total = gw.calls.length + gw.judgeCalls();
     expect(total).toBeGreaterThan(0);
     expect(report.costCents).toBe(total);
-    // Where the calls went: baseline, the skill candidate, the GEPA proposal, and the judge across all three.
+    // Where the calls went: baseline, the skill candidate, the GEPA proposal (each 3 fixtures + 1 re-draw), and the judge across all three.
     expect(report.phases.baseline.calls).toBe(3);
-    expect(report.phases.candidate.calls).toBe(3);
-    expect(report.phases.gepa.calls).toBe(3);
+    expect(report.phases.candidate.calls).toBe(4);
+    expect(report.phases.gepa.calls).toBe(4);
     expect(report.phases.judge.calls).toBe(gw.judgeCalls());
     expect(report.phases.baseline.costCents + report.phases.candidate.costCents + report.phases.gepa.costCents + report.phases.judge.costCents).toBe(total);
     expect(Number.isInteger(report.costCents)).toBe(true);
@@ -245,7 +252,7 @@ describe("cost accounting and budget (I.1-I.3)", () => {
     const second = await runImprovementSweep(COMPANY, deps);
     const engineer = second.agents.find((a) => a.agentId === "engineer")!;
     expect(engineer.skillsDistilled).toBe(1);
-    expect(second.phases.candidate.calls).toBe(2);
+    expect(second.phases.candidate.calls).toBe(2 + 1);
     expect(gw.calls.filter((p) => p === SEAT).length).toBe(0);
     expect(second.phases.baseline.calls).toBe(0);
   });

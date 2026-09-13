@@ -7,6 +7,12 @@
  * EXECUTING the frozen suite with the proposal swapped in for the seat prompt (`gate.ts`).
  * A passing proposal is staged as a quarantined prompt draft — the protected-prompt rule — and
  * only a human promotes it.
+ *
+ * Two filters run before anything is spent (CS329A L6 @48:40, @53:17):
+ *   - a baseline of 1.0 means the suite can teach nothing, so the pass is skipped as
+ *     `suite_saturated` with no reflection and no gate call, and an iteration row says so;
+ *   - a proposal more than 25 percent longer than the current prompt is length explosion, not
+ *     learning, so it is skipped as `proposal_too_long` before the gate runs.
  */
 
 import { buildReflectionPrompt, emptyFrontier, parseReflectionResponse, updateParetoFrontier, type GEPACandidate, type GEPAFrontier } from "../gepa/index.js";
@@ -51,6 +57,14 @@ export interface GepaPassResult {
 }
 
 const OFFLINE_EDIT = "\n<!-- gepa evolved -->";
+export const SUITE_SATURATED = "suite_saturated";
+export const PROPOSAL_TOO_LONG = "proposal_too_long";
+/** A proposal may grow by at most this fraction of the current prompt's length (DAPO's length penalty, applied as a guard). */
+export const MAX_PROPOSAL_GROWTH = 0.25;
+
+export function isProposalTooLong(currentPrompt: string, proposedPrompt: string): boolean {
+  return proposedPrompt.length > Math.ceil(currentPrompt.length * (1 + MAX_PROPOSAL_GROWTH));
+}
 
 function isFailing(trace: TraceRecord): boolean {
   return trace.status === "failed" || (trace.critiqueVerdict !== undefined && trace.critiqueVerdict !== "pass");
@@ -83,6 +97,40 @@ async function gepaPass(input: GepaPassInput): Promise<GepaPassResult> {
   const { frontier, inputHash: lastHash } = storedFrontier(existing?.frontier, input.role, input.now);
   if (lastHash === inputHash) return { passed: false, skipped: "unchanged", bestScore: frontier.best?.score, costCents: 0 };
 
+  const remember = (f: GEPAFrontier): Promise<void> =>
+    input.store.putFrontier({
+      companyId: input.companyId,
+      agentId: input.agentId,
+      frontier: { ...(JSON.parse(JSON.stringify(f)) as JsonObject), inputHash },
+      updatedAt: input.now,
+    });
+  const skipRow = (blockedBy: string, verdicts: JsonObject): Promise<void> =>
+    input.store.appendIteration({
+      id: newId("iter"),
+      companyId: input.companyId,
+      agentId: input.agentId,
+      taskType: SEAT_PROMPT_TASK_TYPE,
+      candidateId: null,
+      candidateKind: null,
+      score: null,
+      delta: null,
+      decision: "skipped",
+      triggers: ["gepa_reflection"],
+      blockedBy,
+      inputHash,
+      verdicts,
+      createdAt: input.now,
+    });
+
+  // The baseline comes first: a saturated suite is decided before a reflection call is paid for.
+  const baseline = await input.baseline();
+  if (!baseline) return { passed: false, skipped: "no_baseline", costCents: 0 };
+  if (baseline.score >= 1) {
+    await remember(frontier);
+    await skipRow(SUITE_SATURATED, { baselineScore: baseline.score, fixtures: input.suite.fixtures.length });
+    return { passed: false, skipped: SUITE_SATURATED, bestScore: frontier.best?.score, costCents: 0 };
+  }
+
   const currentPrompt = await input.seatPrompt();
   let proposal: { rationale: string; proposedPrompt: string };
   if (input.skipLLM) {
@@ -93,20 +141,17 @@ async function gepaPass(input: GepaPassInput): Promise<GepaPassResult> {
     proposal = parseReflectionResponse(typeof raw === "string" ? raw : raw.text, currentPrompt);
   }
 
-  const remember = (f: GEPAFrontier): Promise<void> =>
-    input.store.putFrontier({
-      companyId: input.companyId,
-      agentId: input.agentId,
-      frontier: { ...(JSON.parse(JSON.stringify(f)) as JsonObject), inputHash },
-      updatedAt: input.now,
-    });
-
   if (proposal.proposedPrompt === currentPrompt) {
     await remember(frontier);
     return { passed: false, skipped: "no_change", bestScore: frontier.best?.score, costCents: 0 };
   }
-  const baseline = await input.baseline();
-  if (!baseline) return { passed: false, skipped: "no_baseline", costCents: 0 };
+  // The guard is for what a model proposed; the offline marker is a fixed placeholder, not a proposal.
+  if (!input.skipLLM && isProposalTooLong(currentPrompt, proposal.proposedPrompt)) {
+    // Remembered under this input hash so the same failing set does not buy the same reflection again.
+    await remember(frontier);
+    await skipRow(PROPOSAL_TOO_LONG, { currentLength: currentPrompt.length, proposedLength: proposal.proposedPrompt.length });
+    return { passed: false, skipped: PROPOSAL_TOO_LONG, bestScore: frontier.best?.score, costCents: 0 };
+  }
 
   const candidateId = newId("gepa");
   const verdict = await executeGate({

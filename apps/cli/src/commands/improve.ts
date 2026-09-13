@@ -11,6 +11,10 @@
  * Every subcommand goes through `defineCommand`, so `--json` and `--dry-run` come free. Handlers
  * return data and never print. The store is the profile's `trent.db` (bun:sqlite); under a runtime
  * without it the command still answers, from an in-process store, and says so in `store.durable`.
+ *
+ * `createImproveRunDeps` is the other half: what the run path spreads into `createOrchestrator`
+ * so every run writes traces AND every seat call sees the skills a human promoted here
+ * (`hook.seatModel`), which is what makes `skillApplied` on a trace true.
  */
 
 import path from "node:path";
@@ -18,8 +22,11 @@ import { getCatalogAgent } from "@trent/core/agents/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { BUNDLED_SKILLS_DIR } from "@trent/core/fleet/index.js";
 import {
+  BUNDLED_MECHANICAL_OVERLAYS_DIR,
   InMemoryImproveStore,
   createGatewayActuals,
+  createGatewayJudge,
+  createImproveHook,
   fileSuiteProvider,
   improveStatus,
   promoteDraft,
@@ -27,11 +34,56 @@ import {
   rollback,
   runImprovementSweep,
   type ActualsRunner,
+  type ImproveHook,
   type ImproveStatus,
+  type JudgeFn,
   type SweepReport,
 } from "@trent/core/improve/index.js";
 import type { ModelProvider } from "@trent/core/model-gateway/index.js";
 import type { ImproveStorePort } from "@trent/core/store/index.js";
+
+export interface ImproveRunDepsInput {
+  readonly store: ImproveStorePort;
+  /** `config.fleet.installed_agents`; seats need no entry. */
+  readonly installedAgents: readonly string[];
+  /** Where failure goldens go. Omit to disable capture. */
+  readonly goldenDir?: string;
+  /**
+   * The seat executor to wrap. Omit for the app's real one, loaded lazily on the first seat call
+   * (after the orchestrator has written its env), exactly as the orchestrator would have used it.
+   */
+  readonly executeSeatModelFn?: (...args: never[]) => unknown;
+  readonly onError?: (message: string) => void;
+}
+
+export interface ImproveRunDeps {
+  readonly improve: ImproveHook;
+  readonly executeSeatModelFn: (...args: never[]) => unknown;
+}
+
+/** The app's seat executor, resolved once and only when a seat actually runs. */
+function lazyAppSeatModel(): (input: unknown) => Promise<unknown> {
+  let loaded: Promise<(input: unknown) => Promise<unknown>> | undefined;
+  return async (input) => {
+    loaded ??= import("@trent/core/orchestrator/libs.js").then(async ({ loadLibs }) => {
+      const libs = await loadLibs();
+      return libs.gateway.executeSeatModel as unknown as (input: unknown) => Promise<unknown>;
+    });
+    return (await loaded)(input);
+  };
+}
+
+/** The deps a run path spreads into `createOrchestrator({...})`: the bus hook plus the skill-injecting seat executor. */
+export function createImproveRunDeps(input: ImproveRunDepsInput): ImproveRunDeps {
+  const hook = createImproveHook({
+    store: input.store,
+    installedAgents: input.installedAgents,
+    ...(input.goldenDir === undefined ? {} : { goldenDir: input.goldenDir }),
+    ...(input.onError === undefined ? {} : { onError: input.onError }),
+  });
+  const underlying = (input.executeSeatModelFn ?? lazyAppSeatModel()) as (input: never) => Promise<unknown>;
+  return { improve: hook, executeSeatModelFn: hook.seatModel(underlying) as unknown as (...args: never[]) => unknown };
+}
 import type { CommandContext } from "./context.js";
 import type { CommandSpec } from "./registry.js";
 
@@ -45,6 +97,12 @@ export function setImproveStoreForTests(store: ImproveStorePort | undefined): vo
 
 /** Process-local fallback when bun:sqlite is unavailable, so a Node run still answers. */
 let fallbackStore: InMemoryImproveStore | undefined;
+/** The same fallback the REPL run path uses, so a promotion and a run in one process share it. */
+export function fallbackImproveStore(): ImproveStorePort {
+  if (injectedStore) return injectedStore;
+  fallbackStore ??= new InMemoryImproveStore();
+  return fallbackStore;
+}
 
 interface OpenedStore {
   store: ImproveStorePort;
@@ -111,8 +169,8 @@ function storeInfo(opened: OpenedStore): { durable: boolean; reason?: string } {
   return opened.reason === undefined ? { durable: opened.durable } : { durable: opened.durable, reason: opened.reason };
 }
 
-/** The gate's model access for `--live`: the configured provider through the real gateway. */
-async function liveActuals(ctx: CommandContext, cfg: LoopConfig): Promise<ActualsRunner> {
+/** The gate's model access for `--live`: the configured provider through the real gateway, executor and evidence-cited judge. */
+async function liveModel(ctx: CommandContext, cfg: LoopConfig): Promise<{ actuals: ActualsRunner; judge: JudgeFn }> {
   ctx.config().loadSecrets();
   const { createModelGateway } = await import("@trent/core/model-gateway/index.js");
   const gateway = await createModelGateway({
@@ -122,12 +180,12 @@ async function liveActuals(ctx: CommandContext, cfg: LoopConfig): Promise<Actual
   if (gateway.configuredProviders().length === 0) {
     throw new TrentError({ code: EXIT.AUTH, operation: "improve.sweep", message: `no API key configured for provider ${cfg.provider}` });
   }
-  return createGatewayActuals(gateway);
+  return { actuals: createGatewayActuals(gateway), judge: createGatewayJudge(gateway) };
 }
 
 const statusSpec: CommandSpec = {
   name: "status",
-  description: "Traces per agent, drafts in quarantine, last sweep, frontier best per agent",
+  description: "Traces per agent, drafts in quarantine, last sweep, frontier best, suite saturation, judge agreement rate",
   run: (ctx) =>
     withStore(ctx, async (opened, cfg) => {
       const status = await improveStatus(opened.store, cfg.companyId);
@@ -142,6 +200,10 @@ const statusSpec: CommandSpec = {
     ];
     for (const q of d.quarantine) lines.push(`    ${ctx.theme.value(q.id)} ${q.agentId}/${q.taskType} [${q.kind}] ${q.gate ? `${q.gate.decision}${q.gate.blockedBy ? ` (${q.gate.blockedBy})` : ""}` : "ungated"}`);
     for (const [agent, best] of Object.entries(d.frontierBest)) lines.push(`    ${ctx.theme.meta("frontier")} ${agent}: best ${best.score} (delta ${best.delta}, ${best.candidates} candidates)`);
+    const saturated = Object.entries(d.suiteSaturated).filter(([, yes]) => yes).map(([agent]) => agent);
+    if (saturated.length > 0) lines.push(`  ${ctx.theme.meta("suite saturated")} ${saturated.join("  ")} (baseline 1.0: the suite can teach nothing; add goldens)`);
+    const ja = d.judgeAgreement;
+    lines.push(`  ${ctx.theme.meta("judge agreement")} ${ja.rate === null ? "no gated human decision yet" : `${ja.rate} (${ja.agreed} agreed, ${ja.disagreed} disagreed)`}`);
     return lines;
   },
 };
@@ -159,13 +221,13 @@ const sweepSpec: CommandSpec = {
       if (ctx.dryRun) {
         return { data: { dryRun: true, command: "improve sweep", companyId: cfg.companyId, installedAgents: cfg.installedAgents, agentFilter: agentFilter ?? null, live: opts.live === true } };
       }
-      const actuals = opts.live === true ? await liveActuals(ctx, cfg) : undefined;
+      const live = opts.live === true ? await liveModel(ctx, cfg) : undefined;
       const report = await runImprovementSweep(cfg.companyId, {
         store: opened.store,
         installedAgents: cfg.installedAgents,
         ...(agentFilter === undefined ? {} : { agentFilter }),
-        ...(actuals === undefined ? {} : { actuals }),
-        suiteFor: fileSuiteProvider(BUNDLED_SKILLS_DIR, (agentId) => getCatalogAgent(agentId)?.skills ?? []),
+        ...(live === undefined ? {} : { actuals: live.actuals, judge: live.judge }),
+        suiteFor: fileSuiteProvider(BUNDLED_SKILLS_DIR, (agentId) => getCatalogAgent(agentId)?.skills ?? [], { overlayRoot: BUNDLED_MECHANICAL_OVERLAYS_DIR }),
         skipLLM: true,
       });
       return { data: { ...report, store: storeInfo(opened) } };

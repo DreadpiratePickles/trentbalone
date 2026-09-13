@@ -6,7 +6,8 @@
  * (the agentskills.io layout under `.agents/skills/<name>/evals/`), mapped the same way the app's
  * `frozen-suite.ts` maps them: every natural-language assertion becomes an `llm_rubric` grader.
  * An eval entry may also carry mechanical graders (`contains`, `required_tools`, `forbidden_tools`),
- * which run FIRST in the gate and short-circuit it.
+ * which run FIRST in the gate and short-circuit it. The app's suites carry none, so the wrapper
+ * overlays its own from `<overlayRoot>/<skill>/evals/mechanical.json` (`mechanical-overlay.ts`).
  */
 
 import { createHash } from "node:crypto";
@@ -14,6 +15,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import type { EvalGrader } from "../evals/index.js";
+import { applyMechanicalOverlay, loadMechanicalOverlay, mechanicalOverlayPath } from "./mechanical-overlay.js";
 
 /** A grader as stored on a frozen fixture: never carries a pre-computed judge verdict. */
 export type FrozenGrader = Exclude<EvalGrader, { type: "llm_rubric" }> | { type: "llm_rubric"; weight: number; rubric: string };
@@ -93,14 +95,25 @@ export function mergeSuites(agentId: string, suites: readonly FrozenSuite[]): Fr
   return { id: agentId, version, fixtures: suites.flatMap((s) => s.fixtures) };
 }
 
+export interface FileSuiteOptions {
+  /** Root of the wrapper's `<skill>/evals/mechanical.json` overlays. Omit for the app's suites as they are. */
+  readonly overlayRoot?: string;
+}
+
 /**
  * A `SuiteProvider` over a skills tree: an agent's suite is the merge of `<root>/<skill>/evals/evals.json`
- * for every skill it runs with. `skillsFor` comes from the catalog (specialists) or the seat map.
+ * for every skill it runs with, each with its mechanical overlay applied when one exists.
+ * `skillsFor` comes from the catalog (specialists) or the seat map.
  */
-export function fileSuiteProvider(skillsRoot: string, skillsFor: (agentId: string) => readonly string[]): SuiteProvider {
+export function fileSuiteProvider(skillsRoot: string, skillsFor: (agentId: string) => readonly string[], options: FileSuiteOptions = {}): SuiteProvider {
   return (agentId) => {
     const suites = skillsFor(agentId)
-      .map((skill) => loadSkillSuite(path.join(skillsRoot, skill, "evals", "evals.json")))
+      .map((skill) => {
+        const suite = loadSkillSuite(path.join(skillsRoot, skill, "evals", "evals.json"));
+        if (!suite || options.overlayRoot === undefined) return suite;
+        const overlay = loadMechanicalOverlay(mechanicalOverlayPath(options.overlayRoot, skill));
+        return overlay ? applyMechanicalOverlay(suite, overlay) : suite;
+      })
       .filter((s): s is FrozenSuite => s !== undefined);
     return mergeSuites(agentId, suites);
   };
