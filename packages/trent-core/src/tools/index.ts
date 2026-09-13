@@ -13,10 +13,13 @@ import { createCronAdapter } from "./cron/index.js";
 import { createDelegateAdapter } from "./delegate/index.js";
 import type { DelegatePort } from "./delegate/types.js";
 import { createFileOpsAdapter } from "./file_ops/index.js";
+import { createMcpAdapter } from "./mcp/index.js";
 import { createPluginsAdapter } from "./plugins/index.js";
 import { createSkillsAdapter } from "./skills/index.js";
 import { createTerminalAdapter } from "./terminal/index.js";
 import { createWebToolsAdapter } from "./web/index.js";
+import { createBrowserAdapter } from "./browser/index.js";
+import { askVision, createVisionAdapter, type VisionGateway } from "./vision/index.js";
 import type { ToolContext, TrentToolAdapter } from "./types.js";
 
 export type { ToolAdapter, ToolCallRecord, ToolContext, TrentToolAdapter } from "./types.js";
@@ -33,9 +36,12 @@ export { BUILTIN_TOOL_NAMES, BUILTIN_TOOLS_BY_TOOLSET, isBuiltinToolName } from 
 export { createWebToolsAdapter, WEB_ADAPTER_NAME, WEB_TOOL_SCHEMAS } from "./web/index.js";
 export { createSkillsAdapter, SKILLS_ADAPTER_NAME, SKILL_TOOL_SCHEMAS } from "./skills/index.js";
 export { createCronAdapter, CRON_ADAPTER_NAME, CRON_TOOL_SCHEMAS } from "./cron/index.js";
+export { createBrowserAdapter, findChromium, BROWSER_ADAPTER_NAME, BROWSER_TOOL_SCHEMAS } from "./browser/index.js";
+export { createVisionAdapter, askVision, VISION_ADAPTER_NAME, VISION_TOOL_SCHEMAS, type VisionGateway } from "./vision/index.js";
 
 /** The config slice the tool builder reads. */
 export type ToolBuildConfig = Pick<TrentConfig, "toolsets" | "disabled_toolsets"> & {
+  readonly mcp_servers?: TrentConfig["mcp_servers"];
   readonly terminal?: { readonly backend?: TrentConfig["terminal"]["backend"]; readonly docker?: { readonly image?: string } };
 };
 
@@ -60,6 +66,10 @@ export interface ToolBuildDeps {
   readonly env?: NodeJS.ProcessEnv;
   /** Override `<profileDir>/skills`. */
   readonly skillsDir?: string;
+  /** The model gateway `vision` (and `browser_vision`) ask; without it `vision` is built `unavailable`. */
+  readonly gateway?: VisionGateway;
+  /** Screenshots land in `<profileDir>/browser/<runId>/`. */
+  readonly runId?: string;
 }
 
 /** One toolset that was enabled in config but could not be built here, and why the seat cannot use it. */
@@ -79,14 +89,11 @@ export interface TrentToolBuild {
  * every `ToolsetSchema` value is either here or in `NOT_YET_IMPLEMENTED` with a reason, so a new
  * enum value can never be a silent no-op.
  */
-export const IMPLEMENTED_TOOLSETS = ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins"] as const satisfies readonly Toolset[];
+export const IMPLEMENTED_TOOLSETS = ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp"] as const satisfies readonly Toolset[];
 
 /** Enum values this builder does NOT produce, each with the reason a seat will see. */
 export const NOT_YET_IMPLEMENTED: readonly { readonly toolset: Toolset; readonly reason: string }[] = [
   { toolset: "memory", reason: "registered by the fleet-memory hook (apps/cli/src/repl/fleet-memory.ts), not by this builder" },
-  { toolset: "browser", reason: "no browser adapter yet; the read-only app's Steel/Camofox adapters are registered by apps/web/lib/tools.ts" },
-  { toolset: "vision", reason: "no vision adapter yet" },
-  { toolset: "mcp", reason: "MCP connectors are configured per profile (`/mcp`); no toolset adapter yet" },
 ];
 
 export function enabledToolsets(config: ToolBuildConfig): string[] {
@@ -115,6 +122,13 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
   };
   const adapters: TrentToolAdapter[] = [];
   const skipped: SkippedToolset[] = [];
+  const caPem = deps.egress ? readCaPem(deps.egress.caCertPath) : undefined;
+  const egressReason = !deps.egress
+    ? "the egress proxy is not running; the toolset has no transport"
+    : caPem === undefined
+      ? `the egress CA certificate could not be read at ${deps.egress.caCertPath}`
+      : undefined;
+  const egress = deps.egress && caPem !== undefined ? { proxyUrl: deps.egressHostUrl ?? deps.egress.proxyUrl, token: deps.egress.token, caPem } : undefined;
   const pending = new Map(NOT_YET_IMPLEMENTED.map((entry) => [entry.toolset as string, entry.reason]));
   for (const toolset of enabledToolsets(config)) {
     if (toolset === "file_ops") adapters.push(createFileOpsAdapter(ctx));
@@ -124,24 +138,30 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
     else if (toolset === "plugins") adapters.push(createPluginsAdapter(ctx, deps.pluginsDir ? { pluginsDir: deps.pluginsDir } : {}));
     else if (toolset === "skills") adapters.push(createSkillsAdapter({ profileDir: deps.profileDir, ...(deps.skillsDir ? { skillsDir: deps.skillsDir } : {}) }));
     else if (toolset === "cron") adapters.push(createCronAdapter({ profileDir: deps.profileDir }));
-    else if (toolset === "web") {
-      // web_search / web_extract only ever go out through the egress proxy: no proxy, no web.
-      if (!deps.egress) {
-        skipped.push({ toolset, reason: "the egress proxy is not running; web_search/web_extract have no transport" });
+    else if (toolset === "mcp") adapters.push(createMcpAdapter(config, { profileDir: deps.profileDir, env: deps.env ?? process.env, ...(egress ? { egress } : {}) }));
+    else if (toolset === "vision") {
+      // Without a gateway the adapter is built `unavailable`: every call says not_available, never a stub.
+      adapters.push(createVisionAdapter({ workspace: deps.workspace, profileDir: deps.profileDir, ...(deps.gateway ? { gateway: deps.gateway } : {}), ...(egress ? { egress } : {}) }));
+    } else if (toolset === "web" || toolset === "browser") {
+      // web and browser only ever go out through the egress proxy: no proxy, no network.
+      if (!egress) {
+        skipped.push({ toolset, reason: egressReason ?? "the egress proxy is not running; the toolset has no transport" });
         continue;
       }
-      const caPem = readCaPem(deps.egress.caCertPath);
-      if (caPem === undefined) {
-        skipped.push({ toolset, reason: `the egress CA certificate could not be read at ${deps.egress.caCertPath}` });
-        continue;
+      if (toolset === "web") {
+        adapters.push(createWebToolsAdapter({ profileDir: deps.profileDir, env: deps.env ?? process.env, egress }));
+      } else {
+        const gateway = deps.gateway;
+        adapters.push(
+          createBrowserAdapter({
+            profileDir: deps.profileDir,
+            egress,
+            env: deps.env ?? process.env,
+            ...(deps.runId ? { runId: deps.runId } : {}),
+            ...(gateway ? { vision: (input) => askVision(gateway, input) } : {}),
+          }),
+        );
       }
-      adapters.push(
-        createWebToolsAdapter({
-          profileDir: deps.profileDir,
-          env: deps.env ?? process.env,
-          egress: { proxyUrl: deps.egressHostUrl ?? deps.egress.proxyUrl, token: deps.egress.token, caPem },
-        }),
-      );
     } else {
       skipped.push({ toolset, reason: pending.get(toolset) ?? `"${toolset}" is not a toolset this builder knows` });
     }

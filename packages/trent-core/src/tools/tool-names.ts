@@ -16,9 +16,12 @@ export const BUILTIN_TOOLS_BY_TOOLSET: Readonly<Record<string, readonly string[]
   code_execution: ["code_execution", "execute_code"],
   delegation: ["delegation", "delegate_task"],
   plugins: ["plugins", "plugins_list"],
-  browser: ["browser", "browser_navigate", "browser_click", "browser_type", "browser_snapshot"],
+  browser: [
+    "browser", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll", "browser_back",
+    "browser_press", "browser_get_images", "browser_vision", "browser_console", "browser_screenshot", "browser_get_text",
+  ],
   vision: ["vision", "vision_analyze"],
-  mcp: ["mcp"],
+  mcp: ["mcp", "mcp_status"],
 };
 
 /** Adapter names owned by `apps/web/lib/tools.ts`; also reserved. */

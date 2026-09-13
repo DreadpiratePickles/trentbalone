@@ -41,7 +41,7 @@ describe("buildTrentToolAdapters", () => {
       { ...deps, egress: { proxyUrl: "http://127.0.0.1:1", token: "tok", caCertPath } },
     );
     expect(skipped).toEqual([]);
-    expect(adapters.map((a) => a.name)).toEqual(["file_ops", "terminal", "web", "code_execution", "delegation", "cron", "skills", "plugins"]);
+    expect(adapters.map((a) => a.name)).toEqual(["file_ops", "terminal", "web", "code_execution", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp"]);
     // `web:search`-style entries are permission scopes, not tool names a plugin could shadow.
     for (const adapter of adapters) for (const scope of adapter.scopes.filter((s) => !s.includes(":"))) expect(BUILTIN_TOOL_NAMES, scope).toContain(scope);
     await Promise.all(adapters.map((a) => a.cleanup()));
