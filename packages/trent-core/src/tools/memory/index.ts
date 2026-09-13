@@ -1,10 +1,14 @@
 /**
  * The `memory` toolset: Hermes's `memory(target, action|operations)` over `<profile>/memories/`.
  *
- * MEMORY.md holds what the agent learned (2200 chars); USER.md holds what it knows about the
- * person (1375 chars). Both are rendered once per session by `frozenSnapshot()` for the prompt,
- * so the model reasons over a stable view while writes land on disk for the NEXT session.
- * Delegated seats are constructed `readOnly` and can never write.
+ * MEMORY.md holds what the fleet learned (2200 chars); USER.md holds what it knows about the
+ * person (1375 chars). Both are COMPANY memory: one pair of files per profile, shared by every
+ * seat (ceo, engineer, growth, ... and any installed specialist). They are rendered once per run by
+ * `frozenSnapshot()` for every seat's prelude, so each model reasons over a stable view while
+ * writes land on disk for the NEXT run (`thaw()` ends the freeze; the fleet hook calls it when a
+ * run settles). Delegated children read the snapshot like everyone else but can never write:
+ * either the adapter is constructed `readOnly`, or `callerContext()` reports the current step as
+ * delegated. Hermes blocks subagent memory entirely; Trent allows the read.
  */
 import fs from "node:fs";
 import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
@@ -13,15 +17,13 @@ import { renderToolInstructions, type ToolSchema } from "../web/schemas.js";
 import {
   ENTRY_SEPARATOR,
   MEMORY_CAPS,
-  applyOperations,
+  commitOperations,
   memoryPath,
-  readEntries,
-  writeEntries,
   type MemoryOperation,
   type MemoryTarget,
 } from "./store.js";
 
-export { MEMORY_CAPS, ENTRY_SEPARATOR, MEMORY_FILES, applyOperations } from "./store.js";
+export { MEMORY_CAPS, ENTRY_SEPARATOR, MEMORY_FILES, applyOperations, commitOperations, readEntries } from "./store.js";
 export type { MemoryOperation, MemoryTarget } from "./store.js";
 
 export const MEMORY_ADAPTER_NAME = "memory";
@@ -34,8 +36,8 @@ export const MEMORY_TOOL_SCHEMAS: ToolSchema[] = [
   {
     name: "memory",
     description:
-      "Persist a durable note. target=memory for what you learned about the work (2200 chars total), " +
-      "target=user for facts about the person (1375 chars total). Use a single action, or a batch of " +
+      "Persist a durable note shared by every seat in the company. target=memory for what the fleet learned " +
+      "about the work (2200 chars total), target=user for facts about the person (1375 chars total). Use a single action, or a batch of " +
       "operations that is applied atomically; the cap is checked on the final state, so remove and " +
       "add in one call to make room. Entries are short; the current contents are already in your prompt.",
     parameters: {
@@ -64,15 +66,27 @@ export const MEMORY_TOOL_SCHEMAS: ToolSchema[] = [
   },
 ];
 
+/** What the fleet hook knows about the step currently calling the tool. */
+export interface MemoryCallerContext {
+  /** A `[delegated]` child step: reads are fine, writes are refused. */
+  readonly delegated: boolean;
+}
+
 export interface MemoryAdapterOptions {
   profileDir: string;
-  /** Delegated seats: every write is refused. */
+  /** A permanently read-only adapter: every write is refused. */
   readOnly?: boolean;
+  /** Consulted on every write; lets one shared adapter refuse writes from delegated child steps. */
+  callerContext?: () => MemoryCallerContext;
 }
 
 export interface MemoryAdapter extends TrentToolAdapter {
   /** Both files rendered once; later calls return the same text even if the files change. */
   frozenSnapshot(): string;
+  /** Ends the freeze: the next `frozenSnapshot()` re-reads the files. Called between runs. */
+  thaw(): void;
+  /** Installs (or replaces) the caller-context provider; the fleet hook binds its step tracker here. */
+  bindCallerContext(provider: () => MemoryCallerContext): void;
 }
 
 function isTarget(v: unknown): v is MemoryTarget {
@@ -112,6 +126,7 @@ function renderFile(profileDir: string, target: MemoryTarget): string {
 
 export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapter {
   let snapshot: string | null = null;
+  let callerContext = options.callerContext;
 
   const record = (action: string, status: ToolCallRecord["status"], summary: string) =>
     toRecord(MEMORY_ADAPTER_NAME, action, status, summary);
@@ -134,11 +149,17 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
       }
       return snapshot;
     },
+    thaw() {
+      snapshot = null;
+    },
+    bindCallerContext(provider) {
+      callerContext = provider;
+    },
     async execute(action) {
       const { args, error } = parseAction(action, SPECS);
       if (error) return record(action, "failed", error);
       if (!isTarget(args.target)) return record(action, "failed", "\"target\" must be \"memory\" or \"user\".");
-      if (options.readOnly) {
+      if (options.readOnly || callerContext?.().delegated) {
         return record(action, "blocked", "This seat is delegated and has read-only memory. Report the fact to the parent instead.");
       }
       const ops = toOperations(args);
@@ -146,19 +167,19 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
 
       const target = args.target;
       const cap = MEMORY_CAPS[target];
-      const result = applyOperations(readEntries(options.profileDir, target), ops, cap);
-      if (!result.ok) return record(action, "failed", `memory(${target}) refused: ${result.reason}`);
+      let result: ReturnType<typeof commitOperations>;
       try {
-        writeEntries(options.profileDir, target, result.rendered);
+        result = commitOperations(options.profileDir, target, ops, cap);
       } catch (err) {
         return record(action, "failed", `memory(${target}) write failed: ${(err as Error).message}`);
       }
+      if (!result.ok) return record(action, "failed", `memory(${target}) refused: ${result.reason}`);
       return record(
         action,
         "completed",
         `memory(${target}): applied ${ops.length} operation(s); ${result.entries.length} entries, ` +
           `${result.rendered.length} chars used, ${result.remaining} remaining of ${cap}. ` +
-          `Takes effect in the next session; your prompt keeps this session's snapshot.`
+          `Shared with every seat in the company from the next run on; your prompt keeps this run's snapshot.`
       );
     },
     async dryRun(action) {

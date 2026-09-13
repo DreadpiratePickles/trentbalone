@@ -123,3 +123,67 @@ describe("memory toolset", () => {
     expect(await a.healthCheck()).toBe("connected");
   });
 });
+
+describe("shared company memory (fleet)", () => {
+  it("a seat marked delegated by the caller context cannot write, even on a writable adapter", async () => {
+    let delegated = false;
+    const a = createMemoryAdapter({ profileDir, callerContext: () => ({ delegated }) });
+    expect((await call(a, { target: "memory", action: "add", content: "parent wrote this" })).status).toBe("completed");
+    delegated = true;
+    const rec = await call(a, { target: "memory", action: "add", content: "child tried this" });
+    expect(rec.status).toBe("blocked");
+    expect(rec.summary).toMatch(/delegated/);
+    expect(fs.readFileSync(memoryFile(), "utf8")).toBe("parent wrote this");
+    // Reading is still allowed: the snapshot renders for a delegated child.
+    expect(a.frozenSnapshot()).toContain("parent wrote this");
+  });
+
+  it("two seats writing different entries against a stale view both survive: merge is by entry, not by file", async () => {
+    const { commitOperations, readEntries, MEMORY_CAPS } = await import("./store.js");
+    // Seat A and seat B each read the file (empty), then each commits its own add. Neither
+    // clobbers the other because the commit re-reads under the lock before applying.
+    const a = commitOperations(profileDir, "memory", [{ action: "add", content: "A: churn cohorts defined by signup month" }], MEMORY_CAPS.memory);
+    const b = commitOperations(profileDir, "memory", [{ action: "add", content: "B: deploys are Thursday only" }], MEMORY_CAPS.memory);
+    expect(a.ok && b.ok).toBe(true);
+    const entries = readEntries(profileDir, "memory");
+    expect(entries).toHaveLength(2);
+    expect(entries.join("\n")).toContain("A: churn");
+    expect(entries.join("\n")).toContain("B: deploys");
+    expect(fs.readFileSync(memoryFile(), "utf8").length).toBeLessThanOrEqual(MEMORY_CAPS.memory);
+    expect(fs.readdirSync(path.dirname(memoryFile())).filter((f) => f.endsWith(".tmp") || f.endsWith(".lock"))).toEqual([]);
+  });
+
+  it("two OS processes appending concurrently both land and the file stays under cap", async () => {
+    const { execFile } = await import("node:child_process");
+    const storeUrl = new URL("./store.ts", import.meta.url).href;
+    const script = (label: string) =>
+      `import { commitOperations, MEMORY_CAPS } from ${JSON.stringify(storeUrl)};\n` +
+      `for (let i = 0; i < 20; i += 1) {\n` +
+      `  const r = commitOperations(${JSON.stringify(profileDir)}, "memory", [{ action: "add", content: "${label}-" + i }], MEMORY_CAPS.memory);\n` +
+      `  if (!r.ok) { console.error(r.reason); process.exit(2); }\n` +
+      `}\n`;
+    const run = (label: string) =>
+      new Promise<number>((resolve) =>
+        execFile(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script(label)], { cwd: process.cwd() }, (err, _out, stderr) =>
+          resolve(err ? ((err as { code?: number }).code ?? 1) : (stderr.trim() ? 3 : 0))));
+    const [ca, cb] = await Promise.all([run("alpha"), run("beta")]);
+    expect([ca, cb]).toEqual([0, 0]);
+    const text = fs.readFileSync(memoryFile(), "utf8");
+    const entries = text.split(ENTRY_SEPARATOR);
+    expect(entries).toHaveLength(40);
+    for (let i = 0; i < 20; i += 1) {
+      expect(entries).toContain(`alpha-${i}`);
+      expect(entries).toContain(`beta-${i}`);
+    }
+    expect(text.length).toBeLessThanOrEqual(MEMORY_CAPS.memory);
+  }, 60_000);
+
+  it("thaw() lets the next run see what the previous run wrote, while the current run's view stays frozen", async () => {
+    const a = createMemoryAdapter({ profileDir });
+    const run1 = a.frozenSnapshot();
+    await call(a, { target: "memory", action: "add", content: "engineer: the API rate limit is 60/min" });
+    expect(a.frozenSnapshot()).toBe(run1);
+    a.thaw();
+    expect(a.frozenSnapshot()).toContain("rate limit is 60/min");
+  });
+});

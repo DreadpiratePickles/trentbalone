@@ -2,6 +2,11 @@
  * The two memory files and the rule that governs them: a hard character cap checked on the FINAL
  * state of a batch, so a seat can remove-and-add in one atomic operation. Writes are temp-file
  * then rename, owner-only, and a failed batch leaves the file byte-identical.
+ *
+ * The files are COMPANY memory: every seat in the fleet reads and writes the same two files
+ * (see `../../fleet-memory/README.md`). `commitOperations` is the only writer: it takes a lock,
+ * re-reads the file, applies the batch against that fresh state and renames the result in, so two
+ * seats committing in parallel steps merge by entry and neither loses the other's write.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -102,4 +107,71 @@ export function writeEntries(profileDir: string, target: MemoryTarget, rendered:
   const file = memoryPath(profileDir, target);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   atomicWriteFileSync(NODE_IO, file, rendered, OWNER_ONLY);
+}
+
+/** A lock older than this is a crashed writer's and is broken. Commits take microseconds. */
+const STALE_LOCK_MS = 5_000;
+const LOCK_WAIT_MS = 2_000;
+const LOCK_POLL_MS = 2;
+
+function lockPath(file: string): string {
+  return `${file}.lock`;
+}
+
+/**
+ * Cross-process mutual exclusion on one memory file: `mkdir` is atomic on every platform Node
+ * supports, so the directory IS the lock. Synchronous on purpose — the critical section is a
+ * read, an in-memory merge and a rename, and holding it across an await would let another step
+ * in this process interleave.
+ */
+function acquireLock(file: string): () => void {
+  const dir = lockPath(file);
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try {
+      fs.mkdirSync(dir);
+      return () => {
+        try {
+          fs.rmdirSync(dir);
+        } catch {
+          // Already broken by a peer that judged us stale; nothing to release.
+        }
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      try {
+        if (Date.now() - fs.statSync(dir).mtimeMs > STALE_LOCK_MS) fs.rmdirSync(dir);
+      } catch {
+        // Raced with the holder releasing it; loop and try again.
+      }
+      if (Date.now() > deadline) throw new Error(`memory file is locked by another writer: ${path.basename(file)}`);
+      Atomics.wait(sleeper, 0, 0, LOCK_POLL_MS);
+    }
+  }
+}
+
+/**
+ * The one write path for shared memory: lock, re-read, apply against the FRESH entries, write,
+ * unlock. A caller that planned its batch against a stale view still gets its entries merged in;
+ * an `old_text` that no longer matches (a peer removed it) fails the batch, which is the honest
+ * answer. The cap is checked on the merged result.
+ */
+export function commitOperations(
+  profileDir: string,
+  target: MemoryTarget,
+  operations: readonly MemoryOperation[],
+  cap: number
+): ApplyResult {
+  const file = memoryPath(profileDir, target);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const release = acquireLock(file);
+  try {
+    const result = applyOperations(readEntries(profileDir, target), operations, cap);
+    if (!result.ok) return result;
+    atomicWriteFileSync(NODE_IO, file, result.rendered, OWNER_ONLY);
+    return result;
+  } finally {
+    release();
+  }
 }

@@ -47,6 +47,7 @@ import { applyModelEnv } from "./model-env.js";
 import { PortShaper, PortTally } from "./provider-ports.js";
 import { SeatTally, guardSeatModel, shapeEvent, type SeatModelFn } from "./seat-guard.js";
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
+import type { FleetMemoryHook } from "../fleet-memory/orchestrator-hook.js";
 import type { TrentToolAdapter } from "../tools/types.js";
 import {
   type OrcEvent,
@@ -87,6 +88,13 @@ export type OrchestratorDepsWithImprove = OrchestratorDeps & {
    * before a run launches; their usage text rides into the seat prompt through the seat guard.
    */
   readonly tools?: readonly TrentToolAdapter[];
+  /**
+   * Fleet memory (`../fleet-memory/`): its `memory` and `fleet_search` adapters join `tools`, every
+   * seat call is wrapped so the run's frozen prelude (shared MEMORY.md/USER.md, shared skills
+   * index, cross-agent recall) rides in `dynamicPrompt`, and the run boundaries are reported so
+   * the next run sees this run's writes.
+   */
+  readonly fleetMemory?: FleetMemoryHook;
 };
 
 // --- The drain loop -----------------------------------------------------------------------------
@@ -197,7 +205,12 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
     return gatewayPromise;
   }
 
-  const seatInstructions = toolInstructions(deps.tools ?? []);
+  // ── fleet-memory hook (owned by ../fleet-memory; the only lines here that know about it) ──────
+  const allTools: readonly TrentToolAdapter[] = [...(deps.tools ?? []), ...(deps.fleetMemory?.adapters ?? [])];
+  const withFleetPrelude = (seat: SeatModelFn): SeatModelFn => (deps.fleetMemory ? deps.fleetMemory.wrapSeatModel(seat) : seat);
+  // ── end fleet-memory hook ────────────────────────────────────────────────────────────────────
+
+  const seatInstructions = toolInstructions(allTools);
 
   function installPorts(libs: Libs, gateway: ModelGateway, tally: SeatTally, ports: PortTally): void {
     const underlying = (deps.executeSeatModelFn as SeatModelFn | undefined) ?? libs.gateway.executeSeatModel;
@@ -206,7 +219,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       orchestration: {
         // Default, not test-only: the planner and the critic reach the configured provider.
         createCompletion: deps.createCompletion ?? createCompletionPort(gateway, { onCall: (call) => ports.record(call) }),
-        executeSeatModelFn: guardSeatModel(underlying, chat, tally, seatInstructions),
+        executeSeatModelFn: withFleetPrelude(guardSeatModel(underlying, chat, tally, seatInstructions)),
       },
     });
   }
@@ -296,7 +309,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       assertStandaloneEnv();
       installPorts(libs, gateway, tally, ports);
       // The seats' tools exist before the plan is made: registry, router catalog, seat environments.
-      await wireSeatTools(libs, options.companyId, deps.tools ?? []);
+      await wireSeatTools(libs, options.companyId, allTools);
       try {
         const launched = await libs.orchestrator.launchOrchestration({
           companyId: options.companyId,
@@ -305,6 +318,8 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
           fullTeam: options.fullTeam ?? false,
         });
         runId = launched.id;
+        // fleet-memory hook: the prelude for this run is built on the first seat call.
+        deps.fleetMemory?.runStarted({ runId: launched.id, companyId: options.companyId, objective: options.objective });
         // The bus emits run_start inside launchOrchestration, before anyone can subscribe. The
         // launch result carries the same fields, so the stream starts with it after all (D2).
         deliver({
@@ -374,6 +389,8 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
         unsubscribe?.();
         channel.close();
         libs.overrides.clearRuntimeEvalOverrides();
+        // fleet-memory hook: this run's memory writes become visible to the next run.
+        if (runId !== undefined) deps.fleetMemory?.runFinished(runId);
       }
     })();
     // The handle exposes this through result(); nothing is unhandled if the caller only iterates.
