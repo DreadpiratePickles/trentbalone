@@ -49,6 +49,16 @@ const EXCLUSIVE = [
   "apps/cli/src/commands/__tests__/desktop.test.ts",
 ];
 
+const ROOT_EXCLUDE = [
+  "**/node_modules/**",
+  "**/dist/**",
+  "apps/web/**",
+  "apps/desktop/**",
+  "lib/**",
+  "app/**",
+  ...(includeLiveTests ? [] : ["**/*.live.test.{ts,tsx,mts,js,mjs}", "**/live.*.test.{ts,tsx,mts,js,mjs}"]),
+];
+
 export default defineConfig({
   test: {
     environment: "node",
@@ -97,11 +107,28 @@ export default defineConfig({
     projects: [
       {
         extends: true,
-        test: { name: "parallel", exclude: [...EXCLUSIVE] },
+        // An explicit exclude REPLACES the inherited one, so it must carry the root list too,
+        // or the live suites leak back into the default run.
+        test: { name: "parallel", exclude: [...ROOT_EXCLUDE, ...EXCLUSIVE] },
       },
       {
-        extends: true,
-        test: { name: "exclusive", include: EXCLUSIVE, fileParallelism: false },
+        // Deliberately NOT `extends: true`. Inheriting the root config merges its include glob
+        // into this project, so a CLI path filter collects every matched file here too and each
+        // test runs twice. This project is self-contained and owns exactly its two files.
+        test: {
+          name: "exclusive",
+          environment: "node",
+          include: EXCLUSIVE,
+          fileParallelism: false,
+          testTimeout: 60_000,
+          hookTimeout: 60_000,
+        },
+        resolve: {
+          alias: {
+            "@": path.resolve(__dirname, "./apps/web"),
+            "@trent/core": path.resolve(__dirname, "./packages/trent-core/src"),
+          },
+        },
       },
     ],
   },
