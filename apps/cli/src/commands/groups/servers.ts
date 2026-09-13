@@ -9,8 +9,6 @@
  * consumers get one parseable object at startup instead of waiting for a process that never ends.
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import { A2AServer, generateAgentCard } from "@trent/core/a2a/index.js";
 import { ACPServer } from "@trent/core/acp/index.js";
 import { GatewayManager } from "@trent/core/gateway/index.js";
@@ -19,6 +17,15 @@ import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import type { CommandContext } from "../context.js";
 import type { CommandSpec } from "../registry.js";
 import { startEgressProxy } from "../../repl/tools.js";
+import {
+  BUILD_HINT,
+  buildStandalone,
+  locateWebServer,
+  standaloneEntry,
+  startWebServer,
+  type LocateResult,
+  type WebTarget,
+} from "../web-server.js";
 
 const A2A_DEFAULT_PORT = "7895";
 const ACP_DEFAULT_PORT = "7890";
@@ -259,49 +266,101 @@ export const egressSpec: CommandSpec = {
 
 /**
  * `trent web` — the desktop's web server, which is why A2A had to give up the name `serve`.
- * The server itself is Milestone 5; this validates and reports the real target rather than
- * printing an encouraging sentence.
+ * Without `--start` it reports what would be served; with it, it runs the same `.next/standalone`
+ * tree the desktop sidecar runs (see ../web-server.ts) and stays up until Ctrl+C.
  */
 export const webSpec: CommandSpec = {
   name: "web",
   description: "Report or start the Trent web server for the desktop surface",
   options: [
-    { flags: "--port <port>", description: "Port to bind", defaultValue: WEB_DEFAULT_PORT },
+    { flags: "--port <port>", description: "Port to bind; 0 picks a free one", defaultValue: WEB_DEFAULT_PORT },
     { flags: "--start", description: "Start the server rather than reporting readiness" },
+    { flags: "--build", description: "With --start: run the standalone build first if it is missing" },
+    { flags: "--open", description: "With --start: open the URL in the default browser once ready" },
   ],
-  run(ctx, opts) {
-    const port = parsePort(opts.port, "web", WEB_DEFAULT_PORT);
-    const appDir = path.resolve(process.cwd(), "apps/web");
-    const present = fs.existsSync(path.join(appDir, "package.json"));
+  async run(ctx, opts) {
+    const port = parseWebPort(opts.port);
+    const located = locateWebServer({
+      repoRoot: ctx.overrides.webRepoRoot ?? process.cwd(),
+      home: ctx.config().getBaseDir(),
+    });
+    const report = describeLocation(located, port);
 
-    if (ctx.dryRun) {
-      return { data: { dryRun: true, command: "web", port, appDir, appPresent: present } };
-    }
-    if (!present) {
-      throw new TrentError({
-        code: EXIT.CONFIG,
-        operation: "web",
-        message: "no web application found at the expected path",
-        target: appDir,
-      });
-    }
-    if (opts.start === true) {
+    if (ctx.dryRun) return { data: { dryRun: true, command: "web", ...report } };
+    if (opts.start !== true) return { data: report };
+
+    let target: WebTarget;
+    if (located.kind === "found") {
+      target = located.target;
+    } else if (located.kind === "unbuilt" && opts.build === true) {
+      await buildStandalone(ctx, located.appDir);
+      const entry = standaloneEntry(located.appDir);
+      if (entry === undefined) {
+        throw new TrentError({ code: EXIT.CONFIG, operation: "web.build", message: "the build finished but produced no standalone server.js", target: located.appDir });
+      }
+      target = { source: "clone", entry, appDir: located.appDir };
+    } else if (located.kind === "unbuilt") {
       throw new TrentError({
         code: EXIT.CONFIG,
         operation: "web.start",
-        message:
-          "the web server entry point is not built yet (Milestone 5); run without --start to check readiness",
-        target: appDir,
+        message: `the standalone web build is missing; run \`${BUILD_HINT}\` or pass --build to build it now`,
+        target: located.appDir,
+      });
+    } else {
+      throw new TrentError({
+        code: EXIT.CONFIG,
+        operation: "web.start",
+        message: "no web application found: run from a clone, or `trent desktop install` provides the web resources",
+        target: located.tried.join(", "),
       });
     }
-    return { data: { port, appDir, appPresent: true, started: false } };
+
+    const started = await startWebServer(ctx, target, { port, build: opts.build === true, open: opts.open === true });
+    return {
+      data: { port: started.port, url: started.url, pid: started.pid, source: started.source },
+      keepAlive: true,
+    };
   },
   render(data, ctx) {
-    const d = data as { port: number; appDir: string; appPresent: boolean };
-    return [
-      `  ${ctx.theme.meta("app dir")} ${ctx.theme.value(d.appDir)}`,
-      `  ${ctx.theme.meta("port")}    ${ctx.theme.value(String(d.port))}`,
-      d.appPresent ? ctx.theme.success("  web application present") : ctx.theme.error("  web application missing"),
+    const d = data as {
+      dryRun?: boolean;
+      url?: string;
+      pid?: number;
+      source?: string;
+      entry?: string;
+      port: number;
+      state?: string;
+      hint?: string;
+    };
+    if (d.url !== undefined) {
+      return [
+        `  ${ctx.theme.success("web listening")} ${ctx.theme.value(d.url)} ${ctx.theme.meta(`(${d.source ?? ""}, pid ${String(d.pid)})`)}`,
+        `  ${ctx.theme.meta("Ctrl+C to stop")}`,
+      ];
+    }
+    const lines = [
+      `  ${ctx.theme.meta("port")}   ${ctx.theme.value(String(d.port))}`,
+      `  ${ctx.theme.meta("source")} ${ctx.theme.value(d.source ?? "none")}`,
     ];
+    if (d.entry !== undefined) lines.push(`  ${ctx.theme.meta("entry")}  ${ctx.theme.value(d.entry)}`);
+    lines.push(d.state === "ready" ? ctx.theme.success(`  web server ${d.dryRun === true ? "would start" : "ready to start"}`) : ctx.theme.error(`  ${d.hint ?? ""}`));
+    return lines;
   },
 };
+
+/** Like `parsePort`, but 0 is allowed: it asks the OS for a free port, as the desktop does. */
+function parseWebPort(value: unknown): number {
+  const raw = typeof value === "string" && value !== "" ? value : WEB_DEFAULT_PORT;
+  if (raw === "0") return 0;
+  return parsePort(raw, "web", WEB_DEFAULT_PORT);
+}
+
+function describeLocation(located: LocateResult, port: number): Record<string, unknown> {
+  if (located.kind === "found") {
+    return { port, state: "ready", source: located.target.source, entry: located.target.entry, appDir: located.target.appDir };
+  }
+  if (located.kind === "unbuilt") {
+    return { port, state: "unbuilt", appDir: located.appDir, hint: `standalone build missing: ${BUILD_HINT} (or --start --build)` };
+  }
+  return { port, state: "absent", tried: located.tried, hint: "no web application found; `trent desktop install` provides one" };
+}

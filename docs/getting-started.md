@@ -162,7 +162,24 @@ npm run cli -- --continue
 Both surfaces run on the same session engine and the same model gateway. In the REPL, Ctrl+C aborts
 the in-flight stream and leaves the process alive; Ctrl+J inserts a newline.
 
-## 9. Verify
+## 9. Serve the web UI
+
+```bash
+cd apps/web && npm run build && cd ../..   # once: produces apps/web/.next/standalone
+npm run cli -- web --start                  # http://127.0.0.1:3000, Ctrl+C to stop
+npm run cli -- web --start --open --port 0  # free port, opens the browser once ready
+npm run cli -- web --start --json           # {port, url, pid, source} once ready, then keeps serving
+```
+
+`trent web --start` runs the same `.next/standalone` tree the desktop app ships, on loopback only,
+with the standalone environment contract (`TRENT_QUEUE_FALLBACK=disabled`) and an `AUTH_SECRET`
+generated once per profile at `~/.trent/auth_secret` (mode 0600, never printed). Without the build
+it exits 3 and prints the command above; `--start --build` runs the build for you. From an
+installed layout with no clone it serves the resources `trent desktop install` laid down, and exits
+3 naming that command when they are absent. `--dry-run` reports the entry and port without
+spawning anything.
+
+## 10. Verify
 
 Everything in this page is checkable:
 

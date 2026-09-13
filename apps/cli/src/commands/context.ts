@@ -18,6 +18,19 @@ export interface SetupSummary {
   secretsConfigured: string[];
 }
 
+/** What `trent web` hands to `spawn`; a test asserts on every field. */
+export interface WebSpawnOptions {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}
+
+/** The slice of `ChildProcess` the web command relies on, so a fake needs no real process. */
+export interface WebChild {
+  pid?: number | undefined;
+  kill(signal?: NodeJS.Signals): boolean;
+  once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+}
+
 /** Seams a test replaces. Everything defaults to the real implementation. */
 export interface CliOverrides {
   /** Replace the doctor's check list (used to force a failing check). */
@@ -32,6 +45,12 @@ export interface CliOverrides {
   now?: () => Date;
   /** Replace the docker CLI `trent sandbox build` runs (a fake needs no daemon). */
   sandboxExec?: (command: string, args: readonly string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
+  /** Replace the `spawn` behind `trent web --start` (a fake asserts the argv and env, and binds the port itself). */
+  webSpawn?: (command: string, args: readonly string[], options: WebSpawnOptions) => WebChild;
+  /** Replace the browser opener behind `trent web --open`. */
+  webOpen?: (url: string) => void;
+  /** Where `trent web` looks for `apps/web`; defaults to the working directory and its parents. */
+  webRepoRoot?: string;
 }
 
 export interface CommandContext {
