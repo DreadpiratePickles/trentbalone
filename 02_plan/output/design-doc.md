@@ -115,3 +115,27 @@ phantom failures — and must not be used. Plus the **16th checklist item the re
 4. Four modules call `appendAuditLog` directly and throw with no DATABASE_URL.
 
 These are outside the CLI scope. ICM principle 8 says fix at the source; they need their own task.
+
+---
+
+## 12. Fleet shape and the self-improvement loop (added 2026-09-12 evening)
+
+**Nine seats live at once; the 164 specialists are optional.** The core roles — ceo, engineer, growth,
+content, support, analyst, finance, browser, escalation — are always resident. A specialist is installed
+on demand (`trent fleet install`) and is only active while installed.
+
+**Consequence for the loop.** Trent already owns the strongest self-improvement pipeline in this
+category — trace store -> eval gate -> skill foundry -> GEPA prompt evolution on a Pareto frontier ->
+skill health with cascade -> golden-trace capture from failures. Hermes has no prompt evolution and no
+eval gate at all. Two facts decide the build:
+
+1. **It never runs today.** `apps/web/lib/heartbeat.ts:335-336` constructs fresh in-memory stores inside
+   `runCompanyHeartbeat`, so the production sweep reads an empty trace store and learns nothing. The
+   wrapper's `runSelfImprovementSweep` is fully dependency-injected and does not have the bug; the CLI
+   calls it directly with the real durable stores.
+2. **Scope follows residency.** Improve the nine live seats continuously from every session. Improve a
+   specialist only while it is installed and only once it has produced enough traces to clear the
+   distill threshold. Never spend a model call evolving a prompt for an agent nobody runs.
+
+Everything Hermes does that we lack is added on top, per the research in
+`01_discovery/references/hermes-self-improvement.md` once it lands.
