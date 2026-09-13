@@ -300,3 +300,15 @@ Remaining in flight: improve-loop foundation (I.1-I.5, I.17), fleet shared memor
 - Known blocker for the public one-curl install: repo is private, and install.sh downloads from
   GitHub Releases. User decision: make the repo public at launch or mirror releases to a public repo.
 - Repo-scan CI job still fails on `apps/cli/src/{tui,slash}` (user's TUI session owns them).
+- Evening 2026-09-13 (local commits through `1a5413d`, push held for CI on `49e16cd`): release
+  pipeline (`release.yml` reuses `binary.yml` by workflow_call, signs with real minisign + openssl
+  from secrets, verifies against committed pubkeys before publish; `pages.yml`; runbook in
+  `05_release/output/`); gen-keys now writes minisign's plain-key format (real minisign prompted for
+  a password on the old `Sc` header — key converted in place, secret updated, same key id);
+  GitHub Pages refused on the private repo (`422 plan does not support`) — the ONE user decision left
+  for a public install is making the repo public at launch; MCP toolset (`trent mcp`), browser
+  (playwright-core through the egress proxy, real Chromium test ran) and vision (live Gemini image
+  call passed) — every Hermes toolset now exists in the builder.
+- Full root suite: 1306 tests; two load flakes seen once and passing alone/3x: doctor
+  `inspection.test.ts` real-probe case, and `desktop.test.ts` DMG install (`updater.release:
+  connection failed: read ECONNRESET` from the local release server). Not yet root-caused.
