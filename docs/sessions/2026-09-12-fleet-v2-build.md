@@ -279,3 +279,10 @@ Remaining in flight: improve-loop foundation (I.1-I.5, I.17), fleet shared memor
   code_execution, plugins), README/docs refresh (README still says "no installer" — stale), CI green on
   latest sha (runs before 3ef24cb were cancelled by concurrency, not failed).
 - `notes/` at repo root is untracked user material (Stanford transcripts); left untracked, not mine.
+- Landed since resume: `2c56ed5` (fleet memory in REPL, Gemini price rows, doctor image probe),
+  `6393486` (Stanford I.6–I.12), `f03dc03` (execute_code / delegate_task / plugins), `a01cbab`
+  (Stanford I.13–I.16 — the 17-task plan is complete). In flight: DelegatePort binding +
+  `trent-sandbox` image with python3/node.
+- Known open after that: README/docs refresh (README still says "no installer"), `apps/cli/src/slash`
+  and `tui` violations (user's TUI session owns them), vision/browser toolset (needs a service),
+  seat-step pricing inside the app's executeSeatModel still tier-priced.

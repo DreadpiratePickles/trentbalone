@@ -209,3 +209,15 @@ Format per `02_plan/output/implementation-plan.md`: 2-5 minute tasks, the failin
 - **Commit:** `feat(core): promoted skills reach the seat that earned them`
 
 Order: I.1-I.5 first (cost and the vacuous gate), then I.17 (the loop's output finally lands), then the rest.
+
+## Status (2026-09-13)
+
+All 17 tasks landed on `feature/trent-fleet-v2`:
+
+| Tasks | Commit | Evidence |
+|---|---|---|
+| I.1–I.5, I.17 | `8e79c0a` | gate cannot promote unverified; real cost meter; 71 tests |
+| I.6–I.12 + seat-model wiring | `6393486` | mechanical overlay, evidence-cited judge, agreement ledger, per-fixture tags, saturation/length guards, second draw; 193 tests |
+| I.13–I.16 | `a01cbab` | clean-trace goldens + rationales, repetitive-loop tag, private hold-out; 110 tests |
+
+Session logs: `docs/sessions/2026-09-13-cs329a-batch-{2,3}.md`.
