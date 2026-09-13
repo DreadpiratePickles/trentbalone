@@ -108,7 +108,7 @@ export const TrentConfigSchema = z.object({
   profile: z.string().default("default"),
   provider: ProviderSchema.default("openai"),
   model: z.string().default("gpt-5.6-terra"),
-  toolsets: z.array(ToolsetSchema).default(["file_ops", "terminal"]),
+  toolsets: z.array(ToolsetSchema).default(["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins"]),
   disabled_toolsets: z.array(ToolsetSchema).default([]),
   budget: BudgetConfigSchema.default({}),
   terminal: TerminalConfigSchema.default({}),

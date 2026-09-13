@@ -11,7 +11,10 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // users (404), gemini-3.6-flash is rate-limited on the free tier (429), this one returns 200.
   provider: "google",
   model: "gemini-3.5-flash-lite",
-  toolsets: ["file_ops", "terminal"],
+  // Quick setup enables every toolset that is actually implemented (tools/index.ts
+  // IMPLEMENTED_TOOLSETS), the way Hermes's CLI bundle does. Blank-slate mode below is the
+  // explicit opt-out. web is skipped with a visible reason while the egress proxy is off.
+  toolsets: ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins"],
   disabled_toolsets: [],
   budget: {
     daily_cap: 1000,

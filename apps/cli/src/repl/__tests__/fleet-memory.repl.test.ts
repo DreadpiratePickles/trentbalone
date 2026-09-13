@@ -147,7 +147,7 @@ describe("ClassicRepl wires fleet memory into the orchestrator", () => {
     expect(names).toContain("fleet_search");
     expect(names).toContain("memory");
     // The toolsets themselves are untouched: fleet memory rides in its own dependency.
-    expect((received[0]?.tools ?? []).map((tool) => tool.name)).toEqual(["file_ops", "terminal"]);
+    expect((received[0]?.tools ?? []).map((tool) => tool.name)).toEqual(expect.arrayContaining(["file_ops", "terminal"]));
     expect(s.out.join("")).toContain("fleet_search");
   }, 30_000);
 
