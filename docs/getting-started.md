@@ -83,6 +83,12 @@ Three modes exist:
 - `--mode full` walks every provider, messaging platform and toolset interactively.
 - `--mode blank-slate` writes explicit disable lists for toolsets, skills and background work.
 
+The `toolsets` list in `config.yaml` is what the seats get. `file_ops`, `terminal`, `code`,
+`delegation`, `plugins`, `skills`, `cron` and `web` are registered by the REPL; `web` needs the
+egress proxy, and when it is off the banner says `skipped web (...)` instead of dropping it
+silently. `memory` rides in through the fleet-memory hook, not the toolsets list. The default is
+still `file_ops, terminal`; add the others explicitly.
+
 Setup writes `~/.trent/config.yaml`. Bare `npm run cli --` with no config on disk runs quick setup
 automatically. `doctor`, `setup`, `config` and `uninstall` never do, because those are what you run
 when the config is the broken thing.

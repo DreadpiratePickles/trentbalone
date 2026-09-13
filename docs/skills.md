@@ -28,6 +28,9 @@ SKILLS (6)
 `skills search <term>` matches against name, description and tags. `skills list` shows what is
 installed in the active profile, which is a different list.
 
+Seats reach the same directory through the `skills` toolset (`skills_list`, `skill_view`,
+`skill_manage`) once `skills` is in `toolsets`; the REPL's `/tools` lists it when registered.
+
 ## The pre-install scan
 
 `SkillsHub.install` scans the content before it writes anything. A skill that fails the scan is not

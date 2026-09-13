@@ -164,6 +164,77 @@ describe("the egress proxy", () => {
   });
 });
 
+describe("wireTools registers web, skills and cron", () => {
+  it("skips web with a reason when egress is off, registers skills and cron, and the status line says so", async () => {
+    const config = localConfig({ toolsets: ["file_ops", "web", "skills", "cron"], egress: { ...DEFAULT_CONFIG.egress, enabled: false } });
+    const wiring = await wireTools({ config, workspace, profileDir });
+    try {
+      expect(wiring.adapters.map((a) => a.name)).toEqual(["file_ops", "skills", "cron"]);
+      expect(wiring.skipped).toEqual([{ toolset: "web", reason: expect.stringMatching(/egress/i) }]);
+      const line = toolsStatusLine(wiring, createTheme("none"));
+      expect(line).toMatch(/tools file_ops, skills, cron/);
+      expect(line).toMatch(/skipped web \(.*egress.*\)/);
+    } finally {
+      await wiring.cleanup();
+    }
+  });
+
+  it("hands web the host-side proxy URL, never the docker bridge alias", async () => {
+    const seen: ToolBuildDeps[] = [];
+    const build: typeof buildTrentToolAdapters = (config, deps) => {
+      seen.push(deps);
+      return buildTrentToolAdapters(config, deps);
+    };
+    const config = localConfig({ toolsets: ["file_ops", "web"] });
+    const wiring = await wireTools({
+      config,
+      workspace,
+      profileDir,
+      buildAdapters: build,
+      probeDocker: async () => ({ daemon: true, imagePresent: true }),
+      startEgress: async () => ({
+        port: 4321,
+        url: "http://127.0.0.1:4321",
+        token: "tok",
+        caCertPath: path.join(profileDir, "missing-ca.pem"),
+        isListening: () => true,
+        stop: async () => undefined,
+      }),
+    });
+    try {
+      expect(seen[0]?.egress?.proxyUrl).toBe("http://127.0.0.1:4321");
+      expect(seen[0]?.egressHostUrl).toBe("http://127.0.0.1:4321");
+    } finally {
+      await wiring.cleanup();
+    }
+    // The same wiring under docker: the sandbox sees the bridge alias, web still dials loopback.
+    const dockerConfig = structuredClone(DEFAULT_CONFIG);
+    dockerConfig.toolsets = ["file_ops", "web"];
+    seen.length = 0;
+    const docker = await wireTools({
+      config: dockerConfig,
+      workspace,
+      profileDir,
+      buildAdapters: build,
+      probeDocker: async () => ({ daemon: true, imagePresent: true }),
+      startEgress: async () => ({
+        port: 4321,
+        url: "http://127.0.0.1:4321",
+        token: "tok",
+        caCertPath: path.join(profileDir, "missing-ca.pem"),
+        isListening: () => true,
+        stop: async () => undefined,
+      }),
+    });
+    try {
+      expect(seen[0]?.egress?.proxyUrl).toBe("http://host.docker.internal:4321");
+      expect(seen[0]?.egressHostUrl).toBe("http://127.0.0.1:4321");
+    } finally {
+      await docker.cleanup();
+    }
+  });
+});
+
 describe("the sandbox line", () => {
   it("names the toolsets, the backend and the image, and says when the floor image is in use", async () => {
     const config = structuredClone(DEFAULT_CONFIG); // backend docker, image trent-sandbox:latest

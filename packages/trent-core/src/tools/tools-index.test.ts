@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildTrentToolAdapters, enabledToolsets, IMPLEMENTED_TOOLSETS } from "./index.js";
+import { buildTrentToolAdapters, buildTrentTools, enabledToolsets, IMPLEMENTED_TOOLSETS, NOT_YET_IMPLEMENTED } from "./index.js";
+import { ToolsetSchema } from "../config/schema.js";
 import { BUILTIN_TOOL_NAMES } from "./tool-names.js";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "trent-tools-index-"));
@@ -32,8 +33,55 @@ describe("buildTrentToolAdapters", () => {
     await Promise.all(built.map((a) => a.cleanup()));
   });
 
-  it("every adapter scope this builder can produce is a reserved built-in name", () => {
-    const built = buildTrentToolAdapters({ toolsets: ["file_ops", "terminal", "code", "delegation", "plugins"], disabled_toolsets: [] }, deps);
-    for (const adapter of built) for (const scope of adapter.scopes) expect(BUILTIN_TOOL_NAMES, scope).toContain(scope);
+  it("every tool name this builder can produce is a reserved built-in name", async () => {
+    const caCertPath = path.join(root, "ca-scopes.pem");
+    fs.writeFileSync(caCertPath, "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n");
+    const { adapters, skipped } = buildTrentTools(
+      { toolsets: [...IMPLEMENTED_TOOLSETS], disabled_toolsets: [] },
+      { ...deps, egress: { proxyUrl: "http://127.0.0.1:1", token: "tok", caCertPath } },
+    );
+    expect(skipped).toEqual([]);
+    expect(adapters.map((a) => a.name)).toEqual(["file_ops", "terminal", "web", "code_execution", "delegation", "cron", "skills", "plugins"]);
+    // `web:search`-style entries are permission scopes, not tool names a plugin could shadow.
+    for (const adapter of adapters) for (const scope of adapter.scopes.filter((s) => !s.includes(":"))) expect(BUILTIN_TOOL_NAMES, scope).toContain(scope);
+    await Promise.all(adapters.map((a) => a.cleanup()));
+  });
+});
+
+describe("buildTrentToolAdapters wires web, skills and cron", () => {
+  it("returns the three adapters with the Hermes tool names when egress is present", async () => {
+    const caCertPath = path.join(root, "ca.pem");
+    fs.writeFileSync(caCertPath, "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n");
+    const built = buildTrentToolAdapters(
+      { toolsets: ["web", "skills", "cron"], disabled_toolsets: [] },
+      { ...deps, egress: { proxyUrl: "http://127.0.0.1:1", token: "tok", caCertPath } },
+    );
+    expect(built.map((a) => a.name)).toEqual(["web", "skills", "cron"]);
+    const scopes = built.flatMap((a) => a.scopes);
+    for (const name of ["web_search", "web_extract", "skills_list", "skill_view", "skill_manage", "cronjob_manage"]) {
+      expect(scopes, name).toContain(name);
+    }
+    await Promise.all(built.map((a) => a.cleanup()));
+  });
+
+  it("skips web with a visible reason when there is no egress, and never registers memory here", async () => {
+    const { adapters, skipped } = buildTrentTools({ toolsets: ["web", "skills", "cron", "memory"], disabled_toolsets: [] }, deps);
+    expect(adapters.map((a) => a.name)).toEqual(["skills", "cron"]);
+    expect(skipped.map((s) => s.toolset)).toEqual(["web", "memory"]);
+    expect(skipped[0]?.reason).toMatch(/egress/i);
+    expect(skipped[1]?.reason).toMatch(/fleet[- ]memory/i);
+    await Promise.all(adapters.map((a) => a.cleanup()));
+  });
+
+  it("every ToolsetSchema value is implemented or explicitly not-yet-implemented with a reason", () => {
+    const implemented = new Set<string>(IMPLEMENTED_TOOLSETS);
+    const pending = new Map<string, string>(NOT_YET_IMPLEMENTED.map((entry) => [entry.toolset, entry.reason]));
+    for (const toolset of ToolsetSchema.options) {
+      const known = implemented.has(toolset) || pending.has(toolset);
+      expect(known, `${toolset} is neither implemented nor listed in NOT_YET_IMPLEMENTED`).toBe(true);
+      expect(implemented.has(toolset) && pending.has(toolset), `${toolset} is in both lists`).toBe(false);
+      if (pending.has(toolset)) expect(pending.get(toolset)?.length ?? 0).toBeGreaterThan(10);
+    }
+    for (const toolset of [...implemented, ...pending.keys()]) expect(ToolsetSchema.options as readonly string[]).toContain(toolset);
   });
 });

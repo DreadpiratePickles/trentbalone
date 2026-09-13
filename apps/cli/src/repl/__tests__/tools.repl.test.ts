@@ -169,6 +169,53 @@ describe("ClassicRepl wires the toolsets into the orchestrator", () => {
   }, 30_000);
 });
 
+describe("ClassicRepl registers web, skills and cron and /tools lists them", () => {
+  it("with egress on, /tools names web_search, skills_list and cronjob_manage", async () => {
+    const recorder = recordingFactory();
+    const egress = observedEgress();
+    const s = session(
+      (manager) => {
+        const config = manager.loadConfig();
+        config.toolsets = ["file_ops", "web", "skills", "cron"];
+        manager.saveConfig(config);
+      },
+      { createOrchestrator: recorder.factory, startEgress: egress.startEgress },
+    );
+    const started = s.repl.start();
+    await until(() => atPrompt(s.out));
+    s.stdin.emit("data", "/tools\r");
+    await until(() => s.out.filter((chunk) => chunk === `${PROMPT}\n`).length >= 2);
+    s.stdin.emit("end");
+    await started;
+
+    expect((recorder.received[0]?.tools ?? []).map((tool) => tool.name)).toEqual(["file_ops", "web", "skills", "cron"]);
+    const everything = s.out.join("");
+    for (const name of ["web_search", "web_extract", "skills_list", "skill_view", "skill_manage", "cronjob_manage"]) {
+      expect(everything, name).toContain(name);
+    }
+  }, 30_000);
+
+  it("with egress off, web is skipped with a visible reason and skills/cron still register", async () => {
+    const recorder = recordingFactory();
+    const s = session(
+      (manager) => {
+        const config = manager.loadConfig();
+        config.toolsets = ["file_ops", "web", "skills", "cron"];
+        config.egress.enabled = false;
+        manager.saveConfig(config);
+      },
+      { createOrchestrator: recorder.factory, startEgress: async () => { throw new Error("egress not under test"); } },
+    );
+    const started = s.repl.start();
+    await until(() => atPrompt(s.out));
+    s.stdin.emit("end");
+    await started;
+
+    expect((recorder.received[0]?.tools ?? []).map((tool) => tool.name)).toEqual(["file_ops", "skills", "cron"]);
+    expect(s.out.join("")).toMatch(/skipped web/);
+  }, 30_000);
+});
+
 describe("ClassicRepl and the egress proxy lifecycle", () => {
   it("is listening before the first turn and not after stdin ends", async () => {
     const recorder = recordingFactory();

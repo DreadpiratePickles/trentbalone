@@ -8,7 +8,10 @@
  *      port and its URL, token and CA path are handed to the tools. If it fails to start the
  *      tools run with NO network — never with an open one — and the status line says so;
  *   3. the adapters for `config.toolsets - config.disabled_toolsets` are built, with the
- *      orchestrator's `DelegatePort` bound to `delegation` and `plugins` reading `<profile>/plugins`.
+ *      orchestrator's `DelegatePort` bound to `delegation`, `plugins` reading `<profile>/plugins`,
+ *      `skills` and `cron` under the profile, and `web` on the proxy's host-side URL. A toolset
+ *      the builder cannot produce (`web` without a proxy) is reported in `skipped` and on the
+ *      status line, never dropped silently.
  * `cleanup()` releases the sandboxes and stops the proxy; `index.ts` calls it on every exit path.
  *
  * Every collaborator is injectable so the tests can record what was built without Docker or a
@@ -21,7 +24,16 @@ import process from "node:process";
 import { EgressProxy, TokenManager } from "@trent/core/egress/index.js";
 import type { ConfigManager } from "@trent/core/config/index.js";
 import { SANDBOX_IMAGE } from "@trent/core/terminal/index.js";
-import { buildTrentToolAdapters, enabledToolsets, type DelegatePort, type ToolBuildConfig, type ToolBuildDeps, type TrentToolAdapter } from "@trent/core/tools/index.js";
+import {
+  buildTrentToolAdapters,
+  buildTrentTools,
+  enabledToolsets,
+  type DelegatePort,
+  type SkippedToolset,
+  type ToolBuildConfig,
+  type ToolBuildDeps,
+  type TrentToolAdapter,
+} from "@trent/core/tools/index.js";
 import type { Theme } from "../ui/index.js";
 import type { ReplEgressStatus, ReplSandbox } from "./types.js";
 
@@ -79,7 +91,10 @@ export interface ToolWiringDeps {
   readonly workspace: string;
   readonly profileDir: string;
   readonly configManager?: ConfigManager;
+  /** Legacy recorder seam: an adapters-only factory (nothing is reported as skipped). */
   readonly buildAdapters?: typeof buildTrentToolAdapters;
+  /** The full factory, with `skipped`; wins over `buildAdapters`. */
+  readonly buildTools?: typeof buildTrentTools;
   readonly startEgress?: (input: StartEgressInput) => Promise<EgressHandle>;
   readonly probeDocker?: (image: string) => Promise<DockerProbe>;
   /** The orchestrator's delegation path; without it `delegate_task` reports `not_available`. */
@@ -89,6 +104,8 @@ export interface ToolWiringDeps {
 export interface ToolWiring {
   readonly adapters: TrentToolAdapter[];
   readonly toolsets: string[];
+  /** Enabled in config, not registered, and why. */
+  readonly skipped: SkippedToolset[];
   readonly sandbox: ReplSandbox;
   readonly egress: ReplEgressStatus;
   cleanup(): Promise<void>;
@@ -196,13 +213,17 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
             token: handle.token,
             caCertPath: handle.caCertPath,
           },
+          // `web` runs in this process, so it dials the loopback listener, not the bridge alias.
+          egressHostUrl: handle.url,
         }
       : {}),
   };
-  const build = deps.buildAdapters ?? buildTrentToolAdapters;
   let adapters: TrentToolAdapter[];
+  let skipped: SkippedToolset[];
   try {
-    adapters = build(deps.config, buildDeps);
+    if (deps.buildTools) ({ adapters, skipped } = deps.buildTools(deps.config, buildDeps));
+    else if (deps.buildAdapters) ({ adapters, skipped } = { adapters: deps.buildAdapters(deps.config, buildDeps), skipped: [] });
+    else ({ adapters, skipped } = buildTrentTools(deps.config, buildDeps));
   } catch (error) {
     await handle?.stop();
     throw error;
@@ -212,6 +233,7 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
   return {
     adapters,
     toolsets,
+    skipped,
     sandbox,
     egress,
     cleanup: async () => {
@@ -241,9 +263,13 @@ function egressText(egress: ReplEgressStatus): string {
 }
 
 /** One line under the banner: what the seats can touch, where it runs, and whether it can reach out. */
-export function toolsStatusLine(wiring: Pick<ToolWiring, "toolsets" | "sandbox" | "egress">, theme: Theme): string {
-  const tools = wiring.toolsets.length === 0 ? "no toolsets" : `tools ${wiring.toolsets.join(", ")}`;
+export function toolsStatusLine(wiring: Pick<ToolWiring, "toolsets" | "sandbox" | "egress"> & { skipped?: SkippedToolset[] }, theme: Theme): string {
+  const skipped = wiring.skipped ?? [];
+  const skippedNames = new Set(skipped.map((s) => s.toolset));
+  const registered = wiring.toolsets.filter((t) => !skippedNames.has(t));
+  const tools = registered.length === 0 ? "no toolsets" : `tools ${registered.join(", ")}`;
   const parts = [tools, sandboxText(wiring.sandbox), egressText(wiring.egress)];
-  const paint = wiring.egress.state === "failed" ? theme.needsApproval.bind(theme) : theme.meta.bind(theme);
+  for (const s of skipped) parts.push(`skipped ${s.toolset} (${s.reason})`);
+  const paint = wiring.egress.state === "failed" || skipped.length > 0 ? theme.needsApproval.bind(theme) : theme.meta.bind(theme);
   return paint(parts.join("    "));
 }
