@@ -1,4 +1,5 @@
 import { exec } from "node:child_process";
+import { scrubChildEnv } from "./env-scrub.js";
 import type { TerminalBackend, TerminalCommandOptions, TerminalExecutionResult } from "./types.js";
 
 export class LocalBackend implements TerminalBackend {
@@ -21,8 +22,9 @@ export class LocalBackend implements TerminalBackend {
         command,
         {
           cwd: options?.cwd || process.cwd(),
+          // Never the whole process.env: the CLI loads every provider key into it. See env-scrub.ts.
           env: {
-            ...process.env,
+            ...scrubChildEnv(process.env),
             ...options?.env,
             ...(options?.proxyToken ? { TRENT_PROXY_TOKEN: options.proxyToken } : {}),
           },

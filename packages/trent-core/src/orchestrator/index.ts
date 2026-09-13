@@ -46,6 +46,8 @@ import { loadLibs, type Libs } from "./libs.js";
 import { applyModelEnv } from "./model-env.js";
 import { PortShaper, PortTally } from "./provider-ports.js";
 import { SeatTally, guardSeatModel, shapeEvent, type SeatModelFn } from "./seat-guard.js";
+import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
+import type { TrentToolAdapter } from "../tools/types.js";
 import {
   type OrcEvent,
   type Orchestrator,
@@ -60,6 +62,7 @@ export { FALLBACK_PLANNER_APPROVAL_TRIGGERS, FALLBACK_PLAN_REASONING, FALLBACK_R
 export { buildConsolidationPrompt, isFallbackSummary, WRAPPER_CONSOLIDATED_DETAIL } from "./provider-ports.js";
 export { applyModelEnv, modelEnvKeys } from "./model-env.js";
 export { resolveToolName, normaliseSeatTurn } from "./tool-names.js";
+export { wireSeatTools, toolsetEnvironment, SEAT_ROLES } from "./seat-wiring.js";
 
 /**
  * Default drain bound. A 12-step plan (the planner's Zod maximum) costs one plan job, up to 12
@@ -78,6 +81,12 @@ export interface RunBusHook {
 export type OrchestratorDepsWithImprove = OrchestratorDeps & {
   /** Receives every event and is flushed before `result()` resolves. */
   readonly improve?: RunBusHook;
+  /**
+   * The toolset adapters the seats may use (`buildTrentToolAdapters(config, ...)`). Registered
+   * through the app's `registerExternalAdapters` seam and written into every seat's environment
+   * before a run launches; their usage text rides into the seat prompt through the seat guard.
+   */
+  readonly tools?: readonly TrentToolAdapter[];
 };
 
 // --- The drain loop -----------------------------------------------------------------------------
@@ -188,6 +197,8 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
     return gatewayPromise;
   }
 
+  const seatInstructions = toolInstructions(deps.tools ?? []);
+
   function installPorts(libs: Libs, gateway: ModelGateway, tally: SeatTally, ports: PortTally): void {
     const underlying = (deps.executeSeatModelFn as SeatModelFn | undefined) ?? libs.gateway.executeSeatModel;
     const chat = deps.executeSeatModelFn ? undefined : deps.createChatCompletion;
@@ -195,7 +206,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       orchestration: {
         // Default, not test-only: the planner and the critic reach the configured provider.
         createCompletion: deps.createCompletion ?? createCompletionPort(gateway, { onCall: (call) => ports.record(call) }),
-        executeSeatModelFn: guardSeatModel(underlying, chat, tally),
+        executeSeatModelFn: guardSeatModel(underlying, chat, tally, seatInstructions),
       },
     });
   }
@@ -284,6 +295,8 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       const gateway = await loadGateway();
       assertStandaloneEnv();
       installPorts(libs, gateway, tally, ports);
+      // The seats' tools exist before the plan is made: registry, router catalog, seat environments.
+      await wireSeatTools(libs, options.companyId, deps.tools ?? []);
       try {
         const launched = await libs.orchestrator.launchOrchestration({
           companyId: options.companyId,

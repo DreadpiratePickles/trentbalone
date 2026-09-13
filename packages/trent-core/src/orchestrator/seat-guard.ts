@@ -20,7 +20,7 @@ import {
 /** The slice of `SeatModelExecutionInput` / `SeatModelExecutionResult` the guard reads. */
 export interface SeatModelInput {
   readonly subtask: { readonly id: string; readonly seat: string };
-  readonly toolLoopContext?: { readonly availableTools?: readonly string[] };
+  readonly toolLoopContext?: { readonly availableTools?: readonly string[]; readonly toolInstructions?: readonly string[] };
   readonly createChatCompletion?: SeatChatCompletionFn;
 }
 
@@ -84,15 +84,35 @@ export class SeatTally {
  * Wraps the underlying seat executor: threads the seat-level provider port through, records every
  * result on the tally, and normalises a split tool name to the exact registered adapter.
  */
-export function guardSeatModel(underlying: SeatModelFn, chat: SeatChatCompletionFn | undefined, tally: SeatTally): SeatModelFn {
+export function guardSeatModel(
+  underlying: SeatModelFn,
+  chat: SeatChatCompletionFn | undefined,
+  tally: SeatTally,
+  /** Per-adapter usage text, appended to the seat prompt's tool instructions when that tool is available. */
+  instructions?: ReadonlyMap<string, string>,
+): SeatModelFn {
   return async (input) => {
-    const result = await underlying(chat ? { ...input, createChatCompletion: chat } : input);
+    const forwarded = chat ? { ...input, createChatCompletion: chat } : input;
+    const result = await underlying(withToolInstructions(forwarded, instructions));
     tally.record(input.subtask.id, result);
     const registered = input.toolLoopContext?.availableTools;
     if (!registered || registered.length === 0) return result;
     const output = normaliseSeatTurn(result.output, registered);
     return output === result.output ? result : { ...result, output };
   };
+}
+
+/**
+ * The seat loop only teaches the model the Workbench action shape (`buildToolInstructions`,
+ * `seat-agent-loop.ts`); the registered toolsets carry their own `<tool> <json>` usage text, which
+ * rides in on the same `toolInstructions` list the prompt renders as "Tool-specific instructions".
+ */
+function withToolInstructions(input: SeatModelInput, instructions: ReadonlyMap<string, string> | undefined): SeatModelInput {
+  const loop = input.toolLoopContext;
+  if (!instructions || instructions.size === 0 || !loop?.availableTools?.length) return input;
+  const extra = loop.availableTools.map((tool) => instructions.get(tool)).filter((text): text is string => text !== undefined);
+  if (extra.length === 0) return input;
+  return { ...input, toolLoopContext: { ...loop, toolInstructions: [...(loop.toolInstructions ?? []), ...extra] } };
 }
 
 // --- Event shaping --------------------------------------------------------------------------------
