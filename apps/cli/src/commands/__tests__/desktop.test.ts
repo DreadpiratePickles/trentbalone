@@ -137,7 +137,10 @@ describe("trent update", () => {
 
     const back = await runCli(["update", "--rollback", "--json"], { env });
     expect(back.exitCode, back.stdout).toBe(EXIT.OK);
-    expect(fs.readFileSync(bin)).toEqual(fakeBinary(CLI_VERSION));
+    // Under the versioned layout bin/trent is the launcher, not the binary, so the proof of a
+    // rollback is what it EXECUTES: the previous version, byte-for-byte in versions/<old>/.
+    expect(execFileSync(bin, ["--version"], { env }).toString().trim()).toBe(CLI_VERSION);
+    expect(fs.existsSync(path.join(env.TRENT_HOME ?? "", "versions", CLI_VERSION, "trent"))).toBe(true);
   });
 
   it("refuses a downgrade without --force", async () => {

@@ -32,6 +32,23 @@ const includeLiveTests = process.env.TRENT_TEST_LIVE === "1";
  * config that can run it correctly. Re-including it here re-creates the phantom
  * failures and nothing else.
  */
+/**
+ * Two suites hold genuinely EXCLUSIVE operating-system resources and cannot share a machine
+ * with other workers, so they get their own project with file parallelism OFF. This is the one
+ * legitimate use of sequencing here; everything else still fans out across cores.
+ *   - store/derive-sqlite-schema.test.ts runs `prisma generate`, which rewrites the shared
+ *     generated client on disk while other workers import it; its beforeAll exceeded 60 s under
+ *     a saturated fork pool.
+ *   - commands/__tests__/desktop.test.ts drives `hdiutil`, which mounts and detaches disk images
+ *     serially on macOS; a concurrent mount contends, and a failed run leaves a stale volume
+ *     attached that blocks every later one.
+ * Measured: both pass alone every time and flake only under parallel load.
+ */
+const EXCLUSIVE = [
+  "packages/trent-core/src/store/derive-sqlite-schema.test.ts",
+  "apps/cli/src/commands/__tests__/desktop.test.ts",
+];
+
 export default defineConfig({
   test: {
     environment: "node",
@@ -77,6 +94,16 @@ export default defineConfig({
      */
     testTimeout: 60_000,
     hookTimeout: 60_000,
+    projects: [
+      {
+        extends: true,
+        test: { name: "parallel", exclude: [...EXCLUSIVE] },
+      },
+      {
+        extends: true,
+        test: { name: "exclusive", include: EXCLUSIVE, fileParallelism: false },
+      },
+    ],
   },
   resolve: {
     alias: {

@@ -15,7 +15,9 @@ import {
   compareVersions,
   fetchArtifact,
   installAtomically,
+  launcherText,
   planUpdate,
+  pruneVersions,
   resolveLatest,
   rollbackInstall,
   rollbackUpdate,
@@ -201,12 +203,28 @@ describe("installAtomically and rollback", () => {
   });
 });
 
-describe("self-update end to end", () => {
-  it("check reports an available version and plan/apply install it; --version works", async () => {
-    const e = env("1.0.0");
-    layoutRelease(server, { version: "2.0.0", assets: { [ASSET]: fakeBinary("2.0.0") } }, key);
+describe("self-update end to end (installer layout: versions/<v>/trent + current + bin/trent launcher)", () => {
+  /** Lay `home` out the way `scripts/install.sh` does for one installed version. */
+  function installerLayout(e: UpdaterEnv, version: string): { launcher: string; current: string; versions: string } {
+    const versions = path.join(e.home, "versions");
+    fs.mkdirSync(path.join(versions, version), { recursive: true });
+    fs.writeFileSync(path.join(versions, version, "trent"), fakeBinary(version), { mode: 0o755 });
     fs.mkdirSync(path.join(e.home, "bin"), { recursive: true });
-    fs.writeFileSync(path.join(e.home, "bin", "trent"), fakeBinary("1.0.0"), { mode: 0o755 });
+    const launcher = path.join(e.home, "bin", "trent");
+    fs.writeFileSync(launcher, launcherText(e.home), { mode: 0o755 });
+    const current = path.join(e.home, "current");
+    fs.writeFileSync(current, `${version}\n`);
+    return { launcher, current, versions };
+  }
+  const runVersion = (binary: string): string => execFileSync(binary, ["--version"]).toString().trim();
+  const readCurrent = (e: UpdaterEnv): string => fs.readFileSync(path.join(e.home, "current"), "utf8").trim();
+
+  it("check reports an available version; apply writes versions/<new>/trent, repoints current, never touches bin/trent", async () => {
+    const e = env("1.0.0");
+    const { launcher } = installerLayout(e, "1.0.0");
+    const launcherBefore = fs.readFileSync(launcher);
+    const launcherInode = fs.statSync(launcher).ino;
+    layoutRelease(server, { version: "2.0.0", assets: { [ASSET]: fakeBinary("2.0.0") } }, key);
 
     const check = await checkUpdate(e, "stable");
     expect(check.updateAvailable).toBe(true);
@@ -214,21 +232,106 @@ describe("self-update end to end", () => {
 
     const plan = await planUpdate(e, { channel: "stable" });
     expect(plan.action).toBe("install");
+    expect(plan.targetPath).toBe(path.join(e.home, "versions", "2.0.0", "trent"));
     const receipt = await applyUpdate(e, plan);
     expect(receipt.ok).toBe(true);
-    expect(receipt.installedPath).toBe(path.join(e.home, "bin", "trent"));
-    expect(execFileSync(receipt.installedPath).toString().trim()).toBe("2.0.0");
-    expect(fs.readFileSync(path.join(e.home, "current"), "utf8").trim()).toBe("2.0.0");
+    expect(receipt.installedPath).toBe(path.join(e.home, "versions", "2.0.0", "trent"));
+    expect(receipt.previousVersion).toBe("1.0.0");
+    expect(receipt.launcherRepaired).toBeUndefined();
+    expect(fs.statSync(receipt.installedPath).mode & 0o777).toBe(0o755);
+    expect(readCurrent(e)).toBe("2.0.0");
+    // The launcher is byte-identical, the same inode, and now execs the new version.
+    expect(fs.readFileSync(launcher)).toEqual(launcherBefore);
+    expect(fs.statSync(launcher).ino).toBe(launcherInode);
+    expect(runVersion(launcher)).toBe("2.0.0");
+    // The old version stays on disk (that directory IS the rollback target).
+    expect(fs.readFileSync(path.join(e.home, "versions", "1.0.0", "trent"))).toEqual(fakeBinary("1.0.0"));
+    expect(fs.existsSync(path.join(e.home, "bin", "trent.previous"))).toBe(false);
+    // Staging is empty after a successful run.
+    expect(fs.readdirSync(path.join(e.home, "staging"))).toEqual([]);
 
     const receipts = fs.readdirSync(path.join(e.home, "logs", "update_receipts"));
     expect(receipts).toHaveLength(1);
     const written = JSON.parse(fs.readFileSync(path.join(e.home, "logs", "update_receipts", receipts[0] ?? ""), "utf8")) as { ok: boolean; toVersion: string };
     expect(written.ok).toBe(true);
     expect(written.toVersion).toBe("2.0.0");
+  });
+
+  it("rollback rewrites current to the previous version; bin/trent --version shows the old version", async () => {
+    const e = env("1.0.0");
+    const { launcher } = installerLayout(e, "1.0.0");
+    layoutRelease(server, { version: "2.0.0", assets: { [ASSET]: fakeBinary("2.0.0") } }, key);
+    await applyUpdate(e, await planUpdate(e, { channel: "stable" }));
+    expect(runVersion(launcher)).toBe("2.0.0");
 
     const back = await rollbackUpdate(e);
     expect(back.restoredVersion).toBe("1.0.0");
-    expect(fs.readFileSync(path.join(e.home, "bin", "trent"))).toEqual(fakeBinary("1.0.0"));
+    expect(back.restoredPath).toBe(path.join(e.home, "versions", "1.0.0", "trent"));
+    expect(readCurrent(e)).toBe("1.0.0");
+    expect(runVersion(launcher)).toBe("1.0.0");
+    // Rollback deletes nothing: the version rolled away from is still installed.
+    expect(fs.existsSync(path.join(e.home, "versions", "2.0.0", "trent"))).toBe(true);
+  });
+
+  it("rollback is refused, naming the missing directory, when the old version was deleted", async () => {
+    const e = env("1.0.0");
+    installerLayout(e, "1.0.0");
+    layoutRelease(server, { version: "2.0.0", assets: { [ASSET]: fakeBinary("2.0.0") } }, key);
+    await applyUpdate(e, await planUpdate(e, { channel: "stable" }));
+    const old = path.join(e.home, "versions", "1.0.0");
+    fs.rmSync(old, { recursive: true, force: true });
+
+    await expect(rollbackUpdate(e)).rejects.toThrow(old);
+    expect(readCurrent(e)).toBe("2.0.0");
+  });
+
+  it("prune keeps exactly current and the immediately previous version and reports what it removed", async () => {
+    const e = env("1.0.0");
+    const { versions } = installerLayout(e, "1.0.0");
+    for (const v of ["2.0.0", "3.0.0"]) {
+      layoutRelease(server, { version: v, assets: { [ASSET]: fakeBinary(v) } }, key);
+      await applyUpdate(e, await planUpdate(e, { version: v }));
+    }
+    // A stray broken directory, the shape the installer leaves behind, is also prunable.
+    fs.mkdirSync(path.join(versions, "0.9.0.broken-2026"), { recursive: true });
+    expect(fs.readdirSync(versions).sort()).toEqual(["0.9.0.broken-2026", "1.0.0", "2.0.0", "3.0.0"]);
+
+    const pruned = pruneVersions(e);
+    expect(pruned.kept.sort()).toEqual(["2.0.0", "3.0.0"]);
+    expect(pruned.removed.sort()).toEqual([path.join(versions, "0.9.0.broken-2026"), path.join(versions, "1.0.0")]);
+    expect(fs.readdirSync(versions).sort()).toEqual(["2.0.0", "3.0.0"]);
+    // Idempotent: a second prune removes nothing.
+    expect(pruneVersions(e).removed).toEqual([]);
+    // Prune never deletes the rollback target: rollback still works after it.
+    expect((await rollbackUpdate(e)).restoredVersion).toBe("2.0.0");
+  });
+
+  it("migrates a legacy layout (raw binary at bin/trent, no versions/) and repairs the launcher", async () => {
+    const e = env("1.0.0");
+    fs.mkdirSync(path.join(e.home, "bin"), { recursive: true });
+    const launcher = path.join(e.home, "bin", "trent");
+    fs.writeFileSync(launcher, fakeBinary("1.0.0"), { mode: 0o755 });
+    layoutRelease(server, { version: "2.0.0", assets: { [ASSET]: fakeBinary("2.0.0") } }, key);
+
+    const receipt = await applyUpdate(e, await planUpdate(e, { channel: "stable" }));
+    expect(receipt.ok).toBe(true);
+    expect(receipt.launcherRepaired).toMatch(/legacy|launcher/i);
+    expect(fs.readFileSync(path.join(e.home, "versions", "1.0.0", "trent"))).toEqual(fakeBinary("1.0.0"));
+    expect(fs.readFileSync(launcher, "utf8")).toBe(launcherText(e.home));
+    expect(runVersion(launcher)).toBe("2.0.0");
+
+    await rollbackUpdate(e);
+    expect(runVersion(launcher)).toBe("1.0.0");
+  });
+
+  it("writes the launcher when bin/trent is missing and says so in the receipt", async () => {
+    const e = env("1.0.0");
+    installerLayout(e, "1.0.0");
+    fs.rmSync(path.join(e.home, "bin", "trent"));
+    layoutRelease(server, { version: "2.0.0", assets: { [ASSET]: fakeBinary("2.0.0") } }, key);
+    const receipt = await applyUpdate(e, await planUpdate(e, { channel: "stable" }));
+    expect(receipt.launcherRepaired).toMatch(/missing|launcher/i);
+    expect(runVersion(path.join(e.home, "bin", "trent"))).toBe("2.0.0");
   });
 
   it("refuses a downgrade without force", async () => {
@@ -239,16 +342,28 @@ describe("self-update end to end", () => {
     expect(forced.action).toBe("install");
   });
 
-  it("apply refuses a bad signature and leaves the installed binary untouched", async () => {
+  it("apply refuses a bad signature and leaves the installed layout untouched", async () => {
     const e = env("1.0.0");
+    const { launcher } = installerLayout(e, "1.0.0");
     layoutRelease(server, { version: "2.0.0", assets: { [ASSET]: fakeBinary("2.0.0") } }, key, { badSignature: true });
-    fs.mkdirSync(path.join(e.home, "bin"), { recursive: true });
-    fs.writeFileSync(path.join(e.home, "bin", "trent"), fakeBinary("1.0.0"), { mode: 0o755 });
     const plan = await planUpdate(e, { channel: "stable" });
     await expect(applyUpdate(e, plan)).rejects.toThrow(/signature/i);
-    expect(fs.readFileSync(path.join(e.home, "bin", "trent"))).toEqual(fakeBinary("1.0.0"));
+    expect(readCurrent(e)).toBe("1.0.0");
+    expect(runVersion(launcher)).toBe("1.0.0");
+    expect(fs.existsSync(path.join(e.home, "versions", "2.0.0"))).toBe(false);
     const receipts = fs.readdirSync(path.join(e.home, "logs", "update_receipts"));
     expect(receipts).toHaveLength(1);
     expect((JSON.parse(fs.readFileSync(path.join(e.home, "logs", "update_receipts", receipts[0] ?? ""), "utf8")) as { ok: boolean }).ok).toBe(false);
+  });
+
+  it("a binary that reports the wrong version is quarantined and current is not moved", async () => {
+    const e = env("1.0.0");
+    const { launcher } = installerLayout(e, "1.0.0");
+    // Signed correctly, but the bytes claim to be 1.5.0 while the release says 2.0.0.
+    layoutRelease(server, { version: "2.0.0", assets: { [ASSET]: fakeBinary("1.5.0") } }, key);
+    await expect(applyUpdate(e, await planUpdate(e, { channel: "stable" }))).rejects.toThrow(/1\.5\.0/);
+    expect(readCurrent(e)).toBe("1.0.0");
+    expect(runVersion(launcher)).toBe("1.0.0");
+    expect(fs.existsSync(path.join(e.home, "versions", "2.0.0", "trent"))).toBe(false);
   });
 });
