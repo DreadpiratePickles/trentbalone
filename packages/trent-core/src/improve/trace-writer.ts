@@ -36,6 +36,8 @@ export interface TraceWriterOptions {
    * itself. Defaults to the role, which is what the standalone CLI has.
    */
   readonly resolveAgentId?: (companyId: string, role: string) => Promise<string> | string;
+  /** Whether a live skill reached the model on this step (`skill-injection.ts`). Defaults to never. */
+  readonly skillApplied?: (stepId: string) => boolean;
   readonly now?: () => string;
   /** Diagnostic channel for a failed write. Never receives a prompt body. */
   readonly onError?: (message: string) => void;
@@ -65,6 +67,32 @@ interface RunContext {
   objective: string;
 }
 
+/** The critic's four 0..3 rubric dimensions, when it scored them. */
+interface CritiqueLike {
+  verdict?: string;
+  scores?: { completeness?: number; correctness?: number; safety?: number; followsSpec?: number };
+}
+
+const VERDICT_SCORE: Record<string, number> = { pass: 1, retry: 0.5, replan: 0.25, escalate: 0 };
+
+/**
+ * A 0..1 eval score for the trace, from the critic that actually reviewed the step: the mean of
+ * its rubric scores when it gave them, else the verdict alone. Without this `high_score_no_skill`
+ * can never fire and `worstPerformingRole` is always null (CS329A analysis, code fact 6).
+ */
+export function evalScoreFromCritique(critique: CritiqueLike | undefined): number | undefined {
+  if (!critique) return undefined;
+  const dims = critique.scores;
+  if (dims) {
+    const values = [dims.completeness, dims.correctness, dims.safety, dims.followsSpec].filter((v): v is number => typeof v === "number");
+    if (values.length > 0) {
+      const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+      return Math.max(0, Math.min(1, mean / 3));
+    }
+  }
+  return critique.verdict === undefined ? undefined : VERDICT_SCORE[critique.verdict];
+}
+
 export function isTraceableAgent(agentId: string, installedAgents: readonly string[]): boolean {
   return SEAT_ROLES.includes(agentId) || installedAgents.includes(agentId);
 }
@@ -82,10 +110,13 @@ export function createTraceWriter(options: TraceWriterOptions): BusHook {
     const agentId = await resolveAgentId(context.companyId, step.agentRole);
     if (!isTraceableAgent(agentId, options.installedAgents)) return;
 
+    const evalScore = evalScoreFromCritique(step.critique as CritiqueLike | undefined);
     const record = deriveTrace(step as OrchestratorStepLike, {
       companyId: context.companyId,
       runId: event.runId,
       taskType: deriveTaskType(context.objective),
+      ...(evalScore === undefined ? {} : { evalScore }),
+      skillApplied: options.skillApplied?.(step.id) ?? false,
       now: now(),
     });
     // One trace per finished step: a step re-emitted after an approval or a retry is not two steps.

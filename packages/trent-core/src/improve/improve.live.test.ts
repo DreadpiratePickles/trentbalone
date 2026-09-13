@@ -1,7 +1,9 @@
 /**
  * The one live proof: a real sweep over a real trace, with the executing gate running the frozen
- * suite through the real model gateway on gemini-3.5-flash-lite. Three completions in total
- * (baseline, skill candidate, GEPA proposal); no judge, so the free-tier quota is respected.
+ * suite through the real model gateway on gemini-3.5-flash-lite. Three completions for the first
+ * sweep (baseline, skill candidate, GEPA proposal); a second sweep over new traces makes TWO,
+ * because the baseline is content-addressed (I.3). Before I.3 the pair cost six. No judge, so the
+ * free-tier quota is respected; cost per phase is printed from the gateway's real usage.
  *
  * Gated by TRENT_TEST_LIVE=1 (vitest excludes *.live.test.ts otherwise). The key is read from
  * GEMINI_API_KEY or <repo>/gem.env and is never printed.
@@ -102,6 +104,14 @@ describe.skipIf(!GEMINI_API_KEY)("improve loop (live, google/gemini)", () => {
     expect(engineer.skillsDistilled).toBe(1);
     expect(engineer.gepaPasses).toBe(1);
     expect(calls).toBe(3);
+    expect(report.phases.baseline.calls).toBe(1);
+    expect(report.phases.candidate.calls).toBe(1);
+    expect(report.phases.gepa.calls).toBe(1);
+    expect(report.phases.judge.calls).toBe(0);
+    expect(Number.isInteger(report.costCents)).toBe(true);
+    expect(report.costCents).toBe(
+      report.phases.baseline.costCents + report.phases.candidate.costCents + report.phases.gepa.costCents + report.phases.judge.costCents,
+    );
 
     const iterations = await store.listIterations(companyId, { agentId: "engineer" });
     expect(iterations.length).toBe(2);
@@ -111,6 +121,29 @@ describe.skipIf(!GEMINI_API_KEY)("improve loop (live, google/gemini)", () => {
     }
     const frontier = await store.getFrontier(companyId, "engineer");
     expect(frontier?.frontier.best).toBeTruthy();
-    expect(report.costCents).toBeGreaterThanOrEqual(0);
-  }, 120_000);
+
+    // A second sweep over a new trace gates a fresh draft without re-buying the baseline.
+    await store.appendTrace({ ...base, id: "t3", critiqueVerdict: "retry", improvement: "cite the diff", createdAt: "2026-09-12T11:00:00.000Z" });
+    const before = calls;
+    const second = await runImprovementSweep(companyId, {
+      store,
+      installedAgents: [],
+      agentFilter: "engineer",
+      skipLLM: true,
+      seatPrompt: async () => "You are the engineer seat of a small startup. Answer briefly.",
+      suiteFor: () => SUITE,
+      actuals: counted,
+    });
+    const again = second.agents.find((a) => a.agentId === "engineer")!;
+    expect(again.errors).toEqual([]);
+    expect(again.skillsDistilled).toBe(1);
+    expect(second.phases.baseline.calls).toBe(0);
+    expect(calls - before).toBe(2);
+
+    console.log(
+      `[improve.live] sweep 1: ${JSON.stringify({ costCents: report.costCents, phases: report.phases })}\n` +
+        `[improve.live] sweep 2: ${JSON.stringify({ costCents: second.costCents, phases: second.phases })}\n` +
+        `[improve.live] gateway calls: sweep 1 = 3, sweep 2 = ${calls - before} (was 3 before I.3); total ${calls} (was 6)`,
+    );
+  }, 180_000);
 });

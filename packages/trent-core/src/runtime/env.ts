@@ -19,6 +19,8 @@ export const IN_MEMORY_DATABASE = ":memory:" as const;
 export type StandaloneEnv = {
   /** Must be "disabled". Anything else double-executes every job. */
   TRENT_QUEUE_FALLBACK: "disabled";
+  /** Must be "1": a promoted skill reaches the seat that earned it (`orchestrator-runtime.ts:1437`). */
+  SKILL_INJECTION_ENABLED: "1";
   /** Must be empty so `getQueue()` returns null and no BullMQ connection is attempted. */
   REDIS_URL: "";
   /** A SQLite URL for durable mode, or absent when using the in-memory store. */
@@ -47,6 +49,11 @@ export function applyStandaloneEnv(databaseUrl: string): void {
 
   for (const key of REDIS_KEYS) delete process.env[key];
   process.env.REDIS_URL = "";
+
+  // The loop's output reaches a seat only with this on (`orchestrator-runtime.ts:53` reads it at
+  // module evaluation, hence the "call before any apps/web import" rule above). Off, every promoted
+  // skill is context the seat lacks: L8's "low-context human" finding, and appliedRate stays 0.
+  process.env.SKILL_INJECTION_ENABLED = "1";
 
   if (databaseUrl === IN_MEMORY_DATABASE) delete process.env.DATABASE_URL;
   else process.env.DATABASE_URL = databaseUrl;
@@ -78,5 +85,5 @@ export function assertStandaloneEnv(): void {
 
 /** The variables a standalone run relies on, for `trent doctor` to display. Values are never read. */
 export function standaloneEnvKeys(): readonly string[] {
-  return ["TRENT_QUEUE_FALLBACK", "TRENT_EVAL_SYNC_QUEUE", ...REDIS_KEYS, "DATABASE_URL"] as const;
+  return ["TRENT_QUEUE_FALLBACK", "TRENT_EVAL_SYNC_QUEUE", ...REDIS_KEYS, "DATABASE_URL", "SKILL_INJECTION_ENABLED"] as const;
 }

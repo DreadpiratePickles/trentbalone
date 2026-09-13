@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { OrcEvent, OrchestrationRunSnapshot } from "../orchestrator/types.js";
 import { InMemoryImproveStore } from "./memory-store.js";
-import { createImproveHook, createTraceWriter, deriveTaskType } from "./index.js";
+import { CORE_SEATS, SEAT_ROLES, createImproveHook, createTraceWriter, deriveTaskType, newId } from "./index.js";
 import { bootOffline, imitateCompiledBinary, restoreEnv } from "./offline-harness.js";
 
 describe("trace writer — one trace per finished step, from the bus", () => {
@@ -67,6 +67,18 @@ describe("trace writer — one trace per finished step, from the bus", () => {
     }
   });
 
+  it("populates evalScore from the critic's verdict, so high_score_no_skill and worstPerformingRole can fire", async () => {
+    const traces = await store.tracesByRun(snapshot.id);
+    const critiqued = traces.filter((t) => t.critiqueVerdict !== null);
+    expect(critiqued.length).toBeGreaterThan(0);
+    for (const t of critiqued) {
+      expect(t.evalScore, `trace ${t.id} verdict ${t.critiqueVerdict}`).not.toBeNull();
+      expect(t.evalScore).toBeGreaterThanOrEqual(0);
+      expect(t.evalScore).toBeLessThanOrEqual(1);
+    }
+    expect(critiqued.filter((t) => t.critiqueVerdict === "pass").every((t) => (t.evalScore ?? 0) >= 0.8)).toBe(true);
+  });
+
   it("only the nine seats and installed specialists get traces; an uninstalled specialist never does", async () => {
     const counts = await store.countTracesByAgent(companyId);
     const agents = Object.keys(counts);
@@ -118,5 +130,65 @@ describe("trace writer — scope rule on a synthetic step_end", () => {
     writer.sink(stepEnd("run_y", "engineer"));
     await writer.flush();
     expect(await store.tracesByRun("run_y")).toEqual([]);
+  });
+});
+
+describe("I.17: a promoted live skill reaches the seat that earned it, and the trace says so", () => {
+  const store = new InMemoryImproveStore();
+  const seen: Array<{ seat: string; systemPrompt: string }> = [];
+  let snapshot: OrchestrationRunSnapshot;
+
+  beforeAll(async () => {
+    imitateCompiledBinary();
+    const harness = await bootOffline("ImproveSkillApplied");
+    for (const agentId of SEAT_ROLES) {
+      await store.createDraft({
+        id: newId("skill"),
+        companyId: harness.companyId,
+        agentId,
+        taskType: "general",
+        kind: "skill",
+        status: "live",
+        content: `# Skill for ${agentId}\nSENTINEL-${agentId.toUpperCase()}: read memory before acting.`,
+        contentHash: "h",
+        triggers: [],
+        createdAt: "2026-09-12T10:00:00.000Z",
+        promotedAt: "2026-09-12T10:00:00.000Z",
+        lastUsedAt: null,
+        retiredAt: null,
+      });
+    }
+    const { createOrchestrator } = await import("../orchestrator/index.js");
+    const hook = createImproveHook({ store, installedAgents: [...CORE_SEATS] });
+    const underlying = harness.executeSeatModelFn as unknown as (input: { subtask: { seat: string }; systemPrompt: string }) => Promise<unknown>;
+    const spy = async (input: { subtask: { seat: string }; systemPrompt: string }) => {
+      seen.push({ seat: input.subtask.seat, systemPrompt: input.systemPrompt });
+      return underlying(input);
+    };
+    const orchestrator = createOrchestrator({
+      createCompletion: harness.createCompletion,
+      executeSeatModelFn: hook.seatModel(spy as never) as never,
+      improve: hook,
+    });
+    const handle = orchestrator.run({ companyId: harness.companyId, objective: harness.objective });
+    for await (const _ of handle) {
+      /* drain */
+    }
+    snapshot = await handle.result();
+  }, 120_000);
+
+  afterAll(restoreEnv);
+
+  it("the seat model received the promoted skill in its system prompt", () => {
+    expect(seen.length).toBeGreaterThan(0);
+    for (const call of seen) {
+      expect(call.systemPrompt, `seat ${call.seat}`).toContain(`SENTINEL-${call.seat.toUpperCase()}`);
+    }
+  });
+
+  it("every trace of the run carries skillApplied: true", async () => {
+    const traces = await store.tracesByRun(snapshot.id);
+    expect(traces.length).toBeGreaterThan(0);
+    for (const t of traces) expect(t.skillApplied, `trace ${t.id}`).toBe(true);
   });
 });

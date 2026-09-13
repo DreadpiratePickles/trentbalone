@@ -129,6 +129,128 @@ describe("runImprovementSweep", () => {
   });
 });
 
+/** A suite of N fixtures, each with one mechanical grader and one rubric, so a judge has work. */
+function suiteOf(n: number, version = "v1") {
+  return {
+    id: "cost",
+    version,
+    fixtures: Array.from({ length: n }, (_, i) => ({
+      id: `f${i + 1}`,
+      prompt: `say ok ${i + 1}`,
+      graders: [
+        { type: "contains" as const, weight: 1, values: ["ok"] },
+        { type: "llm_rubric" as const, weight: 1, rubric: "Is polite." },
+      ],
+    })),
+  };
+}
+
+/** One-cent-per-call model access, with every call counted by the system prompt it saw. */
+function centGateway(reply = "ok") {
+  const calls: string[] = [];
+  let judgeCalls = 0;
+  return {
+    calls,
+    judge: async () => {
+      judgeCalls += 1;
+      return { pass: true, costCents: 1 };
+    },
+    judgeCalls: () => judgeCalls,
+    actuals: async ({ systemPrompt }: { systemPrompt: string }) => {
+      calls.push(systemPrompt);
+      return { text: reply, toolCalls: [], costCents: 1 };
+    },
+  };
+}
+
+describe("cost accounting and budget (I.1-I.3)", () => {
+  const SEAT = "SEAT PROMPT engineer";
+
+  it("I.1: with a gateway whose every call costs 1 cent, report.costCents equals the total number of calls, per phase", async () => {
+    const store = new InMemoryImproveStore();
+    await seedEngineer(store);
+    const gw = centGateway();
+    const report = await runImprovementSweep(COMPANY, {
+      store,
+      installedAgents: [],
+      skipLLM: true,
+      agentFilter: "engineer",
+      seatPrompt: async () => SEAT,
+      suiteFor: () => suiteOf(3),
+      actuals: gw.actuals,
+      judge: gw.judge,
+    });
+    const total = gw.calls.length + gw.judgeCalls();
+    expect(total).toBeGreaterThan(0);
+    expect(report.costCents).toBe(total);
+    // Where the calls went: baseline, the skill candidate, the GEPA proposal, and the judge across all three.
+    expect(report.phases.baseline.calls).toBe(3);
+    expect(report.phases.candidate.calls).toBe(3);
+    expect(report.phases.gepa.calls).toBe(3);
+    expect(report.phases.judge.calls).toBe(gw.judgeCalls());
+    expect(report.phases.baseline.costCents + report.phases.candidate.costCents + report.phases.gepa.costCents + report.phases.judge.costCents).toBe(total);
+    expect(Number.isInteger(report.costCents)).toBe(true);
+  });
+
+  it("I.2: budgetCents stops the sweep at the budget and marks what could not be measured budget_exhausted", async () => {
+    const store = new InMemoryImproveStore();
+    await seedEngineer(store);
+    const gw = centGateway();
+    const report = await runImprovementSweep(COMPANY, {
+      store,
+      installedAgents: [],
+      skipLLM: true,
+      agentFilter: "engineer",
+      seatPrompt: async () => SEAT,
+      suiteFor: () => suiteOf(6),
+      actuals: gw.actuals,
+      judge: gw.judge,
+      budgetCents: 10,
+    });
+    expect(report.costCents).toBeLessThanOrEqual(10);
+    expect(gw.calls.length + gw.judgeCalls()).toBeLessThanOrEqual(10);
+    expect(report.budget).toEqual({ limitCents: 10, exhausted: true });
+    const engineer = report.agents.find((a) => a.agentId === "engineer")!;
+    expect(engineer.errors).toEqual([]);
+    const iterations = await store.listIterations(COMPANY, { agentId: "engineer" });
+    const skill = iterations.find((i) => i.candidateKind === "skill")!;
+    expect(skill.decision).toBe("quarantined");
+    expect(skill.blockedBy).toBe("budget_exhausted");
+    // An unmeasured draft is not rejected: it waits in quarantine for a sweep with budget.
+    expect((await store.getDraft(skill.candidateId!))?.status).toBe("quarantine");
+    expect(engineer.skipped).toContain("gepa: budget_exhausted");
+  });
+
+  it("I.3: a second sweep with the same seat prompt and suite version makes zero baseline calls", async () => {
+    const store = new InMemoryImproveStore();
+    await seedEngineer(store);
+    const gw = centGateway();
+    const deps = {
+      store,
+      installedAgents: [],
+      skipLLM: true,
+      agentFilter: "engineer",
+      seatPrompt: async () => SEAT,
+      suiteFor: () => suiteOf(2),
+      actuals: gw.actuals,
+      judge: gw.judge,
+    };
+    const first = await runImprovementSweep(COMPANY, deps);
+    expect(first.phases.baseline.calls).toBe(2);
+    expect(gw.calls.filter((p) => p === SEAT).length).toBe(2);
+
+    // New traces, so the second sweep must gate a fresh draft and has a real reason to want the baseline.
+    await trace(store, { id: "engineer_t4", agentId: "engineer", createdAt: "2026-09-12T11:00:00.000Z" });
+    gw.calls.length = 0;
+    const second = await runImprovementSweep(COMPANY, deps);
+    const engineer = second.agents.find((a) => a.agentId === "engineer")!;
+    expect(engineer.skillsDistilled).toBe(1);
+    expect(second.phases.candidate.calls).toBe(2);
+    expect(gw.calls.filter((p) => p === SEAT).length).toBe(0);
+    expect(second.phases.baseline.calls).toBe(0);
+  });
+});
+
 describe("fleet scope", () => {
   it("an uninstalled specialist never appears in a sweep report; installing it and giving it traces does", async () => {
     const store = new InMemoryImproveStore();

@@ -20,6 +20,7 @@ const ENV_KEYS = [
   "GEMINI_API_KEY",
   "ORCHESTRATION_GOLDEN_CAPTURE",
   "ORCHESTRATION_GOLDENS_DIR",
+  "SKILL_INJECTION_ENABLED",
 ] as const;
 
 const saved: Record<string, string | undefined> = {};

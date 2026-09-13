@@ -15,6 +15,7 @@ export {
   SEAT_ROLES,
   createTraceWriter,
   deriveTaskType,
+  evalScoreFromCritique,
   isTraceableAgent,
   type BusHook,
   type TraceWriterOptions,
@@ -28,6 +29,7 @@ export {
   type GoldenCaptureOptions,
 } from "./golden-capture.js";
 export { createImproveHook, type ImproveHook, type ImproveHookOptions } from "./hook.js";
+export { SKILL_PRELUDE_MARKER, createSkillInjector, type SeatCallLike, type SkillInjector, type SkillInjectorOptions } from "./skill-injection.js";
 export * from "./suites.js";
 export {
   composeSystemPrompt,
@@ -49,8 +51,11 @@ export {
   type JudgeFn,
   type JudgeInput,
   type JudgeVerdict,
+  type MeasuredBaseline,
 } from "./gate.js";
 export { contentHash, newId, recordLedger, setHash, type LedgerEntry } from "./ledger.js";
+export { baselineCacheKey, createMemoryGateCache, judgeCacheKey, storeGateCache, type GateCache } from "./gate-cache.js";
+export { BudgetExhaustedError, SweepMeter, emptyPhases, isBudgetExhausted, type PhaseReport, type PhaseTally, type SweepPhase } from "./meter.js";
 export {
   ProtectedPromptError,
   SEAT_PROMPT_TASK_TYPE,

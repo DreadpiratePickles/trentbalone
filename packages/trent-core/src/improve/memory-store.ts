@@ -7,6 +7,7 @@ import type {
   AgentTraceRow,
   DraftFilter,
   DraftPatch,
+  GateCacheRow,
   GepaFrontierRow,
   ImproveStorePort,
   IterationFilter,
@@ -30,6 +31,7 @@ export class InMemoryImproveStore implements ImproveStorePort {
   readonly #iterations: IterationRow[] = [];
   readonly #frontiers = new Map<string, GepaFrontierRow>();
   readonly #ledger: SkillLedgerRow[] = [];
+  readonly #gateCache = new Map<string, GateCacheRow>();
 
   async appendTrace(row: AgentTraceRow): Promise<void> {
     this.#traces.push({ ...row, toolCalls: [...row.toolCalls] });
@@ -132,5 +134,14 @@ export class InMemoryImproveStore implements ImproveStorePort {
       .filter((l) => filter.artifactId === undefined || l.artifactId === filter.artifactId)
       .sort(oldestFirst)
       .map((l) => ({ ...l }));
+  }
+
+  async getGateCache(companyId: string, key: string): Promise<GateCacheRow | null> {
+    const row = this.#gateCache.get(`${companyId}|${key}`);
+    return row ? { ...row, value: structuredClone(row.value) } : null;
+  }
+
+  async putGateCache(row: GateCacheRow): Promise<void> {
+    this.#gateCache.set(`${row.companyId}|${row.key}`, { ...row, value: structuredClone(row.value) });
   }
 }

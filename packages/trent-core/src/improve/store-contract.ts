@@ -21,6 +21,10 @@ export interface StoreContractResult {
   frontierMissing: boolean;
   ledgerForIteration: number;
   ledgerBeforeBytes: string | null;
+  /** I.3: the gate cache round-trips JSON, overwrites on the same key, and misses cleanly. */
+  gateCacheRoundTrip: unknown;
+  gateCacheOtherCompany: unknown;
+  gateCacheMissing: boolean;
 }
 
 export async function runStoreContract(store: ImproveStorePort): Promise<StoreContractResult> {
@@ -138,6 +142,10 @@ export async function runStoreContract(store: ImproveStorePort): Promise<StoreCo
     createdAt: t1,
   });
 
+  await store.putGateCache({ companyId, key: "baseline:s:v1:h1", value: { score: 0.5, failureClusters: {} }, createdAt: t0 });
+  await store.putGateCache({ companyId, key: "baseline:s:v1:h1", value: { score: 0.75, failureClusters: { rubric_failed: 1 } }, createdAt: t1 });
+  await store.putGateCache({ companyId: "co_other", key: "baseline:s:v1:h1", value: { score: 1 }, createdAt: t1 });
+
   const draft = await store.getDraft("draft_1");
   const iter = await store.getIteration("iter_1");
   const frontier = await store.getFrontier(companyId, "engineer");
@@ -157,6 +165,9 @@ export async function runStoreContract(store: ImproveStorePort): Promise<StoreCo
     frontierMissing: (await store.getFrontier(companyId, "nobody")) === null,
     ledgerForIteration: ledger.length,
     ledgerBeforeBytes: ledger[0]?.before ?? null,
+    gateCacheRoundTrip: (await store.getGateCache(companyId, "baseline:s:v1:h1"))?.value ?? null,
+    gateCacheOtherCompany: (await store.getGateCache("co_other", "baseline:s:v1:h1"))?.value ?? null,
+    gateCacheMissing: (await store.getGateCache(companyId, "baseline:s:v1:nope")) === null,
   };
 }
 
@@ -176,5 +187,8 @@ export function expectedStoreContract(): StoreContractResult {
     frontierMissing: true,
     ledgerForIteration: 1,
     ledgerBeforeBytes: "# skill v1",
+    gateCacheRoundTrip: { score: 0.75, failureClusters: { rubric_failed: 1 } },
+    gateCacheOtherCompany: { score: 1 },
+    gateCacheMissing: true,
   };
 }

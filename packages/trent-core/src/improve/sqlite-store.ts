@@ -6,7 +6,8 @@
  * (read-only), whose AgentTrace / SkillDraft / SelfImprovementIteration models predate the fleet
  * loop and carry no agent id, no ledger and no frontier. This module bootstraps what the loop needs
  * idempotently on first use: nullable columns added to the three existing tables (the app's client
- * never selects them, so it is unaffected) and two new tables, GepaFrontier and SkillLedger.
+ * never selects them, so it is unaffected) and three new tables: GepaFrontier, SkillLedger and
+ * GateCache (content-addressed gate results, so a sweep never re-buys a measurement it has).
  *
  * Every write is a single bound statement; every read normalises the driver's typed columns
  * (DATETIME -> ISO string, BOOLEAN -> boolean, JSONB -> parsed) so callers see one row shape.
@@ -16,6 +17,7 @@ import type {
   AgentTraceRow,
   DraftFilter,
   DraftPatch,
+  GateCacheRow,
   GepaFrontierRow,
   ImproveArtifactKind,
   ImproveDraftStatus,
@@ -76,6 +78,13 @@ const NEW_TABLES: readonly string[] = [
     "iterationId" TEXT,
     "actor" TEXT NOT NULL,
     "createdAt" TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS "GateCache" (
+    "companyId" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "value" TEXT NOT NULL,
+    "createdAt" TEXT NOT NULL,
+    PRIMARY KEY ("companyId", "key")
   )`,
   `CREATE INDEX IF NOT EXISTS "SkillLedger_company_artifact_idx" ON "SkillLedger" ("companyId", "artifactId")`,
   `CREATE INDEX IF NOT EXISTS "SkillLedger_company_iteration_idx" ON "SkillLedger" ("companyId", "iterationId")`,
@@ -441,5 +450,25 @@ export class SqliteImproveStore implements ImproveStorePort {
     ]);
     const rows = await this.raw.query<Row>(`SELECT * FROM "SkillLedger"${w.sql} ORDER BY "createdAt" ASC, "rowid" ASC`, ...w.args);
     return rows.map(ledgerRow);
+  }
+
+  async getGateCache(companyId: string, key: string): Promise<GateCacheRow | null> {
+    await this.ensure();
+    const rows = await this.raw.query<Row>(`SELECT * FROM "GateCache" WHERE "companyId" = ? AND "key" = ?`, companyId, key);
+    const r = rows[0];
+    if (!r) return null;
+    return { companyId: String(r.companyId), key: String(r.key), value: json(r.value), createdAt: iso(r.createdAt) };
+  }
+
+  async putGateCache(row: GateCacheRow): Promise<void> {
+    await this.ensure();
+    await this.raw.execute(
+      `INSERT INTO "GateCache" ("companyId","key","value","createdAt") VALUES (?,?,?,?)
+       ON CONFLICT("companyId","key") DO UPDATE SET "value" = excluded."value", "createdAt" = excluded."createdAt"`,
+      row.companyId,
+      row.key,
+      JSON.stringify(row.value),
+      row.createdAt,
+    );
   }
 }

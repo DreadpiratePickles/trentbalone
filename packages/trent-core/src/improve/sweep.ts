@@ -9,15 +9,22 @@
  * same traces produces nothing new.
  *
  * Triggers stay deterministic (`shouldDistillSkill`): no "be ACTIVE" bias is adopted.
+ *
+ * Cost honesty (CS329A analysis, sections 3.1 and 4): every provider call goes through the
+ * `SweepMeter`, so `report.costCents` is the sum of what the gateway charged, per phase, and an
+ * optional `budgetCents` stops the sweep. The baseline is content-addressed in the store's
+ * GateCache, so a seat prompt is executed once per suite version, not once per sweep.
  */
 
 import type { AgentTraceRow, ImproveStorePort, IterationRow, JsonValue, SkillDraftRow } from "../store/StorePort.js";
 import { createSkillFoundry, type SkillDraftStore } from "../skills/foundry.js";
 import type { TraceRecord } from "../traces/trace-store.js";
+import { baselineCacheKey, storeGateCache, type GateCache } from "./gate-cache.js";
 import { executeGate, measureBaseline, type ActualsRunner, type GateBaseline, type GateVerdict, type JudgeFn } from "./gate.js";
 import { runGepaPass, type ReflectFn } from "./gepa-pass.js";
 import { contentHash, newId, nowIso, setHash } from "./ledger.js";
 import { retireSkills, type RetirementReport } from "./lifecycle.js";
+import { isBudgetExhausted, SweepMeter, type PhaseReport } from "./meter.js";
 import { resolveSweepScope, type SkippedSpecialist } from "./scope.js";
 import { defaultSeatPromptProvider, type SeatPromptProvider } from "./seat-prompt.js";
 import type { SuiteProvider } from "./suites.js";
@@ -38,6 +45,8 @@ export interface SweepDeps {
   readonly reflect?: ReflectFn;
   readonly listedSkills?: ReadonlySet<string>;
   readonly retirement?: { staleAfterDays?: number; archiveAfterDays?: number };
+  /** Hard cap on what this sweep may spend, integer cents. Omit for no cap. */
+  readonly budgetCents?: number;
   readonly now?: () => string;
 }
 
@@ -61,7 +70,11 @@ export interface SweepReport {
   agents: AgentSweepReport[];
   skippedSpecialists: SkippedSpecialist[];
   retirement: RetirementReport;
+  /** Integer cents: the sum of every phase below, from the gateway's real usage. */
   costCents: number;
+  /** Where the calls went: baseline, skill candidates, GEPA (reflection + proposal), and the judge. */
+  phases: PhaseReport;
+  budget: { limitCents: number | null; exhausted: boolean };
   errors: string[];
 }
 
@@ -142,6 +155,8 @@ interface AgentContext {
   companyId: string;
   agentId: string;
   deps: SweepDeps;
+  meter: SweepMeter;
+  cache: GateCache;
   now: string;
   report: AgentSweepReport;
   baseline: () => Promise<GateBaseline | undefined>;
@@ -154,18 +169,31 @@ function verdictJson(verdict: GateVerdict): JsonValue {
 }
 
 async function gateDraft(ctx: AgentContext, draft: SkillDraftRow): Promise<Pick<IterationRow, "decision" | "score" | "delta" | "blockedBy" | "verdicts">> {
-  if (!ctx.suite) return { decision: "quarantined", score: null, delta: null, blockedBy: "no_suite", verdicts: null };
-  if (!ctx.deps.actuals) return { decision: "quarantined", score: null, delta: null, blockedBy: "no_gateway", verdicts: null };
-  const baseline = await ctx.baseline();
-  if (!baseline) return { decision: "quarantined", score: null, delta: null, blockedBy: "no_baseline", verdicts: null };
-  const verdict = await executeGate({
-    candidate: { id: draft.id, kind: "skill", content: draft.content },
-    seatPrompt: await ctx.seatPrompt(),
-    suite: ctx.suite,
-    baseline,
-    actuals: ctx.deps.actuals,
-    ...(ctx.deps.judge === undefined ? {} : { judge: ctx.deps.judge }),
-  });
+  const { suite, deps } = ctx;
+  const actuals = deps.actuals;
+  if (!suite) return { decision: "quarantined", score: null, delta: null, blockedBy: "no_suite", verdicts: null };
+  if (!actuals) return { decision: "quarantined", score: null, delta: null, blockedBy: "no_gateway", verdicts: null };
+  let verdict: GateVerdict;
+  try {
+    const baseline = await ctx.baseline();
+    if (!baseline) return { decision: "quarantined", score: null, delta: null, blockedBy: "no_baseline", verdicts: null };
+    const seatPrompt = await ctx.seatPrompt();
+    verdict = await ctx.meter.within("candidate", () =>
+      executeGate({
+        candidate: { id: draft.id, kind: "skill", content: draft.content },
+        seatPrompt,
+        suite,
+        baseline,
+        actuals,
+        cache: ctx.cache,
+        ...(deps.judge === undefined ? {} : { judge: deps.judge }),
+      }),
+    );
+  } catch (error) {
+    // An unmeasured draft stays in quarantine for a sweep that can afford it; it is not rejected.
+    if (isBudgetExhausted(error)) return { decision: "quarantined", score: null, delta: null, blockedBy: "budget_exhausted", verdicts: null };
+    throw error;
+  }
   if (verdict.promoted) {
     ctx.report.skillsGated += 1;
     return { decision: "pending_approval", score: verdict.score, delta: verdict.delta, blockedBy: null, verdicts: verdictJson(verdict) };
@@ -231,7 +259,37 @@ async function sweepTaskType(ctx: AgentContext, taskType: string, group: TraceRe
   await store.appendIteration(iteration);
 }
 
-async function sweepAgent(companyId: string, agentId: string, rows: AgentTraceRow[], deps: SweepDeps, now: string, seatPrompt: SeatPromptProvider): Promise<AgentSweepReport> {
+/** The baseline, content-addressed: (suite, version, judged?, sha256(seat prompt)) -> score and clusters. */
+async function cachedOrMeasuredBaseline(ctx: AgentContext): Promise<GateBaseline | undefined> {
+  const { suite, deps } = ctx;
+  if (!suite || !deps.actuals) return undefined;
+  const actuals = deps.actuals;
+  const seatPrompt = await ctx.seatPrompt();
+  const key = baselineCacheKey(suite.id, suite.version, deps.judge !== undefined, seatPrompt);
+  const hit = await ctx.cache.get(key);
+  if (hit !== undefined && typeof hit === "object" && hit !== null && !Array.isArray(hit) && typeof hit.score === "number") {
+    const clusters = hit.failureClusters;
+    return {
+      score: hit.score,
+      failureClusters: clusters !== null && typeof clusters === "object" && !Array.isArray(clusters) ? (clusters as Record<string, number>) : {},
+    };
+  }
+  const measured = await ctx.meter.within("baseline", () =>
+    measureBaseline({ seatPrompt, suite, actuals, cache: ctx.cache, ...(deps.judge === undefined ? {} : { judge: deps.judge }) }),
+  );
+  await ctx.cache.put(key, { score: measured.score, failureClusters: measured.failureClusters });
+  return { score: measured.score, failureClusters: measured.failureClusters };
+}
+
+async function sweepAgent(
+  companyId: string,
+  agentId: string,
+  rows: AgentTraceRow[],
+  deps: SweepDeps,
+  meter: SweepMeter,
+  now: string,
+  seatPrompt: SeatPromptProvider,
+): Promise<AgentSweepReport> {
   const report: AgentSweepReport = {
     agentId,
     traces: rows.length,
@@ -261,15 +319,13 @@ async function sweepAgent(companyId: string, agentId: string, rows: AgentTraceRo
     companyId,
     agentId,
     deps,
+    meter,
+    cache: storeGateCache(deps.store, companyId, () => now),
     now,
     report,
     suite,
     seatPrompt: () => (cachedPrompt ??= seatPrompt(agentId)),
-    baseline: () =>
-      (cachedBaseline ??= (async () => {
-        if (!suite || !deps.actuals) return undefined;
-        return measureBaseline({ seatPrompt: await ctx.seatPrompt(), suite, actuals: deps.actuals, ...(deps.judge === undefined ? {} : { judge: deps.judge }) });
-      })()),
+    baseline: () => (cachedBaseline ??= cachedOrMeasuredBaseline(ctx)),
   };
 
   for (const [taskType, group] of byTaskType) {
@@ -281,21 +337,24 @@ async function sweepAgent(companyId: string, agentId: string, rows: AgentTraceRo
   }
 
   try {
-    const gepa = await runGepaPass({
-      store: deps.store,
-      companyId,
-      agentId,
-      role: traces[0]!.agentRole,
-      traces,
-      suite,
-      seatPrompt: ctx.seatPrompt,
-      baseline: ctx.baseline,
-      ...(deps.actuals === undefined ? {} : { actuals: deps.actuals }),
-      ...(deps.judge === undefined ? {} : { judge: deps.judge }),
-      ...(deps.reflect === undefined ? {} : { reflect: deps.reflect }),
-      skipLLM: deps.skipLLM ?? true,
-      now,
-    });
+    const gepa = await meter.within("gepa", () =>
+      runGepaPass({
+        store: deps.store,
+        companyId,
+        agentId,
+        role: traces[0]!.agentRole,
+        traces,
+        suite,
+        seatPrompt: ctx.seatPrompt,
+        baseline: ctx.baseline,
+        cache: ctx.cache,
+        ...(deps.actuals === undefined ? {} : { actuals: deps.actuals }),
+        ...(deps.judge === undefined ? {} : { judge: deps.judge }),
+        ...(deps.reflect === undefined ? {} : { reflect: deps.reflect }),
+        skipLLM: deps.skipLLM ?? true,
+        now,
+      }),
+    );
     if (gepa.passed) report.gepaPasses += 1;
     if (gepa.bestScore !== undefined) report.gepaBestScore = gepa.bestScore;
     if (gepa.skipped) report.skipped.push(`gepa: ${gepa.skipped}`);
@@ -306,9 +365,27 @@ async function sweepAgent(companyId: string, agentId: string, rows: AgentTraceRo
 }
 
 /** One sweep over every agent in scope. Never throws: per-agent failures land in the report. */
-export async function runImprovementSweep(companyId: string, deps: SweepDeps): Promise<SweepReport> {
-  const now = (deps.now ?? nowIso)();
-  const report: SweepReport = { companyId, at: now, agents: [], skippedSpecialists: [], retirement: { stale: [], archived: [], kept: [] }, costCents: 0, errors: [] };
+export async function runImprovementSweep(companyId: string, input: SweepDeps): Promise<SweepReport> {
+  const now = (input.now ?? nowIso)();
+  const meter = new SweepMeter(input.budgetCents);
+  // Every model call the loop can make goes through the meter; nothing else is allowed to spend.
+  const deps: SweepDeps = {
+    ...input,
+    ...(input.actuals === undefined ? {} : { actuals: meter.actuals(input.actuals) }),
+    ...(input.judge === undefined ? {} : { judge: meter.judge(input.judge) }),
+    ...(input.reflect === undefined ? {} : { reflect: meter.reflect(input.reflect) }),
+  };
+  const report: SweepReport = {
+    companyId,
+    at: now,
+    agents: [],
+    skippedSpecialists: [],
+    retirement: { stale: [], archived: [], kept: [] },
+    costCents: 0,
+    phases: meter.phases,
+    budget: { limitCents: input.budgetCents ?? null, exhausted: false },
+    errors: [],
+  };
   try {
     const counts = await deps.store.countTracesByAgent(companyId);
     const scope = resolveSweepScope({
@@ -330,7 +407,7 @@ export async function runImprovementSweep(companyId: string, deps: SweepDeps): P
 
     for (const agentId of scope.agents) {
       try {
-        report.agents.push(await sweepAgent(companyId, agentId, rowsByAgent.get(agentId) ?? [], deps, now, seatPrompt));
+        report.agents.push(await sweepAgent(companyId, agentId, rowsByAgent.get(agentId) ?? [], deps, meter, now, seatPrompt));
       } catch (error) {
         report.errors.push(`agent[${agentId}]: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -339,5 +416,7 @@ export async function runImprovementSweep(companyId: string, deps: SweepDeps): P
   } catch (error) {
     report.errors.push(`sweep: ${error instanceof Error ? error.message : String(error)}`);
   }
+  report.costCents = meter.spentCents;
+  report.budget.exhausted = meter.exhausted;
   return report;
 }

@@ -12,13 +12,19 @@
 import { buildReflectionPrompt, emptyFrontier, parseReflectionResponse, updateParetoFrontier, type GEPACandidate, type GEPAFrontier } from "../gepa/index.js";
 import type { ImproveStorePort, IterationRow, JsonObject } from "../store/StorePort.js";
 import type { TraceRecord } from "../traces/trace-store.js";
+import type { GateCache } from "./gate-cache.js";
 import { executeGate, type ActualsRunner, type GateBaseline, type JudgeFn } from "./gate.js";
 import { newId, setHash } from "./ledger.js";
+import { isBudgetExhausted } from "./meter.js";
 import { SEAT_PROMPT_TASK_TYPE, stagePromptProposal } from "./protected-prompt.js";
 import type { FrozenSuite } from "./suites.js";
 
-/** Sends the reflection prompt to a model and returns its raw reply. Injected; never a default. */
-export type ReflectFn = (reflectionPrompt: string) => Promise<string>;
+/**
+ * Sends the reflection prompt to a model and returns its raw reply. Injected; never a default.
+ * Return the reply with its integer-cent cost so the sweep can count it; a bare string counts as
+ * one call at 0 cents.
+ */
+export type ReflectFn = (reflectionPrompt: string) => Promise<string | { text: string; costCents: number }>;
 
 export interface GepaPassInput {
   readonly store: ImproveStorePort;
@@ -31,6 +37,7 @@ export interface GepaPassInput {
   readonly baseline: () => Promise<GateBaseline | undefined>;
   readonly actuals?: ActualsRunner;
   readonly judge?: JudgeFn;
+  readonly cache?: GateCache;
   readonly reflect?: ReflectFn;
   readonly skipLLM: boolean;
   readonly now: string;
@@ -55,7 +62,17 @@ function storedFrontier(frontier: JsonObject | undefined, role: TraceRecord["age
   return { frontier: rest as unknown as GEPAFrontier, inputHash: typeof inputHash === "string" ? inputHash : undefined };
 }
 
+/** One pass; a budget exhausted anywhere inside it is a skip, not an error. */
 export async function runGepaPass(input: GepaPassInput): Promise<GepaPassResult> {
+  try {
+    return await gepaPass(input);
+  } catch (error) {
+    if (isBudgetExhausted(error)) return { passed: false, skipped: "budget_exhausted", costCents: 0 };
+    throw error;
+  }
+}
+
+async function gepaPass(input: GepaPassInput): Promise<GepaPassResult> {
   const failing = input.traces.filter(isFailing);
   if (failing.length === 0) return { passed: false, skipped: "no_failing_traces", costCents: 0 };
   if (!input.suite) return { passed: false, skipped: "no_suite", costCents: 0 };
@@ -73,7 +90,7 @@ export async function runGepaPass(input: GepaPassInput): Promise<GepaPassResult>
   } else {
     if (!input.reflect) return { passed: false, skipped: "no_reflection_model", costCents: 0 };
     const raw = await input.reflect(buildReflectionPrompt(input.role, currentPrompt, failing));
-    proposal = parseReflectionResponse(raw, currentPrompt);
+    proposal = parseReflectionResponse(typeof raw === "string" ? raw : raw.text, currentPrompt);
   }
 
   const remember = (f: GEPAFrontier): Promise<void> =>
@@ -99,6 +116,7 @@ export async function runGepaPass(input: GepaPassInput): Promise<GepaPassResult>
     baseline,
     actuals: input.actuals,
     ...(input.judge === undefined ? {} : { judge: input.judge }),
+    ...(input.cache === undefined ? {} : { cache: input.cache }),
   });
 
   const candidate: GEPACandidate = {

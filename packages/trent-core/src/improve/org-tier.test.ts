@@ -35,8 +35,8 @@ describe("promoteOrgSkill", () => {
       gateFor: async (agentId): Promise<GateVerdict> => {
         gated.push(agentId);
         return agentId === "finance"
-          ? { promoted: false, score: 0.3, delta: -0.4, blockedBy: "regression", stage: "deterministic", judgeCalls: 0, fixtures: [], failureClusters: { missing_expected_text: 1 }, costCents: 0 }
-          : { promoted: true, score: 1, delta: 0, stage: "judge", judgeCalls: 0, fixtures: [], failureClusters: {}, costCents: 0 };
+          ? { promoted: false, score: 0.3, delta: -0.4, blockedBy: "regression", stage: "deterministic", actualsCalls: 1, judgeCalls: 0, pendingRubrics: 0, fixtures: [], failureClusters: { missing_expected_text: 1 }, costCents: 0 }
+          : { promoted: true, score: 1, delta: 0, stage: "judge", actualsCalls: 1, judgeCalls: 0, pendingRubrics: 0, fixtures: [], failureClusters: {}, costCents: 0 };
       },
     });
     expect(gated).toEqual(["ceo", "finance", "eng-ai-engineer"]);
@@ -51,7 +51,7 @@ describe("promoteOrgSkill", () => {
   it("refuses a non-human actor", async () => {
     const store = new InMemoryImproveStore();
     await expect(
-      promoteOrgSkill(store, { draftId: "x", consumers: [], actor: "agent", gateFor: async (): Promise<GateVerdict> => ({ promoted: true, score: 1, delta: 0, stage: "judge", judgeCalls: 0, fixtures: [], failureClusters: {}, costCents: 0 }) }),
+      promoteOrgSkill(store, { draftId: "x", consumers: [], actor: "agent", gateFor: async (): Promise<GateVerdict> => ({ promoted: true, score: 1, delta: 0, stage: "judge", actualsCalls: 1, judgeCalls: 0, pendingRubrics: 0, fixtures: [], failureClusters: {}, costCents: 0 }) }),
     ).rejects.toThrow(/human/);
   });
 });

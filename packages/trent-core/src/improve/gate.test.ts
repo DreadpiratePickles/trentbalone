@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ModelGateway } from "../model-gateway/types.js";
-import { createGatewayActuals, executeGate, type FrozenSuite } from "./index.js";
+import { createGatewayActuals, createMemoryGateCache, executeGate, measureBaseline, type FrozenSuite } from "./index.js";
 
 const SUITE: FrozenSuite = {
   id: "ads",
@@ -131,7 +131,7 @@ describe("executeGate", () => {
     }
   });
 
-  it("with no judge injected, rubric graders stay pending and are tagged as such", async () => {
+  it("I.5: with no judge injected a rubric-only verdict is UNVERIFIED and cannot promote (the vacuous gate)", async () => {
     const { actuals } = scriptedActuals(GOOD);
     const verdict = await executeGate({
       candidate: { id: "c", kind: "skill", content: "CANDIDATE" },
@@ -142,7 +142,70 @@ describe("executeGate", () => {
     });
     expect(verdict.judgeCalls).toBe(0);
     expect(verdict.failureClusters).toEqual({ llm_judge_pending: 1 });
+    expect(verdict.promoted).toBe(false);
+    expect(verdict.blockedBy).toBe("unverified");
+  });
+
+  it("I.5: a suite with only mechanical graders needs no judge and is still promotable", async () => {
+    const { actuals } = scriptedActuals(GOOD);
+    const mechanical: FrozenSuite = { id: "m", version: "v1", fixtures: [SUITE.fixtures[1]!] };
+    const verdict = await executeGate({
+      candidate: { id: "c", kind: "skill", content: "CANDIDATE" },
+      seatPrompt: "seat",
+      suite: mechanical,
+      baseline: { score: 1, failureClusters: {} },
+      actuals,
+    });
     expect(verdict.promoted).toBe(true);
+    expect(verdict.blockedBy).toBeUndefined();
+  });
+
+  it("I.4: a fixture whose candidate output is byte-identical to the baseline output makes zero judge calls", async () => {
+    // The reply ignores the system prompt, so candidate and baseline outputs hash equal on every fixture.
+    const { actuals } = scriptedActuals(() => ({ text: "Use LinkedIn; split 60/40.", toolCalls: ["memory:read"] }));
+    const cache = createMemoryGateCache();
+    let judgeCalls = 0;
+    const judge = async () => {
+      judgeCalls += 1;
+      return { pass: true, costCents: 1 };
+    };
+    const baseline = await measureBaseline({ seatPrompt: "seat", suite: SUITE, actuals, judge, cache });
+    expect(judgeCalls).toBe(1);
+    expect(baseline.costCents).toBe(SUITE.fixtures.length + 1);
+
+    judgeCalls = 0;
+    const verdict = await executeGate({
+      candidate: { id: "c", kind: "skill", content: "CANDIDATE" },
+      seatPrompt: "seat",
+      suite: SUITE,
+      baseline,
+      actuals,
+      judge,
+      cache,
+    });
+    expect(judgeCalls).toBe(0);
+    expect(verdict.judgeCalls).toBe(0);
+    expect(verdict.promoted).toBe(true);
+    expect(verdict.stage).toBe("judge");
+    // A changed output is judged again: the memo is keyed by the output hash, not the fixture alone.
+    const changed = scriptedActuals((system) => ({ text: system.includes("CANDIDATE") ? "Use LinkedIn; split 70/30." : "x", toolCalls: ["memory:read"] }));
+    await executeGate({ candidate: { id: "c2", kind: "skill", content: "CANDIDATE" }, seatPrompt: "seat", suite: SUITE, baseline, actuals: changed.actuals, judge, cache });
+    expect(judgeCalls).toBe(1);
+  });
+
+  it("judge cost is part of the gate's cost, and calls are reported per kind", async () => {
+    const { actuals } = scriptedActuals(GOOD);
+    const verdict = await executeGate({
+      candidate: { id: "c", kind: "skill", content: "CANDIDATE" },
+      seatPrompt: "seat",
+      suite: SUITE,
+      baseline: { score: 0.5, failureClusters: {} },
+      actuals,
+      judge: async () => ({ pass: true, costCents: 3 }),
+    });
+    expect(verdict.actualsCalls).toBe(2);
+    expect(verdict.judgeCalls).toBe(1);
+    expect(verdict.costCents).toBe(2 + 3);
   });
 });
 

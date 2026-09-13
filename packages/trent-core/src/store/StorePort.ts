@@ -190,7 +190,7 @@ export interface StorePort {
   listJobRuns(companyId: string | null, limit?: number): Promise<JobRunRecord[]>;
 
   /**
-   * The self-improvement loop's five tables, on the same connection. See `ImproveStorePort`.
+   * The self-improvement loop's six tables, on the same connection. See `ImproveStorePort`.
    * Optional so a narrow test double of this port is not forced to carry the loop.
    */
   improve?(): ImproveStorePort;
@@ -200,7 +200,7 @@ export interface StorePort {
 }
 
 // ─── Self-improvement loop tables ──────────────────────────────────────────────
-// Five tables the improve loop (`../improve/`) reads and writes. Traces are keyed by
+// Six tables the improve loop (`../improve/`) reads and writes. Traces are keyed by
 // (companyId, agentId, taskType); the GEPA frontier and the ledger are per AGENT, not per role,
 // because a plugged specialist and the seat it sits in learn separately.
 
@@ -324,6 +324,18 @@ export interface LedgerFilter {
   artifactId?: string;
 }
 
+/**
+ * Content-addressed gate results (`../improve/gate-cache.ts`): a measured baseline keyed by
+ * (suite, version, sha256(prompt)) and a judge verdict keyed by (fixture, rubric, sha256(output)).
+ * A key is only ever written with the value the model actually produced, so a hit is a call saved.
+ */
+export interface GateCacheRow {
+  companyId: string;
+  key: string;
+  value: JsonValue;
+  createdAt: string;
+}
+
 export interface ImproveStorePort {
   appendTrace(row: AgentTraceRow): Promise<void>;
   listTraces(companyId: string, filter?: TraceFilter): Promise<AgentTraceRow[]>;
@@ -344,4 +356,8 @@ export interface ImproveStorePort {
 
   appendLedger(row: SkillLedgerRow): Promise<void>;
   listLedger(companyId: string, filter?: LedgerFilter): Promise<SkillLedgerRow[]>;
+
+  getGateCache(companyId: string, key: string): Promise<GateCacheRow | null>;
+  /** Upsert: the same (companyId, key) written twice keeps the later value. */
+  putGateCache(row: GateCacheRow): Promise<void>;
 }

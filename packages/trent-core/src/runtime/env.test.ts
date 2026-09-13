@@ -21,6 +21,7 @@ const CLI_ENV_KEYS = [
   "TRENT_EVAL_SYNC_QUEUE",
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
+  "SKILL_INJECTION_ENABLED",
 ] as const;
 
 let saved: Record<string, string | undefined> = {};
@@ -137,6 +138,14 @@ describe("standalone environment contract", () => {
       expect(count, `step ${stepId} started ${count} times`).toBe(1);
     }
   }, 60_000);
+
+  it("I.17: applyStandaloneEnv turns skill injection on, so a promoted skill can reach the seat that earned it", async () => {
+    const { applyStandaloneEnv, standaloneEnvKeys } = await import("./env.js");
+    expect(process.env.SKILL_INJECTION_ENABLED).toBeUndefined();
+    applyStandaloneEnv(":memory:");
+    expect(process.env.SKILL_INJECTION_ENABLED).toBe("1");
+    expect(standaloneEnvKeys()).toContain("SKILL_INJECTION_ENABLED");
+  });
 
   it("assertStandaloneEnv rejects the env that causes double execution", async () => {
     const { applyStandaloneEnv, assertStandaloneEnv } = await import("./env.js");
