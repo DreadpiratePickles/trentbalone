@@ -104,6 +104,7 @@ export class TranscriptRenderer {
   readonly #theme: Theme;
   readonly #degraded: boolean;
   readonly #steps = new Map<string, LiveStep>();
+  readonly #awaiting = new Set<string>();
   readonly #lines: string[] = [];
 
   constructor(options: RenderOptions) {
@@ -168,25 +169,37 @@ export class TranscriptRenderer {
         return [this.agentLine(step.identity, "idle", `${step.title} queued`)];
       }
       case "step_start": {
+        this.#awaiting.delete(event.step?.id ?? "unknown");
         const step = this.#step(event);
         return [this.agentLine(step.identity, "running", `${step.title}...`)];
       }
-      case "step_output":
+      case "step_output": {
+        // The step's output is printed HERE and only here. step_critic carries the same
+        // `step.output`, so reading it there printed every output twice (live proof, F6).
+        const detail = event.detail ?? event.step?.output;
+        return detail === undefined || detail === "" ? [] : [`    ${this.#theme.body(detail)}`];
+      }
       case "step_note":
       case "step_critic": {
-        const detail = event.detail ?? event.step?.output;
+        const detail = event.detail;
         return detail === undefined || detail === "" ? [] : [`    ${this.#theme.body(detail)}`];
       }
       case "step_awaiting_approval":
       case "run_awaiting_approval": {
+        // One gate, two bus events (step_ then run_awaiting_approval): the line is drawn once.
+        const id = event.step?.id ?? "unknown";
+        if (this.#awaiting.has(id)) return [];
+        this.#awaiting.add(id);
         const step = this.#step(event);
         return [this.agentLine(step.identity, "needsApproval", `${step.title} — awaiting your approval`)];
       }
       case "step_approved": {
+        this.#awaiting.delete(event.step?.id ?? "unknown");
         const step = this.#step(event);
         return [this.agentLine(step.identity, "running", `${step.title}...`)];
       }
       case "step_end": {
+        this.#awaiting.delete(event.step?.id ?? "unknown");
         const step = this.#step(event);
         const failed = event.step?.status === "failed";
         return [this.agentLine(step.identity, failed ? "failed" : "done", step.title)];

@@ -120,16 +120,80 @@ export type InjectedModelPort = (...args: never[]) => unknown;
 /** Receives every event the run emits, whether or not the caller iterates the handle. */
 export type TraceSink = (event: OrcEvent) => void;
 
+/**
+ * The provider and model the user configured (`config.provider` / `config.model`). The wrapper maps
+ * these into the env the orchestrator's model resolver reads — `MODEL_PREFERRED_PROVIDER` and the
+ * per-provider `<PROVIDER>_MODEL_FAST/DEFAULT/STRONG` — BEFORE any `apps/web` module loads, because
+ * `ai-client.ts` freezes its registry at import time. Without this mapping a Google user's seats
+ * are routed to the retired `gemini-2.0-flash` / `gemini-2.5-pro` defaults and every call 404s
+ * (live proof, finding F2).
+ */
+export interface OrchestratorModelConfig {
+  readonly provider: string;
+  readonly model: string;
+}
+
+/** One chat-completion request as the seat executor issues it. Mirrors `ChatCompletionInput`. */
+export interface SeatChatRequest {
+  readonly model: string;
+  readonly temperature: number;
+  readonly response_format: { readonly type: "json_object" };
+  readonly messages: ReadonlyArray<{ readonly role: "system" | "user"; readonly content: string }>;
+}
+
+/** The provider's reply. Mirrors `ChatCompletionOutput`. */
+export interface SeatChatResponse {
+  readonly choices: ReadonlyArray<{ readonly message: { readonly content: string | null } }>;
+  readonly usage?: {
+    readonly prompt_tokens?: number;
+    readonly completion_tokens?: number;
+    readonly total_tokens?: number;
+  };
+}
+
+/**
+ * The seat-level provider port. Unlike `executeSeatModelFn` it replaces only the HTTP call, so the
+ * real route, tier, model-name resolution, JSON parsing and cost estimate still run. A throw is a
+ * provider failure and is what makes the wrapper fail the run (D1).
+ */
+export type SeatChatCompletionFn = (request: SeatChatRequest) => Promise<SeatChatResponse>;
+
+/**
+ * The words that make the deterministic FALLBACK planner (used whenever no planner model answers)
+ * add an approval gate to its plan. Source: `apps/web/lib/orchestrator-runtime.ts`,
+ * `generateOrchestrationPlan` — `/\b(publish|send|merge|deploy|spend|charge|refund|withdraw|delete)\b/i`
+ * tested against the objective. That file is read-only, so the wrapper documents the trigger here
+ * and explains the gate on the `*_awaiting_approval` events it emits (D4).
+ */
+export const FALLBACK_PLANNER_APPROVAL_TRIGGERS: readonly string[] = [
+  "publish",
+  "send",
+  "merge",
+  "deploy",
+  "spend",
+  "charge",
+  "refund",
+  "withdraw",
+  "delete",
+];
+
+/** The `plan.reasoning` the fallback planner stamps on its plans. */
+export const FALLBACK_PLAN_REASONING = "LLM unavailable — using deterministic fallback plan.";
+
 export interface OrchestratorDeps {
   /**
    * SQLite connection string for durable mode. Defaults to the in-memory store, which is what makes
    * an orchestration runnable with no Postgres and no Redis.
    */
   readonly databaseUrl?: string;
+  /** The configured provider and model; see {@link OrchestratorModelConfig}. */
+  readonly model?: OrchestratorModelConfig;
   /** Planner/critic JSON completion port. Omit to use the real gateway. */
   readonly createCompletion?: InjectedModelPort;
-  /** Seat execution port. Omit to use the real gateway. */
+  /** Seat execution port. Omit to use the real gateway (wrapped by the seat guard). */
   readonly executeSeatModelFn?: InjectedModelPort;
+  /** Seat-level provider port; see {@link SeatChatCompletionFn}. Ignored when `executeSeatModelFn` is set. */
+  readonly createChatCompletion?: SeatChatCompletionFn;
   /** Observer for every event on every run this orchestrator starts. */
   readonly traceSink?: TraceSink;
   /** Default bound on drain-loop iterations per run. See `DEFAULT_MAX_JOBS`. */
@@ -163,8 +227,21 @@ export type OrchestratorRunHandle = AsyncIterable<OrcEvent> & {
   cancel(): Promise<boolean>;
 };
 
+/** The company a surface runs against. Looked up by slug so a restart finds the same one. */
+export interface EnsureCompanyInput {
+  readonly name: string;
+  /** Defaults to a slug of `name`. */
+  readonly slug?: string;
+  readonly vision?: string;
+}
+
 export interface Orchestrator {
   run(options: OrchestratorRunOptions): OrchestratorRunHandle;
+  /**
+   * Returns the id of the company with this slug, creating it when absent. `launchOrchestration`
+   * throws "Company not found" for an unknown id, and nothing else in the CLI path creates one.
+   */
+  ensureCompany(input: EnsureCompanyInput): Promise<string>;
   snapshot(runId: string): Promise<OrchestrationRunSnapshot | undefined>;
   approve(runId: string, stepId: string): Promise<boolean>;
   reject(runId: string, stepId: string): Promise<boolean>;

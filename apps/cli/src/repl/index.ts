@@ -10,15 +10,16 @@ import process from "node:process";
 import { ConfigManager, SessionManager } from "@trent/core";
 import { createOrchestrator } from "@trent/core/orchestrator/index.js";
 import { InMemoryTraceStore } from "@trent/core/traces/index.js";
-import { autoTheme, canUseRawMode, terminalWidth, renderBanner } from "../ui/index.js";
-import { ReplEngine, type ReplRunner } from "./engine.js";
+import { autoTheme, canUseRawMode, terminalWidth, type Theme } from "../ui/index.js";
+import { playBoot, type BootStdin } from "../ui/boot.js";
+import { ReplEngine, bindApprovalAnswers, type ReplRunner } from "./engine.js";
 import { EphemeralStore } from "./ephemeral-store.js";
 import { isDegraded } from "./degraded.js";
 import { ESCAPE_TIMEOUT_MS, withKittyProtocol } from "./keys.js";
 import { withRawMode } from "./interrupt.js";
 import type { ReplConfig, ReplStore } from "./types.js";
 
-export { ReplEngine } from "./engine.js";
+export { ReplEngine, bindApprovalAnswers } from "./engine.js";
 export { TranscriptRenderer, renderTranscript, identityForRole } from "./render.js";
 export { BudgetLedger, formatCents } from "./budget.js";
 export { ApprovalGate, renderApprovalCard } from "./approvals.js";
@@ -27,12 +28,47 @@ export { isDegraded, renderDegradedBanner } from "./degraded.js";
 export { KeyDecoder, NEWLINE_HINT } from "./keys.js";
 export type { ReplContext, ReplStore } from "./types.js";
 
+/** Exit code for Ctrl+C during the boot sequence: 128 + SIGINT, the shell convention. */
+export const BOOT_INTERRUPT_EXIT_CODE = 130;
+
+/** The stdin the REPL reads: the boot listener plus what the key loop and raw mode need. */
+export interface ReplStdin extends BootStdin {
+  setEncoding(encoding: BufferEncoding): unknown;
+  once(event: "end" | "close", listener: () => void): unknown;
+}
+
+/**
+ * The terminal, as an injectable. `ClassicRepl` defaults to the process streams; the tests hand
+ * in scripted ones so the boot and the first prompt can be asserted without a TTY.
+ */
+export interface ReplIo {
+  write(text: string): void;
+  isTTY: boolean;
+  stdin: ReplStdin;
+  exit(code: number): void;
+  theme?: Theme;
+  width?: number;
+  /** Injectable clock for the boot animation. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
 export interface ReplOptions {
   continueSession?: boolean;
   profile?: string;
+  io?: ReplIo;
 }
 
-const DEFAULT_COMPANY_ID = "trent-local";
+/** The company a local session runs against when config names none. Found again by slug on restart. */
+const DEFAULT_COMPANY = { name: "Trent Local", slug: "trent-local" } as const;
+
+function processIo(): ReplIo {
+  return {
+    write: (text) => void process.stdout.write(text),
+    isTTY: process.stdout.isTTY === true,
+    stdin: process.stdin as unknown as ReplStdin,
+    exit: (code) => process.exit(code),
+  };
+}
 
 /** Opens the durable store, or says plainly that this session will not persist. */
 async function openStore(databaseUrl: string): Promise<{ store: ReplStore; durable: boolean }> {
@@ -49,25 +85,50 @@ async function openStore(databaseUrl: string): Promise<{ store: ReplStore; durab
 export class ClassicRepl {
   readonly #configManager: ConfigManager;
   readonly #sessions: SessionManager;
+  readonly #io: ReplIo;
 
   constructor(options: ReplOptions = {}) {
     this.#configManager = new ConfigManager({ profile: options.profile });
     this.#sessions = new SessionManager(this.#configManager);
+    this.#io = options.io ?? processIo();
     if (options.continueSession === true) this.#sessions.resumeLastSession();
   }
 
   async start(): Promise<void> {
-    const theme = autoTheme();
+    const io = this.#io;
+    const theme = io.theme ?? autoTheme();
     const config = this.#configManager.loadConfig() as unknown as ReplConfig;
+    // Parses the profile's .env AND exports every key into process.env, which is where the
+    // gateway reads them. Values are never read here.
     const secrets = this.#configManager.loadSecrets() as unknown as Record<string, string | undefined>;
     const degraded = isDegraded({ ...process.env, ...secrets });
-    const width = terminalWidth();
+    const width = io.width ?? terminalWidth();
+    const writeLine = (line: string): void => io.write(`${line}\n`);
 
-    const companyId = String((config as { company?: { id?: string } }).company?.id ?? DEFAULT_COMPANY_ID);
+    // The boot sequence, before anything else is on screen. Ctrl+C here is a clean exit; any
+    // other key skips to the final frame. Without a TTY or colour only the static frame is drawn.
+    const boot = await playBoot(
+      { agents: config.fleet.installed_agents ?? config.fleet.active_agents, width, colorMode: theme.mode },
+      { write: (text) => io.write(text), isTTY: io.isTTY, stdin: io.stdin, sleep: io.sleep },
+    );
+    if (boot.interrupted) {
+      io.exit(BOOT_INTERRUPT_EXIT_CODE);
+      return;
+    }
+
     const databaseUrl = `file:${this.#configManager.getProfileDir()}/trent.db`;
     const { store, durable } = await openStore(databaseUrl);
 
-    const orchestrator = createOrchestrator(durable ? { databaseUrl } : {});
+    // The configured provider/model travel with the orchestrator, which maps them into the env
+    // its model resolver reads before the first apps/web import (live proof, F2).
+    const orchestrator = createOrchestrator({
+      ...(durable ? { databaseUrl } : {}),
+      model: { provider: config.provider, model: config.model },
+    });
+    // `launchOrchestration` throws "Company not found" for an id nothing created; an explicit
+    // config id is trusted, otherwise the local company is found by slug or created.
+    const configuredId = (config as { company?: { id?: string } }).company?.id;
+    const companyId = configuredId !== undefined ? String(configuredId) : await orchestrator.ensureCompany(DEFAULT_COMPANY);
     const runner: ReplRunner = ({ objective, signal }) =>
       orchestrator.run({ companyId, objective, trigger: "manual", signal });
 
@@ -80,23 +141,16 @@ export class ClassicRepl {
       traces: new InMemoryTraceStore(),
       degraded,
       width,
-      write: (line) => process.stdout.write(`${line}\n`),
-      exit: (code) => process.exit(code),
-      onApprovalAnswer: async (stepId, answer) => {
-        if (stepId === undefined) return;
-        const runId = engine.context.runIds?.at(-1);
-        if (runId === undefined) return;
-        if (answer === "approved") await orchestrator.approve(runId, stepId);
-        else await orchestrator.reject(runId, stepId);
-      },
+      write: writeLine,
+      exit: (code) => io.exit(code),
+      onApprovalAnswer: bindApprovalAnswers(orchestrator),
     });
 
-    for (const line of renderBanner("repl", width, theme)) process.stdout.write(`${line}\n`);
     if (!durable) {
-      process.stdout.write(
-        `${theme.needsApproval(
+      writeLine(
+        theme.needsApproval(
           "This session is not durable: the SQLite store needs Bun. Approvals will not survive a restart.",
-        )}\n`,
+        ),
       );
     }
 
@@ -109,28 +163,31 @@ export class ClassicRepl {
    * never fires.
    */
   async #drive(engine: ReplEngine): Promise<void> {
-    const io = { write: (text: string) => void process.stdout.write(text), isTTY: process.stdout.isTTY === true };
-    await withKittyProtocol(io, async () => {
-      await withRawMode(canUseRawMode(process.stdin) ? process.stdin : undefined, async () => {
-        process.stdin.setEncoding("utf8");
+    const io = this.#io;
+    const stdin = io.stdin;
+    const terminal = { write: (text: string) => io.write(text), isTTY: io.isTTY };
+    await withKittyProtocol(terminal, async () => {
+      await withRawMode(canUseRawMode(stdin) ? stdin : undefined, async () => {
+        stdin.setEncoding("utf8");
         await engine.start();
 
         let escapeTimer: NodeJS.Timeout | undefined;
-        const onData = (chunk: string): void => {
+        const onData = (chunk: Buffer | string): void => {
           if (escapeTimer !== undefined) clearTimeout(escapeTimer);
-          engine.feed(chunk);
+          engine.feed(String(chunk));
           escapeTimer = setTimeout(() => engine.flushKeys(), ESCAPE_TIMEOUT_MS);
           escapeTimer.unref?.();
         };
 
-        process.stdin.on("data", onData);
+        stdin.on("data", onData);
+        stdin.resume?.();
         try {
           await new Promise<void>((resolve) => {
-            process.stdin.once("end", () => resolve());
-            process.stdin.once("close", () => resolve());
+            stdin.once("end", () => resolve());
+            stdin.once("close", () => resolve());
           });
         } finally {
-          process.stdin.off("data", onData);
+          stdin.off("data", onData);
           if (escapeTimer !== undefined) clearTimeout(escapeTimer);
         }
       });

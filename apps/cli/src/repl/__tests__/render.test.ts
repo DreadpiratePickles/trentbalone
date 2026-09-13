@@ -113,3 +113,30 @@ describe("agent identity", () => {
     expect(identityForRole("some-unknown-seat").category).toBe("specialized");
   });
 });
+
+describe("D3 — step output renders once", () => {
+  it("prints step.output exactly once when both step_output and step_critic carry it", () => {
+    const output = "Executed the CEO scoping objective by verifying the tool result.";
+    const step = { id: "s1", title: "Scope objective", agentRole: "ceo", output };
+    const lines = renderTranscript(
+      [
+        ev("step_start", { step: { id: "s1", title: "Scope objective", agentRole: "ceo" } }),
+        ev("step_output", { step }),
+        ev("step_critic", { step }),
+        ev("step_end", { step: { ...step, status: "completed" } }),
+      ],
+      { theme: plain },
+    );
+    expect(lines.filter((line) => line.includes(output))).toHaveLength(1);
+    expect(lines).toEqual(["● [CEO] Scope objective...", `    ${output}`, "✓ [CEO] Scope objective"]);
+  });
+
+  it("still prints a critic verdict when the critic event carries its own detail", () => {
+    const step = { id: "s1", title: "Scope objective", agentRole: "ceo", output: "the output" };
+    const lines = renderTranscript(
+      [ev("step_output", { step }), ev("step_critic", { step, detail: "critic: pass" })],
+      { theme: plain },
+    );
+    expect(lines).toEqual(["    the output", "    critic: pass"]);
+  });
+});

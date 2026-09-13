@@ -39,8 +39,30 @@ export interface ReplEngineDeps {
   degraded?: boolean;
   traces?: ReplTraceStore;
   width?: number;
-  /** Told when the human answers, so the orchestrator can release the step. */
-  onApprovalAnswer?(stepId: string | undefined, answer: "approved" | "rejected"): Promise<void> | void;
+  /**
+   * Told when the human answers, so the orchestrator can release the step. `runId` is the run the
+   * gate belongs to — taken from the event itself, never from a side list (live proof, F5).
+   */
+  onApprovalAnswer?(runId: string, stepId: string | undefined, answer: "approved" | "rejected"): Promise<void> | void;
+}
+
+/** The two calls an approval answer needs. `Orchestrator` from `@trent/core` satisfies it. */
+export interface ApprovalTarget {
+  approve(runId: string, stepId: string): Promise<boolean>;
+  reject(runId: string, stepId: string): Promise<boolean>;
+}
+
+/**
+ * The `onApprovalAnswer` that releases a parked orchestrator step. Shared by `index.ts` and the
+ * tests so the REPL's real approval path is the one under test. A gate with no step id (a
+ * restored card from an earlier session) has nothing to release and is a no-op.
+ */
+export function bindApprovalAnswers(target: ApprovalTarget): NonNullable<ReplEngineDeps["onApprovalAnswer"]> {
+  return async (runId, stepId, answer) => {
+    if (stepId === undefined) return;
+    if (answer === "approved") await target.approve(runId, stepId);
+    else await target.reject(runId, stepId);
+  };
 }
 
 const EMPTY_TRACES: ReplTraceStore = { query: async () => [], byRun: async () => [] };
@@ -61,6 +83,8 @@ export class ReplEngine {
   #answer: ((answer: "approved" | "rejected") => void) | undefined;
   #awaitingStepId: string | undefined;
   #runIds: string[] = [];
+  /** Steps already gated this turn: the bus emits step_ AND run_awaiting_approval for one gate. */
+  #gated = new Set<string>();
   #selected = 0;
 
   constructor(deps: ReplEngineDeps) {
@@ -263,6 +287,7 @@ export class ReplEngine {
     const abort = new AbortController();
     this.#abort = abort;
     this.#busy = true;
+    this.#gated.clear();
     let interrupted = false;
     try {
       for await (const event of this.#deps.runner({ objective, signal: abort.signal })) {
@@ -302,6 +327,9 @@ export class ReplEngine {
       }
     }
     if (event.kind === "step_awaiting_approval" || event.kind === "run_awaiting_approval") {
+      const key = `${event.runId}/${event.step?.id ?? event.at}`;
+      if (this.#gated.has(key)) return;
+      this.#gated.add(key);
       await this.#blockOnApproval(event, signal);
     }
   }
@@ -340,7 +368,7 @@ export class ReplEngine {
 
     if (answer === "aborted") return;
     await this.approvals.answer(record.id, answer);
-    await this.#deps.onApprovalAnswer?.(this.#awaitingStepId, answer);
+    await this.#deps.onApprovalAnswer?.(event.runId, this.#awaitingStepId, answer);
     this.#awaitingStepId = undefined;
     this.#emit(this.#renderer.push(this.#deps.theme.body(`Approval ${record.id} ${answer}.`)));
   }

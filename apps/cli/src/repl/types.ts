@@ -111,7 +111,7 @@ export interface ReplConfig {
   model: string;
   budget: { daily_cap: number; currency: string; per_run_cap: number; alert_thresholds: number[] };
   terminal: { backend: string };
-  fleet: { active_agents: string[]; default_agent: string };
+  fleet: { installed_agents?: string[]; active_agents: string[]; default_agent: string };
   [key: string]: unknown;
 }
 
