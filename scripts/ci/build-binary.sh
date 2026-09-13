@@ -16,6 +16,21 @@
 
 set -euo pipefail
 
+# ------------------------------------------------------------ preflight: generated clients
+# The CLI bundles apps/web/lib, which imports the web app's Prisma client, and the store uses the
+# derived SQLite client. Compiling without either bundles an uninitialised stub that compiles with
+# exit 0 and dies on launch. Refuse up front rather than ship a binary that only fails on a user's
+# machine. (Verified: a 41 MB binary that printed '@prisma/client did not initialize yet'.)
+for client in "node_modules/.prisma/client/index.js" "packages/trent-core/src/store/generated/client.ts"; do
+  if [ ! -e "$client" ]; then
+    echo "build-binary: FAIL - generated Prisma client missing: $client" >&2
+    echo "  run: npx prisma generate --schema apps/web/prisma/schema.prisma" >&2
+    echo "  and: node packages/trent-core/scripts/derive-sqlite-schema.mjs" >&2
+    exit 1
+  fi
+done
+
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 

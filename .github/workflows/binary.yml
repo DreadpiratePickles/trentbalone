@@ -83,6 +83,10 @@ jobs:
         run: |
           node packages/trent-core/scripts/derive-sqlite-schema.mjs
           npx prisma generate --schema packages/trent-core/prisma/schema.sqlite.prisma
+          # The CLI bundles apps/web/lib, whose modules import the WEB app's Prisma client. Compiling
+          # without it bundles the uninitialised stub: a 41 MB binary that dies on launch with
+          # '@prisma/client did not initialize yet'. Caught by the native-run job, which is its job.
+          npx prisma generate --schema apps/web/prisma/schema.prisma
 
       - name: Compile
         run: bash scripts/ci/build-binary.sh "${{ matrix.target }}" "dist/binaries/${{ matrix.artifact }}"
