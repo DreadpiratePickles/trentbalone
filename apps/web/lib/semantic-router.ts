@@ -6,7 +6,7 @@
 import OpenAI from "openai";
 import { createHash } from "node:crypto";
 import { SEAT_MANIFESTS, getSeatManifest } from "@/lib/seat-manifest";
-import { adapters, type ToolAdapter } from "@/lib/tools";
+import { adapters, onAdapterRegistryChange, type ToolAdapter } from "@/lib/tools";
 import { store } from "@/lib/store";
 import type { AgentRole, Document } from "@/lib/types";
 import type { AgentEnvironmentConfig } from "@/lib/types";
@@ -35,6 +35,8 @@ export function resetSemanticRouterForTests() {
   sharedVocab = null;
   idfByToken = null;
 }
+// Externally registered adapters (file_ops, terminal) must enter the catalog: rebuild it on the next route.
+onAdapterRegistryChange(() => { toolCatalog = null; sharedVocab = null; idfByToken = null; });
 
 function stemLite(word: string): string {
   if (word.endsWith("ing") && word.length > 5) return word.slice(0, -3);
@@ -143,7 +145,8 @@ function buildToolRoutingText(adapter: ToolAdapter): string {
       )
       .map((t) => `${t.purpose} ${t.description} ${t.actions.join(" ")}`),
   );
-  return [adapter.name, adapter.scopes.join(" "), ...manifestBits].join("\n");
+  const routingText = (adapter as { routingText?: unknown }).routingText;
+  return [adapter.name, adapter.scopes.join(" "), ...(typeof routingText === "string" ? [routingText] : []), ...manifestBits].join("\n");
 }
 
 function collectRoutingCorpusTexts(): string[] {

@@ -1,3 +1,5 @@
+import { createRequire } from "node:module";
+import path from "node:path";
 import type { ToolCallRecord } from "@/lib/types";
 import { createGitHubIssue, getGitHubCredentials } from "@/lib/github";
 import { assertToolSpendAllowed } from "@/lib/spend";
@@ -116,6 +118,19 @@ function unavailableAdapter(name: string, scopes: string[], approvalWords: strin
 export type AdapterRegistryOptions = {
   env?: NodeJS.ProcessEnv;
 };
+
+/** Adapters built outside apps/web (packages/trent-core: file_ops, terminal), named by TRENT_TOOL_ADAPTERS_MODULE. */
+function loadExternalAdapterModule(env: NodeJS.ProcessEnv): ToolAdapter[] {
+  if (!env.TRENT_TOOL_ADAPTERS_MODULE) return [];
+  try {
+    const loaded = createRequire(path.join(process.cwd(), "index.js"))(env.TRENT_TOOL_ADAPTERS_MODULE) as { adapters?: unknown; default?: unknown };
+    const list = ([loaded.adapters, loaded.default].find(Array.isArray) ?? []) as ToolAdapter[];
+    return list.filter((adapter) => typeof adapter?.name === "string" && typeof adapter.execute === "function");
+  } catch (error) {
+    logger.warn({ modulePath: env.TRENT_TOOL_ADAPTERS_MODULE, error: error instanceof Error ? error.message : String(error) }, "tools.external_adapters_module_failed");
+    return [];
+  }
+}
 
 export function buildAdapterRegistry(options: AdapterRegistryOptions = {}): ToolAdapter[] {
   const env = options.env ?? process.env;
@@ -463,11 +478,25 @@ export function buildAdapterRegistry(options: AdapterRegistryOptions = {}): Tool
   mockedAdapter("Expo", ["mobile_builds", "eas_distribution"], ["submit", "publish"]),
   createSentryReadAdapter({ env }),
   createPostHogReadAdapter({ env }),
-  mockedAdapter("IPinfo", ["ip_geolocation", "enrichment"], [])
+  mockedAdapter("IPinfo", ["ip_geolocation", "enrichment"], []),
+  ...loadExternalAdapterModule(env),
   ];
 }
 
 export const adapters: ToolAdapter[] = buildAdapterRegistry();
+
+const registryListeners = new Set<() => void>();
+/** Runs after every registerExternalAdapters call; the semantic router drops its tool catalog here. */
+export function onAdapterRegistryChange(listener: () => void): void {
+  registryListeners.add(listener);
+}
+/** The wrapper's seam: append adapters built outside apps/web to the live registry, replacing any with the same name. */
+export function registerExternalAdapters(list: ToolAdapter[], options: { remove?: string[] } = {}): void {
+  const names = new Set([...list.map((adapter) => adapter.name), ...(options.remove ?? [])]);
+  for (let i = adapters.length - 1; i >= 0; i -= 1) if (names.has(adapters[i].name)) adapters.splice(i, 1);
+  adapters.push(...list);
+  for (const listener of registryListeners) listener();
+}
 
 export const DEFAULT_APPROVAL_EXPIRY_HOURS = 48;
 
