@@ -134,6 +134,7 @@ function fakeGateway(calls: RecordedCall[], options: FakeGatewayOptions = {}): M
     outputTokens: 50,
     costCents: 1,
     estimated: true,
+    priced_as_default: true,
     finishReason: "stop",
   });
   async function complete(req: GatewayStreamRequest): Promise<GatewayCompletion> {

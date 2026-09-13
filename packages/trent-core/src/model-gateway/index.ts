@@ -11,8 +11,9 @@
  *     `createModelGateway` is async: it seeds process.env and THEN `await import()`s.
  *     A static top-level import of the web modules would break this.
  *  2. ai-proxy is never imported.
- *  3. `estimateModelCostCents` (model-gateway.ts:194) is the single cost source;
- *     costs are integer cents.
+ *  3. `estimateModelCostCents` (model-gateway.ts:194) is the tier cost source; the
+ *     wrapper overlays a per-model-id price (`pricing.ts`) because the tier table bills
+ *     every model at Anthropic list. Costs are integer cents.
  *  4. Usage frames are provider-dependent; when absent they are estimated and the
  *     event is marked `estimated: true`.
  *  5. No AbortSignal upstream: cancellation breaks the `for await`, which calls the
@@ -34,7 +35,10 @@ import type {
   StreamRole,
 } from "./types.js";
 
+import { priceCall } from "./pricing.js";
+
 export type * from "./types.js";
+export { MODEL_PRICE_TABLE, priceCall, priceRowFor, normaliseModelId, type ModelPriceRow, type PricedCall, type PriceSource } from "./pricing.js";
 
 const API_KEY_ENV: Record<ModelProvider, string> = {
   openai: "OPENAI_API_KEY",
@@ -118,10 +122,15 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
     return ALL_PROVIDERS.filter((provider) => clientModule.isProviderConfigured(provider));
   }
 
-  function estimateCostCents(input: { modelTier: ModelTier; inputTokens: number; outputTokens: number }): number {
-    // Trap 3: model-gateway.ts:194 is the single source of truth, not
+  function tierCostCents(input: { modelTier: ModelTier; inputTokens: number; outputTokens: number }): number {
+    // Trap 3: model-gateway.ts:194 is the tier source of truth, not
     // ai-client.ts:530's divergent table. Integer cents, never floats.
     return gatewayModule.estimateModelCostCents(input);
+  }
+
+  function estimateCostCents(input: { modelTier: ModelTier; inputTokens: number; outputTokens: number; model?: string }): number {
+    if (input.model === undefined) return tierCostCents(input);
+    return priceCall({ model: input.model, modelTier: input.modelTier, inputTokens: input.inputTokens, outputTokens: input.outputTokens }, tierCostCents).costCents;
   }
 
   async function* stream(req: GatewayStreamRequest): AsyncGenerator<GatewayStreamEvent> {
@@ -203,6 +212,7 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
         outputTokens = estimateTokens(text);
       }
 
+      const priced = priceCall({ model, modelTier: route.modelTier, inputTokens, outputTokens }, tierCostCents);
       yield {
         type: "usage",
         provider,
@@ -210,8 +220,9 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
         modelTier: route.modelTier,
         inputTokens,
         outputTokens,
-        costCents: estimateCostCents({ modelTier: route.modelTier, inputTokens, outputTokens }),
+        costCents: priced.costCents,
         estimated: !sawUsage,
+        priced_as_default: priced.pricedAsDefault,
       };
       yield {
         type: "finish",
@@ -234,6 +245,7 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
     let outputTokens = 0;
     let costCents = 0;
     let estimated = true;
+    let pricedAsDefault = true;
     let finishReason = "stop";
 
     for await (const event of stream(req)) {
@@ -249,12 +261,13 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
         outputTokens = event.outputTokens;
         costCents = event.costCents;
         estimated = event.estimated;
+        pricedAsDefault = event.priced_as_default;
       } else {
         finishReason = event.reason;
       }
     }
 
-    return { text, provider, model, modelTier, inputTokens, outputTokens, costCents, estimated, finishReason };
+    return { text, provider, model, modelTier, inputTokens, outputTokens, costCents, estimated, priced_as_default: pricedAsDefault, finishReason };
   }
 
   return { stream, complete, resolveRoute, configuredProviders, estimateCostCents };

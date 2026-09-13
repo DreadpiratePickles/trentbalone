@@ -162,4 +162,54 @@ describe("workbench check", () => {
     );
     expect(result.status).toBe("ok");
   });
+
+  /**
+   * A docker shim that behaves like the 29.x daemon on this machine: `docker image inspect <ref>`
+   * says "No such image" for an image it lists and runs; only `docker inspect --type image <ref>`
+   * answers. The check must use the form that works. No daemon is involved.
+   */
+  function dockerShim(present: readonly string[]) {
+    const calls: string[][] = [];
+    const execImpl: DoctorContext["execImpl"] = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (cmd !== "docker") return { code: 127, stdout: "", stderr: `${cmd}: not found` };
+      if (args[0] === "info") return { code: 0, stdout: "29.1.0\n", stderr: "" };
+      if (args[0] === "inspect" && args[1] === "--type" && args[2] === "image") {
+        const ref = args[args.length - 1] ?? "";
+        return present.includes(ref)
+          ? { code: 0, stdout: "sha256:0123456789abcdef\n", stderr: "" }
+          : { code: 1, stdout: "", stderr: `Error: No such image: ${ref}` };
+      }
+      return { code: 1, stdout: "", stderr: `Error: No such image: ${args[args.length - 1] ?? ""}` };
+    };
+    return { execImpl, calls };
+  }
+
+  it("reports the configured image present when only `docker inspect --type image` knows it", async () => {
+    const image = "trent-sandbox:latest";
+    configManager.saveConfig({
+      ...configManager.loadConfig(),
+      terminal: { ...configManager.loadConfig().terminal, backend: "docker", docker: { ...configManager.loadConfig().terminal.docker, image } },
+    });
+    const shim = dockerShim([image]);
+    const result = await checkWorkbench.run(context({ execImpl: shim.execImpl }));
+    expect(result.status).toBe("ok");
+    expect(result.message).not.toMatch(/not present/);
+    expect(result.details).toMatchObject({ image, serverVersion: "29.1.0" });
+    expect(shim.calls.some((call) => call[1] === "inspect" && call[2] === "--type" && call[3] === "image")).toBe(true);
+    expect(shim.calls.some((call) => call[1] === "image" && call[2] === "inspect")).toBe(false);
+  });
+
+  it("warns, naming the image, when the daemon runs but the image is absent", async () => {
+    const image = "trent-sandbox:latest";
+    configManager.saveConfig({
+      ...configManager.loadConfig(),
+      terminal: { ...configManager.loadConfig().terminal, backend: "docker", docker: { ...configManager.loadConfig().terminal.docker, image } },
+    });
+    const shim = dockerShim([]);
+    const result = await checkWorkbench.run(context({ execImpl: shim.execImpl }));
+    expect(result.status).toBe("warn");
+    expect(result.message).toContain(image);
+    expect(result.fixHint).toContain(image);
+  });
 });

@@ -18,6 +18,7 @@ function gatewayReturning(text: string, calls: GatewayStreamRequest[], providers
     outputTokens: 12,
     costCents: 1,
     estimated: true,
+    priced_as_default: true,
     finishReason: "stop",
   });
   return {

@@ -99,8 +99,8 @@ function docker(args: string[]): Promise<{ ok: boolean; stdout: string }> {
 
 /**
  * `docker info` exiting 0 is the daemon; `docker inspect --type image` is the image. The
- * `docker image inspect` form the doctor uses reports "No such image" for images this daemon
- * (29.x) lists and runs, so it is not used here.
+ * `docker image inspect` form reports "No such image" for images this daemon (29.x) lists and
+ * runs, so it is not used here nor in the doctor's workbench check.
  */
 export async function probeDockerCli(image: string): Promise<DockerProbe> {
   const info = await docker(["info", "--format", "{{.ServerVersion}}"]);

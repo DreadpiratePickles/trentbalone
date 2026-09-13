@@ -50,6 +50,11 @@ export type GatewayStreamEvent =
        * `stream_options.include_usage` is set only for openai upstream).
        */
       estimated: boolean;
+      /**
+       * True when the model id has no row in the wrapper's price table (`pricing.ts`) and the
+       * app's tier price (Anthropic list for haiku/sonnet/opus) priced the call instead.
+       */
+      priced_as_default: boolean;
     }
   | { type: "finish"; reason: GatewayFinishReason; provider: ModelProvider; model: string };
 
@@ -62,6 +67,7 @@ export type GatewayCompletion = {
   outputTokens: number;
   costCents: number;
   estimated: boolean;
+  priced_as_default: boolean;
   finishReason: GatewayFinishReason;
 };
 
@@ -102,5 +108,6 @@ export interface ModelGateway {
   complete(req: GatewayStreamRequest): Promise<GatewayCompletion>;
   resolveRoute(role?: StreamRole): GatewayRoute;
   configuredProviders(): ModelProvider[];
-  estimateCostCents(input: { modelTier: ModelTier; inputTokens: number; outputTokens: number }): number;
+  /** With `model`, the per-model overlay (`pricing.ts`) applies; without it, the app's tier price. */
+  estimateCostCents(input: { modelTier: ModelTier; inputTokens: number; outputTokens: number; model?: string }): number;
 }

@@ -108,8 +108,7 @@ export const checkWorkbench: DoctorCheck = {
 
     const image = config.terminal?.docker?.image;
     const serverVersion = info.stdout.trim();
-    const imageMissing =
-      image !== undefined && ctx.execImpl === undefined ? await imageAbsent(image, timeoutMs) : false;
+    const imageMissing = image !== undefined ? await imageAbsent(ctx, image, timeoutMs) : false;
 
     if (imageMissing) {
       return result({
@@ -128,10 +127,17 @@ export const checkWorkbench: DoctorCheck = {
   },
 };
 
-async function imageAbsent(image: string, timeoutMs: number): Promise<boolean> {
+/**
+ * `docker inspect --type image <ref>` is the form that answers on the 29.x daemon; the
+ * `docker image inspect <ref>` form reports "No such image" for images the daemon lists and
+ * runs, so it is not used (the REPL's `probeDockerCli` uses the same form). Goes through the
+ * injected exec like the daemon probe, so a shim can prove the form without a daemon.
+ */
+async function imageAbsent(ctx: DoctorContext, image: string, timeoutMs: number): Promise<boolean> {
+  const exec = ctx.execImpl ?? runCommand;
   try {
-    const out = await runCommand("docker", ["image", "inspect", image], timeoutMs);
-    return out.code !== 0;
+    const out = await exec("docker", ["inspect", "--type", "image", "--format", "{{.Id}}", image], timeoutMs);
+    return out.code !== 0 || out.stdout.trim() === "";
   } catch {
     return false;
   }
