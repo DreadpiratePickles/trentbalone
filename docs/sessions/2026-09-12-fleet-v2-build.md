@@ -312,3 +312,15 @@ Remaining in flight: improve-loop foundation (I.1-I.5, I.17), fleet shared memor
 - Full root suite: 1306 tests; two load flakes seen once and passing alone/3x: doctor
   `inspection.test.ts` real-probe case, and `desktop.test.ts` DMG install (`updater.release:
   connection failed: read ECONNRESET` from the local release server). Not yet root-caused.
+- Night 2026-09-13 (pushed through `4f5d19e`): CI now proves on real Linux runners what only Docker
+  Desktop proved before — three Linux-only defects fixed: bind-mounted writes under `--cap-drop=ALL`
+  (container now runs as host uid:gid on Linux), egress proxy unreachable from containers (proxy binds
+  loopback + Docker bridge gateway on Linux, token-gated, wildcards refused; same for `trent egress
+  start`), and the tool suites gate on the sandbox image so they run in the sandbox job, whose no-skip
+  assertion now covers them. Updater: pooled keep-alive socket reuse caused the desktop DMG
+  ECONNRESET flake — `agent:false`, deterministic reproduction in the fixture. Doctor probe flake:
+  shared 20 s budget.
+- CI state on `50e04b2`: all 4 binaries build and RUN natively; web tests/typecheck, core typecheck,
+  binary guards green. Remaining red: `lint` (`tui/App.tsx fixAll`) and `anti-pattern repo scan`
+  (112 hex + 14 emoji in `apps/cli/src/{tui,slash}`) — both the user's TUI session; `core tests` and
+  `sandbox` had one uid-pinned assertion left, fixed in `4f5d19e` (awaiting run).
