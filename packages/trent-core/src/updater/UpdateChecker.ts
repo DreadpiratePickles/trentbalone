@@ -1,3 +1,11 @@
+/**
+ * Back-compatible facade. The previous version returned "no update" unconditionally; this one asks
+ * the real release source and reports what it finds.
+ */
+
+import { resolveLatest, type Channel, type ReleaseOptions, RELEASE_REPO } from "./release.js";
+import { compareVersions } from "./version.js";
+
 export interface UpdateInfo {
   currentVersion: string;
   latestVersion: string;
@@ -6,19 +14,19 @@ export interface UpdateInfo {
 }
 
 export class UpdateChecker {
-  private currentVersion: string;
-
-  constructor(currentVersion = "1.0.0") {
-    this.currentVersion = currentVersion;
-  }
+  constructor(
+    private readonly currentVersion = "1.0.0",
+    private readonly release: ReleaseOptions = {},
+    private readonly channel: Channel = "stable",
+  ) {}
 
   public async checkForUpdates(): Promise<UpdateInfo> {
-    // Simulated or remote check
+    const latest = await resolveLatest(this.channel, this.release);
     return {
       currentVersion: this.currentVersion,
-      latestVersion: this.currentVersion,
-      updateAvailable: false,
-      releaseUrl: "https://github.com/DreadpiratePickles/trent/releases",
+      latestVersion: latest.version,
+      updateAvailable: compareVersions(latest.version, this.currentVersion) > 0,
+      releaseUrl: `https://github.com/${RELEASE_REPO}/releases/tag/${latest.tag}`,
     };
   }
 }
