@@ -286,3 +286,17 @@ Remaining in flight: improve-loop foundation (I.1-I.5, I.17), fleet shared memor
 - Known open after that: README/docs refresh (README still says "no installer"), `apps/cli/src/slash`
   and `tui` violations (user's TUI session owns them), vision/browser toolset (needs a service),
   seat-step pricing inside the app's executeSeatModel still tier-priced.
+- Afternoon 2026-09-13 (pushed through `0ffafc9`): updater split under the 500-line ceiling; README
+  and docs rewritten to the shipped product, root MIT LICENSE restored; web/skills/cron toolsets
+  wired into the seats and quick-setup defaults widened to every implemented toolset; `trent web
+  --start` serves the real standalone web UI (200 in 2 s, Ctrl-C exits 130); CI: the compiled binary
+  died on `doctor --json` because a static import chain reached `apps/web/lib/db.ts`'s eager
+  `new PrismaClient()` (Postgres engine never in the bundle) — foundry store now lazy, proven with
+  `node_modules/.prisma` hidden; lint generates both Prisma clients; macos-13 -> macos-15-intel;
+  verify-binary prints full stderr and checks --help / fleet list / improve status.
+- Signing keys placed as repo secrets `TRENT_MINISIGN_KEY` / `TRENT_ECDSA_KEY` (values live only in
+  `scripts/installer/keys/*` locally, gitignored, and in GitHub secrets). Release pipeline agent in
+  flight (`release.yml`, `pages.yml`, `05_release/output/release-runbook.md`).
+- Known blocker for the public one-curl install: repo is private, and install.sh downloads from
+  GitHub Releases. User decision: make the repo public at launch or mirror releases to a public repo.
+- Repo-scan CI job still fails on `apps/cli/src/{tui,slash}` (user's TUI session owns them).
