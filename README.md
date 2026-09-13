@@ -100,18 +100,22 @@ Every seat's tools are Hermes-shaped toolsets (`02_plan/output/tools-build-spec.
 
 | Toolset | Tools | State |
 |---|---|---|
-| `file_ops` | `read_file`, `write_file`, `patch`, `search_files` | Wired into the agent loop |
-| `terminal` | `terminal`, `process_manage` | Wired; runs in the Docker sandbox or locally |
-| `code_execution` | `execute_code` | Wired; runs inside the `trent-sandbox:1` image |
-| `delegation` | `delegate_task` | Wired; reports `not_available` until a delegate port is configured |
-| `plugins` | `plugins_list` | Wired; a plugin manifest may not shadow a built-in tool name |
-| `memory` | `memory`, `fleet_search`, `fleet_skill_view` | Wired through the fleet-memory hook |
-| `web` | `web_search`, `web_extract` | Implemented and tested; not yet registered into the agent loop |
-| `skills` | `skills_list`, `skill_view`, `skill_manage` | Implemented and tested; not yet registered into the agent loop |
-| `cron` | `cronjob_manage` | Implemented and tested; not yet registered into the agent loop |
+| `file_ops` | `read_file`, `write_file`, `patch`, `search_files` | On by default; workspace-confined |
+| `terminal` | `terminal`, `process_manage` | On by default; Docker sandbox (`trent-sandbox:1`, no network, caps dropped) or confined local backend |
+| `code` | `execute_code` | On by default; python3/node inside the sandbox image |
+| `delegation` | `delegate_task` | On by default; real delegated child steps, max 6 per run |
+| `web` | `web_search`, `web_extract` | On by default; through the egress proxy, skipped with a visible reason when the proxy is off |
+| `skills` | `skills_list`, `skill_view`, `skill_manage` | On by default |
+| `cron` | `cronjob_manage` | On by default; prompt-injection scan on stored prompts |
+| `plugins` | `plugins_list` + `~/.trent/plugins/*/plugin.json` commands | On by default; names cannot shadow built-ins, manifests must be 0600 |
+| `memory` | `memory`, `fleet_search`, `fleet_skill_view` | Always on, registered by the fleet-memory hook |
+| `browser` | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, ... | Opt-in; needs a Chromium on the machine, drives it through the egress proxy |
+| `vision` | `vision_analyze` | Opt-in; sends the image to the configured model |
+| `mcp` | `mcp_<server>_<tool>`, `mcp_status` | Opt-in; servers from `trent mcp add` (stdio or http) |
 
-`browser`, `vision` and `mcp` are reserved toolset names with no adapter yet. The MCP connector
-manager is `trent mcp`.
+Quick setup turns on the first eight; blank-slate setup turns on `file_ops` and `terminal` only.
+Every tool call goes through the approval floors in `tools/approval-floors.ts`; output over 24K
+characters spills to a file.
 
 ## Connect to things
 
