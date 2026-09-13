@@ -1,0 +1,311 @@
+# release.yml — cut a signed GitHub Release from a tag.
+#
+# Trigger: push a tag `v<semver>` (or dispatch with the same version, which must already be a tag
+# pointing at the dispatched commit). The pipeline is:
+#
+#   preflight  -> tag == CLI_VERSION == apps/cli/package.json; rendered installers not stale
+#   binaries   -> .github/workflows/binary.yml: build 4 targets, RUN each on its native OS,
+#                 emit SHA256SUMS. A binary that does not launch never reaches the sign job.
+#   sign       -> minisign (Ed25519) + openssl (ECDSA P-256) signatures over SHA256SUMS, made with
+#                 the private keys from repository secrets, written to $RUNNER_TEMP under umask 077
+#                 for the duration of one step and shredded after. Both signatures are verified
+#                 against the COMMITTED public keys before anything is uploaded.
+#   publish    -> `gh release create v<version>` with the binaries, SHA256SUMS{,.minisig,.sig},
+#                 install.sh and install.ps1. The only job with `contents: write`.
+#   desktop    -> TODO, disabled (vars.TRENT_RELEASE_DESKTOP unset). See 05_release/output/release-runbook.md.
+#
+# Contract with binary.yml (owned elsewhere): it uploads one artifact per binary, named exactly
+# `trent-darwin-arm64`, `trent-darwin-x64`, `trent-linux-x64`, `trent-windows-x64.exe`, and one
+# artifact `SHA256SUMS`. The sign job recomputes the sums and fails if they differ.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the leading v (a tag v<version> must already exist at this commit)"
+        required: true
+        type: string
+
+# One release at a time per tag; never cancel a release that is already signing or publishing.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22.x"
+
+jobs:
+  # --------------------------------------------------------------------------------------
+  preflight:
+    name: preflight - version and rendered installers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Resolve the version from the tag or the dispatch input
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            version="${INPUT_VERSION#v}"
+          else
+            version="${REF_NAME#v}"
+          fi
+          # Same shape the installer and updater accept: X.Y.Z with an optional prerelease suffix.
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$version' is not a semver version"; exit 1
+          fi
+          # The tag must exist and must point at the commit being released, whichever way we got here.
+          git fetch --force --no-tags origin "refs/tags/v$version:refs/tags/v$version" 2>/dev/null || true
+          tagged=$(git rev-parse --verify -q "v$version^{commit}" || true)
+          if [ -z "$tagged" ]; then echo "::error::tag v$version does not exist"; exit 1; fi
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::tag v$version points at $tagged, not at the commit being released ($GITHUB_SHA)"; exit 1
+          fi
+          prerelease=false
+          case "$version" in *-*) prerelease=true ;; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "releasing v$version (prerelease=$prerelease) from $GITHUB_SHA"
+
+      - name: Version must equal CLI_VERSION and apps/cli/package.json
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/release/check-version.sh "$VERSION"
+
+      - name: Committed public keys must be present
+        run: |
+          set -euo pipefail
+          test -s scripts/installer/keys/minisign.pub
+          test -s scripts/installer/keys/ecdsa-p256.pub.pem
+          # The private halves are gitignored and must never be in the tree.
+          tracked=$(git ls-files scripts/installer/keys/minisign.key scripts/installer/keys/ecdsa-p256.key.pem)
+          if [ -n "$tracked" ]; then
+            echo "::error::a private signing key is tracked by git: $tracked"; exit 1
+          fi
+
+      - name: Rendered installers must match the committed copies
+        # scripts/install.sh and install.ps1 are what gets uploaded; they embed the public keys.
+        run: sh scripts/installer/render.sh --check
+
+  # --------------------------------------------------------------------------------------
+  binaries:
+    name: binaries
+    # Build all four targets and RUN each one on its native OS. Reused verbatim from CI so a
+    # release is built by exactly the pipeline that verifies pull requests.
+    needs: preflight
+    uses: ./.github/workflows/binary.yml
+    permissions:
+      contents: read
+
+  # --------------------------------------------------------------------------------------
+  sign:
+    name: sign SHA256SUMS
+    needs: [preflight, binaries]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Download every binary and the SHA256SUMS emitted after the native runs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist/release
+          merge-multiple: true
+
+      - name: Recompute SHA256SUMS and require it to match the one binary.yml verified
+        working-directory: dist/release
+        run: |
+          set -euo pipefail
+          ls -la
+          for f in trent-darwin-arm64 trent-darwin-x64 trent-linux-x64 trent-windows-x64.exe SHA256SUMS; do
+            [ -s "$f" ] || { echo "::error::missing release artifact $f"; exit 1; }
+          done
+          sha256sum trent-* > SHA256SUMS.recomputed
+          if ! cmp -s SHA256SUMS SHA256SUMS.recomputed; then
+            echo "::error::SHA256SUMS from binary.yml does not match the downloaded binaries"
+            diff SHA256SUMS SHA256SUMS.recomputed || true
+            exit 1
+          fi
+          rm SHA256SUMS.recomputed
+          sha256sum --check SHA256SUMS
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install minisign
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign >/dev/null
+          minisign -v
+
+      - name: Sign with the release keys (keys exist on disk only inside this step)
+        env:
+          TRENT_MINISIGN_KEY: ${{ secrets.TRENT_MINISIGN_KEY }}
+          TRENT_ECDSA_KEY: ${{ secrets.TRENT_ECDSA_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$TRENT_MINISIGN_KEY" ] || { echo "::error::secret TRENT_MINISIGN_KEY is empty"; exit 1; }
+          [ -n "$TRENT_ECDSA_KEY" ] || { echo "::error::secret TRENT_ECDSA_KEY is empty"; exit 1; }
+          keys=("$RUNNER_TEMP/minisign.stored.key" "$RUNNER_TEMP/minisign.key" "$RUNNER_TEMP/ecdsa-p256.key.pem")
+          cleanup() { for k in "${keys[@]}"; do [ -e "$k" ] && { shred -u "$k" 2>/dev/null || rm -f "$k"; }; done; return 0; }
+          trap cleanup EXIT
+          umask 077
+          printf '%s\n' "$TRENT_MINISIGN_KEY" > "$RUNNER_TEMP/minisign.stored.key"
+          printf '%s\n' "$TRENT_ECDSA_KEY" > "$RUNNER_TEMP/ecdsa-p256.key.pem"
+          # gen-keys.mjs stores the key in clear but labels it "Sc"; real minisign would prompt for a
+          # password and fail. Rewrite it to minisign's own unencrypted (-W) layout first.
+          node scripts/release/minisign-plain-key.mjs "$RUNNER_TEMP/minisign.stored.key" "$RUNNER_TEMP/minisign.key"
+          # Exactly the commands in scripts/installer/keys/README.md.
+          minisign -S -s "$RUNNER_TEMP/minisign.key" -m dist/release/SHA256SUMS -x dist/release/SHA256SUMS.minisig
+          openssl dgst -sha256 -sign "$RUNNER_TEMP/ecdsa-p256.key.pem" -out dist/release/SHA256SUMS.sig dist/release/SHA256SUMS
+
+      - name: Assert the private keys are gone
+        if: always()
+        run: |
+          set -euo pipefail
+          for k in minisign.stored.key minisign.key ecdsa-p256.key.pem; do
+            if [ -e "$RUNNER_TEMP/$k" ]; then rm -f "$RUNNER_TEMP/$k"; echo "::error::$k survived the signing step"; exit 1; fi
+          done
+
+      - name: Verify both signatures against the COMMITTED public keys
+        # If this fails the secrets do not match the keys the installers embed. Nothing is uploaded.
+        run: |
+          set -euo pipefail
+          minisign -V -p scripts/installer/keys/minisign.pub -m dist/release/SHA256SUMS -x dist/release/SHA256SUMS.minisig
+          openssl dgst -sha256 -verify scripts/installer/keys/ecdsa-p256.pub.pem -signature dist/release/SHA256SUMS.sig dist/release/SHA256SUMS
+
+      - name: Upload the signed checksum set
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-signatures
+          path: |
+            dist/release/SHA256SUMS
+            dist/release/SHA256SUMS.minisig
+            dist/release/SHA256SUMS.sig
+          if-no-files-found: error
+          retention-days: 30
+
+  # --------------------------------------------------------------------------------------
+  publish:
+    name: publish v${{ needs.preflight.outputs.version }}
+    needs: [preflight, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # the ONLY write permission in this workflow: creating the release
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Download the binaries and the signed checksum set
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist/release
+          merge-multiple: true
+
+      - name: Re-verify the signatures on the files about to be published
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign >/dev/null
+          cd dist/release
+          minisign -V -p "$GITHUB_WORKSPACE/scripts/installer/keys/minisign.pub" -m SHA256SUMS -x SHA256SUMS.minisig
+          openssl dgst -sha256 -verify "$GITHUB_WORKSPACE/scripts/installer/keys/ecdsa-p256.pub.pem" -signature SHA256SUMS.sig SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Render the installers and require them to match the committed copies
+        run: |
+          set -euo pipefail
+          sh scripts/installer/render.sh --check
+          sh -n scripts/install.sh
+          cp scripts/install.sh scripts/install.ps1 dist/release/
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::release v$VERSION already exists; releases are immutable, cut a new version"; exit 1
+          fi
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags origin "refs/tags/v$VERSION:refs/tags/v$VERSION" 2>/dev/null || true
+          # Notes come from the annotated tag message; a lightweight tag gets a one-line default.
+          notes=$(git tag -l --format='%(contents)' "v$VERSION")
+          [ -n "$(printf '%s' "$notes" | tr -d '[:space:]')" ] || notes="Trent Fleet v$VERSION"
+          # shellcheck disable=SC2016  # markdown backticks, not shell expansion
+          {
+            printf '%s\n\n' "$notes"
+            echo '## Install'
+            echo
+            echo '```sh'
+            echo 'curl -fsSL https://agent.let-trent.uk/install.sh | bash'
+            echo '```'
+            echo
+            echo '## Verify'
+            echo
+            echo 'Every binary is listed in `SHA256SUMS`, which is signed twice: `SHA256SUMS.minisig`'
+            echo '(Ed25519, minisign) and `SHA256SUMS.sig` (ECDSA P-256, OpenSSL). The public keys are'
+            echo 'committed at `scripts/installer/keys/` and embedded in the installers.'
+            echo
+            echo '```'
+            cat dist/release/SHA256SUMS
+            echo '```'
+          } > "$RUNNER_TEMP/notes.md"
+          flags=(--repo "$GITHUB_REPOSITORY" --verify-tag --title "Trent Fleet v$VERSION" --notes-file "$RUNNER_TEMP/notes.md")
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          cd dist/release
+          gh release create "v$VERSION" "${flags[@]}" \
+            trent-darwin-arm64 trent-darwin-x64 trent-linux-x64 trent-windows-x64.exe \
+            SHA256SUMS SHA256SUMS.minisig SHA256SUMS.sig install.sh install.ps1
+          echo "### Released v$VERSION" >> "$GITHUB_STEP_SUMMARY"
+          gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
+
+  # --------------------------------------------------------------------------------------
+  desktop:
+    # TODO(desktop): NOT WIRED. `apps/desktop` is a Tauri v2 app whose build needs a Rust toolchain,
+    # the Next.js standalone build of apps/web, a vendored Bun runtime per target triple and per-OS
+    # bundling (.dmg / .msi / .AppImage), with `signingIdentity: null` (docs/desktop.md). That is
+    # not a cheap CI job and has never run on a hosted runner; it is deliberately left disabled
+    # rather than shipping an unverified bundle. `trent desktop install` expects assets named
+    # `Trent Fleet_<version>_<aarch64|x64>.dmg` etc. (packages/trent-core/src/updater/desktop.ts)
+    # listed in the SAME signed SHA256SUMS, so enabling this means signing after the bundles exist.
+    # See 05_release/output/release-runbook.md, section "Desktop bundles". Disabled until the
+    # repository variable TRENT_RELEASE_DESKTOP is set to "true" (it does not exist today), which
+    # is the same as `if: false` but lint-clean and switchable without editing this file.
+    name: desktop bundles (TODO, disabled)
+    if: vars.TRENT_RELEASE_DESKTOP == 'true'
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: echo "desktop bundling is not implemented; see the runbook"

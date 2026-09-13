@@ -179,9 +179,14 @@ Every skill is scanned before it loads. See [skills.md](skills.md).
 
 ## Not yet implemented
 
-- A signed release. The installer, `trent update` and `trent desktop install` verify `SHA256SUMS`
-  against embedded Ed25519 (minisign) and ECDSA P-256 public keys and refuse unsigned artefacts,
-  and CI emits `SHA256SUMS`; but no workflow signs it and no release has been cut.
+- A signed release, cut. The installer, `trent update` and `trent desktop install` verify
+  `SHA256SUMS` against embedded Ed25519 (minisign) and ECDSA P-256 public keys and refuse unsigned
+  artefacts. `.github/workflows/release.yml` signs `SHA256SUMS` with the `TRENT_MINISIGN_KEY` and
+  `TRENT_ECDSA_KEY` repository secrets (on disk only inside the signing step, under `umask 077`,
+  shredded after) and verifies both signatures against the committed public keys before
+  `gh release create`; but no tag has been pushed, so no release exists, and the repository is
+  private, so the release URLs the installer uses would 404 for the public anyway
+  (`05_release/output/release-runbook.md`).
 - Approval floors matched over deobfuscated command variants. The design calls for them; they are not
   built.
 - Automatic CA injection into a running container. The certificate path and the environment are

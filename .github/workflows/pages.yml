@@ -1,0 +1,109 @@
+# pages.yml — publish the installer scripts at https://agent.let-trent.uk.
+#
+# The site is three static files plus a CNAME: scripts/install.sh, scripts/install.ps1 and
+# scripts/release/pages/index.html. Nothing is built; the checked-in installers are what a user
+# pipes into their shell, so the deploy step only ever copies files that already passed
+# `scripts/installer/render.sh --check` and `scripts/install.test.sh` in CI.
+#
+# Prerequisites that this workflow cannot create (see 05_release/output/release-runbook.md):
+#   - GitHub Pages enabled on the repository with source "GitHub Actions"
+#   - Pages on a PRIVATE repository needs GitHub Pro/Team/Enterprise; otherwise make the repo public
+#   - the custom domain agent.let-trent.uk configured in Pages settings (the CNAME file below is
+#     what keeps it set across deploys)
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/install.sh
+      - scripts/install.ps1
+      - scripts/release/pages/**
+      - .github/workflows/pages.yml
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a superseded deploy of the same files can be cancelled safely.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: assemble the site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: The installers published must be a fresh render of their sources
+        run: |
+          set -euo pipefail
+          sh scripts/installer/render.sh --check
+          sh -n scripts/install.sh
+          # --manifest is the installer's own self-check that it parses and runs in a plain sh.
+          sh scripts/install.sh --manifest | head -c 200; echo
+
+      - name: The landing page uses only the three sanctioned tokens and no emoji
+        run: |
+          set -euo pipefail
+          page=scripts/release/pages/index.html
+          # Every hex colour on the page must be one of obsidian, bone or pulse.
+          if grep -oiE '#[0-9a-f]{6}\b' "$page" | tr 'a-f' 'A-F' | grep -vE '^#(0A0A0F|F1ECE2|6EE7B7)$'; then
+            echo "::error::index.html uses a colour outside obsidian/bone/pulse"; exit 1
+          fi
+          # No emoji or other astral-plane characters.
+          if LC_ALL=C grep -qP '[\xF0-\xF4][\x80-\xBF]{3}' "$page"; then
+            echo "::error::index.html contains a 4-byte UTF-8 sequence (emoji)"; exit 1
+          fi
+
+      - name: Assemble _site
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp scripts/install.sh scripts/install.ps1 _site/
+          cp scripts/release/pages/index.html _site/index.html
+          printf 'agent.let-trent.uk\n' > _site/CNAME
+          touch _site/.nojekyll
+          ls -la _site
+
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write # deploy the artifact
+      id-token: write # OIDC token that authorises the Pages deployment
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+      - name: Confirm the custom domain serves the installer
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          set -euo pipefail
+          echo "deployed to $PAGE_URL"
+          for attempt in 1 2 3 4 5 6; do
+            echo "attempt $attempt"
+            if curl -fsSIL --max-time 20 https://agent.let-trent.uk/install.sh >/dev/null 2>&1; then
+              echo "https://agent.let-trent.uk/install.sh answers"; exit 0
+            fi
+            sleep 20
+          done
+          echo "::warning::https://agent.let-trent.uk/install.sh did not answer within 2 minutes (DNS/CDN propagation, or the custom domain is not configured)"

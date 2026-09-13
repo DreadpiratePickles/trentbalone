@@ -192,9 +192,12 @@ npm run cli -- sessions list
 
 ## Not yet implemented
 
-- A published release for `curl … | bash` installation. The installer exists and is tested;
-  `agent.let-trent.uk/install.sh` returns 404 and no GitHub release has been cut, so it has nothing
-  to download.
+- A published release for `curl … | bash` installation. The installer exists and is tested, and the
+  pipeline that would publish it exists (`.github/workflows/release.yml` on a `v*` tag,
+  `.github/workflows/pages.yml` for `agent.let-trent.uk`), but no tag has been pushed, GitHub Pages
+  is not enabled, and the repository is private, so `agent.let-trent.uk/install.sh` returns 404 and
+  there is nothing to download. Blockers and the release procedure:
+  `05_release/output/release-runbook.md`; run `scripts/release/preflight.sh` before tagging.
 - A `trent` binary on your `PATH` without building it yourself (`npm run build:binary`). Use
   `npm run cli --`.
 - Windows outside CI. The `windows-x64` binary is built and executed on a Windows runner in

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trent Fleet</title>
+<meta name="description" content="Install Trent Fleet with one command. Signed releases, verified before anything runs.">
+<style>
+  /* Tokens from 01_discovery/output/design-tokens.json: obsidian, bone, pulse. Nothing else. */
+  :root { --obsidian: #0A0A0F; --bone: #F1ECE2; --pulse: #6EE7B7; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--obsidian); color: var(--bone); }
+  body { font: 16px/1.6 Inter, -apple-system, BlinkMacSystemFont, sans-serif; padding: 48px 24px; }
+  main { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 8px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 40px 0 8px; color: var(--pulse); }
+  p { margin: 0 0 12px; }
+  pre { font: 14px/1.5 "JetBrains Mono", ui-monospace, monospace; background: var(--obsidian); color: var(--bone);
+        border: 1px solid var(--pulse); border-radius: 6px; padding: 14px 16px; overflow-x: auto; margin: 0 0 12px; }
+  code { font-family: "JetBrains Mono", ui-monospace, monospace; }
+  a { color: var(--pulse); text-decoration: underline; text-underline-offset: 3px; }
+  ul { padding-left: 20px; margin: 0 0 12px; }
+  footer { margin-top: 56px; font-size: 13px; opacity: 0.8; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Trent Fleet</h1>
+  <p>One command installs the <code>trent</code> CLI into <code>~/.trent</code>. No sudo, no Node, no Bun.</p>
+
+  <h2>macOS and Linux</h2>
+  <pre>curl -fsSL https://agent.let-trent.uk/install.sh | bash</pre>
+
+  <h2>Windows (PowerShell)</h2>
+  <pre>irm https://agent.let-trent.uk/install.ps1 | iex</pre>
+
+  <h2>What the installer does</h2>
+  <ul>
+    <li>Downloads the binary for your platform from the GitHub Release, over HTTPS only.</li>
+    <li>Downloads <code>SHA256SUMS</code> and verifies its signature against a public key embedded in the script.</li>
+    <li>Checks the binary's SHA-256 against the signed sums before it is moved into place.</li>
+    <li>Writes <code>~/.trent/bin/trent</code> and adds one PATH line to your shell profile.</li>
+  </ul>
+  <p>Read the script before you run it: <a href="install.sh">install.sh</a>, <a href="install.ps1">install.ps1</a>.</p>
+
+  <h2>Verify a release by hand</h2>
+  <pre>minisign -V -p minisign.pub -m SHA256SUMS
+sha256sum --check SHA256SUMS</pre>
+  <p>Release assets and public keys: <a href="https://github.com/DreadpiratePickles/trentbalone/releases">github.com/DreadpiratePickles/trentbalone/releases</a>.</p>
+
+  <footer>Trent Fleet. MIT licensed.</footer>
+</main>
+</body>
+</html>
