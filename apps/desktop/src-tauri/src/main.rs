@@ -22,6 +22,7 @@
 //! window had been closed panicked and took the tray down with it. There is no
 //! `.unwrap()` on a window lookup anywhere in this file.
 
+mod auth_secret;
 mod fleet;
 mod http;
 mod server;

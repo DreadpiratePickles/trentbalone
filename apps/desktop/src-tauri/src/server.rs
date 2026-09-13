@@ -15,6 +15,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+use crate::auth_secret;
 use crate::http;
 
 /// Handle to the running server. Cloned into the tray, the poller and the signal
@@ -104,6 +105,10 @@ pub fn spawn(app: &AppHandle, handle: &ServerHandle, port: u16) -> Result<(), St
         .ok_or_else(|| "server entry has no parent directory".to_string())?
         .to_path_buf();
 
+    // auth.js will not start without AUTH_SECRET (measured: `[auth][error] MissingSecret`).
+    // One per install, persisted under ~/.trent/desktop, never printed.
+    let auth_secret = auth_secret::load_or_create(&auth_secret::default_dir()?)?;
+
     let command = app
         .shell()
         .sidecar("bun")
@@ -112,6 +117,7 @@ pub fn spawn(app: &AppHandle, handle: &ServerHandle, port: u16) -> Result<(), St
         .env("HOSTNAME", "127.0.0.1")
         .env("PORT", port.to_string())
         .env("NODE_ENV", "production")
+        .env("AUTH_SECRET", auth_secret)
         // AGENTS.md, the standalone environment contract: without this every job
         // runs twice and still reports success, at roughly 4x the model bill.
         .env("TRENT_QUEUE_FALLBACK", "disabled")

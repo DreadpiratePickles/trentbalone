@@ -40,7 +40,7 @@ export const checkCron: DoctorCheck = {
       return result({
         status: "warn",
         message: `No scheduler state at ${statePath}; nothing is running scheduled jobs on this machine.`,
-        fixHint: "Run `trent cron add <schedule> <agent>` to register a job, or ignore this if you do not use the scheduler.",
+        fixHint: `No CLI command manages the scheduler yet. Ignore this if you do not use scheduled jobs; otherwise create ${statePath} with a top-level \`jobs\` array.`,
         details: { statePath, jobs: 0 },
       });
     }
@@ -64,7 +64,7 @@ export const checkCron: DoctorCheck = {
       return result({
         status: "warn",
         message: `Scheduler state exists at ${statePath} but no job is enabled.`,
-        fixHint: "Enable a job with `trent cron enable <id>`.",
+        fixHint: `Set \`enabled: true\` on a job in ${statePath}; no CLI command edits the schedule yet.`,
         details: { statePath, jobs: 0 },
       });
     }
@@ -81,7 +81,7 @@ export const checkCron: DoctorCheck = {
       return result({
         status: "warn",
         message: `${overdue.length} scheduled job(s) are overdue by more than 6 hours: ${names}. The scheduler is not draining.`,
-        fixHint: "Start the scheduler with `trent cron run`, then re-run `trent doctor`.",
+        fixHint: `Nothing in the CLI runs the scheduler; start whatever process drains ${statePath}, then re-run \`trent doctor\`.`,
         details: { statePath, jobs: enabled.length, overdue: overdue.map((job) => job.id) },
       });
     }

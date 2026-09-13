@@ -66,7 +66,7 @@ export const checkWorkbench: DoctorCheck = {
         ? result({
             status: "warn",
             message: "Sandbox backend is \"e2b\"; a key is present but no sandbox was started to verify it.",
-            fixHint: "Run `trent terminal open` once to confirm the E2B sandbox starts.",
+            fixHint: "Start one sandbox from the web app's workbench to confirm E2B accepts the key; the CLI has no sandbox command.",
             details: { backend },
           })
         : result({
