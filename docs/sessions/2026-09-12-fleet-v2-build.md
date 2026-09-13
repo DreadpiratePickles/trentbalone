@@ -258,3 +258,10 @@ Never ask permission to proceed. Opus subagents, max 6, Fable only at real forks
 
 Commit order once they land: seam-free core first (1 and 2 together if they typecheck), then REPL.
 Then push, check CI run on the latest sha, and start I.6-I.16.
+
+### 2026-09-13 — REPL tool wiring COMMITTED (commit 56)
+Agent in the terminal reads a file live through file_ops with egress brokered; proxy up before first
+turn and down after exit (throw and Ctrl+C included). 99 REPL tests. Sandbox floor is alpine:3.
+Doctor's workbench check uses `docker image inspect`, which reports No such image on this daemon
+while `docker inspect --type image` works — fix when next in src/doctor.
+Remaining in flight: improve-loop foundation (I.1-I.5, I.17), fleet shared memory.
