@@ -265,3 +265,17 @@ turn and down after exit (throw and Ctrl+C included). 99 REPL tests. Sandbox flo
 Doctor's workbench check uses `docker image inspect`, which reports No such image on this daemon
 while `docker inspect --type image` works — fix when next in src/doctor.
 Remaining in flight: improve-loop foundation (I.1-I.5, I.17), fleet shared memory.
+
+## 2026-09-13 — post-compaction resume
+
+- Committed the fleet shared-memory work as `3ef24cb` (10 files / 75 tests, tsc clean, 3-test live
+  suite on gemini-3.5-flash-lite; ceo seat wrote a fact, support seat recalled it next run). Details in
+  `docs/sessions/2026-09-13-fleet-memory.md`.
+- In flight (two Opus agents, ≤6 rule respected):
+  1. Stanford tasks I.6–I.12 + `hook.seatModel` wiring — owns `src/improve/**`, `apps/cli/src/commands/improve.ts`.
+  2. CLI wiring of `deps.fleetMemory` (REPL + run path), Gemini price rows in the ledger, doctor
+     `docker inspect --type image` fix — owns `apps/cli/src/repl/**`, `src/doctor/**`, pricing overlay.
+- Still pending after those: I.13–I.16, remaining Hermes toolsets (delegation alias, vision/browser,
+  code_execution, plugins), README/docs refresh (README still says "no installer" — stale), CI green on
+  latest sha (runs before 3ef24cb were cancelled by concurrency, not failed).
+- `notes/` at repo root is untracked user material (Stanford transcripts); left untracked, not mine.
