@@ -23,7 +23,10 @@
  *   - the drain loop WAITS while the run is parked on an approval and resumes after `approve()` /
  *     `reject()`, instead of closing the handle (D2);
  *   - an explanation on the `*_awaiting_approval` events the fallback planner's keyword gate
- *     produces, so a surface can render it as an answerable gate (F4 / D4).
+ *     produces, so a surface can render it as an answerable gate (F4 / D4);
+ *   - the self-improvement loop's bus hook (`deps.improve`, see `../improve/hook.ts`): every event
+ *     is handed to it and its writes are awaited before the run settles, so traces and failure
+ *     goldens are durable by the time a caller sweeps.
  */
 
 import { IN_MEMORY_DATABASE, applyStandaloneEnv, assertStandaloneEnv } from "../runtime/env.js";
@@ -51,6 +54,18 @@ export { resolveToolName, normaliseSeatTurn } from "./tool-names.js";
  * with margin while still guaranteeing termination if a phase worker ever re-enqueues itself.
  */
 export const DEFAULT_MAX_JOBS = 60;
+
+/** A bus hook with a flush the run awaits: what `../improve/hook.ts` builds. */
+export interface RunBusHook {
+  readonly sink: (event: OrcEvent) => void;
+  flush(): Promise<void>;
+}
+
+/** `OrchestratorDeps` plus the self-improvement hook. Declared here so `types.ts` stays a pure mirror. */
+export type OrchestratorDepsWithImprove = OrchestratorDeps & {
+  /** Receives every event and is flushed before `result()` resolves. */
+  readonly improve?: RunBusHook;
+};
 
 // --- Structural views of the wrapped modules ------------------------------------------------
 // Declared locally and cast at the single `await import` boundary below, so `tsc` never has to load
@@ -230,7 +245,7 @@ function slugify(name: string): string {
 
 // --- Public factory -----------------------------------------------------------------------------
 
-export function createOrchestrator(deps: OrchestratorDeps = {}): Orchestrator {
+export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orchestrator {
   // Must happen before any apps/web module is imported. Without TRENT_QUEUE_FALLBACK=disabled the
   // inline fallback races this drain loop and every job executes twice, silently.
   applyStandaloneEnv(deps.databaseUrl ?? IN_MEMORY_DATABASE);
@@ -316,6 +331,7 @@ export function createOrchestrator(deps: OrchestratorDeps = {}): Orchestrator {
 
     const deliver = (event: OrcEvent): void => {
       deps.traceSink?.(event);
+      deps.improve?.sink(event);
       channel.push(event);
     };
 
@@ -339,6 +355,7 @@ export function createOrchestrator(deps: OrchestratorDeps = {}): Orchestrator {
           at: launched.startedAt,
           run: {
             id: launched.id,
+            companyId: options.companyId,
             objective: launched.objective,
             status: launched.status as OrchestrationRunSnapshot["status"],
             trigger: launched.trigger as OrchestrationRunSnapshot["trigger"],
@@ -367,6 +384,8 @@ export function createOrchestrator(deps: OrchestratorDeps = {}): Orchestrator {
           waitForResume: () => waitForResume(id, options.signal, isInterrupted),
         });
         await applyFailureOverride(libs, id, tally);
+        // The loop's writes are part of the run: a caller that sweeps right after must see them.
+        await deps.improve?.flush();
         const snapshot = await snapshotOf(libs, id);
         if (!snapshot) throw new Error(`Orchestration run ${id} vanished before a snapshot could be read`);
         return snapshot;

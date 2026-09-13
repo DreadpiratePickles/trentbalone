@@ -29,6 +29,7 @@ import { mcpSpec, sessionsSpec } from "./groups/sessions.js";
 import { a2aSpec, acpSpec, egressSpec, gatewaySpec, webSpec } from "./groups/servers.js";
 import { serveShimSpec, uninstallSpec } from "./groups/maintenance.js";
 import { desktopSpec, updateSpec } from "./desktop.js";
+import { improveSpec } from "./improve.js";
 
 export { CLI_VERSION } from "./registry.js";
 export type { CommandContext, CliOverrides } from "./context.js";
@@ -40,6 +41,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   modelSpec,
   fleetSpec,
   skillsSpec,
+  improveSpec,
   toolsSpec,
   sessionsSpec,
   configSpec,

@@ -189,6 +189,159 @@ export interface StorePort {
   createJobRun(input: CreateJobRunInput): Promise<JobRunRecord>;
   listJobRuns(companyId: string | null, limit?: number): Promise<JobRunRecord[]>;
 
+  /**
+   * The self-improvement loop's five tables, on the same connection. See `ImproveStorePort`.
+   * Optional so a narrow test double of this port is not forced to carry the loop.
+   */
+  improve?(): ImproveStorePort;
+
   /** Releases the underlying connection. After this the store must not be used again. */
   close(): Promise<void>;
+}
+
+// ─── Self-improvement loop tables ──────────────────────────────────────────────
+// Five tables the improve loop (`../improve/`) reads and writes. Traces are keyed by
+// (companyId, agentId, taskType); the GEPA frontier and the ledger are per AGENT, not per role,
+// because a plugged specialist and the seat it sits in learn separately.
+
+export type ImproveDraftStatus = "quarantine" | "live" | "rejected" | "stale" | "archived";
+export type ImproveArtifactKind = "skill" | "prompt";
+export type ImproveLedgerAction = "stage" | "promote" | "fix" | "reject" | "retire" | "archive" | "recover" | "rollback";
+
+export interface AgentTraceRow {
+  id: string;
+  companyId: string;
+  /** The seat role (one of the nine) the step ran under. */
+  agentRole: string;
+  /** The seat role, or the installed specialist plugged into it. The learning key. */
+  agentId: string;
+  runId: string;
+  taskType: string;
+  stepTitle: string;
+  status: string;
+  toolCalls: string[];
+  toolCallCount: number;
+  critiqueVerdict: string | null;
+  improvement: string | null;
+  evalScore: number | null;
+  costCents: number;
+  latencyMs: number | null;
+  humanCorrected: boolean;
+  skillApplied: boolean;
+  createdAt: string;
+}
+
+export interface TraceFilter {
+  agentId?: string;
+  taskType?: string;
+}
+
+export interface SkillDraftRow {
+  id: string;
+  companyId: string;
+  agentId: string;
+  taskType: string;
+  kind: ImproveArtifactKind;
+  status: ImproveDraftStatus;
+  content: string;
+  contentHash: string;
+  triggers: string[];
+  createdAt: string;
+  promotedAt: string | null;
+  lastUsedAt: string | null;
+  retiredAt: string | null;
+}
+
+export interface DraftFilter {
+  agentId?: string;
+  taskType?: string;
+  kind?: ImproveArtifactKind;
+  status?: ImproveDraftStatus;
+}
+
+export interface DraftPatch {
+  status?: ImproveDraftStatus;
+  content?: string;
+  contentHash?: string;
+  promotedAt?: string | null;
+  lastUsedAt?: string | null;
+  retiredAt?: string | null;
+}
+
+export interface IterationRow {
+  id: string;
+  companyId: string;
+  agentId: string;
+  taskType: string;
+  candidateId: string | null;
+  candidateKind: ImproveArtifactKind | null;
+  score: number | null;
+  delta: number | null;
+  decision: string;
+  triggers: string[];
+  blockedBy: string | null;
+  /** Hash of the trace ids this iteration consumed; a repeat sweep over the same set is a no-op. */
+  inputHash: string | null;
+  /** Every grader verdict the executing gate produced, for audit. */
+  verdicts: JsonValue;
+  createdAt: string;
+}
+
+export interface IterationFilter {
+  agentId?: string;
+  taskType?: string;
+  limit?: number;
+}
+
+export interface GepaFrontierRow {
+  companyId: string;
+  agentId: string;
+  frontier: JsonObject;
+  updatedAt: string;
+}
+
+export interface SkillLedgerRow {
+  id: string;
+  companyId: string;
+  agentId: string;
+  taskType: string;
+  action: ImproveLedgerAction;
+  artifactKind: ImproveArtifactKind;
+  artifactId: string;
+  beforeHash: string | null;
+  afterHash: string | null;
+  /** Full prior bytes, so rollback is byte-for-byte and needs no other source. */
+  before: string | null;
+  after: string | null;
+  iterationId: string | null;
+  actor: string;
+  createdAt: string;
+}
+
+export interface LedgerFilter {
+  agentId?: string;
+  iterationId?: string;
+  artifactId?: string;
+}
+
+export interface ImproveStorePort {
+  appendTrace(row: AgentTraceRow): Promise<void>;
+  listTraces(companyId: string, filter?: TraceFilter): Promise<AgentTraceRow[]>;
+  tracesByRun(runId: string): Promise<AgentTraceRow[]>;
+  countTracesByAgent(companyId: string): Promise<Record<string, number>>;
+
+  createDraft(row: SkillDraftRow): Promise<void>;
+  getDraft(id: string): Promise<SkillDraftRow | null>;
+  updateDraft(id: string, patch: DraftPatch): Promise<SkillDraftRow>;
+  listDrafts(companyId: string, filter?: DraftFilter): Promise<SkillDraftRow[]>;
+
+  appendIteration(row: IterationRow): Promise<void>;
+  getIteration(id: string): Promise<IterationRow | null>;
+  listIterations(companyId: string, filter?: IterationFilter): Promise<IterationRow[]>;
+
+  getFrontier(companyId: string, agentId: string): Promise<GepaFrontierRow | null>;
+  putFrontier(row: GepaFrontierRow): Promise<void>;
+
+  appendLedger(row: SkillLedgerRow): Promise<void>;
+  listLedger(companyId: string, filter?: LedgerFilter): Promise<SkillLedgerRow[]>;
 }

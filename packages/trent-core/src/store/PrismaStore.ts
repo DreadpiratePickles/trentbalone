@@ -7,6 +7,7 @@
  */
 
 import type { PrismaClient } from "./generated/client";
+import { SqliteImproveStore } from "../improve/sqlite-store.js";
 import type {
   AppendEventInput,
   ApprovalRecord,
@@ -25,6 +26,7 @@ import type {
   UpdateRunInput,
   UpsertStepInput,
   ApprovalStatus,
+  ImproveStorePort,
 } from "./StorePort.js";
 
 const COMPANY_FIELDS = { id: true, name: true, slug: true, budgetCents: true } as const;
@@ -99,10 +101,25 @@ function asJsonObject(value: unknown): JsonObject {
 }
 
 export class PrismaStore implements StorePort {
+  #improve: ImproveStorePort | undefined;
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly onClose?: () => Promise<void>,
   ) {}
+
+  /**
+   * The self-improvement tables, on this same connection. Raw SQL by design: the derived schema
+   * cannot carry the loop's columns (see `../improve/sqlite-store.ts`), and the bootstrap there is
+   * idempotent, so the first call on an older database upgrades it in place.
+   */
+  improve(): ImproveStorePort {
+    this.#improve ??= new SqliteImproveStore({
+      execute: (sql, ...args) => this.prisma.$executeRawUnsafe(sql, ...args),
+      query: <T>(sql: string, ...args: unknown[]) => this.prisma.$queryRawUnsafe<T[]>(sql, ...args),
+    });
+    return this.#improve;
+  }
 
   async createCompany(input: CreateCompanyInput): Promise<CompanyRecord> {
     return this.prisma.company.create({

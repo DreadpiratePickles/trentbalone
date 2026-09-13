@@ -1,0 +1,124 @@
+/**
+ * Item 5 — adopted from Hermes: retirement, ledger, rollback.
+ */
+import { describe, expect, it } from "vitest";
+
+import type { SkillDraftRow } from "../store/StorePort.js";
+import { InMemoryImproveStore } from "./memory-store.js";
+import { contentHash, promoteDraft, recoverDraft, retireSkills, rollback } from "./index.js";
+
+const COMPANY = "co_life";
+const T = (day: number) => `2026-09-${String(day).padStart(2, "0")}T00:00:00.000Z`;
+
+function draft(over: Partial<SkillDraftRow> & { id: string }): SkillDraftRow {
+  return {
+    companyId: COMPANY,
+    agentId: "engineer",
+    taskType: over.id,
+    kind: "skill",
+    status: "quarantine",
+    content: `# ${over.id}`,
+    contentHash: contentHash(`# ${over.id}`),
+    triggers: [],
+    createdAt: T(1),
+    promotedAt: null,
+    lastUsedAt: null,
+    retiredAt: null,
+    ...over,
+  };
+}
+
+describe("retirement", () => {
+  it("stale after N days unused and NOT listed; archived after M; listed skills are never retired", async () => {
+    const store = new InMemoryImproveStore();
+    await store.createDraft(draft({ id: "fresh", status: "live", promotedAt: T(1), lastUsedAt: T(20) }));
+    await store.createDraft(draft({ id: "stale-ish", status: "live", promotedAt: T(1), lastUsedAt: T(5) }));
+    await store.createDraft(draft({ id: "ancient", status: "live", promotedAt: T(1), lastUsedAt: null }));
+    await store.createDraft(draft({ id: "listed", status: "live", promotedAt: T(1), lastUsedAt: null }));
+
+    const report = await retireSkills(store, COMPANY, {
+      now: T(21),
+      staleAfterDays: 14,
+      archiveAfterDays: 20,
+      listed: new Set(["listed"]),
+    });
+    expect(report).toEqual({ stale: ["stale-ish"], archived: ["ancient"], kept: ["fresh", "listed"] });
+    expect((await store.getDraft("stale-ish"))?.status).toBe("stale");
+    expect((await store.getDraft("ancient"))?.status).toBe("archived");
+    expect((await store.getDraft("ancient"))?.retiredAt).toBe(T(21));
+    expect((await store.getDraft("listed"))?.status).toBe("live");
+
+    // Both are recoverable, and every archive wrote a ledger row.
+    await recoverDraft(store, "ancient", "human", T(22));
+    expect((await store.getDraft("ancient"))?.status).toBe("live");
+    const ledger = await store.listLedger(COMPANY, { artifactId: "ancient" });
+    expect(ledger.map((l) => l.action)).toEqual(["archive", "recover"]);
+  });
+});
+
+describe("ledger", () => {
+  it("every promote writes a before/after hash row; a fix on a live skill writes a 'fix' row with the prior bytes", async () => {
+    const store = new InMemoryImproveStore();
+    await store.createDraft(draft({ id: "d1", taskType: "ship" }));
+    await promoteDraft(store, "d1", { actor: "human" });
+    const [promote] = await store.listLedger(COMPANY, { artifactId: "d1" });
+    expect(promote?.action).toBe("promote");
+    expect(promote?.beforeHash).toBeNull();
+    expect(promote?.afterHash).toBe(contentHash("# d1"));
+    expect(promote?.after).toBe("# d1");
+
+    await store.createDraft(draft({ id: "d2", taskType: "ship", content: "# d1 fixed", contentHash: contentHash("# d1 fixed") }));
+    await promoteDraft(store, "d2", { actor: "human" });
+    const rows = await store.listLedger(COMPANY, { artifactId: "d2" });
+    expect(rows.map((r) => r.action)).toEqual(["fix"]);
+    expect(rows[0]?.beforeHash).toBe(contentHash("# d1"));
+    expect(rows[0]?.before).toBe("# d1");
+    expect(rows[0]?.afterHash).toBe(contentHash("# d1 fixed"));
+    // The previous live skill for that task type is superseded, never silently deleted.
+    expect((await store.getDraft("d1"))?.status).toBe("archived");
+    expect((await store.getDraft("d2"))?.status).toBe("live");
+  });
+});
+
+describe("rollback", () => {
+  it("rollback <iterationId> restores the prior artifact byte-for-byte and writes a rollback row", async () => {
+    const store = new InMemoryImproveStore();
+    const original = "# ship v1\n\nexact bytes é \t here\n";
+    await store.createDraft(draft({ id: "v1", taskType: "ship", content: original, contentHash: contentHash(original) }));
+    await promoteDraft(store, "v1", { actor: "human" });
+    await store.createDraft(draft({ id: "v2", taskType: "ship", content: "# ship v2", contentHash: contentHash("# ship v2") }));
+    await store.appendIteration({
+      id: "iter_fix",
+      companyId: COMPANY,
+      agentId: "engineer",
+      taskType: "ship",
+      candidateId: "v2",
+      candidateKind: "skill",
+      score: 0.9,
+      delta: 0.1,
+      decision: "pending_approval",
+      triggers: ["skill_health"],
+      blockedBy: null,
+      inputHash: "x",
+      verdicts: null,
+      createdAt: T(2),
+    });
+    await promoteDraft(store, "v2", { actor: "human", iterationId: "iter_fix" });
+    expect((await store.getDraft("v1"))?.status).toBe("archived");
+
+    const result = await rollback(store, "iter_fix", "human");
+    expect(result.restored).toEqual([{ artifactId: "v1", taskType: "ship" }]);
+    expect((await store.getDraft("v1"))?.status).toBe("live");
+    expect((await store.getDraft("v1"))?.content).toBe(original);
+    expect((await store.getDraft("v2"))?.status).toBe("rejected");
+    const ledger = await store.listLedger(COMPANY, { iterationId: "iter_fix" });
+    expect(ledger.map((l) => l.action)).toEqual(["fix", "rollback"]);
+    expect(ledger[1]?.after).toBe(original);
+    expect(ledger[1]?.afterHash).toBe(contentHash(original));
+  });
+
+  it("refuses an unknown iteration", async () => {
+    const store = new InMemoryImproveStore();
+    await expect(rollback(store, "nope", "human")).rejects.toThrow(/iteration nope/);
+  });
+});
