@@ -1,0 +1,3 @@
+# Private signing keys never enter the repo. Only the public halves are committed.
+minisign.key
+*.key.pem

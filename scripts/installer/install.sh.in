@@ -64,47 +64,20 @@ RUN_TMP=""
 FAILED_STAGE=""
 VERSION_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
 
-# BEGIN GENERATED FROM scripts/installer/stages.tsv — do not edit by hand
-STAGE_NAMES="detect resolve-version download verify install path setup doctor"
-MANIFEST_JSON='{"protocol_version":1,"stages":[{"name":"detect","title":"Detect operating system and CPU","category":"environment","needs_user_input":false},{"name":"resolve-version","title":"Resolve the release to install","category":"release","needs_user_input":false},{"name":"download","title":"Download the binary and checksums","category":"release","needs_user_input":false},{"name":"verify","title":"Verify the SHA-256 digest","category":"security","needs_user_input":false},{"name":"install","title":"Install the binary under ~/.trent","category":"install","needs_user_input":false},{"name":"path","title":"Put ~/.trent/bin on PATH","category":"shell","needs_user_input":false},{"name":"setup","title":"Run the Trent setup wizard","category":"configure","needs_user_input":true},{"name":"doctor","title":"Run the Trent health checks","category":"health","needs_user_input":false}]}'
-stage_needs_input() {
-  case "$1" in
-    setup) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-stage_title() {
-  case "$1" in
-    detect) echo "Detect operating system and CPU" ;;
-    resolve-version) echo "Resolve the release to install" ;;
-    download) echo "Download the binary and checksums" ;;
-    verify) echo "Verify the SHA-256 digest" ;;
-    install) echo "Install the binary under ~/.trent" ;;
-    path) echo "Put ~/.trent/bin on PATH" ;;
-    setup) echo "Run the Trent setup wizard" ;;
-    doctor) echo "Run the Trent health checks" ;;
-    *) echo "$1" ;;
-  esac
-}
-# END GENERATED
+@@STAGES@@
 
 # ------------------------------------------------------------------- release public keys
 # Canonical: Ed25519 in minisign format (shared with `trent update` and `trent desktop install`).
 # Verified with minisign, or with OpenSSL >= 1.1.1 via the equivalent SPKI form below.
-MINISIGN_PUB='RWTOPBC7ApREla1RnDwQK1ESwQnVgjtUc3N5o7zgc+JANMV8lU9pLtc7'
+MINISIGN_PUB='@@MINISIGN_PUB@@'
 ED25519_PEM="$(cat <<'PEM'
------BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEArVGcPBArURLBCdWCO1Rzc3mjvOBz4kA0xXyVT2ku1zs=
------END PUBLIC KEY-----
+@@ED25519_PEM@@
 PEM
 )"
 # Co-signature for hosts whose only openssl is LibreSSL 3.3 (stock macOS): it has no Ed25519 and
 # no BLAKE2b, but verifies ECDSA P-256. The release job signs SHA256SUMS with both keys.
 ECDSA_PEM="$(cat <<'PEM'
------BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE9gKLudYz6uA3TSrNpPaW+/TC9e0P
-6YM3/5qtTmDSbMqFPCXSrvCutMh2DmSHj4dxWp0fnk5ST8J0EvEphrNTQA==
------END PUBLIC KEY-----
+@@ECDSA_PEM@@
 PEM
 )"
 
@@ -112,31 +85,11 @@ PEM
 # Pre-rendered by scripts/installer/banner*.ansi from the CLI's own theme; embedded at render
 # time so the single downloaded script carries it. Empty when the files were absent at render.
 BANNER_TRUECOLOR="$(cat <<'__TRENT_BANNER__'
-   [38;2;110;231;183m·[0m     [38;2;110;231;183m·[0m     [38;2;110;231;183m·[0m     [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m
-            [38;2;241;236;226m███████[0m  [38;2;241;236;226m██████▄[0m  [38;2;241;236;226m███████[0m  [38;2;241;236;226m███[0m  [38;2;241;236;226m██[0m  [38;2;241;236;226m███████[0m
-   [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m   [38;2;74;74;87m█[0m[38;2;241;236;226m███[0m[38;2;74;74;87m███[0m [38;2;241;236;226m███[0m[38;2;74;74;87m██[0m[38;2;241;236;226m██[0m[38;2;74;74;87m▄[0m [38;2;241;236;226m███[0m[38;2;74;74;87m█████[0m [38;2;241;236;226m████[0m [38;2;241;236;226m██[0m[38;2;74;74;87m█[0m  [38;2;74;74;87m█[0m[38;2;241;236;226m███[0m[38;2;74;74;87m███[0m             [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m
-              [38;2;241;236;226m███[0m[38;2;74;74;87m█[0m   [38;2;241;236;226m██████[0m[38;2;74;74;87m██[0m [38;2;241;236;226m██████[0m   [38;2;241;236;226m███[0m[38;2;74;74;87m█[0m[38;2;241;236;226m███[0m[38;2;74;74;87m█[0m   [38;2;241;236;226m███[0m[38;2;74;74;87m█[0m      [38;2;74;74;87m·[0m
-   [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m    [38;2;241;236;226m███[0m[38;2;74;74;87m█[0m   [38;2;241;236;226m███[0m[38;2;74;74;87m█[0m[38;2;241;236;226m▀█▄[0m  [38;2;241;236;226m███[0m[38;2;74;74;87m████[0m  [38;2;241;236;226m██[0m[38;2;74;74;87m█[0m[38;2;241;236;226m████[0m[38;2;74;74;87m█[0m   [38;2;241;236;226m███[0m[38;2;74;74;87m█[0m     [38;2;110;231;183m···[0m       [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m
-              [38;2;241;236;226m███[0m[38;2;74;74;87m█[0m   [38;2;241;236;226m███[0m[38;2;74;74;87m█[0m [38;2;241;236;226m██[0m[38;2;74;74;87m▄[0m [38;2;241;236;226m███████[0m  [38;2;241;236;226m██[0m[38;2;74;74;87m█[0m [38;2;241;236;226m███[0m[38;2;74;74;87m█[0m   [38;2;241;236;226m███[0m[38;2;74;74;87m█[0m    [38;2;74;74;87m·[0m[38;2;110;231;183m·●·[0m[38;2;74;74;87m·[0m
-   [38;2;74;74;87m·[0m     [38;2;74;74;87m·[0m     [38;2;74;74;87m███[0m    [38;2;74;74;87m███[0m  [38;2;74;74;87m██[0m  [38;2;74;74;87m███████[0m  [38;2;74;74;87m██[0m  [38;2;74;74;87m███[0m    [38;2;74;74;87m███[0m     [38;2;110;231;183m···[0m       [38;2;251;146;60m·[0m     [38;2;251;146;60m·[0m
-[38;2;74;74;87mBOOT SEQUENCE 05 / 05[0m [38;2;110;231;183m·[0m [38;2;74;74;87mEDITION 01[0m [38;2;110;231;183m·[0m [38;2;74;74;87mOPERATING[0m
-[38;2;148;163;184mthe cofounder who never sleeps[0m
-[38;2;110;231;183m━━━━━━━━━━━━━[0m[38;2;74;74;87m┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄[0m[38;2;38;38;51m┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈[0m
-[38;2;74;74;87mINSTALL    VERIFIED SHA-256    INSTALLED TO YOUR HOME[0m
+@@BANNER_TRUECOLOR@@
 __TRENT_BANNER__
 )"
 BANNER_16="$(cat <<'__TRENT_BANNER__'
-   [92m·[0m     [92m·[0m     [92m·[0m     [90m·[0m     [90m·[0m     [90m·[0m     [90m·[0m     [90m·[0m     [90m·[0m     [90m·[0m     [90m·[0m     [90m·[0m     [90m·[0m
-            [97m███████[0m  [97m██████▄[0m  [97m███████[0m  [97m███[0m  [97m██[0m  [97m███████[0m
-   [90m·[0m     [90m·[0m   [90m█[0m[97m███[0m[90m███[0m [97m███[0m[90m██[0m[97m██[0m[90m▄[0m [97m███[0m[90m█████[0m [97m████[0m [97m██[0m[90m█[0m  [90m█[0m[97m███[0m[90m███[0m             [90m·[0m     [90m·[0m
-              [97m███[0m[90m█[0m   [97m██████[0m[90m██[0m [97m██████[0m   [97m███[0m[90m█[0m[97m███[0m[90m█[0m   [97m███[0m[90m█[0m      [90m·[0m
-   [90m·[0m     [90m·[0m    [97m███[0m[90m█[0m   [97m███[0m[90m█[0m[97m▀█▄[0m  [97m███[0m[90m████[0m  [97m██[0m[90m█[0m[97m████[0m[90m█[0m   [97m███[0m[90m█[0m     [92m···[0m       [90m·[0m     [90m·[0m
-              [97m███[0m[90m█[0m   [97m███[0m[90m█[0m [97m██[0m[90m▄[0m [97m███████[0m  [97m██[0m[90m█[0m [97m███[0m[90m█[0m   [97m███[0m[90m█[0m    [90m·[0m[92m·●·[0m[90m·[0m
-   [90m·[0m     [90m·[0m     [90m███[0m    [90m███[0m  [90m██[0m  [90m███████[0m  [90m██[0m  [90m███[0m    [90m███[0m     [92m···[0m       [33m·[0m     [33m·[0m
-[90mBOOT SEQUENCE 05 / 05[0m [92m·[0m [90mEDITION 01[0m [92m·[0m [90mOPERATING[0m
-[37mthe cofounder who never sleeps[0m
-[92m━━━━━━━━━━━━━[0m[90m┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄[0m[90m┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈[0m
-[90mINSTALL    VERIFIED SHA-256    INSTALLED TO YOUR HOME[0m
+@@BANNER_16@@
 __TRENT_BANNER__
 )"
 

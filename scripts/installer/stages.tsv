@@ -1,0 +1,12 @@
+# name	title	category	needs_user_input
+# Single source of truth for the installer stage list. scripts/installer/render.sh turns this
+# into the stage tables inside scripts/install.sh and scripts/install.ps1. Edit THIS file, then
+# run render.sh; scripts/install.test.sh fails if the rendered scripts drift from it.
+detect	Detect operating system and CPU	environment	false
+resolve-version	Resolve the release to install	release	false
+download	Download the binary and checksums	release	false
+verify	Verify the SHA-256 digest	security	false
+install	Install the binary under ~/.trent	install	false
+path	Put ~/.trent/bin on PATH	shell	false
+setup	Run the Trent setup wizard	configure	true
+doctor	Run the Trent health checks	health	false
