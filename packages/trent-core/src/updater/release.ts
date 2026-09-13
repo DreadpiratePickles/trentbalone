@@ -145,6 +145,11 @@ function requestOnce(url: URL, ca: string | undefined, signal: AbortSignal | und
       {
         method: "GET",
         headers: { "User-Agent": "trent-updater", Accept: "application/octet-stream, application/json" },
+        // A fresh connection per request. Node's global agent pools keep-alive sockets, and a
+        // pooled socket the server closed while the updater was busy (hdiutil, a build) fails
+        // its next request with ECONNRESET / "socket hang up". The updater makes a handful of
+        // requests; pooling buys nothing and cost the desktop install a flaky failure.
+        agent: false,
         timeout: REQUEST_TIMEOUT_MS,
         ...(ca === undefined ? {} : { ca }),
         ...(signal === undefined ? {} : { signal }),

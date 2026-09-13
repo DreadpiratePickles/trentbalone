@@ -95,6 +95,23 @@ describe("resolveLatest", () => {
     expect(latest.assets).toContain(ASSET);
   });
 
+  it("never reuses a keep-alive socket between requests", async () => {
+    // Node's global agent keeps sockets alive by default. When the server closes an idle socket
+    // (GitHub's edge does) in the same instant the client reuses it, the next request dies with
+    // "connection failed: read ECONNRESET" -- observed as the desktop.test DMG flake after the
+    // slow hdiutil step. The fixture resets any reused socket, so this passes only when every
+    // updater request opens a fresh connection.
+    const idle = await startReleaseServer({ resetReusedSockets: true });
+    try {
+      layoutRelease(idle, { version: "2.0.0", assets: { [ASSET]: fakeBinary("2.0.0") } }, key);
+      const opts = { insecureBaseUrl: idle.baseUrl, ca: idle.caPem };
+      expect((await resolveLatest("stable", opts)).version).toBe("2.0.0");
+      expect((await resolveLatest("stable", opts)).version).toBe("2.0.0");
+    } finally {
+      await idle.close();
+    }
+  });
+
   it("refuses a base URL override that is not https", async () => {
     await expect(resolveLatest("stable", { insecureBaseUrl: "http://127.0.0.1:1" })).rejects.toThrow(/https/);
     expect(server.requests).toHaveLength(0);

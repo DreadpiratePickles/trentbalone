@@ -135,16 +135,27 @@ function selfSignedCert(): { key: string; cert: string } {
   return { key: keyPem, cert: forge.pki.certificateToPem(cert) };
 }
 
-export async function startReleaseServer(): Promise<ReleaseServer> {
+export async function startReleaseServer(options: { resetReusedSockets?: boolean } = {}): Promise<ReleaseServer> {
   const { key, cert } = selfSignedCert();
   const files = new Map<string, Buffer>();
   const redirects = new Map<string, string>();
   const truncate = new Set<string>();
   const requests: string[] = [];
 
+  const served = new WeakSet<object>();
   const server = https.createServer({ key, cert }, (req, res) => {
     const url = req.url ?? "/";
     requests.push(url);
+    // Model the keep-alive race deterministically: a request that arrives on a socket that
+    // already served one is what a client sees when the server closed that idle socket a
+    // moment earlier -- the read fails with ECONNRESET and no bytes.
+    if (options.resetReusedSockets === true) {
+      if (served.has(req.socket)) {
+        req.socket.destroy();
+        return;
+      }
+      served.add(req.socket);
+    }
     const redirect = redirects.get(url);
     if (redirect !== undefined) {
       res.writeHead(302, { Location: redirect });
