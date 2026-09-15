@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
+import { P, categoryColor } from "../palette.js";
+import type { AgentCategory } from "../../ui/theme.js";
 
 interface FleetModalProps {
   activeAgents: string[];
@@ -9,14 +11,15 @@ interface FleetModalProps {
   onClose: () => void;
 }
 
-const FEATURED_AGENTS = [
-  { id: "ceo", name: "CEO Agent", role: "Chief Executive & Strategy", color: "#8B5CF6" },
-  { id: "engineer", name: "Lead Engineer", role: "Full-Stack System Architect", color: "#06B6D4" },
-  { id: "growth", name: "Growth Hacker", role: "Traction & Acquisition", color: "#10B981" },
-  { id: "content", name: "Content Engine", role: "Copy & Publishing", color: "#F59E0B" },
-  { id: "support", name: "Support Lead", role: "Customer Operations", color: "#3B82F6" },
-  { id: "analyst", name: "Data Analyst", role: "Quantitative Insights", color: "#EC4899" },
-  { id: "finance", name: "Finance Controller", role: "Burn & Budget Caps", color: "#EF4444" },
+/** Identity colour comes from the seat's category, never a per-seat literal. */
+const FEATURED_AGENTS: Array<{ id: string; name: string; role: string; category: AgentCategory }> = [
+  { id: "ceo", name: "CEO Agent", role: "Chief Executive & Strategy", category: "product" },
+  { id: "engineer", name: "Lead Engineer", role: "Full-Stack System Architect", category: "engineering" },
+  { id: "growth", name: "Growth Hacker", role: "Traction & Acquisition", category: "marketing" },
+  { id: "content", name: "Content Engine", role: "Copy & Publishing", category: "design" },
+  { id: "support", name: "Support Lead", role: "Customer Operations", category: "support" },
+  { id: "analyst", name: "Data Analyst", role: "Quantitative Insights", category: "finance" },
+  { id: "finance", name: "Finance Controller", role: "Burn & Budget Caps", category: "finance" },
 ];
 
 export const FleetModal: React.FC<FleetModalProps> = ({
@@ -50,16 +53,16 @@ export const FleetModal: React.FC<FleetModalProps> = ({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="#8B5CF6"
+      borderColor={P.accent}
       padding={1}
       width={68}
-      backgroundColor="#1A1D27"
+      backgroundColor={P.surface}
     >
       <Box marginBottom={1} justifyContent="space-between">
-        <Text bold color="#8B5CF6">
-          👥 FLEET MANAGEMENT ({totalCatalogCount} Specialists)
+        <Text bold color={P.accent}>
+          FLEET MANAGEMENT ({totalCatalogCount} Specialists)
         </Text>
-        <Text color="#9CA3AF">[Esc to close]</Text>
+        <Text color={P.muted}>[Esc to close]</Text>
       </Box>
 
       {FEATURED_AGENTS.map((agent, idx) => {
@@ -70,29 +73,29 @@ export const FleetModal: React.FC<FleetModalProps> = ({
         return (
           <Box key={agent.id} marginY={0} justifyContent="space-between">
             <Box>
-              <Text color={isSelected ? "#06B6D4" : "gray"}>
+              <Text color={isSelected ? P.info : P.dim}>
                 {isSelected ? "❯ " : "  "}
               </Text>
-              <Text color={agent.color} bold>
+              <Text color={categoryColor(agent.category)} bold>
                 {agent.name.padEnd(18, " ")}
               </Text>
-              <Text color="#9CA3AF">{agent.role}</Text>
+              <Text color={P.muted}>{agent.role}</Text>
             </Box>
             <Box>
               {isActive ? (
-                <Text color="#10B981">● active</Text>
+                <Text color={P.accent}>● active</Text>
               ) : isInstalled ? (
-                <Text color="#F59E0B">● idle</Text>
+                <Text color={P.dim}>· idle</Text>
               ) : (
-                <Text color="#6B7280">○ available</Text>
+                <Text color={P.dim}>○ available</Text>
               )}
             </Box>
           </Box>
         );
       })}
 
-      <Box marginTop={1} borderStyle="single" borderColor="#2D3139" paddingTop={0}>
-        <Text dimColor color="#9CA3AF">
+      <Box marginTop={1} borderStyle="single" borderColor={P.border} paddingTop={0}>
+        <Text dimColor color={P.muted}>
           Press [Enter] to deploy agent to active duty.
         </Text>
       </Box>

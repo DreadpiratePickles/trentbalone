@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
+import { P } from "../palette.js";
 import type { CheckResult, DoctorReport } from "@trent/core";
 
 interface DoctorModalProps {
@@ -27,22 +28,22 @@ export const DoctorModal: React.FC<DoctorModalProps> = ({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="#10B981"
+      borderColor={P.accent}
       padding={1}
       width={72}
-      backgroundColor="#1A1D27"
+      backgroundColor={P.surface}
     >
       <Box marginBottom={1} justifyContent="space-between">
-        <Text bold color="#10B981">
-          ⚕ TRENT DOCTOR — SYSTEM DIAGNOSTICS
+        <Text bold color={P.accent}>
+          TRENT DOCTOR — SYSTEM DIAGNOSTICS
         </Text>
-        <Text color="#9CA3AF">[Esc to close]</Text>
+        <Text color={P.muted}>[Esc to close]</Text>
       </Box>
 
       {report.results.slice(0, 8).map((res) => {
-        let icon = <Text color="#10B981">✓ </Text>;
-        if (res.status === "warn") icon = <Text color="#F59E0B">⚠ </Text>;
-        if (res.status === "error") icon = <Text color="#EF4444">✗ </Text>;
+        let icon = <Text color={P.accent}>✓ </Text>;
+        if (res.status === "warn") icon = <Text color={P.needsApproval}>◆ </Text>;
+        if (res.status === "error") icon = <Text color={P.danger}>✗ </Text>;
 
         return (
           <Box key={res.name} marginY={0}>
@@ -50,18 +51,18 @@ export const DoctorModal: React.FC<DoctorModalProps> = ({
             <Text bold color="white">
               {res.category.padEnd(14, " ")}
             </Text>
-            <Text color="#9CA3AF" wrap="truncate">
+            <Text color={P.muted} wrap="truncate">
               {res.message}
             </Text>
           </Box>
         );
       })}
 
-      <Box marginTop={1} justifyContent="space-between" borderStyle="single" borderColor="#2D3139" paddingTop={0}>
-        <Text color={report.errors > 0 ? "#EF4444" : "#10B981"} bold>
+      <Box marginTop={1} justifyContent="space-between" borderStyle="single" borderColor={P.border} paddingTop={0}>
+        <Text color={report.errors > 0 ? P.danger : P.accent} bold>
           {report.passed}/{report.total} Passed · {report.warnings} Warnings · {report.errors} Errors
         </Text>
-        <Text color="#8B5CF6">[f] Auto-Fix Issues</Text>
+        <Text color={P.accent}>[f] Auto-Fix Issues</Text>
       </Box>
     </Box>
   );

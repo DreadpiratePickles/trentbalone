@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { SessionManager, type SessionData } from "@trent/core";
 
+/** What the orchestrator actually reported for a step. Absent means unknown, never a default. */
+export interface AgentMessageMetadata {
+  costCents?: number;
+  durationMs?: number;
+}
+
 export function useSession(sessionManager: SessionManager) {
   const [session, setSession] = useState<SessionData>(() => {
     return (
@@ -18,12 +24,16 @@ export function useSession(sessionManager: SessionManager) {
     return msg;
   };
 
-  const appendAgentMessage = (agent: string, text: string, cost = 0.04, durationMs = 350) => {
+  const appendAgentMessage = (agent: string, text: string, metadata: AgentMessageMetadata = {}) => {
+    const { costCents, durationMs } = metadata;
     const msg = sessionManager.appendMessage(session.id, {
       role: "assistant",
       agent,
       content: text,
-      metadata: { cost, durationMs },
+      metadata: {
+        ...(Number.isInteger(costCents) ? { cost_cents: costCents } : {}),
+        ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),
+      },
     });
     setSession({ ...sessionManager.getSession(session.id)! });
     return msg;

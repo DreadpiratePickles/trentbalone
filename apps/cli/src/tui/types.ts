@@ -6,5 +6,6 @@ export interface TuiActivityItem {
   action: string;
   timestamp: string;
   durationMs?: number;
-  cost?: number;
+  /** Integer cents, as reported by the orchestrator. */
+  costCents?: number;
 }

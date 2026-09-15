@@ -1,11 +1,25 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
-import type { SessionData } from "@trent/core";
+import { P } from "./palette.js";
+import type { SessionData, SessionMessageMetadata } from "@trent/core";
+import { formatCents } from "../repl/budget.js";
 
 export interface ChatProps {
   session: SessionData;
   onSendMessage: (text: string) => void;
   isActive?: boolean;
+}
+
+/**
+ * Only what the orchestrator reported. A message with no cost shows no cost; a message
+ * with no duration shows no duration. Nothing is estimated for display.
+ */
+function describeMetadata(metadata: SessionMessageMetadata): string {
+  const parts: string[] = [];
+  const duration = metadata.duration_ms ?? metadata.durationMs;
+  if (duration !== undefined) parts.push(`${Math.round(duration / 1000)}s`);
+  if (metadata.cost_cents !== undefined) parts.push(formatCents(metadata.cost_cents));
+  return parts.join(" | ");
 }
 
 export const Chat: React.FC<ChatProps> = ({ session, onSendMessage, isActive = true }) => {
@@ -36,39 +50,38 @@ export const Chat: React.FC<ChatProps> = ({ session, onSendMessage, isActive = t
       flexDirection="column"
       flexGrow={1}
       borderStyle="single"
-      borderColor="#2D3139"
+      borderColor={P.border}
       paddingX={1}
     >
       <Box marginBottom={1} justifyContent="space-between">
-        <Text bold color="#8B5CF6">
-          💬 FLEET WORKSPACE [{session.agent}]
+        <Text bold color={P.accent}>
+          FLEET WORKSPACE [{session.agent}]
         </Text>
-        <Text color="#9CA3AF">{session.messages.length} messages</Text>
+        <Text color={P.muted}>{session.messages.length} messages</Text>
       </Box>
 
       <Box flexDirection="column" flexGrow={1} marginBottom={1}>
         {displayMessages.length === 0 ? (
           <Box marginY={2} justifyContent="center">
-            <Text dimColor color="#6B7280">
+            <Text dimColor color={P.dim}>
               Fleet session initialized. Type below and press [Enter] to dispatch.
             </Text>
           </Box>
         ) : (
           displayMessages.map((m) => {
             const isUser = m.role === "user";
+            const meta = m.metadata ? describeMetadata(m.metadata) : "";
             return (
               <Box key={m.id} flexDirection="column" marginY={0}>
                 <Box>
-                  <Text bold color={isUser ? "#06B6D4" : "#8B5CF6"}>
+                  <Text bold color={isUser ? P.info : P.accent}>
                     {isUser ? "You: " : `[${m.agent || "CEO"}]: `}
                   </Text>
-                  <Text color={isUser ? "white" : "#E4E6EB"}>{m.content}</Text>
+                  <Text color={isUser ? "white" : P.text}>{m.content}</Text>
                 </Box>
-                {m.metadata?.cost !== undefined && (
+                {meta !== "" && (
                   <Box marginLeft={2}>
-                    <Text dimColor color="#9CA3AF">
-                      ⏱ {((m.metadata.durationMs || 0) / 1000).toFixed(1)}s · 💰 ${m.metadata.cost.toFixed(2)}
-                    </Text>
+                    <Text dimColor color={P.muted}>{meta}</Text>
                   </Box>
                 )}
               </Box>
@@ -80,12 +93,12 @@ export const Chat: React.FC<ChatProps> = ({ session, onSendMessage, isActive = t
       {/* Input Line */}
       <Box
         borderStyle="single"
-        borderColor={isActive ? "#8B5CF6" : "#2D3139"}
+        borderColor={isActive ? P.accent : P.border}
         paddingX={1}
       >
-        <Text color="#8B5CF6">❯ </Text>
+        <Text color={P.accent}>❯ </Text>
         <Text color="white">{input}</Text>
-        <Text color="#8B5CF6">█</Text>
+        <Text color={P.accent}>█</Text>
       </Box>
     </Box>
   );

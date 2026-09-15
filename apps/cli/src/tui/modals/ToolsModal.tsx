@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
+import { P } from "../palette.js";
 
 interface ToolsModalProps {
   toolsets: string[];
@@ -48,16 +49,16 @@ export const ToolsModal: React.FC<ToolsModalProps> = ({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="#06B6D4"
+      borderColor={P.info}
       padding={1}
       width={70}
-      backgroundColor="#1A1D27"
+      backgroundColor={P.surface}
     >
       <Box marginBottom={1} justifyContent="space-between">
-        <Text bold color="#06B6D4">
-          🔧 TOOLSET CAPABILITY POLICIES
+        <Text bold color={P.info}>
+          TOOLSET CAPABILITY POLICIES
         </Text>
-        <Text color="#9CA3AF">[Esc to close]</Text>
+        <Text color={P.muted}>[Esc to close]</Text>
       </Box>
 
       {ALL_TOOLSETS.map((t, idx) => {
@@ -67,23 +68,23 @@ export const ToolsModal: React.FC<ToolsModalProps> = ({
         return (
           <Box key={t.id} marginY={0} justifyContent="space-between">
             <Box>
-              <Text color={isSelected ? "#06B6D4" : "gray"}>
+              <Text color={isSelected ? P.info : P.dim}>
                 {isSelected ? "❯ " : "  "}
               </Text>
-              <Text color={isEnabled ? "#10B981" : "#EF4444"}>
+              <Text color={isEnabled ? P.accent : P.danger}>
                 {isEnabled ? "[✓] " : "[ ] "}
               </Text>
-              <Text bold color={isSelected ? "white" : "#E4E6EB"}>
+              <Text bold color={isSelected ? "white" : P.text}>
                 {t.label.padEnd(20, " ")}
               </Text>
-              <Text color="#9CA3AF">{t.desc}</Text>
+              <Text color={P.muted}>{t.desc}</Text>
             </Box>
           </Box>
         );
       })}
 
-      <Box marginTop={1} borderStyle="single" borderColor="#2D3139" paddingTop={0}>
-        <Text dimColor color="#9CA3AF">
+      <Box marginTop={1} borderStyle="single" borderColor={P.border} paddingTop={0}>
+        <Text dimColor color={P.muted}>
           Press [Space] or [Enter] to toggle capability on/off.
         </Text>
       </Box>

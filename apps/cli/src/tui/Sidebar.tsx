@@ -1,19 +1,24 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { P } from "./palette.js";
 import type { FleetStatusReport } from "@trent/core";
+import { formatCents } from "../repl/budget.js";
 
 export interface SidebarProps {
   fleet: FleetStatusReport;
-  budgetSpent: number;
-  budgetCap: number;
+  /** Integer cents. Formatted here, at the edge, and nowhere earlier. */
+  budgetSpentCents: number;
+  budgetCapCents: number;
+  budgetWarning?: boolean;
   toolsCount: number;
   skillsCount: number;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   fleet,
-  budgetSpent,
-  budgetCap,
+  budgetSpentCents,
+  budgetCapCents,
+  budgetWarning = false,
   toolsCount,
   skillsCount,
 }) => {
@@ -25,51 +30,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
       flexDirection="column"
       width={28}
       borderStyle="single"
-      borderColor="#2D3139"
+      borderColor={P.border}
       paddingX={1}
     >
       <Box marginBottom={1}>
-        <Text bold color="#8B5CF6">
-          ⚡ FLEET STATUS
+        <Text bold color={P.accent}>
+          FLEET STATUS
         </Text>
       </Box>
 
       <Box flexDirection="column" marginBottom={1}>
         {activeAgents.map((a) => (
           <Box key={a.id}>
-            <Text color="#10B981">● </Text>
+            <Text color={P.accent}>● </Text>
             <Text bold color="white">{a.name} </Text>
-            <Text color="#9CA3AF">({a.id})</Text>
+            <Text color={P.muted}>({a.id})</Text>
           </Box>
         ))}
         {idleAgents.map((a) => (
           <Box key={a.id}>
-            <Text color="#F59E0B">● </Text>
-            <Text color="#9CA3AF">{a.name} </Text>
-            <Text dimColor color="#6B7280">[idle]</Text>
+            <Text color={P.dim}>· </Text>
+            <Text color={P.muted}>{a.name} </Text>
+            <Text dimColor color={P.dim}>[idle]</Text>
           </Box>
         ))}
         {activeAgents.length === 0 && idleAgents.length === 0 && (
-          <Text dimColor color="#6B7280">No agents active</Text>
+          <Text dimColor color={P.dim}>No agents active</Text>
         )}
       </Box>
 
-      <Box flexDirection="column" borderStyle="single" borderColor="#2D3139" paddingX={1} marginY={1}>
-        <Text color="#9CA3AF">DAILY BUDGET</Text>
-        <Text bold color="#10B981">
-          ${budgetSpent.toFixed(2)} / ${budgetCap.toFixed(2)}
+      <Box flexDirection="column" borderStyle="single" borderColor={P.border} paddingX={1} marginY={1}>
+        <Text color={P.muted}>DAILY BUDGET</Text>
+        <Text bold color={budgetWarning ? P.needsApproval : P.accent}>
+          {formatCents(budgetSpentCents)} / {formatCents(budgetCapCents)}
         </Text>
       </Box>
 
       <Box flexDirection="column" marginBottom={1}>
-        <Text color="#9CA3AF">Tools: <Text color="white">{toolsCount} active</Text></Text>
-        <Text color="#9CA3AF">Skills: <Text color="white">{skillsCount} loaded</Text></Text>
-        <Text color="#9CA3AF">Catalog: <Text color="#8B5CF6">164 specialists</Text></Text>
-      </Box>
-
-      <Box flexDirection="column" borderStyle="single" borderColor="#2D3139" paddingX={1}>
-        <Text dimColor color="#6B7280">Self-Improvement:</Text>
-        <Text color="#10B981">GEPA: +0.03 <Text color="#9CA3AF">· 2 distilled</Text></Text>
+        <Text color={P.muted}>Tools: <Text color="white">{toolsCount} active</Text></Text>
+        <Text color={P.muted}>Skills: <Text color="white">{skillsCount} loaded</Text></Text>
+        <Text color={P.muted}>Catalog: <Text color={P.accent}>{fleet.totalCatalog} specialists</Text></Text>
       </Box>
     </Box>
   );

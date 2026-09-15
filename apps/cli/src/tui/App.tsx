@@ -1,15 +1,21 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
+import { P } from "./palette.js";
 import {
   ConfigManager,
   FleetManager,
   SessionManager,
   ApprovalBridge,
   DoctorRunner,
+  FixRunner,
+  type ApprovalRequest,
   type DoctorReport,
   type Toolset,
   type Provider,
 } from "@trent/core";
+import { createOrchestrator, type Orchestrator } from "@trent/core/orchestrator/index.js";
+import { handleOrcEvent, type OrchestratorApprovalDetails } from "./events.js";
+import { CLI_VERSION } from "../commands/registry.js";
 import { Sidebar } from "./Sidebar.js";
 import { Chat } from "./Chat.js";
 import { Activity } from "./Activity.js";
@@ -31,6 +37,16 @@ export interface AppProps {
   fleetManager?: FleetManager;
   sessionManager?: SessionManager;
   approvalBridge?: ApprovalBridge;
+  /** The event source for every turn. Defaults to the real in-process orchestrator. */
+  orchestrator?: Orchestrator;
+}
+
+const DEFAULT_COMPANY_ID = "trent-local";
+
+function orchestratorApproval(request: ApprovalRequest): OrchestratorApprovalDetails | undefined {
+  const { runId, stepId } = request.details;
+  if (typeof runId !== "string" || typeof stepId !== "string") return undefined;
+  return { runId, stepId };
 }
 
 export const App: React.FC<AppProps> = (props) => {
@@ -39,11 +55,13 @@ export const App: React.FC<AppProps> = (props) => {
   const sessionManager = props.sessionManager || new SessionManager(configManager);
   const approvalBridge = props.approvalBridge || new ApprovalBridge();
   const doctorRunner = new DoctorRunner(configManager);
+  const [orchestrator] = useState<Orchestrator>(() => props.orchestrator ?? createOrchestrator());
 
   const fleet = useFleet(fleetManager);
   const { pending, approve, deny } = useApprovals(approvalBridge);
-  const { dailySpent, dailyCap } = useBudget(configManager);
+  const budget = useBudget(configManager, fleet.dailyBudgetSpentCents);
   const { session, appendUserMessage, appendAgentMessage } = useSession(sessionManager);
+  const [busy, setBusy] = useState(false);
 
   const [activeModal, setActiveModal] = useState<
     "none" | "model" | "fleet" | "tools" | "doctor" | "help"
@@ -51,9 +69,37 @@ export const App: React.FC<AppProps> = (props) => {
   const [doctorReport, setDoctorReport] = useState<DoctorReport | null>(null);
 
   const config = configManager.loadConfig();
+  const companyId = String((config as { company?: { id?: string } }).company?.id ?? DEFAULT_COMPANY_ID);
+
+  // A decision taken in the approval queue is routed back to the step that is waiting on it.
+  useEffect(() => {
+    const onDecided = (request: ApprovalRequest): void => {
+      const link = orchestratorApproval(request);
+      if (link === undefined) return;
+      if (request.status === "approved") void orchestrator.approve(link.runId, link.stepId);
+      else void orchestrator.reject(link.runId, link.stepId);
+    };
+    approvalBridge.on("approval_decided", onDecided);
+    return () => {
+      approvalBridge.off("approval_decided", onDecided);
+    };
+  }, [approvalBridge, orchestrator]);
 
   useInput((input, key) => {
     if (activeModal !== "none") return;
+
+    // y / n answer the oldest pending approval, exactly as the queue pane advertises.
+    const [oldest] = pending;
+    if (oldest !== undefined && !key.ctrl && !key.meta) {
+      if (input === "y") {
+        approve(oldest.id);
+        return;
+      }
+      if (input === "n") {
+        deny(oldest.id);
+        return;
+      }
+    }
 
     if (key.ctrl && input === "m") {
       setActiveModal("model");
@@ -73,14 +119,35 @@ export const App: React.FC<AppProps> = (props) => {
     }
   });
 
-  const [activities, setActivities] = useState<TuiActivityItem[]>([
-    {
-      id: "act-1",
-      agent: "CEO",
-      action: "Fleet initialized in 3-pane autonomous mode",
-      timestamp: new Date().toISOString(),
-    },
-  ]);
+  const [activities, setActivities] = useState<TuiActivityItem[]>([]);
+
+  const pushActivity = (item: Omit<TuiActivityItem, "id" | "timestamp">): void => {
+    const at = new Date().toISOString();
+    setActivities((prev) => [{ id: `act-${at}-${prev.length}`, timestamp: at, ...item }, ...prev.slice(0, 8)]);
+  };
+
+  /** One real orchestrated turn. Every line shown comes from an event; nothing is invented. */
+  const runObjective = async (objective: string): Promise<void> => {
+    setBusy(true);
+    try {
+      for await (const event of orchestrator.run({ companyId, objective, trigger: "manual" })) {
+        handleOrcEvent(event, {
+          recordCost: budget.record,
+          appendAgentMessage,
+          pushActivity,
+          sessionAgent: session.agent,
+          openApproval: ({ agent, action, runId, stepId, reason }) => {
+            approvalBridge.createApprovalRequest(agent, action, { runId, stepId, reason });
+          },
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendAgentMessage("orchestrator", `Run failed: ${message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleSendMessage = async (text: string) => {
     const trimmed = text.trim();
@@ -112,24 +179,9 @@ export const App: React.FC<AppProps> = (props) => {
       process.exit(0);
     }
 
+    if (busy) return;
     appendUserMessage(text);
-    const actId = `act-${Date.now()}`;
-    setActivities((prev) => [
-      {
-        id: actId,
-        agent: "Engineer",
-        action: `Processing: "${text.slice(0, 24)}..."`,
-        timestamp: new Date().toISOString(),
-      },
-      ...prev.slice(0, 8),
-    ]);
-
-    setTimeout(() => {
-      appendAgentMessage(
-        "CEO",
-        `Dispatching subtasks across Trent specialists for: "${text}". Fleet operational.`
-      );
-    }, 300);
+    await runObjective(text);
   };
 
   const handleSelectModel = (provider: string, model: string) => {
@@ -166,27 +218,27 @@ export const App: React.FC<AppProps> = (props) => {
       {/* Top Header Bar */}
       <Box
         borderStyle="single"
-        borderColor="#8B5CF6"
+        borderColor={P.accent}
         paddingX={1}
         justifyContent="space-between"
       >
         <Box>
-          <Text bold color="#8B5CF6">
-            ⚡ TRENT FLEET{" "}
+          <Text bold color={P.accent}>
+            TRENT FLEET{" "}
           </Text>
-          <Text dimColor color="#9CA3AF">
-            v1.0.0 (Hermes Parity)
+          <Text dimColor color={P.muted}>
+            v{CLI_VERSION}
           </Text>
         </Box>
         <Box>
-          <Text color="#9CA3AF">Model: </Text>
-          <Text bold color="#06B6D4">
+          <Text color={P.muted}>Model: </Text>
+          <Text bold color={P.info}>
             {config.model}{" "}
           </Text>
-          <Text color="#9CA3AF">({config.provider})</Text>
+          <Text color={P.muted}>({config.provider})</Text>
         </Box>
         <Box>
-          <Text dimColor color="#6B7280">
+          <Text dimColor color={P.dim}>
             Commands: /model /fleet /tools /doctor /help
           </Text>
         </Box>
@@ -232,9 +284,9 @@ export const App: React.FC<AppProps> = (props) => {
           <DoctorModal
             report={doctorReport}
             onFix={async () => {
-              await doctorRunner.fixAll();
-              const refreshed = await doctorRunner.runAll();
-              setDoctorReport(refreshed);
+              // The same fixes `trent doctor --fix` runs; the report is the post-fix re-run.
+              const { newReport } = await new FixRunner(configManager).runFixes();
+              setDoctorReport(newReport);
             }}
             onClose={() => setActiveModal("none")}
           />
@@ -251,15 +303,16 @@ export const App: React.FC<AppProps> = (props) => {
         <Box flexDirection="row" marginTop={1}>
           <Sidebar
             fleet={fleet}
-            budgetSpent={dailySpent}
-            budgetCap={dailyCap}
+            budgetSpentCents={budget.spentCents}
+            budgetCapCents={budget.capCents}
+            budgetWarning={budget.warning}
             toolsCount={config.toolsets.length}
             skillsCount={config.disabled_toolsets.length}
           />
           <Chat
             session={session}
             onSendMessage={handleSendMessage}
-            isActive={activeModal === "none"}
+            isActive={activeModal === "none" && !busy}
           />
           <Activity
             activities={activities}

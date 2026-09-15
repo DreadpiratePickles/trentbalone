@@ -77,16 +77,24 @@ export class BudgetLedger {
     return this.#announced.size > 0;
   }
 
+  /** The ticker text, uncoloured. The TUI paints it with Ink; the REPL with the theme. */
+  summaryText(): string {
+    return `${formatCents(this.#spent)} / ${formatCents(this.capCents)} today (${this.percent}%)`;
+  }
+
   /** The ticker line. Ember once a threshold is live, haze otherwise. */
   render(theme: Theme): string {
-    const text = `${formatCents(this.#spent)} / ${formatCents(this.capCents)} today (${this.percent}%)`;
+    const text = this.summaryText();
     return this.warning ? theme.needsApproval(text) : theme.meta(text);
+  }
+
+  /** The warning text, uncoloured, for a surface that paints with something other than the theme. */
+  warningText(threshold: number): string {
+    return `Budget alert: ${threshold}% of the daily cap used (${formatCents(this.#spent)} of ${formatCents(this.capCents)}).`;
   }
 
   /** The one-line warning shown as a threshold is crossed. */
   warningLine(threshold: number, theme: Theme): string {
-    return theme.needsApproval(
-      `Budget alert: ${threshold}% of the daily cap used (${formatCents(this.#spent)} of ${formatCents(this.capCents)}).`,
-    );
+    return theme.needsApproval(this.warningText(threshold));
   }
 }

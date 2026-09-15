@@ -13,6 +13,9 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPL_DIR = path.resolve(here, "..");
+const TUI_DIR = path.resolve(here, "../../tui");
+/** Every interactive surface: the REPL and the Ink TUI. Neither may invent a number or a reply. */
+const INTERACTIVE_DIRS = [REPL_DIR, TUI_DIR];
 const CLI_SRC = path.resolve(here, "../..");
 const CORE_SRC = path.resolve(here, "../../../../../packages/trent-core/src");
 
@@ -70,15 +73,36 @@ describe("the canned response paths are gone", () => {
 });
 
 describe("no hard-coded sample money", () => {
+  const files = INTERACTIVE_DIRS.flatMap((dir) => sources(dir, { includeTests: false }));
+
   it("does not contain the old 0.12 / 0.04 placeholder costs", () => {
-    const files = sources(REPL_DIR, { includeTests: false });
     expect(offenders(files, /\b0\.12\b|\b0\.04\b/)).toEqual([]);
   });
 
   it("does not write a dollar float literal at all", () => {
-    const files = sources(REPL_DIR, { includeTests: false });
-    // Money is integer cents; the only float in the REPL is the one formatCents produces.
+    // Money is integer cents; the only float in the REPL or TUI is the one formatCents produces.
     expect(offenders(files, /\$\d+\.\d\d/)).toEqual([]);
+  });
+
+  it("never formats money with toFixed; formatCents is the only edge", () => {
+    expect(offenders(files, /\.toFixed\(2\)/)).toEqual([]);
+  });
+
+  it("never defaults a cost or a duration in a parameter list", () => {
+    // `cost = 0.04, durationMs = 350` was the TUI's invented latency and spend.
+    expect(offenders(files, /\b(cost|costCents|durationMs|duration_ms)\s*=\s*\d/)).toEqual([]);
+  });
+});
+
+describe("no fake agent reply in the TUI", () => {
+  const files = sources(TUI_DIR, { includeTests: false });
+
+  it("does not schedule a reply with setTimeout", () => {
+    expect(offenders(files, /setTimeout\(/)).toEqual([]);
+  });
+
+  it("has no canned dispatch prose", () => {
+    expect(offenders(files, /Dispatching subtasks across|Fleet operational/)).toEqual([]);
   });
 });
 

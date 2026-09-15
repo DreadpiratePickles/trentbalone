@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
+import { P } from "../palette.js";
 
 interface ModelModalProps {
   currentProvider: string;
@@ -47,16 +48,16 @@ export const ModelModal: React.FC<ModelModalProps> = ({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="#8B5CF6"
+      borderColor={P.accent}
       padding={1}
       width={60}
-      backgroundColor="#1A1D27"
+      backgroundColor={P.surface}
     >
       <Box marginBottom={1} justifyContent="space-between">
-        <Text bold color="#8B5CF6">
-          🤖 SWITCH MODEL & PROVIDER
+        <Text bold color={P.accent}>
+          SWITCH MODEL & PROVIDER
         </Text>
-        <Text color="#9CA3AF">[Esc to close]</Text>
+        <Text color={P.muted}>[Esc to close]</Text>
       </Box>
 
       {PROVIDERS.map((p, idx) => {
@@ -64,19 +65,19 @@ export const ModelModal: React.FC<ModelModalProps> = ({
         const isCurrent = p.provider === currentProvider && p.model === currentModel;
         return (
           <Box key={p.provider} marginY={0}>
-            <Text color={isSelected ? "#06B6D4" : "gray"}>
+            <Text color={isSelected ? P.info : P.dim}>
               {isSelected ? "❯ " : "  "}
             </Text>
-            <Text color={isSelected ? "#06B6D4" : "white"} bold={isSelected}>
+            <Text color={isSelected ? P.info : "white"} bold={isSelected}>
               {p.name}
             </Text>
-            {isCurrent && <Text color="#10B981"> (active)</Text>}
+            {isCurrent && <Text color={P.accent}> (active)</Text>}
           </Box>
         );
       })}
 
-      <Box marginTop={1} borderStyle="single" borderColor="#2D3139" paddingTop={0}>
-        <Text dimColor color="#9CA3AF">
+      <Box marginTop={1} borderStyle="single" borderColor={P.border} paddingTop={0}>
+        <Text dimColor color={P.muted}>
           Use ↑/↓ arrows to navigate, [Enter] to select.
         </Text>
       </Box>

@@ -9,6 +9,7 @@ import {
   DoctorRunner,
 } from "@trent/core";
 import { formatBudgetTicker } from "../repl/output.js";
+import { TOKEN_HEX } from "../ui/theme.js";
 
 export interface SlashCommandContext {
   configManager: ConfigManager;
@@ -32,7 +33,7 @@ export const SLASH_COMMANDS: Record<string, SlashCommandDefinition> = {
     name: "help",
     description: "Show all available slash commands",
     async execute(_args, _ctx) {
-      const lines = [chalk.bold.hex("#8B5CF6")("Available Slash Commands:")];
+      const lines = [chalk.bold.hex(TOKEN_HEX.pulse)("Available Slash Commands:")];
       for (const cmd of Object.values(SLASH_COMMANDS)) {
         const cmdName = `/${cmd.name}${cmd.args ? ` ${cmd.args}` : ""}`.padEnd(24, " ");
         lines.push(`  ${chalk.cyan(cmdName)} ${chalk.dim(cmd.description)}`);
@@ -73,7 +74,7 @@ export const SLASH_COMMANDS: Record<string, SlashCommandDefinition> = {
       const status = ctx.fleetManager.getStatus();
       const activeAgents = status.agents.filter((a) => a.active);
       const lines = [
-        chalk.bold.hex("#8B5CF6")("┌─ FLEET STATUS ────────────────────────────────────────┐"),
+        chalk.bold.hex(TOKEN_HEX.pulse)("┌─ FLEET STATUS ────────────────────────────────────────┐"),
         `  ${chalk.bold("Active Fleet:")} ${status.activeCount} / ${status.installedCount} installed (${status.totalCatalog} in catalog)`,
         "",
       ];
@@ -86,7 +87,7 @@ export const SLASH_COMMANDS: Record<string, SlashCommandDefinition> = {
 
       lines.push("");
       lines.push(`  ${formatBudgetTicker(status.dailyBudgetSpent, status.dailyBudgetCap)}`);
-      lines.push(chalk.bold.hex("#8B5CF6")("└───────────────────────────────────────────────────────┘"));
+      lines.push(chalk.bold.hex(TOKEN_HEX.pulse)("└───────────────────────────────────────────────────────┘"));
       return lines.join("\n");
     },
   },
@@ -232,7 +233,7 @@ export const SLASH_COMMANDS: Record<string, SlashCommandDefinition> = {
 
       const enabled = await ctx.voiceManager.toggle(target);
       return enabled
-        ? chalk.green("🎙️ Voice mode enabled. Press Ctrl+B to start/stop speaking.")
+        ? chalk.green("Voice mode enabled. Press Ctrl+B to start/stop speaking.")
         : chalk.yellow("Voice mode disabled.");
     },
   },
@@ -327,7 +328,7 @@ export const SLASH_COMMANDS: Record<string, SlashCommandDefinition> = {
         { id: "slack", name: "Slack Messaging Connector", trustScore: 92, risk: "medium", status: "online" },
       ];
 
-      const lines = [chalk.bold.hex("#8B5CF6")("Model Context Protocol (MCP) Connectors:")];
+      const lines = [chalk.bold.hex(TOKEN_HEX.pulse)("Model Context Protocol (MCP) Connectors:")];
       for (const c of connectors) {
         lines.push(
           `  ${chalk.green("●")} ${chalk.bold(c.id.padEnd(16, " "))} [Trust: ${chalk.cyan(`${c.trustScore}%`)}] [Risk: ${chalk.yellow(c.risk)}] ${chalk.dim(c.name)}`
@@ -365,7 +366,7 @@ export const SLASH_COMMANDS: Record<string, SlashCommandDefinition> = {
           `  ${chalk.cyan("• Company Architecture:")} Autonomous AI cofounder multi-agent platform.\n` +
           `  ${chalk.cyan("• Operating Seats:")} 9 core roles + 164 specialists across 13 divisions.`;
       }
-      return chalk.bold.hex("#8B5CF6")("Company Memory & Wiki:\n") +
+      return chalk.bold.hex(TOKEN_HEX.pulse)("Company Memory & Wiki:\n") +
         `  ${chalk.cyan("Total Knowledge Nodes:")} 24\n` +
         `  ${chalk.cyan("Active Entities:")} Roadmap, Sprint Goals, Architecture, Brand Voice\n` +
         `  Use \`/wiki query <text>\` to search specific knowledge topics.`;
@@ -377,7 +378,7 @@ export const SLASH_COMMANDS: Record<string, SlashCommandDefinition> = {
     description: "Inspect sandbox IDE runtime status and preview endpoints",
     async execute(_args, ctx) {
       const config = ctx.configManager.loadConfig();
-      return chalk.bold.hex("#8B5CF6")("Workbench Sandbox Runtime:\n") +
+      return chalk.bold.hex(TOKEN_HEX.pulse)("Workbench Sandbox Runtime:\n") +
         `  ${chalk.cyan("Backend:")}    ${config.terminal.backend}\n` +
         `  ${chalk.cyan("Isolation:")}  Active\n` +
         `  ${chalk.cyan("Preview:")}    http://localhost:3000\n` +
@@ -390,7 +391,7 @@ export const SLASH_COMMANDS: Record<string, SlashCommandDefinition> = {
     description: "Browse agent marketplace packs and specialists",
     async execute(_args, ctx) {
       const catalog = ctx.fleetManager.listCatalog();
-      const lines = [chalk.bold.hex("#8B5CF6")(`Agent Marketplace (${catalog.length} specialists available):`)];
+      const lines = [chalk.bold.hex(TOKEN_HEX.pulse)(`Agent Marketplace (${catalog.length} specialists available):`)];
       lines.push(`  ${chalk.bold("Featured Packs:")}`);
       lines.push(`    ${chalk.cyan("• Engineering Trio:")} AI Engineer, Backend Architect, DevOps ($0.00 / free tier)`);
       lines.push(`    ${chalk.cyan("• Growth Engine:")} Growth Hacker, Content Engine, Search Optimizer ($0.00 / free tier)`);
@@ -404,7 +405,7 @@ export const SLASH_COMMANDS: Record<string, SlashCommandDefinition> = {
     name: "traces",
     description: "Inspect recent agent execution telemetry and critique verdicts",
     async execute(_args, _ctx) {
-      return chalk.bold.hex("#8B5CF6")("Recent Agent Execution Traces:\n") +
+      return chalk.bold.hex(TOKEN_HEX.pulse)("Recent Agent Execution Traces:\n") +
         `  ${chalk.green("✓")} [trace-01] ${chalk.bold("CEO")} → Strategic roadmap planning (420ms · $0.02 · Approved)\n` +
         `  ${chalk.green("✓")} [trace-02] ${chalk.bold("Engineer")} → Health diagnostic check (180ms · $0.01 · Approved)\n` +
         `  ${chalk.dim("All traces exported to OpenTelemetry gen_ai.* standard.")}`;
