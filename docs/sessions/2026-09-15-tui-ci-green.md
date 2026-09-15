@@ -32,3 +32,7 @@ worktree session `claude/recursing-swanson-81e04e`, idle since 2026-09-13 with 2
 - The worktree `.claude/worktrees/recursing-swanson-81e04e` still holds the same diff uncommitted;
   it is now redundant with this commit and can be removed (`git worktree remove`) — Bobby's call.
 - First public release still needs the repo public + a tag on main (unchanged).
+
+## CI on `7f405da` — run 35010440625: every job green, `all-checks-pass` ✓
+lint, anti-pattern scan, core/web tests + typechecks, sandbox on Linux, 4 binaries built and RUN
+natively, SHA256SUMS. First fully green run on the branch.
