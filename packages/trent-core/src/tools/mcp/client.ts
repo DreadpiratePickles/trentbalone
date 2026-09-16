@@ -13,15 +13,20 @@
  *
  * A failure anywhere in here becomes an `unavailable` reason. Reasons name env vars and hosts,
  * never values or headers.
+ *
+ * Every `callTool` result passes through `scrubMcpResult` (`./scan.ts`) before it reaches the
+ * seat: secret-shaped runs become numbered tokens, hit counts are logged, values never are.
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { McpServerConfig } from "../../config/schema.js";
 import { scrubChildEnv } from "../../terminal/env-scrub.js";
+import { StructuredLogger } from "../../telemetry/logger.js";
 import { createEgressFetch, type EgressClientOptions, type FetchLike } from "../web/proxied-fetch.js";
 import { checkUrlSafety, type LookupFn } from "../web/url-safety.js";
 import { resolveTemplateRecord } from "./config.js";
+import { scrubMcpResult } from "./scan.js";
 
 const CLIENT_INFO = { name: "trent-fleet", version: "1.0.0" };
 export const MCP_CONNECT_TIMEOUT_MS = 15_000;
@@ -56,6 +61,8 @@ export interface McpConnectDeps {
   /** cwd for stdio children; defaults to the process cwd. */
   readonly cwd?: string;
   readonly connectTimeoutMs?: number;
+  /** Where result-scrub hit counts go; defaults to a `StructuredLogger` on stderr. Never carries a value. */
+  readonly redactionLog?: (event: string, fields: Record<string, unknown>) => void;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
@@ -100,7 +107,9 @@ function renderContent(result: unknown): McpCallResult {
   return { text: text || "(MCP tool returned no content)", isError: record.isError === true };
 }
 
-function wrap(server: string, client: Client, closeExtra?: () => Promise<void>): McpConnection {
+function wrap(server: string, client: Client, deps: McpConnectDeps, closeExtra?: () => Promise<void>): McpConnection {
+  const logger = deps.redactionLog === undefined ? new StructuredLogger({ runId: "mcp" }) : undefined;
+  const redactionLog = deps.redactionLog ?? ((event, fields) => logger?.info(event, fields));
   return {
     server,
     async listTools() {
@@ -109,7 +118,10 @@ function wrap(server: string, client: Client, closeExtra?: () => Promise<void>):
     },
     async callTool(name, args) {
       const result = await client.callTool({ name, arguments: args }, undefined, { timeout: MCP_CALL_TIMEOUT_MS });
-      return renderContent(result);
+      const rendered = renderContent(result);
+      const scrubbed = scrubMcpResult(rendered.text);
+      if (scrubbed.hits.length > 0) redactionLog("mcp.result.redacted", { server, tool: name, hits: scrubbed.hits });
+      return { text: scrubbed.text, isError: rendered.isError };
     },
     async close() {
       await client.close().catch(() => undefined);
@@ -136,7 +148,7 @@ async function connectStdio(name: string, config: Extract<McpServerConfig, { tra
     await transport.close().catch(() => undefined);
     throw error;
   }
-  return wrap(name, client);
+  return wrap(name, client, deps);
 }
 
 async function connectHttp(name: string, config: Extract<McpServerConfig, { transport: "http" }>, deps: McpConnectDeps): Promise<McpConnection> {
@@ -157,7 +169,7 @@ async function connectHttp(name: string, config: Extract<McpServerConfig, { tran
     await transport.close().catch(() => undefined);
     throw error;
   }
-  return wrap(name, client);
+  return wrap(name, client, deps);
 }
 
 /** Connects to one configured server. Throws with a value-free reason on any failure. */

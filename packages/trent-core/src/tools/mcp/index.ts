@@ -22,6 +22,7 @@ import { mcpToolName } from "./config.js";
 
 export { connectMcpServer, connectFailureReason, MCP_CONNECT_TIMEOUT_MS, type McpConnection, type McpConnectDeps, type McpToolInfo } from "./client.js";
 export { mcpToolName, resolveTemplate, resolveTemplateRecord, containsTemplate, sanitiseComponent, MCP_SERVER_NAME_PATTERN } from "./config.js";
+export { scanMcpTools, scrubMcpResult, toolInstructionStrings, type McpScanFinding } from "./scan.js";
 
 export const MCP_ADAPTER_NAME = "mcp";
 export const MCP_STATUS_TOOL = "mcp_status";

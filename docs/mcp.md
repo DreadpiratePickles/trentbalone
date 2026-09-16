@@ -54,6 +54,36 @@ built-in Trent tool (`tools/tool-names.ts`), a duplicate, a bad name, and a lite
 var whose name looks secret (`*_TOKEN`, `*_KEY`, ...) or a credential header (`Authorization`,
 `Cookie`, `X-Api-Key`, ...) must carry a `${ENV_VAR}` reference.
 
+### Install-time scan
+
+`add` connects to the server once, runs `tools/list`, and scans every string the server would
+hand a seat as instructions: each tool's name, its description, and every `description` or
+`title` inside its input schema. The scanner is `skills/SecurityScan`, the same jailbreak and
+exfiltration patterns a SKILL.md must pass (`ignore all previous instructions`, `system override
+mode`, `webhook: https://...` off-domain, `curl ... | sh`, reads of `~/.ssh`, ...).
+
+- A finding refuses the add with exit code 3. The error names the tool and the finding category
+  (`helper [Prompt injection / jailbreak attempt]`), never the matched text: the text is the
+  attack, and echoing it would put it in a log a seat might later read. Nothing is written.
+- `--allow-flagged` installs anyway. The server is recorded under the top-level `mcp_flagged`
+  key (`{ <name>: [{ tool, categories }] }`, categories only), `mcp list` shows it as flagged,
+  and one warning line goes to stderr. `mcp remove` clears the record.
+- A server that cannot be reached at add time (stdio command missing, http with no egress proxy
+  running) is stored unchecked; the `--json` result carries `scanRan: false` with the reason. Run
+  `trent mcp test <name>` once it is reachable.
+
+### Result scrubbing
+
+Every `callTool` result passes through the secret detectors of the prompt redactor
+(`model-gateway/redact.ts`, T3.2) before it reaches the seat: provider API keys, bearer and
+basic credentials, `Authorization`/`X-Api-Key` header values, JWTs, AWS key ids and named
+secrets, private-key blocks, connection-string passwords and `api_key=`/`password=` pairs become
+numbered tokens such as `[REDACTED:api-key#1]`. PII stays: an MCP result legitimately carries
+emails and phone numbers, so the prompt pass's PII detectors are not applied, and neither is the
+generic long-base64 sweep, which would blank a git SHA or an encoded payload the seat asked for.
+Hit counts per kind are logged as `mcp.result.redacted` (server, tool, kinds, counts); values
+never are. Implemented in `packages/trent-core/src/tools/mcp/scan.ts`.
+
 ## How the toolset behaves
 
 Implemented in `packages/trent-core/src/tools/mcp/`.
@@ -85,6 +115,7 @@ synchronous tool builder. Both take `{ profileDir, env?, egress?, cwd?, connectT
 
 ## Not implemented
 
-SSE transport, OAuth flows, resources and prompts, Hermes's tool-definition drift checks and
-its OSV malware preflight for `npx` servers. The read-only app's `mcp-tool-adapter.ts` keeps its
+SSE transport, OAuth flows, resources and prompts, Hermes's tool-definition drift checks (the
+scan runs at `add` and on `test`; a server that changes a description after install is not
+re-scanned at connect time) and its OSV malware preflight for `npx` servers. The read-only app's `mcp-tool-adapter.ts` keeps its
 own per-company registry; this toolset is the CLI/desktop profile equivalent.

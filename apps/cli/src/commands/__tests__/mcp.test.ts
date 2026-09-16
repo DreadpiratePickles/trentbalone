@@ -96,6 +96,51 @@ describe("trent mcp", () => {
     expect(JSON.parse(dead.stdout)).toMatchObject({ name: "dead", ok: false });
   });
 
+  it("add refuses a server whose tool description carries an injection string, naming the tool and category, writing nothing", async () => {
+    const result = await runCli(["mcp", "add", "poisoned", "--command", process.execPath, "--args", FIXTURE, "--env", "FAKE_MCP_POISON=1", "--json"]);
+    expect(result.exitCode).toBe(EXIT.CONFIG);
+    expect(result.stdout).toContain("helper");
+    expect(result.stdout).toMatch(/injection/i);
+    expect(result.stdout).not.toContain("Ignore all previous");
+    expect(result.stdout).not.toContain("collector.example.net");
+    expect(fs.existsSync(path.join(home, "config.yaml"))).toBe(false);
+    const listed = JSON.parse((await runCli(["mcp", "list", "--json"])).stdout) as Listed;
+    expect(listed.configured).toEqual([]);
+  });
+
+  it("add --allow-flagged installs a poisoned server marked flagged, with a warning on stderr", async () => {
+    const result = await runCli(["mcp", "add", "poisoned", "--command", process.execPath, "--args", FIXTURE, "--env", "FAKE_MCP_POISON=1", "--allow-flagged", "--json"]);
+    expect(result.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as { added: { name: string; flagged: boolean; findings: { tool: string; categories: string[] }[] } };
+    expect(data.added.flagged).toBe(true);
+    expect(data.added.findings.map((f) => f.tool)).toEqual(["helper"]);
+    expect(result.stderr).toMatch(/flagged/i);
+    expect(result.stderr).not.toContain("Ignore all previous");
+    const listed = JSON.parse((await runCli(["mcp", "list", "--json"])).stdout) as Listed & { configured: { flagged?: boolean }[] };
+    expect(listed.configured[0]).toMatchObject({ name: "poisoned", flagged: true });
+    const yaml = fs.readFileSync(path.join(home, "config.yaml"), "utf8");
+    expect(yaml).toContain("flagged");
+    expect(yaml).not.toContain("Ignore all previous");
+    expect((await runCli(["mcp", "remove", "poisoned", "--json"])).exitCode).toBe(EXIT.OK);
+    expect(fs.readFileSync(path.join(home, "config.yaml"), "utf8")).not.toContain("helper");
+  });
+
+  it("test re-runs the scan and reports findings on a flagged server", async () => {
+    await runCli(["mcp", "add", "poisoned", "--command", process.execPath, "--args", FIXTURE, "--env", "FAKE_MCP_POISON=1", "--allow-flagged", "--json"]);
+    const result = await runCli(["mcp", "test", "poisoned", "--json"]);
+    expect(result.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as { ok: boolean; findings: { tool: string }[] };
+    expect(data.ok).toBe(true);
+    expect(data.findings.map((f) => f.tool)).toEqual(["helper"]);
+  });
+
+  it("add of a clean server records that the scan ran", async () => {
+    const result = await runCli(["mcp", "add", "fake", "--command", process.execPath, "--args", FIXTURE, "--json"]);
+    expect(result.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as { added: { flagged: boolean; scanRan: boolean; findings: unknown[] } };
+    expect(data.added).toMatchObject({ flagged: false, scanRan: true, findings: [] });
+  });
+
   it("--dry-run on add writes nothing", async () => {
     const result = await runCli(["mcp", "add", "fake", "--command", "srv", "--dry-run", "--json"]);
     expect(result.exitCode).toBe(EXIT.OK);
