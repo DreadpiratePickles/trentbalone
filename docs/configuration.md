@@ -75,6 +75,19 @@ gateway:
   enabled: false
   platforms: []
   routes: {}                  # platform -> agentId
+  double_text_policy: enqueue # enqueue | interrupt | reject: a second message on a busy chat
+
+repl:
+  double_text_policy: enqueue # the same three modes for input typed during a REPL turn
+
+heartbeat:
+  enabled: false              # trent heartbeat start, and gateway start, run the loop only when true
+  interval_minutes: 60        # one model turn over <profile>/HEARTBEAT.md per interval
+  # active_hours:             # unset means never quiet
+  #   start: "08:00"          # HH:MM on the wall clock of tz; the end is exclusive
+  #   end: "20:00"            # a window that crosses midnight (22:00-06:00) wraps
+  #   tz: Europe/Berlin       # IANA zone, default UTC
+  consolidate_memory: true    # once a day, inside quiet hours, draft a MEMORY.md/USER.md rewrite
 
 fleet:
   installed_agents: [ceo, eng-ai-engineer, support-responder]
@@ -84,7 +97,37 @@ fleet:
 telemetry:
   # otlp_endpoint: http://127.0.0.1:4318/v1/traces   # unset means tracing off
   service_name: trent
+
+privacy:
+  redact_prompts: false       # true: mask secrets and PII in every prompt before the provider call
+  patterns: []                # extra regular expressions (JavaScript syntax) to mask as well
+
+policy:
+  rules: []                   # appended to the shipped rules; a rule with a shipped id replaces it
 ```
+
+### Heartbeat
+
+`heartbeat` drives the loop in `packages/trent-core/src/heartbeat/` (see [heartbeat.md](heartbeat.md)).
+The reply goes to `gateway.owner`, so set that block too; without it every reply stays in
+`<profile>/heartbeat/runs.jsonl` with a `deliveryError` naming the missing key.
+
+### Privacy
+
+`privacy.redact_prompts` turns on prompt-side redaction in the model gateway
+(`packages/trent-core/src/model-gateway/redact.ts`). With it on, every message content that is about
+to leave for a provider, the system prompt and tool results included, is run through the shared
+secret detectors of `telemetry/redact.ts` (API keys, bearer tokens, private keys, connection strings,
+named credentials) and the built-in PII detectors (email addresses, E.164 phone numbers, IPv4
+addresses). `privacy.patterns` adds your own expressions; each is compiled with the `g` flag at
+startup, and an expression that does not compile fails the start with exit code 3 and the index of
+the offending pattern. The masked value becomes a numbered token per kind, `[REDACTED:email#1]`,
+and the same value maps to the same token within one request, so the model can still say "reply to
+the first email" without seeing it. Off by default; see docs/security.md, "Prompt redaction".
+
+The block reaches the gateway through two environment variables the runtime writes from config
+(`TRENT_PRIVACY_REDACT_PROMPTS=1`, `TRENT_PRIVACY_PATTERNS='["..."]'`); an explicit value in the
+process environment wins over the file, the same precedence as the model block.
 
 ### Telemetry
 
@@ -104,6 +147,40 @@ closed. Prompt-shaped strings (step output, the objective, tool summaries) go th
 redactor in `telemetry/redact.ts` before they are attached. `service_name` becomes the
 `service.name` resource attribute. `trent doctor` probes the endpoint with an empty batch and reports
 it reachable or unreachable; with no endpoint it reports `not configured` as a skip, never as a pass.
+
+### Policy rules
+
+`policy.rules` is a list of trace-level rules evaluated at every tool call against the run's
+recent calls (`packages/trent-core/src/governance/policy-rules.ts`). Each rule is
+`{ id, effect, when, also, after, within, reason }`: `effect` is `deny` or `require_approval`,
+`when` (and the optional `also`) are classes the current call must carry, `after` is a class that
+must appear within the last `within` calls (default 20), and `reason` is what the seat reads in the
+blocked or needs_approval result. Classes are `read_only`, `write`, `execute`, `external_send`,
+`network`, `secret_access`, `destructive`, `money_moving`, `deploy` and `customer_facing`; any other
+value fails validation. Six rules ship by default (listed in docs/security.md, "Policy rules"); a
+config rule with the same `id` replaces the shipped one in place, any other id appends.
+
+```yaml
+policy:
+  rules:
+    - id: send-after-secret          # soften the shipped deny to an approval
+      effect: require_approval
+      when: external_send
+      after: secret_access
+      within: 10
+      reason: a secret was read in this run; confirm the send
+    - id: no-deploy-from-seats       # a new rule
+      effect: deny
+      when: deploy
+      reason: deploys are run by hand
+```
+
+### Double texting
+
+`gateway.double_text_policy` and `repl.double_text_policy` each take `enqueue` (hold the message
+and run it as the next turn, the default), `interrupt` (abort the running turn and run the new
+message once it has settled) or `reject` (refuse it with one status line; the model never sees
+it). `/stop` interrupts the running turn under every policy. See [gateway.md](gateway.md).
 
 ### Money is integer cents
 
