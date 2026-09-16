@@ -1,6 +1,6 @@
 # Doctor
 
-`trent doctor` runs 13 checks. Each one inspects something real: a file, a daemon, a socket, an
+`trent doctor` runs 14 checks. Each one inspects something real: a file, a daemon, a socket, an
 authenticated request. None of them return a hard-coded green.
 
 ```bash
@@ -45,13 +45,16 @@ TRENT DOCTOR
                               trent-sandbox:latest is not present locally.
   ✓ Self-Improvement Loop     Trace store at /Users/you/.trent/traces is writable.
 
-  total 13  passed 7  warnings 3  failed 2  skipped 1  in 880ms
+  · OTel Trace Export         Tracing is not configured (telemetry.otlp_endpoint is unset); nothing
+                              was probed and nothing is exported.
+
+  total 14  passed 7  warnings 3  failed 2  skipped 2  in 880ms
   2 check(s) failed — exit 3
 ```
 
 Glyphs carry the status when colour is off: `✓` ok, `◆` warn, `✗` fail, `·` skip.
 
-## The 13 checks
+## The 14 checks
 
 | # | Name | What it actually inspects | Auto-fixable |
 |---|---|---|:---:|
@@ -68,6 +71,7 @@ Glyphs carry the status when colour is off: `✓` ok, `◆` warn, `✗` fail, `�
 | 11 | System Binaries | Resolves `git`, `node`, `npm` as required and `docker` as optional, recording the version of each | no |
 | 12 | Sandbox & Workbench | Runs `docker info` and checks the sandbox image is present locally. A backend named in YAML is a claim; `docker info` exiting 0 is evidence | no |
 | 13 | Self-Improvement Loop | Creates the trace directory if absent, then writes and deletes a probe file to prove it is writable | yes |
+| 14 | OTel Trace Export | Posts an empty OTLP batch to `telemetry.otlp_endpoint` under the probe deadline and reports reachable or unreachable. With no endpoint it reports `not configured` as a skip: a skipped check is not a pass, and the line says so | no |
 
 Checks 6, 9 and 12 used to return hard-coded green from inside a try block that could not throw.
 Each now has a test that induces a real failure and asserts it is reported
@@ -123,11 +127,11 @@ npm run cli -- doctor --json > report.json; echo $?    # 3 on this machine
 ```json
 {
   "timestamp": "2026-09-12T23:20:06.956Z",
-  "total": 13,
+  "total": 14,
   "passed": 7,
   "warnings": 3,
   "errors": 2,
-  "skipped": 1,
+  "skipped": 2,
   "durationMs": 1534,
   "results": [
     {

@@ -1,4 +1,5 @@
 export * from "./schema.js";
+export * from "./telemetry-schema.js";
 export * from "./defaults.js";
 export * from "./ConfigManager.js";
 export * from "./migrate.js";

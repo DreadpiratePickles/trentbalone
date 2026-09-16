@@ -80,7 +80,30 @@ fleet:
   installed_agents: [ceo, eng-ai-engineer, support-responder]
   active_agents: [ceo]
   default_agent: ceo
+
+telemetry:
+  # otlp_endpoint: http://127.0.0.1:4318/v1/traces   # unset means tracing off
+  service_name: trent
 ```
+
+### Telemetry
+
+`telemetry.otlp_endpoint` is optional and must be an `http(s)` URL. When it is unset nothing is
+built: no exporter, no buffered spans, and `/traces` in the REPL says `tracing off`. When it is
+set, every run's event stream is exported as OTLP/HTTP JSON to that URL
+(`packages/trent-core/src/traces/bus-hook.ts`) as one tree per run:
+
+| Span | Opens on | Closes on | Parent |
+|---|---|---|---|
+| `trent.run` | `run_start` | `run_done`, `run_failed`, `run_cancelled` | none |
+| `gen_ai.agent.turn` | `step_start` | `step_end`, `step_blocked` | the run span |
+| `execute_tool <adapter>` | each tool call record on `step_output` | the same frame | the step span |
+
+The batch is posted when the run ends and again on flush, so a cancelled process still ships what it
+closed. Prompt-shaped strings (step output, the objective, tool summaries) go through the shared
+redactor in `telemetry/redact.ts` before they are attached. `service_name` becomes the
+`service.name` resource attribute. `trent doctor` probes the endpoint with an empty batch and reports
+it reachable or unreachable; with no endpoint it reports `not configured` as a skip, never as a pass.
 
 ### Money is integer cents
 

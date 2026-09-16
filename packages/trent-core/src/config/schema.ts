@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
+import { TelemetryConfigSchema } from "./telemetry-schema.js";
 
 export const ProviderSchema = z.enum([
   "openai",
@@ -171,6 +172,7 @@ export const TrentConfigSchema = z.object({
   gateway: GatewayConfigSchema.default({}),
   fleet: FleetConfigSchema.default({}),
   mcp_servers: McpServersConfigSchema.default({}),
+  telemetry: TelemetryConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
 }).passthrough();

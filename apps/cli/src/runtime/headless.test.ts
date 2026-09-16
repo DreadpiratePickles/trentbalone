@@ -187,3 +187,58 @@ describe("createHeadlessRuntime", () => {
     expect(f.ensureCompany).not.toHaveBeenCalled();
   });
 });
+
+describe("createHeadlessRuntime telemetry", () => {
+  it("with no telemetry.otlp_endpoint the improve hook goes to the orchestrator unwrapped and no exporter is built", async () => {
+    const f = fakes();
+    const runtime = await createHeadlessRuntime(f.deps);
+    runtimes.push(runtime);
+    expect(runtime.telemetry).toBeUndefined();
+    expect(f.received[0]?.improve).toBe(runtime.improve.improve);
+  });
+
+  it("with telemetry.otlp_endpoint set, the run's events reach both the improve loop and an OTel export to that endpoint", async () => {
+    const { default: http } = await import("node:http");
+    const bodies: string[] = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk: Buffer) => {
+        body += chunk.toString();
+      });
+      req.on("end", () => {
+        bodies.push(body);
+        res.writeHead(200);
+        res.end("{}");
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as { port: number };
+    const endpoint = `http://127.0.0.1:${port}/v1/traces`;
+    try {
+      const f = fakes((manager) => {
+        const config = manager.loadConfig();
+        manager.saveConfig({ ...config, telemetry: { otlp_endpoint: endpoint, service_name: "trent-headless-test" } });
+      });
+      const runtime = await createHeadlessRuntime(f.deps);
+      runtimes.push(runtime);
+
+      expect(runtime.telemetry?.exporter.getEndpoint()).toBe(endpoint);
+      const hook = f.received[0]?.improve;
+      expect(hook).toBeDefined();
+      expect(hook).not.toBe(runtime.improve.improve);
+
+      // Drive the composed hook the way the orchestrator does: every event, then one flush.
+      for (const event of EVENTS) hook!.sink(event);
+      await hook!.flush();
+
+      expect(bodies).toHaveLength(1);
+      const payload = JSON.parse(bodies[0]!) as {
+        resourceSpans: Array<{ resource: { attributes: Array<{ key: string; value: { stringValue: string } }> }; scopeSpans: Array<{ spans: Array<{ name: string }> }> }>;
+      };
+      expect(payload.resourceSpans[0]?.resource.attributes).toContainEqual({ key: "service.name", value: { stringValue: "trent-headless-test" } });
+      expect(payload.resourceSpans[0]?.scopeSpans[0]?.spans.map((s) => s.name)).toEqual(["trent.run"]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});

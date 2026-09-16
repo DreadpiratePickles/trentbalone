@@ -395,12 +395,15 @@ export const SLASH_COMMANDS: Record<string, SlashCommandDefinition> = {
 
   traces: {
     name: "traces",
-    description: "Inspect recent agent execution telemetry and critique verdicts",
-    async execute(_args, _ctx) {
-      return chalk.bold.hex(TOKEN_HEX.pulse)("Recent Agent Execution Traces:\n") +
-        `  ${chalk.green("✓")} [trace-01] ${chalk.bold("CEO")} → Strategic roadmap planning (420ms · $0.02 · Approved)\n` +
-        `  ${chalk.green("✓")} [trace-02] ${chalk.bold("Engineer")} → Health diagnostic check (180ms · $0.01 · Approved)\n` +
-        `  ${chalk.dim("All traces exported to OpenTelemetry gen_ai.* standard.")}`;
+    description: "Where this session's agent execution traces go: the trace store and the OpenTelemetry export",
+    async execute(_args, ctx) {
+      const telemetry = ctx.configManager.loadConfig().telemetry;
+      const exportLine = telemetry.otlp_endpoint
+        ? `OpenTelemetry export: ${telemetry.otlp_endpoint} (service.name ${telemetry.service_name}); one run span, a step span per seat turn, a tool span per tool call.`
+        : "OpenTelemetry export: tracing off. Set telemetry.otlp_endpoint to an OTLP/HTTP collector to export run, step and tool spans.";
+      return chalk.bold("Agent Execution Traces\n") +
+        `  ${chalk.dim("Every finished step is written to the trace store; `trent improve status` counts them per agent.")}\n` +
+        `  ${chalk.dim(exportLine)}`;
     },
   },
 };

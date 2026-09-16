@@ -75,9 +75,25 @@ describe("Slash Commands Suite", () => {
     expect(out).toContain("Engineering Trio");
   });
 
-  it("executes /traces to inspect recent agent turns", async () => {
+  it("executes /traces and says tracing is off when no OTLP endpoint is configured", async () => {
     const out = await SLASH_COMMANDS["traces"].execute([], ctx);
-    expect(out).toContain("Recent Agent Execution Traces:");
     expect(out).toContain("OpenTelemetry");
+    expect(out).toContain("tracing off");
+    expect(out).toContain("telemetry.otlp_endpoint");
+    // No fabricated trace rows: the command reports configuration, never invented runs.
+    expect(out).not.toMatch(/trace-0\d/);
+    expect(out).not.toMatch(/\p{Extended_Pictographic}/u);
+  });
+
+  it("executes /traces and names the configured OTLP endpoint", async () => {
+    const config = configManager.loadConfig();
+    configManager.saveConfig({ ...config, telemetry: { ...config.telemetry, otlp_endpoint: "http://127.0.0.1:4318/v1/traces" } });
+    try {
+      const out = await SLASH_COMMANDS["traces"].execute([], ctx);
+      expect(out).toContain("http://127.0.0.1:4318/v1/traces");
+      expect(out).not.toContain("tracing off");
+    } finally {
+      configManager.saveConfig(config);
+    }
   });
 });

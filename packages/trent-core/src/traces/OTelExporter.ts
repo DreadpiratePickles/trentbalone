@@ -1,6 +1,7 @@
 // OpenTelemetry Tracing Exporter for Trent Fleet
 // Adheres to OpenTelemetry Semantic Conventions for Generative AI systems (gen_ai.*)
 
+import { createHash } from "node:crypto";
 import { redactTranscript } from "../telemetry/redact.js";
 
 export interface TraceStepInput {
@@ -26,6 +27,8 @@ export interface TraceStepInput {
 export interface OTelSpan {
   traceId: string;
   spanId: string;
+  /** Absent on a root span. Set by `traces/bus-hook.ts` to build the run > step > tool tree. */
+  parentSpanId?: string;
   name: string;
   kind: number; // 1 = INTERNAL, 2 = SERVER, 3 = CLIENT
   startTimeUnixNano: number;
@@ -38,6 +41,47 @@ export interface OTelExporterOptions {
   headers?: Record<string, string>;
   serviceName?: string;
   fetchImpl?: typeof fetch;
+}
+
+/** OTLP/JSON `AnyValue`: one typed leaf per attribute. Integers travel as strings (uint64). */
+type OtlpValue = { stringValue: string } | { intValue: string } | { doubleValue: number } | { boolValue: boolean };
+interface OtlpKeyValue {
+  key: string;
+  value: OtlpValue;
+}
+
+function otlpValue(value: string | number | boolean): OtlpValue {
+  if (typeof value === "string") return { stringValue: value };
+  if (typeof value === "boolean") return { boolValue: value };
+  return Number.isInteger(value) ? { intValue: String(value) } : { doubleValue: value };
+}
+
+function otlpAttributes(attributes: Record<string, string | number | boolean>): OtlpKeyValue[] {
+  return Object.entries(attributes).map(([key, value]) => ({ key, value: otlpValue(value) }));
+}
+
+/** The wire shape of one span (opentelemetry/proto/trace/v1 in its JSON mapping). */
+export function toOtlpSpan(span: OTelSpan): Record<string, unknown> {
+  return {
+    traceId: span.traceId,
+    spanId: span.spanId,
+    ...(span.parentSpanId === undefined ? {} : { parentSpanId: span.parentSpanId }),
+    name: span.name,
+    kind: span.kind,
+    startTimeUnixNano: String(span.startTimeUnixNano),
+    endTimeUnixNano: String(span.endTimeUnixNano),
+    attributes: otlpAttributes(span.attributes),
+  };
+}
+
+/** A 32-hex OTLP trace id, stable for a run id so a retried export lands on the same trace. */
+export function traceIdFor(runId: string): string {
+  return createHash("sha256").update(`trace:${runId}`).digest("hex").slice(0, 32);
+}
+
+/** A 16-hex OTLP span id, stable for the (run, span key) pair. */
+export function spanIdFor(runId: string, key: string): string {
+  return createHash("sha256").update(`span:${runId}:${key}`).digest("hex").slice(0, 16);
 }
 
 export class OTelExporter {
@@ -123,6 +167,15 @@ export class OTelExporter {
     this.buffer.push(span);
   }
 
+  /** Buffers an already-built span, parent id and all. What the bus hook uses. */
+  public recordSpan(span: OTelSpan): void {
+    this.buffer.push({ ...span, attributes: { "service.name": this.serviceName, ...span.attributes } });
+  }
+
+  public getEndpoint(): string {
+    return this.endpoint;
+  }
+
   public getBufferedCount(): number {
     return this.buffer.length;
   }
@@ -141,7 +194,7 @@ export class OTelExporter {
           scopeSpans: [
             {
               scope: { name: "trent.fleet.orchestrator" },
-              spans: this.buffer,
+              spans: this.buffer.map(toOtlpSpan),
             },
           ],
         },

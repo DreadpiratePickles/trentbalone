@@ -21,6 +21,7 @@ import {
   type Orchestrator,
 } from "@trent/core/orchestrator/index.js";
 import type { FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
+import { OTelExporter, composeBusHooks, createOTelBusHook, type OTelBusHook } from "@trent/core/traces/index.js";
 import type { ImproveRunDeps } from "../commands/improve.js";
 import { EphemeralStore } from "../repl/ephemeral-store.js";
 import { wireFleetMemory } from "../repl/fleet-memory.js";
@@ -70,6 +71,8 @@ export interface HeadlessRuntime {
   readonly tools: ToolWiring;
   readonly fleetMemory: FleetMemoryHook;
   readonly improve: ImproveRunDeps;
+  /** The OTel export hook, present only when `telemetry.otlp_endpoint` is configured. */
+  readonly telemetry: OTelBusHook | undefined;
   /** One run against the session's company: the orchestrator's event stream. */
   run(objective: string, options?: HeadlessRunOptions): AsyncIterable<OrcEvent>;
   /** Releases the proxy and the sandboxes. Idempotent, so every exit path may call it. */
@@ -86,6 +89,22 @@ export async function openStore(databaseUrl: string): Promise<OpenedStore> {
     // prints a warning, and approvals will not survive this process.
     return { store: new EphemeralStore(), durable: false };
   }
+}
+
+/** The `telemetry` config block as the runtime reads it; `TrentConfig` satisfies it structurally. */
+interface TelemetrySlice {
+  telemetry?: { otlp_endpoint?: string; service_name?: string };
+}
+
+/**
+ * The OTel bus hook for this config, or nothing when no endpoint is set. Tracing off means no
+ * exporter is built at all, so an unconfigured session never buffers spans it cannot ship.
+ */
+export function wireTelemetry(config: TelemetrySlice, onError?: (message: string) => void): OTelBusHook | undefined {
+  const endpoint = config.telemetry?.otlp_endpoint;
+  if (!endpoint) return undefined;
+  const exporter = new OTelExporter({ endpoint, serviceName: config.telemetry?.service_name ?? "trent" });
+  return createOTelBusHook(exporter, onError === undefined ? {} : { onError });
 }
 
 export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<HeadlessRuntime> {
@@ -119,6 +138,10 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     const fleetMemory = wireFleetMemory({ profileDir, store });
     // The self-improvement loop: traces from every run, and promoted skills back into every seat.
     const improve = wireImproveLoop({ store, config });
+    // OTel export, when config names a collector: composed onto the same bus hook the improve
+    // loop uses, so the orchestrator sees one sink and one flush.
+    const telemetry = wireTelemetry(config as TelemetrySlice);
+    const busHook = telemetry === undefined ? improve.improve : composeBusHooks(improve.improve, telemetry);
 
     // The configured provider/model travel with the orchestrator, which maps them into the env
     // its model resolver reads before the first apps/web import (live proof, F2).
@@ -130,6 +153,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       fleetMemory,
       delegate,
       ...improve,
+      improve: busHook,
     });
     // `launchOrchestration` throws "Company not found" for an id nothing created; an explicit
     // config id is trusted, otherwise the local company is found by slug or created.
@@ -144,6 +168,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       tools,
       fleetMemory,
       improve,
+      telemetry,
       run: (objective, options = {}) =>
         orchestrator.run({ companyId, objective, trigger: options.trigger ?? "manual", signal: options.signal }),
       cleanup: () => tools.cleanup(),

@@ -53,6 +53,7 @@ export const DEFAULT_CONFIG: TrentConfig = {
     default_agent: "ceo",
   },
   mcp_servers: {},
+  telemetry: { service_name: "trent" },
   personality: "default",
   theme: "dark",
 };
