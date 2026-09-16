@@ -20,6 +20,7 @@ import { createAgentHandler } from "../../gateway/agent-handler.js";
 import { startEgressProxy } from "../../repl/tools.js";
 import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime } from "../../runtime/headless.js";
+import { openHeartbeat } from "./heartbeat.js";
 import {
   BUILD_HINT,
   buildStandalone,
@@ -240,7 +241,7 @@ export const gatewaySpec: CommandSpec = {
             log: (line) => ctx.err(line),
           },
         });
-        manager = buildManager(configManager, { agentHandler: createAgentHandler(runtime) });
+        manager = buildManager(configManager, { agentHandler: createAgentHandler(runtime, { configManager }) });
         link = linkRunApprovals({
           orchestrator: runtime.orchestrator,
           bridge: manager.getApprovalBridge(),
@@ -248,7 +249,13 @@ export const gatewaySpec: CommandSpec = {
           owner: config.gateway.owner,
           log: (line) => ctx.err(line),
         });
+        // The heartbeat (T1.2) rides on the same runtime and delivers through the same manager,
+        // so a gateway that is up is also the founder's periodic check when `heartbeat.enabled`.
+        const heartbeat = config.heartbeat.enabled
+          ? openHeartbeat({ configManager, config, runtime, buildManager: () => manager as GatewayManager, now: ctx.overrides.now, log: (line) => ctx.err(line) })
+          : undefined;
         const shutdown = async (): Promise<void> => {
+          heartbeat?.loop.stop();
           link?.close();
           await manager.stopAll();
           await runtime.cleanup();
@@ -258,21 +265,28 @@ export const gatewaySpec: CommandSpec = {
           // Nothing is listening, so the process exits: the proxy and the sandboxes go first.
           await shutdown();
         } else {
+          try {
+            heartbeat?.loop.start();
+          } catch (error) {
+            await shutdown();
+            throw error;
+          }
           releaseOnSignal(shutdown);
         }
         return {
-          data: { started, count: started.length, agentHandler: true, approvalLink: link.active },
+          data: { started, count: started.length, agentHandler: true, approvalLink: link.active, heartbeat: heartbeat !== undefined && started.length > 0 },
           keepAlive: started.length > 0,
         };
       },
       render(data, ctx) {
-        const d = data as { started?: string[]; wouldStart?: string[]; dryRun?: boolean; approvalLink?: boolean };
+        const d = data as { started?: string[]; wouldStart?: string[]; dryRun?: boolean; approvalLink?: boolean; heartbeat?: boolean };
         const list = (d.dryRun === true ? d.wouldStart : d.started) ?? [];
         const lines = [
           `  ${ctx.theme.success(d.dryRun === true ? "would start" : "started")} ${ctx.theme.value(
             list.length > 0 ? list.join(", ") : "none",
           )}`,
         ];
+        if (d.heartbeat === true) lines.push(`  ${ctx.theme.meta("heartbeat loop running; history under <profile>/heartbeat/runs.jsonl")}`);
         if (d.approvalLink !== undefined) {
           lines.push(
             d.approvalLink

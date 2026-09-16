@@ -1,6 +1,6 @@
 /**
- * Durable state the gateway owns: outbound queue rows, sender pairings, pairing codes and
- * approval rows. The Prisma StorePort covers orchestration entities and only runs under
+ * Durable state the gateway owns: outbound queue rows, sender pairings, pairing codes,
+ * approval rows and the conversation-to-session map (a chat thread is one session). The Prisma StorePort covers orchestration entities and only runs under
  * Bun, so the gateway keeps its own small file-backed store with atomic writes; a
  * `StorePort` can additionally be mirrored into for approvals (see ApprovalBridge).
  */
@@ -71,10 +71,39 @@ export interface GatewayState {
   approvals: Record<string, ApprovalRow>;
   /** Free-form per-platform cursors (Telegram update offset, IMAP UID, Slack ts, ...). */
   cursors: Record<string, string>;
+  /** `platform:chatId:threadId` (see `conversationKey`) to the session id that thread runs in. */
+  conversations: Record<string, string>;
 }
 
 export function emptyState(): GatewayState {
-  return { version: 1, pairings: [], pairingCodes: [], queue: [], approvals: {}, cursors: {} };
+  return { version: 1, pairings: [], pairingCodes: [], queue: [], approvals: {}, cursors: {}, conversations: {} };
+}
+
+/** The address of a conversation: a thread is its own conversation; no thread is the chat root. */
+export interface ConversationAddress {
+  platform: string;
+  channelId: string;
+  threadId?: string;
+}
+
+export function conversationKey(address: ConversationAddress): string {
+  return `${address.platform}:${address.channelId}:${address.threadId ?? "root"}`;
+}
+
+export function getConversationSession(store: GatewayStore, key: string): string | undefined {
+  return store.snapshot().conversations[key];
+}
+
+export function setConversationSession(store: GatewayStore, key: string, sessionId: string): void {
+  store.mutate((state) => {
+    state.conversations[key] = sessionId;
+  });
+}
+
+export function clearConversationSession(store: GatewayStore, key: string): void {
+  store.mutate((state) => {
+    delete state.conversations[key];
+  });
 }
 
 export interface GatewayStore {

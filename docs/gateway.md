@@ -137,6 +137,19 @@ Without `gateway.owner` the hook is inert: it writes one structured log line
 (`gateway.alerts.disabled`) and never sends. A delivery failure is logged
 (`gateway.alerts.send_failed`) and never thrown into the run.
 
+## Threads are sessions
+
+A chat thread is one session. `gateway.json` carries a `conversations` map from
+`platform:chatId:threadId` (`root` when the platform has no thread) to a session id in the
+profile's sessions directory, the same store `trent sessions` and the TUI read. The agent handler
+(`apps/cli/src/gateway/agent-handler.ts`) resolves that mapping before every run: the first
+message on a thread creates the session and records it, every later message resumes it, and each
+turn appends the user's text and the run's reply to that session's transcript. A different thread
+of the same chat is a different session. The mapping is a row like any other in the store, so it
+survives a restart and a second process over the same profile. A message whose text is exactly
+`/new` forgets the mapping for that thread and replies with nothing; the next message starts a
+fresh session there.
+
 ## Double texting
 
 A second message on a chat whose turn is still running used to start a second turn beside the
