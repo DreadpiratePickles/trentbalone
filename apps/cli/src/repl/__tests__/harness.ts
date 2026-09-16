@@ -212,6 +212,8 @@ export interface Harness {
   emitted(n: number): Promise<void>;
   readonly streamCompleted: boolean;
   readonly promptsRendered: number;
+  /** Every objective the runner was asked to run, in order. */
+  readonly objectives: string[];
 }
 
 export function makeHarness(options: HarnessOptions = {}): Harness {
@@ -221,6 +223,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
   const out: string[] = [];
   let completed = false;
   let produced = 0;
+  const objectives: string[] = [];
 
   const engine = new ReplEngine({
     theme: createTheme("none"),
@@ -230,8 +233,9 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
     degraded: options.degraded ?? false,
     write: (text: string) => void out.push(text),
     exit: (code: number) => void exit(code),
-    runner: ({ signal }) =>
+    runner: ({ objective, signal }) =>
       (async function* () {
+        objectives.push(objective);
         for (const event of events) {
           if (signal.aborted) return;
           // A real stream yields to the event loop between frames; so must this one,
@@ -262,6 +266,9 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
     },
     get promptsRendered() {
       return out.filter((line) => line.includes(PROMPT.trim())).length;
+    },
+    get objectives() {
+      return [...objectives];
     },
   };
 }

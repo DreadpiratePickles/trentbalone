@@ -6,6 +6,7 @@
 
 import { terminalWidth, type Theme } from "../ui/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
+import { BUSY_STATUS_LINE, STOP_COMMAND, type DoubleTextPolicy } from "@trent/core/gateway/index.js";
 import { TranscriptRenderer, identityForRole } from "./render.js";
 import { BudgetLedger } from "./budget.js";
 import { ApprovalGate, renderApprovalCard } from "./approvals.js";
@@ -19,6 +20,22 @@ import type { ReplConfig, ReplContext, ReplEgressStatus, ReplSandbox, ReplStore,
 
 /** The prompt prefix. The mark is a mint dot; read the product name as `trent·`. */
 export const PROMPT = "● ";
+
+export { BUSY_STATUS_LINE };
+
+/** `repl.double_text_policy`, read off the config slice; anything unrecognised is `enqueue`. */
+function doubleTextPolicy(config: ReplConfig): DoubleTextPolicy {
+  const repl = config.repl;
+  const value = typeof repl === "object" && repl !== null ? (repl as { double_text_policy?: unknown }).double_text_policy : undefined;
+  return value === "interrupt" || value === "reject" ? value : "enqueue";
+}
+
+/** A turn submitted while another was running, held until that one settles. */
+interface QueuedTurn {
+  text: string;
+  settle: () => void;
+  fail: (error: unknown) => void;
+}
 
 export interface ReplRunnerInput {
   objective: string;
@@ -83,6 +100,7 @@ export class ReplEngine {
   #cursor = 0;
   #busy = false;
   #started = false;
+  #queued: QueuedTurn[] = [];
   #abort: AbortController | undefined;
   #answer: ((answer: "approved" | "rejected") => void) | undefined;
   #awaitingStepId: string | undefined;
@@ -116,6 +134,10 @@ export class ReplEngine {
   }
   get draft(): string {
     return this.#draft;
+  }
+  /** Turns waiting behind the running one, oldest first. */
+  get queued(): string[] {
+    return this.#queued.map((turn) => turn.text);
   }
   get awaitingApproval(): boolean {
     return this.#answer !== undefined;
@@ -198,7 +220,7 @@ export class ReplEngine {
       this.#answerKey(event);
       return;
     }
-    if (this.#busy) return; // keystrokes during a run are not queued into the draft
+    if (this.#busy && event.type === "eof") return; // a stray EOF must not kill a running turn
 
     switch (event.type) {
       case "text":
@@ -277,17 +299,55 @@ export class ReplEngine {
 
   // ── a turn ────────────────────────────────────────────────────────────────
 
-  /** One turn: a slash command, or a real orchestrated run. Never a canned string. */
+  /**
+   * One turn: a slash command, or a real orchestrated run. Never a canned string.
+   * While a run is in flight, `/stop` interrupts it and a second objective follows
+   * `repl.double_text_policy`; the promise settles when the turn it caused has run.
+   */
   async submit(input: string): Promise<void> {
     const text = input.trim();
     if (text === "") return;
+    if (text === STOP_COMMAND) {
+      if (this.#busy) this.#interrupts.press();
+      else this.#emit(this.#renderer.push(this.#deps.theme.meta("Nothing is running.")));
+      return;
+    }
     if (text.startsWith("/")) {
       const [name, ...args] = text.slice(1).split(/\s+/);
       this.#emit(await runCommand(name ?? "", args, this.context));
       this.prompt();
       return;
     }
-    await this.#runTurn(text);
+    if (!this.#busy) {
+      await this.#runTurn(text);
+      return;
+    }
+    await this.#whileBusy(text);
+  }
+
+  /** Applies the double-texting policy to an objective that arrived mid-run. */
+  #whileBusy(text: string): Promise<void> {
+    const policy = doubleTextPolicy(this.#deps.config);
+    if (policy === "reject") {
+      this.#emit(this.#renderer.push(this.#deps.theme.meta(BUSY_STATUS_LINE)));
+      return Promise.resolve();
+    }
+    if (policy === "interrupt") {
+      // The new objective supersedes the run and anything queued behind it.
+      for (const stale of this.#queued.splice(0)) stale.settle();
+      this.#interrupts.press();
+    } else {
+      this.#emit(this.#renderer.push(this.#deps.theme.meta(`Queued for the next turn: ${text}`)));
+    }
+    return new Promise<void>((settle, fail) => this.#queued.push({ text, settle, fail }));
+  }
+
+  /** Runs the next queued turn, if any, once the current one has fully settled. */
+  #drainQueued(): void {
+    const next = this.#queued.shift();
+    if (!next) return;
+    // A failure belongs to whoever submitted the queued turn, exactly as for a direct one.
+    void Promise.resolve().then(() => this.#runTurn(next.text)).then(next.settle, next.fail);
   }
 
   async #runTurn(objective: string): Promise<void> {
@@ -316,6 +376,7 @@ export class ReplEngine {
       this.#abort = undefined;
       if (interrupted) this.#emit(this.#renderer.push(this.#deps.theme.meta("Interrupted. The run was stopped.")));
       this.prompt();
+      this.#drainQueued();
     }
   }
 

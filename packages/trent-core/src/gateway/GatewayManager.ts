@@ -11,6 +11,7 @@ import path from "node:path";
 import { ConfigManager } from "../config/ConfigManager.js";
 import type { StorePort } from "../store/StorePort.js";
 import { ApprovalBridge, type ApprovalRequest } from "./ApprovalBridge.js";
+import { BUSY_STATUS_LINE, ConversationQueue, INTERRUPT_REASON, type DoubleTextPolicy, type SubmitResult } from "./ConversationQueue.js";
 import { PairingManager } from "./security/PairingManager.js";
 import { MessageQueue, type MessageQueueOptions } from "./queue/MessageQueue.js";
 import { FileGatewayStore, type GatewayStore } from "./store/GatewayStore.js";
@@ -28,8 +29,11 @@ import type {
 } from "./transport/types.js";
 import type { BreakerSnapshot } from "./queue/CircuitBreaker.js";
 
-/** Receives a message that passed the gate; returns the agent's reply text, or null for silence. */
-export type AgentHandler = (agentId: string, message: InboundMessage) => Promise<string | null>;
+/**
+ * Receives a message that passed the gate; returns the agent's reply text, or null for silence.
+ * `signal` aborts when the double-texting policy interrupts this turn or the sender says `/stop`.
+ */
+export type AgentHandler = (agentId: string, message: InboundMessage, signal?: AbortSignal) => Promise<string | null>;
 
 export interface GatewayManagerOptions {
   store?: GatewayStore;
@@ -39,6 +43,8 @@ export interface GatewayManagerOptions {
   queue?: MessageQueueOptions;
   /** Milliseconds between queue drains once started. */
   drainIntervalMs?: number;
+  /** Overrides `gateway.double_text_policy` from config. */
+  doubleTextPolicy?: DoubleTextPolicy;
 }
 
 export interface PlatformStatus {
@@ -61,6 +67,8 @@ export class GatewayManager {
   private readonly approvalBridge: ApprovalBridge;
   private readonly pairing: PairingManager;
   private readonly queue: MessageQueue;
+  private readonly conversations = new ConversationQueue();
+  private readonly doubleTextPolicy: DoubleTextPolicy;
   private readonly adapters: Map<string, TransportAdapter>;
   private routes: Record<string, string> = {};
   private agentHandler?: AgentHandler;
@@ -75,11 +83,13 @@ export class GatewayManager {
     this.approvalBridge = new ApprovalBridge({ store: this.store, pairing: this.pairing, storePort: options.storePort });
     this.agentHandler = options.agentHandler;
     this.drainIntervalMs = options.drainIntervalMs ?? 1000;
+    this.doubleTextPolicy = options.doubleTextPolicy ?? this.configManager.loadConfig().gateway?.double_text_policy ?? "enqueue";
     const ctx: AdapterContext = { config: this.configManager, store: this.store, ...(options.adapterContext ?? {}) };
     this.adapters = createAllAdapters(ctx);
     for (const adapter of this.adapters.values()) {
       adapter.onMessage((m) => this.handleInbound(m));
       adapter.onCallback((c) => this.handleCallback(c));
+      adapter.onReaction?.(async (r) => { this.approvalBridge.resolveReaction(r); });
     }
     this.queue = new MessageQueue(this.store, (platform, message) => this.transmit(platform, message), options.queue);
     this.routes = { ...DEFAULT_ROUTES, ...(this.configManager.loadConfig().gateway?.routes ?? {}) };
@@ -90,6 +100,8 @@ export class GatewayManager {
   public getApprovalBridge(): ApprovalBridge { return this.approvalBridge; }
   public getPairing(): PairingManager { return this.pairing; }
   public getQueue(): MessageQueue { return this.queue; }
+  public getConversationQueue(): ConversationQueue { return this.conversations; }
+  public getDoubleTextPolicy(): DoubleTextPolicy { return this.doubleTextPolicy; }
   public getAdapter(platformId: string): TransportAdapter | undefined { return this.adapters.get(platformId); }
   public setAgentHandler(handler: AgentHandler): void { this.agentHandler = handler; }
 
@@ -214,10 +226,26 @@ export class GatewayManager {
     }
 
     if (!this.agentHandler) return;
+    const handler = this.agentHandler;
     const agentId = this.getAgentForPlatform(message.platform);
-    const reply = await this.agentHandler(agentId, message);
+    const subject = `Re: ${typeof message.metadata?.subject === "string" ? message.metadata.subject : "Trent"}`;
+    const key = { platform: message.platform, chatId: message.channelId, threadId: message.threadId };
+    let outcome: SubmitResult<string | null>;
+    try {
+      outcome = await this.conversations.submit(key, message.content, (signal) => handler(agentId, message, signal), { policy: this.doubleTextPolicy });
+    } catch (err) {
+      // An interrupted turn may reject with the abort; that is the policy working, not a failure.
+      if (err instanceof Error && err.message === INTERRUPT_REASON) return;
+      throw err;
+    }
+    if (outcome.rejected) {
+      await this.send(message.platform, { channelId: message.channelId, threadId: message.threadId, text: BUSY_STATUS_LINE, metadata: { subject } });
+      return;
+    }
+    if (outcome.stopped) return;
+    const reply = outcome.value;
     if (reply !== null && reply !== "") {
-      await this.send(message.platform, { channelId: message.channelId, threadId: message.threadId, text: reply, metadata: { subject: `Re: ${typeof message.metadata?.subject === "string" ? message.metadata.subject : "Trent"}` } });
+      await this.send(message.platform, { channelId: message.channelId, threadId: message.threadId, text: reply, metadata: { subject } });
     }
   }
 

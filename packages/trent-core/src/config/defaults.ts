@@ -46,8 +46,10 @@ export const DEFAULT_CONFIG: TrentConfig = {
     enabled: false,
     platforms: [],
     routes: {},
+    double_text_policy: "enqueue",
     alerts: { approval_wait_minutes: 30 },
   },
+  repl: { double_text_policy: "enqueue" },
   fleet: {
     installed_agents: ["ceo", "eng-ai-engineer", "sup-support-responder"],
     active_agents: ["ceo"],

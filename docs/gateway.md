@@ -88,6 +88,70 @@ step through `orchestrator.approve` / `orchestrator.reject`, once per card. With
 the link is off: `gateway start` says so in its report and writes one structured log line, and a
 gated run stays parked until it is answered from the REPL or the TUI.
 
+### Reactions decide the card too
+
+On Slack, Discord and Telegram a reaction on the delivered card is a decision: thumbs up (Slack
+`+1` or `thumbsup`, unicode U+1F44D) or a check mark (`white_check_mark`, `heavy_check_mark`,
+U+2705) approves; thumbs down (`-1`, `thumbsdown`, U+1F44E) or a cross mark (`x`, U+274C) denies.
+Skin-tone and variation-selector suffixes are stripped; any other emoji is ignored. The adapters
+surface these as `InboundReaction { platform, channelId, messageId, emoji, senderId, scope }`
+through `onReaction` (Slack `reaction_added` over Socket Mode or the Events API; Discord
+`MESSAGE_REACTION_ADD`, which needs the `GUILD_MESSAGE_REACTIONS` and `DIRECT_MESSAGE_REACTIONS`
+intents the adapter now identifies with; Telegram `message_reaction`, which only arrives when
+`allowed_updates` names it, as the adapter's `getUpdates` call does). A reaction carries no
+approval id or nonce: `ApprovalBridge.resolveReaction` finds the pending row by the card's
+delivery record (`deliveredTo` platform, channel and message id, written with `recordDelivery`)
+and then resolves it through the same path as a button press, so the pending, nonce and
+admin-pairing checks are identical. A second reaction on a decided card, a reaction from a
+sender who is not a paired admin, or a reaction on a message that is not a delivered card
+changes nothing.
+
+## Push alerts
+
+With `gateway.owner` set, `gateway start` also pushes three kinds of plain-text alert to the owner
+through `packages/trent-core/src/gateway/alerts.ts`, a bus hook the headless runtime composes onto
+the same hook as the improve loop, telemetry and the approval link (`HeadlessRuntimeDeps.alerts`):
+
+- A run that fails: one message per run, `Run <id> failed: <reason>`, where the reason is the
+  `detail` the `run_failed` event carries, never a substitute.
+- A gate nobody answered: `run_awaiting_approval` / `step_awaiting_approval` arms one timer per
+  run and step; a `step_approved` or the run ending disarms it. If it fires, one reminder names the
+  run, the step and the wait. The wait is `gateway.alerts.approval_wait_minutes` (default 30):
+
+  ```yaml
+  gateway:
+    owner: { platform: telegram, channelId: "555" }
+    alerts:
+      approval_wait_minutes: 30
+  ```
+
+- A budget threshold: when a `budget` port is injected (`{ spentCents, limitCents, thresholds }`,
+  the percentages from `budget.alert_thresholds`), each `step_end` with a cost and each `run_done`
+  checks spent over limit and sends one message per threshold crossed, once per process. Two
+  thresholds crossed by one step send two messages. `gateway start` does not inject a budget yet:
+  the ledger lives in the REPL, and the port is the seam for handing it over.
+
+Without `gateway.owner` the hook is inert: it writes one structured log line
+(`gateway.alerts.disabled`) and never sends. A delivery failure is logged
+(`gateway.alerts.send_failed`) and never thrown into the run.
+
+## Double texting
+
+A second message on a chat whose turn is still running used to start a second turn beside the
+first. `packages/trent-core/src/gateway/ConversationQueue.ts` now serialises turns per
+conversation, keyed by platform, chat and thread (a thread is its own conversation; different
+chats never wait on each other), and `GatewayManager.handleInbound` routes every message that
+passes the pairing gate through it. What the second message does is `gateway.double_text_policy`:
+
+| Policy | While a turn is running, the next message... |
+|---|---|
+| `enqueue` (default) | waits, and runs as the next turn once the first settles |
+| `interrupt` | aborts the running turn's `AbortSignal` (the agent handler receives it as its third argument) and runs once the old turn has settled |
+| `reject` | is refused: the chat gets one status line saying a run is in progress, and the model never sees it |
+
+A message whose text is exactly `/stop` aborts the running turn under every policy and starts no
+turn of its own. The REPL applies the same three modes from `repl.double_text_policy`.
+
 ## Not yet implemented
 
 - A published run against every live platform. The live tests exist but skip without credentials;

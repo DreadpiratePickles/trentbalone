@@ -177,3 +177,101 @@ describe("GatewayManager end to end over the Telegram wire", () => {
     expect(() => b.setRoute("pigeon", "ceo")).toThrow(/Unknown platform/);
   });
 });
+
+describe("GatewayManager double-texting policy", () => {
+  let tempDir: string;
+  beforeEach(() => { tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-gateway-dt-")); });
+  afterEach(() => { fs.rmSync(tempDir, { recursive: true, force: true }); });
+
+  const inbound = (channelId: string, content: string, id = content): InboundMessage =>
+    ({ id, platform: "email", channelId, senderId: channelId, content, timestamp: "t", scope: "dm" });
+
+  /** An agent handler whose turns finish only when the test says so, logging start/end. */
+  function slowHandler(log: string[]) {
+    const finishers = new Map<string, () => void>();
+    const handler = async (_agentId: string, m: InboundMessage, signal?: AbortSignal): Promise<string> => {
+      log.push(`${m.content}:start`);
+      await new Promise<void>((resolve) => {
+        finishers.set(m.content, resolve);
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      log.push(`${m.content}:end${signal?.aborted ? ":aborted" : ""}`);
+      return `re ${m.content}`;
+    };
+    return { handler, finish: (content: string) => finishers.get(content)?.() };
+  }
+
+  function build(policy: "enqueue" | "interrupt" | "reject", handler: (a: string, m: InboundMessage, s?: AbortSignal) => Promise<string | null>) {
+    const cfg = new ConfigManager({ baseDir: tempDir });
+    const config = cfg.loadConfig();
+    config.gateway = { ...config.gateway, double_text_policy: policy };
+    cfg.saveConfig(config);
+    const m = new GatewayManager(cfg, { store: new MemoryGatewayStore(), agentHandler: handler });
+    m.getPairing().grant({ platform: "email", senderId: "a@example.com", scope: "dm", tier: "regular" });
+    m.getPairing().grant({ platform: "email", senderId: "b@example.com", scope: "dm", tier: "regular" });
+    return m;
+  }
+
+  it("enqueue: two messages on one chat run one after the other; on different chats they overlap", async () => {
+    const log: string[] = [];
+    const slow = slowHandler(log);
+    const m = build("enqueue", slow.handler);
+    const first = m.handleInbound(inbound("a@example.com", "one"));
+    const second = m.handleInbound(inbound("a@example.com", "two"));
+    const other = m.handleInbound(inbound("b@example.com", "three"));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(log).toEqual(["one:start", "three:start"]);
+    slow.finish("one");
+    await first;
+    await new Promise((r) => setTimeout(r, 5));
+    expect(log).toEqual(["one:start", "three:start", "one:end", "two:start"]);
+    slow.finish("three");
+    slow.finish("two");
+    await Promise.all([second, other]);
+    const texts = m.getQueue().pending("email").map((r) => r.message.text);
+    expect(texts).toEqual(["re one", "re three", "re two"]);
+  });
+
+  it("interrupt: the second message aborts the first turn's signal and then runs", async () => {
+    const log: string[] = [];
+    const slow = slowHandler(log);
+    const m = build("interrupt", slow.handler);
+    const first = m.handleInbound(inbound("a@example.com", "one"));
+    await new Promise((r) => setTimeout(r, 5));
+    const second = m.handleInbound(inbound("a@example.com", "two"));
+    await first;
+    await new Promise((r) => setTimeout(r, 5));
+    expect(log).toEqual(["one:start", "one:end:aborted", "two:start"]);
+    slow.finish("two");
+    await second;
+    expect(log.at(-1)).toBe("two:end");
+  });
+
+  it("reject: a message during a turn gets the status line and never reaches the agent", async () => {
+    const log: string[] = [];
+    const slow = slowHandler(log);
+    const m = build("reject", slow.handler);
+    const first = m.handleInbound(inbound("a@example.com", "one"));
+    await new Promise((r) => setTimeout(r, 5));
+    await m.handleInbound(inbound("a@example.com", "two"));
+    expect(log).toEqual(["one:start"]);
+    const rows = m.getQueue().pending("email");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].message.channelId).toBe("a@example.com");
+    expect(rows[0].message.text).not.toContain("re two");
+    slow.finish("one");
+    await first;
+    expect(log).toEqual(["one:start", "one:end"]);
+  });
+
+  it("/stop interrupts the running turn under enqueue and starts nothing", async () => {
+    const log: string[] = [];
+    const slow = slowHandler(log);
+    const m = build("enqueue", slow.handler);
+    const first = m.handleInbound(inbound("a@example.com", "one"));
+    await new Promise((r) => setTimeout(r, 5));
+    await m.handleInbound(inbound("a@example.com", "/stop"));
+    await first;
+    expect(log).toEqual(["one:start", "one:end:aborted"]);
+  });
+});

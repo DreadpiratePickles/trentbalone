@@ -76,6 +76,8 @@ export const GatewayConfigSchema = z.object({
   enabled: z.boolean().default(false),
   platforms: z.array(z.string()).default([]),
   routes: z.record(z.string(), z.string()).default({}), // platform -> agentId
+  /** What a second message on a busy chat does: queue it, interrupt the running turn, or refuse it. */
+  double_text_policy: z.enum(["enqueue", "interrupt", "reject"]).default("enqueue"),
   /** Who receives approval cards and heartbeat messages: a platform id and a channel on it. */
   owner: z.object({ platform: z.string(), channelId: z.string() }).optional(),
   /** Push alerts to `owner`: how long a gate may wait unanswered before one reminder is sent. */
@@ -176,6 +178,7 @@ export const TrentConfigSchema = z.object({
   gateway: GatewayConfigSchema.default({}),
   fleet: FleetConfigSchema.default({}),
   mcp_servers: McpServersConfigSchema.default({}),
+  repl: z.object({ double_text_policy: z.enum(["enqueue", "interrupt", "reject"]).default("enqueue") }).default({}),
   telemetry: TelemetryConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
