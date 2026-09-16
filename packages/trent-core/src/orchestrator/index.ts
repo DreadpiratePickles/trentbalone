@@ -47,6 +47,7 @@ import { applyModelEnv } from "./model-env.js";
 import { PortShaper, PortTally } from "./provider-ports.js";
 import { SeatTally, guardSeatModel, shapeEvent, type SeatModelFn } from "./seat-guard.js";
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
+import { runWithToolCallContext } from "../governance/tool-call-context.js";
 import type { FleetMemoryHook } from "../fleet-memory/orchestrator-hook.js";
 import type { OrchestratorDelegatePort } from "./delegate-port.js";
 import type { TrentToolAdapter } from "../tools/types.js";
@@ -144,13 +145,11 @@ async function drainRun(libs: Libs, companyId: string, runId: string, maxJobs: n
     }
 
     try {
-      await libs.queue.processJobData("orchestration_step", {
-        jobRunId: next.id,
-        companyId,
-        runId,
-        action: next.metadata?.action,
-        stepId: next.metadata?.stepId,
-      });
+      const stepId = next.metadata?.stepId;
+      const job = (): Promise<unknown> =>
+        libs.queue.processJobData("orchestration_step", { jobRunId: next.id, companyId, runId, action: next.metadata?.action, stepId });
+      // The step's tool calls read this context to key their idempotency rows (governance/idempotent-dispatch.ts).
+      await (stepId === undefined ? job() : runWithToolCallContext({ runId, stepId }, job));
     } catch (error) {
       // A cancelled run makes the in-flight worker throw; that is the interruption, not a fault.
       if (control.isInterrupted()) return "interrupted";

@@ -7,6 +7,8 @@
 import fs from "node:fs";
 import process from "node:process";
 import type { Toolset, TrentConfig } from "../config/schema.js";
+import { IdempotencyManager } from "../governance/IdempotencyManager.js";
+import { idempotentAdapters } from "../governance/idempotent-dispatch.js";
 import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import { createCodeExecutionAdapter } from "./code_execution/index.js";
 import { createCronAdapter } from "./cron/index.js";
@@ -70,6 +72,11 @@ export interface ToolBuildDeps {
   readonly gateway?: VisionGateway;
   /** Screenshots land in `<profileDir>/browser/<runId>/`. */
   readonly runId?: string;
+  /**
+   * Durable idempotency for side-effecting calls (`governance/idempotent-dispatch.ts`). Defaults
+   * to a manager persisted at `<profileDir>/idempotency.json`; tests pass an in-memory one.
+   */
+  readonly idempotency?: IdempotencyManager;
 }
 
 /** One toolset that was enabled in config but could not be built here, and why the seat cannot use it. */
@@ -166,7 +173,8 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
       skipped.push({ toolset, reason: pending.get(toolset) ?? `"${toolset}" is not a toolset this builder knows` });
     }
   }
-  return { adapters, skipped };
+  const idempotency = deps.idempotency ?? new IdempotencyManager({ dir: deps.profileDir });
+  return { adapters: idempotentAdapters(adapters, idempotency), skipped };
 }
 
 /** `buildTrentTools(...).adapters`: the shape the orchestrator and the older callers take. */
