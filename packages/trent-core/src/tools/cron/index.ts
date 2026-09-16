@@ -88,6 +88,59 @@ export interface CronAdapterOptions {
   now?: () => Date;
 }
 
+/** Fields a caller supplies to create a job; everything else is derived. */
+export interface CronJobInput {
+  name?: string | undefined;
+  schedule: string;
+  prompt: string;
+  deliver?: string | undefined;
+  skills?: string[] | undefined;
+  enabled_toolsets?: string[] | undefined;
+  workdir?: string | undefined;
+}
+
+/** `<profile>/cron/jobs.json` — the one file both the tool and `trent cron` read. */
+export function cronJobsPath(profileDir: string): string {
+  return path.join(profileDir, "cron", "jobs.json");
+}
+
+/** Read every job; a missing file is an empty schedule, never an error. */
+export function readCronJobs(profileDir: string): CronJob[] {
+  const file = cronJobsPath(profileDir);
+  if (!fs.existsSync(file)) return [];
+  const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { jobs?: CronJob[] };
+  return Array.isArray(parsed.jobs) ? parsed.jobs : [];
+}
+
+/** Temp-file-then-rename at 0600, so a crash mid-write leaves the previous file whole. */
+export function writeCronJobs(profileDir: string, jobs: CronJob[], ioOverride?: Partial<ConfigIO>): void {
+  const io: ConfigIO = { ...NODE_IO, ...(ioOverride ?? {}) };
+  const file = cronJobsPath(profileDir);
+  if (!io.existsSync(path.dirname(file))) io.mkdirSync(path.dirname(file), { recursive: true });
+  atomicWriteFileSync(io, file, `${JSON.stringify({ version: 1, jobs }, null, 2)}\n`, JOBS_FILE_MODE);
+}
+
+/**
+ * Build a job record from already-validated input. The schedule must be the `normalized` value
+ * from `validateCronExpression` and the prompt must have passed `scanPromptForInjection`; the
+ * id and default name are decided here so every writer produces the same record shape.
+ */
+export function newCronJob(input: CronJobInput, stamp: string): CronJob {
+  return {
+    id: `job_${crypto.randomBytes(5).toString("hex")}`,
+    name: input.name ?? input.prompt.slice(0, 40),
+    schedule: input.schedule,
+    prompt: input.prompt,
+    deliver: input.deliver,
+    skills: input.skills,
+    enabled_toolsets: input.enabled_toolsets,
+    workdir: input.workdir,
+    enabled: true,
+    created_at: stamp,
+    updated_at: stamp,
+  };
+}
+
 function asStringArray(v: unknown): string[] | undefined {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined;
 }
@@ -107,22 +160,13 @@ function describe(job: CronJob): string {
 }
 
 export function createCronAdapter(options: CronAdapterOptions): TrentToolAdapter {
-  const io: ConfigIO = { ...NODE_IO, ...(options.io ?? {}) };
-  const file = path.join(options.profileDir, "cron", "jobs.json");
+  const file = cronJobsPath(options.profileDir);
   const now = () => (options.now ?? (() => new Date()))().toISOString();
   const record = (action: string, status: ToolCallRecord["status"], summary: string) =>
     toRecord(CRON_ADAPTER_NAME, action, status, fitSummary(summary, options.profileDir, "cron"));
 
-  function load(): CronJob[] {
-    if (!fs.existsSync(file)) return [];
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { jobs?: CronJob[] };
-    return Array.isArray(parsed.jobs) ? parsed.jobs : [];
-  }
-
-  function save(jobs: CronJob[]): void {
-    if (!io.existsSync(path.dirname(file))) io.mkdirSync(path.dirname(file), { recursive: true });
-    atomicWriteFileSync(io, file, `${JSON.stringify({ version: 1, jobs }, null, 2)}\n`, JOBS_FILE_MODE);
-  }
+  const load = (): CronJob[] => readCronJobs(options.profileDir);
+  const save = (jobs: CronJob[]): void => writeCronJobs(options.profileDir, jobs, options.io);
 
   /** A finding blocks the write. The summary names the categories, never the matched text. */
   function injectionBlock(action: string, prompt: string): ToolCallRecord | null {
@@ -144,20 +188,18 @@ export function createCronAdapter(options: CronAdapterOptions): TrentToolAdapter
     if (!schedule.ok) return record(action, "failed", `create refused: invalid schedule - ${schedule.reason}.`);
     const blocked = injectionBlock(action, prompt);
     if (blocked) return blocked;
-    const stamp = now();
-    const job: CronJob = {
-      id: `job_${crypto.randomBytes(5).toString("hex")}`,
-      name: argString(args, "name") ?? prompt.slice(0, 40),
-      schedule: schedule.normalized,
-      prompt,
-      deliver: argString(args, "deliver"),
-      skills: asStringArray(args.skills),
-      enabled_toolsets: asStringArray(args.enabled_toolsets),
-      workdir: argString(args, "workdir"),
-      enabled: true,
-      created_at: stamp,
-      updated_at: stamp,
-    };
+    const job = newCronJob(
+      {
+        name: argString(args, "name"),
+        schedule: schedule.normalized,
+        prompt,
+        deliver: argString(args, "deliver"),
+        skills: asStringArray(args.skills),
+        enabled_toolsets: asStringArray(args.enabled_toolsets),
+        workdir: argString(args, "workdir"),
+      },
+      now(),
+    );
     save([...load(), job]);
     return record(action, "completed", `Created job id ${job.id} "${job.name}" on ${job.schedule}. ${RUNNER_NOTE}`);
   }

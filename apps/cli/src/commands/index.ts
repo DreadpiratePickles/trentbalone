@@ -32,6 +32,7 @@ import { serveShimSpec, uninstallSpec } from "./groups/maintenance.js";
 import { desktopSpec, updateSpec } from "./desktop.js";
 import { improveSpec } from "./improve.js";
 import { sandboxSpec } from "./groups/sandbox.js";
+import { cronSpec } from "./groups/cron.js";
 
 export { CLI_VERSION } from "./registry.js";
 export type { CommandContext, CliOverrides } from "./context.js";
@@ -49,6 +50,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   sessionsSpec,
   configSpec,
   mcpSpec,
+  cronSpec,
   a2aSpec,
   acpSpec,
   gatewaySpec,
