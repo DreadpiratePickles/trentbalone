@@ -24,3 +24,23 @@ export {
   type FleetSeatInput,
   type RunStartedInput,
 } from "./orchestrator-hook.js";
+export {
+  CONSOLIDATE_TRIGGER,
+  MEMORY_DRAFT_AGENT,
+  MEMORY_DRAFT_KIND,
+  MEMORY_DRAFT_TASK_TYPE,
+  applyMemoryBytes,
+  consolidateMemory,
+  consolidationSystemPrompt,
+  consolidationUserPrompt,
+  decodeMemoryDraft,
+  encodeMemoryDraft,
+  parseConsolidationReply,
+  promoteMemoryDraft,
+  readMemoryBytes,
+  type ConsolidateMemoryOptions,
+  type ConsolidateMemoryResult,
+  type MemoryBytes,
+  type MemoryDraftPayload,
+  type PromoteMemoryDraftOptions,
+} from "./consolidate.js";

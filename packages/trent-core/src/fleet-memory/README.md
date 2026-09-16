@@ -19,6 +19,36 @@ touched — and plugs into `createOrchestrator({ fleetMemory })` through a delim
 | 4 | **Shared skills** | `listSharedSkills`: the `__org__` tier's live drafts plus the seat's own, consumer copies folded by content hash; rendered as an index in every prelude; `fleet_skill_view {"skill"}` returns the body of a skill another agent earned. | org skill promoted by the engineer is listed for finance; finance views it; a quarantined engineer draft is not listed. |
 | 5 | **Write discipline** | Only two writers exist: the `memory` tool (`commitOperations`: `mkdir` lock, re-read, apply the batch on the FRESH entries, cap on the merged result, write-then-rename 0600) and the improve loop's human-gated promotion path for skills. No seat ever writes free text into a shared file. | two writers against a stale view: both entries survive; two OS processes x 20 appends: all 40 land, file under cap, no `.tmp`/`.lock` left. |
 
+## Sleep-time consolidation (T1.4, `consolidate.ts`)
+
+By night the two files carry duplicates, near-duplicates and facts a later entry superseded.
+`consolidateMemory({ profileDir, companyId, gateway, store, meter?, now? })` makes ONE model call
+(temperature 0, both blocks and both caps in the prompt, the body never logged) asking for a
+deduplicated, merged rewrite of each block that keeps every fact still true, as strict JSON
+`{ memory, user, dropped }` validated with zod. The outcome is one of three, and the files are
+never touched here:
+
+| Outcome | When | What is written |
+|---|---|---|
+| `rejected` (`reason`) | reply is not JSON / not the schema, a block is over its cap, the call failed or the `SweepMeter` budget is spent | nothing |
+| `unchanged` | the canonical rewrite equals the current files byte-for-byte | nothing |
+| `drafted` | anything else | a `SkillDraftRow` `kind: "memory"`, agent `__fleet__`, task type `memory_consolidation`, status `quarantine`; an iteration (`pending_approval`) and a `stage` ledger row whose `before` is the current bytes |
+
+The draft's `content` is the JSON payload `{ profileDir, memory, user, dropped }`
+(`memory-draft.ts`), so the founder sees exactly which entries were removed, and every ledger
+row for a memory artifact carries enough to put the files back on its own.
+
+`promoteMemoryDraft({ store, draftId, actor: "human" })` is the only door to disk: it checks both
+blocks against the files as they are now, keeps a live `memory` row mirroring the current bytes,
+calls the improve loop's `promoteDraft` (human only; the live row is archived and the ledger gets
+a `fix` row with the prior bytes), then writes both files through the memory tool's commit path
+(`commitOperations`: lock, re-read, replace the entries, cap-check, write-then-rename 0600), the
+second reverting the first if it fails. The existing `rollback(iterationId)` restores the previous
+bytes: `improve/lifecycle.ts` applies a memory row's `before` payload to disk before it reverts
+the rows, so a refused file write leaves the ledger untouched. The one call is metered under the
+`candidate` phase when a `SweepMeter` is passed. Scheduling (once a day inside quiet hours) is the
+heartbeat's job, not this module's. Proof: `consolidate.test.ts`.
+
 ## What is NOT shared, and why
 
 - **Seat prompts.** Protected (`../improve/protected-prompt.ts`): only GEPA through the executing

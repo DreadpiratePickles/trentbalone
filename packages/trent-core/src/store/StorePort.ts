@@ -205,7 +205,8 @@ export interface StorePort {
 // because a plugged specialist and the seat it sits in learn separately.
 
 export type ImproveDraftStatus = "quarantine" | "live" | "rejected" | "stale" | "archived";
-export type ImproveArtifactKind = "skill" | "prompt";
+/** `memory`: a consolidated rewrite of MEMORY.md + USER.md (`../fleet-memory/consolidate.ts`). */
+export type ImproveArtifactKind = "skill" | "prompt" | "memory";
 export type ImproveLedgerAction = "stage" | "promote" | "fix" | "reject" | "retire" | "archive" | "recover" | "rollback";
 
 export interface AgentTraceRow {

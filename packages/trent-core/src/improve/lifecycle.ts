@@ -7,6 +7,7 @@
  * (`skill-health.ts`, applied in the sweep) — the reference says keep it, so it is kept.
  */
 
+import { applyMemoryBytes, decodeMemoryDraft } from "../fleet-memory/memory-draft.js";
 import type { ImproveStorePort, SkillDraftRow } from "../store/StorePort.js";
 import { distillCleanTrace, groupRowsByRun, rawTraceFromRows, type CleanGolden } from "./clean-trace.js";
 import { contentHash, judgeAgreementFor, newId, nowIso, recordLedger } from "./ledger.js";
@@ -225,6 +226,12 @@ export async function rollback(store: ImproveStorePort, iterationId: string, act
 
   const report: RollbackReport = { iterationId, reverted: [], restored: [] };
   for (const row of [...rows].reverse()) {
+    // A memory artifact lives on disk as well as in the row: put the prior bytes back first, so a
+    // refused file write (over the cap, or locked by a writer) leaves the ledger untouched.
+    if (row.artifactKind === "memory" && row.before !== null) {
+      const prior = decodeMemoryDraft(row.before);
+      applyMemoryBytes(prior.profileDir, prior);
+    }
     const candidate = await store.getDraft(row.artifactId);
     if (candidate && candidate.status !== "rejected") {
       await store.updateDraft(candidate.id, { status: "rejected", retiredAt: now });
