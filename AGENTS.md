@@ -69,3 +69,6 @@ Money is **integer cents**, never floats. Tenant data access goes through `withR
 6. `apps/web/lib/outbound/sequences.ts:22` returns `step: input.steps[0]` after `.find()` matched a
    different step, so every ready sequence re-sends the first step; the `.sort()` on `:20` also mutates
    the caller's array in place.
+7. `apps/web/lib/worker.ts` job-name allowlist omits `weekly_capability_sweep`, so the Redis worker
+   refuses that job. `apps/web/middleware.ts` does not bypass session auth for
+   `/api/marketing/stripe/webhook`, so Stripe posts get 401 (found while adding `/api/hooks/`).
