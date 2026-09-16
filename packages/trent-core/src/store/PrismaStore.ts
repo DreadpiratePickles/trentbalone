@@ -11,6 +11,8 @@ import { SqliteImproveStore } from "../improve/sqlite-store.js";
 import type {
   AppendEventInput,
   ApprovalRecord,
+  AuditRowFilter,
+  AuditRowRecord,
   CompanyRecord,
   CreateApprovalInput,
   CreateCompanyInput,
@@ -92,6 +94,20 @@ const JOB_RUN_FIELDS = {
   error: true,
   startedAt: true,
   completedAt: true,
+  metadata: true,
+} as const;
+
+const AUDIT_FIELDS = {
+  id: true,
+  companyId: true,
+  actor: true,
+  action: true,
+  objectType: true,
+  objectId: true,
+  summary: true,
+  hash: true,
+  prevHash: true,
+  createdAt: true,
 } as const;
 
 function asJsonObject(value: unknown): JsonObject {
@@ -274,7 +290,7 @@ export class PrismaStore implements StorePort {
       },
       select: JOB_RUN_FIELDS,
     });
-    return { ...row, status: row.status as JobRunStatus };
+    return { ...row, status: row.status as JobRunStatus, metadata: asJsonObject(row.metadata) };
   }
 
   async listJobRuns(companyId: string | null, limit = 50): Promise<JobRunRecord[]> {
@@ -284,7 +300,16 @@ export class PrismaStore implements StorePort {
       take: limit,
       select: JOB_RUN_FIELDS,
     });
-    return rows.map((row) => ({ ...row, status: row.status as JobRunStatus }));
+    return rows.map((row) => ({ ...row, status: row.status as JobRunStatus, metadata: asJsonObject(row.metadata) }));
+  }
+
+  async listAuditRows(filter: AuditRowFilter = {}): Promise<AuditRowRecord[]> {
+    const rows = await this.prisma.auditLog.findMany({
+      ...(filter.companyId === undefined ? {} : { where: { companyId: filter.companyId } }),
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: AUDIT_FIELDS,
+    });
+    return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
   }
 
   async close(): Promise<void> {

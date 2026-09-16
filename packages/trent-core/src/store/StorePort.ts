@@ -154,6 +154,30 @@ export interface JobRunRecord {
   error: string | null;
   startedAt: Date;
   completedAt: Date | null;
+  /**
+   * The row's JSON payload: the wrapped application's drain loop writes `{ runId, action, stepId }`
+   * on an orchestration step, and `trent jobs retry` reads `runId` or `objective` from it.
+   * Optional so a narrow test double of this port need not carry it.
+   */
+  metadata?: JsonObject;
+}
+
+/** One row of the `AuditLog` table; `createdAt` is ISO 8601 because the chain hash is computed over that string. */
+export interface AuditRowRecord {
+  id: string;
+  companyId: string;
+  actor: string;
+  action: string;
+  objectType: string;
+  objectId: string;
+  summary: string;
+  hash: string;
+  prevHash: string;
+  createdAt: string;
+}
+
+export interface AuditRowFilter {
+  companyId?: string;
 }
 
 export interface CreateJobRunInput {
@@ -188,6 +212,13 @@ export interface StorePort {
 
   createJobRun(input: CreateJobRunInput): Promise<JobRunRecord>;
   listJobRuns(companyId: string | null, limit?: number): Promise<JobRunRecord[]>;
+
+  /**
+   * The audit chain, oldest first within each company (`createdAt`, then `id`), so the signed
+   * export (`../audit/export.ts`) can re-walk it link by link. A store with no audit table
+   * returns an empty list rather than inventing rows.
+   */
+  listAuditRows(filter?: AuditRowFilter): Promise<AuditRowRecord[]>;
 
   /**
    * The self-improvement loop's six tables, on the same connection. See `ImproveStorePort`.

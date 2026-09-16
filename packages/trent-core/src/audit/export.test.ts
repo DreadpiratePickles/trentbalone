@@ -5,10 +5,12 @@
  * named by its line number, and the report says whether it was the chain or the signature.
  */
 import { afterEach, describe, expect, it } from "vitest";
+import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   auditSourceFor,
   computeAuditRowHash,
@@ -19,7 +21,25 @@ import {
   type AuditRowSource,
 } from "./export.js";
 import { generateAuditKeyPair } from "./signing.js";
+import type { AuditScenarioResult } from "../store/scenarios.js";
 import { verifyAuditExport } from "./verify.js";
+
+const SCENARIO_RUNNER = path.join(path.dirname(fileURLToPath(import.meta.url)), "../store/scenario-runner.ts");
+
+/** The durable store's driver is bun:sqlite, so the real store is exercised under Bun as a child process. */
+function findBun(): string {
+  const fromEnv = process.env.TRENT_BUN_BIN;
+  if (fromEnv !== undefined && fromEnv !== "" && fs.existsSync(fromEnv)) return fromEnv;
+  try {
+    const onPath = execSync("command -v bun", { encoding: "utf8" }).trim();
+    if (onPath !== "") return onPath;
+  } catch {
+    /* fall through to the standard install location */
+  }
+  const standard = path.join(os.homedir(), ".bun", "bin", "bun");
+  if (fs.existsSync(standard)) return standard;
+  throw new Error("bun not found; set TRENT_BUN_BIN or put bun on PATH");
+}
 
 const dirs: string[] = [];
 function tmpDir(): string {
@@ -195,4 +215,19 @@ describe("auditSourceFor", () => {
   it("refuses a store that has no audit table to read", () => {
     expect(() => auditSourceFor({ createRun: async () => undefined })).toThrow(/audit/);
   });
+});
+
+describe("exportAudit over the durable SQLite store, under Bun", () => {
+  it("StorePort.listAuditRows feeds three chained rows from a real store into an export of three lines that verifies", () => {
+    const file = path.join(tmpDir(), "trent.db");
+    const stdout = execFileSync(findBun(), [SCENARIO_RUNNER, "audit", file], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const result = JSON.parse(stdout) as AuditScenarioResult;
+    expect(result.listedIds).toEqual(["aud_1", "aud_2", "aud_3"]);
+    expect(result.listedPrevHashes[0]).toBe("genesis");
+    expect(result.listedForOtherCompany).toBe(0);
+    expect(result.exportedRows).toBe(3);
+    expect(result.lines).toBe(3);
+    expect(result.verified).toBe(true);
+    expect(result.failures).toEqual([]);
+  }, 120_000);
 });

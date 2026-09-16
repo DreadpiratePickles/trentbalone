@@ -9,11 +9,10 @@
  *
  * Install-time scan (T3.3): when the server answers at add time, its tool list is run through the
  * skill security scan (`scanMcpTools`). A finding refuses the add, naming tools and categories
- * only, unless `--allow-flagged` is given, in which case the server is recorded under the
- * top-level `mcp_flagged` key (name -> findings, categories only) and a warning goes to stderr.
- * The flag lives beside `mcp_servers` rather than inside the entry because the entry schema strips
- * unknown keys on every save. A server that cannot be reached at add time is stored unchecked
- * and the result says so.
+ * only, unless `--allow-flagged` is given, in which case the findings are stored on the entry
+ * itself as `flagged` (tool and categories, never the matched text) and a warning goes to stderr.
+ * The entry also records `scanRan`, so a server that could not be reached at add time is visibly
+ * unchecked; the result says so too.
  */
 import process from "node:process";
 import { MCP_CONNECTOR_GALLERY } from "@trent/core/mcp/index.js";
@@ -26,8 +25,6 @@ import type { CommandSpec } from "../registry.js";
 import type { CommandContext } from "../context.js";
 
 export const MCP_CONFIG_KEY = "mcp_servers";
-/** Top-level, passthrough: `{ <server>: McpScanFinding[] }` for servers installed with `--allow-flagged`. */
-export const MCP_FLAGGED_KEY = "mcp_flagged";
 const SECRET_HEADERS = new Set(["authorization", "proxy-authorization", "cookie", "x-api-key", "x-auth-token"]);
 
 function fail(operation: string, message: string, target?: string): never {
@@ -89,8 +86,8 @@ function target(entry: McpServerConfig): string {
   return entry.transport === "stdio" ? entry.command : entry.url;
 }
 
-function isFlagged(ctx: CommandContext, name: string): boolean {
-  return Array.isArray(ctx.config().get(`${MCP_FLAGGED_KEY}.${name}`));
+function isFlagged(entry: McpServerConfig): boolean {
+  return entry.flagged !== undefined && entry.flagged.length > 0;
 }
 
 interface ScanOutcome {
@@ -135,7 +132,7 @@ export const mcpSpec: CommandSpec = {
               .sort()
               .map((name) => {
                 const entry = servers[name]!;
-                return { name, transport: entry.transport, target: target(entry), auto_approve: entry.auto_approve, enabled: entry.enabled, ...(isFlagged(ctx, name) ? { flagged: true } : {}) };
+                return { name, transport: entry.transport, target: target(entry), auto_approve: entry.auto_approve, enabled: entry.enabled, ...(isFlagged(entry) ? { flagged: true } : {}) };
               }),
             available: MCP_CONNECTOR_GALLERY.map((t) => ({ id: t.id, name: t.name, source: t.source, transport: t.transport, auth: t.authMode })),
           },
@@ -196,8 +193,7 @@ export const mcpSpec: CommandSpec = {
             context: { findings: scan.findings },
           });
         }
-        manager.set(`${MCP_CONFIG_KEY}.${name}`, entry);
-        if (flagged) manager.set(`${MCP_FLAGGED_KEY}.${name}`, scan.findings);
+        manager.set(`${MCP_CONFIG_KEY}.${name}`, { ...entry, scanRan: scan.scanRan, ...(flagged ? { flagged: scan.findings } : {}) });
         if (flagged) ctx.err(`warning: ${name} is installed flagged; the scan found ${describeFindings(scan.findings)}`);
         return {
           data: {
@@ -223,7 +219,6 @@ export const mcpSpec: CommandSpec = {
         if (ctx.dryRun) return { data: { dryRun: true, command: "mcp remove", name } };
         if (!readServers(ctx)[name]) fail("mcp.remove", "no server with that name is configured", name);
         ctx.config().delete(`${MCP_CONFIG_KEY}.${name}`);
-        if (isFlagged(ctx, name)) ctx.config().delete(`${MCP_FLAGGED_KEY}.${name}`);
         return { data: { removed: name, count: Object.keys(readServers(ctx)).length } };
       },
       render(data, ctx) {

@@ -39,6 +39,17 @@ describe("mcp_servers config", () => {
     expect(McpServersConfigSchema.safeParse({ ok: { transport: "sse", url: "https://h" } }).success).toBe(false);
   });
 
+  it("keeps the install-time scan record on the entry: `flagged` findings and `scanRan`", () => {
+    const parsed = McpServersConfigSchema.parse({
+      poisoned: { transport: "stdio", command: "x", scanRan: true, flagged: [{ tool: "helper", categories: ["Prompt injection / jailbreak attempt"] }] },
+      clean: { transport: "http", url: "https://h/mcp", scanRan: true },
+    });
+    expect(parsed.poisoned).toMatchObject({ scanRan: true, flagged: [{ tool: "helper", categories: ["Prompt injection / jailbreak attempt"] }] });
+    expect(parsed.clean).toMatchObject({ scanRan: true });
+    expect(parsed.clean!.flagged).toBeUndefined();
+    expect(McpServersConfigSchema.safeParse({ bad: { transport: "stdio", command: "x", flagged: [{ tool: 1 }] } }).success).toBe(false);
+  });
+
   it("migrates the legacy `[{name, url}]` array written by the old CLI into http entries", () => {
     const parsed = McpServersConfigSchema.parse([{ name: "old", url: "https://mcp.example.com/mcp" }, { name: "nourl" }]);
     expect(Object.keys(parsed)).toEqual(["old"]);

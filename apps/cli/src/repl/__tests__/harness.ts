@@ -13,6 +13,7 @@ import type { TrentConfig } from "@trent/core/config/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import type {
   ApprovalRecord,
+  AuditRowRecord,
   CompanyRecord,
   CreateApprovalInput,
   CreateCompanyInput,
@@ -169,12 +170,18 @@ export class MemoryStore implements StorePort {
       error: null,
       startedAt: new Date(this.#n * 1000),
       completedAt: null,
+      metadata: input.metadata ?? {},
     };
     this.#jobs.push(record);
     return record;
   }
   async listJobRuns(companyId: string | null, limit = 50): Promise<JobRunRecord[]> {
     return this.#jobs.filter((j) => companyId === null || j.companyId === companyId).slice(0, limit);
+  }
+
+  /** Nothing in the harness writes an audit chain. */
+  async listAuditRows(): Promise<AuditRowRecord[]> {
+    return [];
   }
 
   async close(): Promise<void> {}

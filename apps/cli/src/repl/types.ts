@@ -33,6 +33,8 @@ export interface JobRunRow {
   companyId: string | null;
   summary: string;
   startedAt: Date;
+  /** The row's JSON payload (`{ runId, action, stepId }` on an orchestration step; `{ retryOf, runId }` on a retry link). */
+  metadata?: Record<string, unknown>;
 }
 
 export interface RunRow {
@@ -76,6 +78,7 @@ export interface ReplStore {
     trigger: string;
     companyId?: string | null;
     summary?: string;
+    metadata?: Record<string, unknown>;
   }): Promise<JobRunRow>;
   listJobRuns(companyId: string | null, limit?: number): Promise<JobRunRow[]>;
   getRun(id: string): Promise<RunRow | null>;

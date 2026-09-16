@@ -8,15 +8,20 @@
  */
 
 import {
+  runAuditScenario,
   runConcurrencyScenario,
   runDurabilityScenario,
   runTransactionScenario,
+  seedAuditChain,
 } from "./scenarios.js";
 
 const SCENARIOS: Record<string, (url: string) => Promise<unknown>> = {
   durability: runDurabilityScenario,
   concurrency: runConcurrencyScenario,
   transaction: runTransactionScenario,
+  audit: runAuditScenario,
+  /** Seeds the chain and stops, so a CLI test can export it from a temp profile. */
+  "audit-seed": seedAuditChain,
 };
 
 async function main(): Promise<void> {

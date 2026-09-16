@@ -1,10 +1,13 @@
 /**
  * `trent audit export|verify|key`: a signed NDJSON export of the store's audit chain. `export`
  * needs the durable store, so under plain Node (no bun:sqlite) it refuses rather than signing an
- * empty file from the in-process fallback; `verify` works on any export, including one produced
- * elsewhere, and reports whether the signer is this profile's key.
+ * empty file from the in-process fallback; under Bun it reads the profile's SQLite store through
+ * `StorePort.listAuditRows`, which the last test proves against a seeded temp profile. `verify`
+ * works on any export, including one produced elsewhere, and reports whether the signer is this
+ * profile's key.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,6 +16,25 @@ import process from "node:process";
 import { exportAudit, generateAuditKeyPair, loadOrCreateAuditKey, signaturePathFor, type AuditRow } from "@trent/core/audit/index.js";
 import { EXIT } from "@trent/core/errors/index.js";
 import { runCli } from "../index.js";
+
+const REPO_ROOT = path.resolve(process.cwd());
+const SCENARIO_RUNNER = path.join(REPO_ROOT, "packages/trent-core/src/store/scenario-runner.ts");
+const CLI_ENTRY = path.join(REPO_ROOT, "apps/cli/src/index.ts");
+
+/** The durable store's driver is bun:sqlite, so the seeded-store export runs the CLI under Bun. */
+function findBun(): string {
+  const fromEnv = process.env.TRENT_BUN_BIN;
+  if (fromEnv !== undefined && fromEnv !== "" && fs.existsSync(fromEnv)) return fromEnv;
+  try {
+    const onPath = execSync("command -v bun", { encoding: "utf8" }).trim();
+    if (onPath !== "") return onPath;
+  } catch {
+    /* fall through to the standard install location */
+  }
+  const standard = path.join(os.homedir(), ".bun", "bin", "bun");
+  if (fs.existsSync(standard)) return standard;
+  throw new Error("bun not found; set TRENT_BUN_BIN or put bun on PATH");
+}
 
 let home: string;
 let work: string;
@@ -136,4 +158,23 @@ describe("trent audit", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ dryRun: true, exists: false });
     expect(fs.existsSync(path.join(home, "keys", "audit.key"))).toBe(false);
   });
+
+  it("export under Bun reads a seeded temp-profile SQLite store and writes its three chained rows, which verify as this profile's", async () => {
+    const bun = findBun();
+    const run = (args: string[]): string =>
+      execFileSync(bun, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, TRENT_HOME: home } });
+    run([SCENARIO_RUNNER, "audit-seed", path.join(home, "trent.db")]);
+
+    const out = path.join(work, "seeded.ndjson");
+    const exported = JSON.parse(run([CLI_ENTRY, "audit", "export", "--out", out, "--json"])) as { rows: number; file: string; fingerprint: string };
+    expect(exported.rows).toBe(3);
+    expect(exported.file).toBe(out);
+    const lines = fs.readFileSync(out, "utf8").split("\n").filter((l) => l.length > 0);
+    expect(lines.map((l) => (JSON.parse(l) as AuditRow).id)).toEqual(["aud_1", "aud_2", "aud_3"]);
+    expect((JSON.parse(lines[0]!) as AuditRow).prevHash).toBe("genesis");
+
+    const result = await runCli(["audit", "verify", out, "--json"]);
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(JSON.parse(result.stdout) as VerifyData).toMatchObject({ ok: true, rows: 3, signer: exported.fingerprint, trusted: true, failures: [] });
+  }, 180_000);
 });

@@ -72,6 +72,10 @@ describe("prisma-on-sqlite store, under Bun", () => {
       expect(result.beforeClose.approvalStatus).toBe("pending");
     });
 
+    it("keeps the job run's metadata payload, so a failed job can be retried from its run id", () => {
+      expect(result.afterReopen.jobRunMetadata).toEqual([{ runId: "run_durable_1", action: "execute_step" }]);
+    });
+
     it("reads all four back from a brand new client on the same file", () => {
       // This is what makes `--continue` resume a real run rather than an orphan transcript.
       expect(result.afterReopen.companyFound).toBe(true);

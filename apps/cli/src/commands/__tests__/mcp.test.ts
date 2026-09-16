@@ -8,12 +8,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { parse as parseYaml } from "yaml";
 import { EXIT } from "@trent/core/errors/index.js";
 import { runCli } from "../index.js";
 
 const FIXTURE = path.resolve(process.cwd(), "packages/trent-core/src/tools/mcp/__fixtures__/fake-mcp-server.mjs");
 
 let home: string;
+
+type StoredConfig = { mcp_servers?: Record<string, { flagged?: { tool: string; categories: string[] }[]; scanRan?: boolean }>; mcp_flagged?: unknown };
+
+function storedConfig(): StoredConfig {
+  return parseYaml(fs.readFileSync(path.join(home, "config.yaml"), "utf8")) as StoredConfig;
+}
 
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "trent-cli-mcp-"));
@@ -119,8 +126,11 @@ describe("trent mcp", () => {
     const listed = JSON.parse((await runCli(["mcp", "list", "--json"])).stdout) as Listed & { configured: { flagged?: boolean }[] };
     expect(listed.configured[0]).toMatchObject({ name: "poisoned", flagged: true });
     const yaml = fs.readFileSync(path.join(home, "config.yaml"), "utf8");
-    expect(yaml).toContain("flagged");
     expect(yaml).not.toContain("Ignore all previous");
+    const stored = storedConfig();
+    expect(stored.mcp_servers?.poisoned?.flagged).toEqual(data.added.findings);
+    expect(stored.mcp_servers?.poisoned?.scanRan).toBe(true);
+    expect(stored.mcp_flagged).toBeUndefined();
     expect((await runCli(["mcp", "remove", "poisoned", "--json"])).exitCode).toBe(EXIT.OK);
     expect(fs.readFileSync(path.join(home, "config.yaml"), "utf8")).not.toContain("helper");
   });
@@ -139,6 +149,8 @@ describe("trent mcp", () => {
     expect(result.exitCode).toBe(EXIT.OK);
     const data = JSON.parse(result.stdout) as { added: { flagged: boolean; scanRan: boolean; findings: unknown[] } };
     expect(data.added).toMatchObject({ flagged: false, scanRan: true, findings: [] });
+    expect(storedConfig().mcp_servers?.fake).toMatchObject({ scanRan: true });
+    expect(storedConfig().mcp_servers?.fake?.flagged).toBeUndefined();
   });
 
   it("--dry-run on add writes nothing", async () => {

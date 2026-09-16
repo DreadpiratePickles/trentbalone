@@ -28,7 +28,7 @@ export interface AuditRow {
   readonly createdAt: string;
 }
 
-/** Where the rows come from. A store that grows `listAuditRows` satisfies it directly. */
+/** Where the rows come from. `StorePort.listAuditRows` satisfies it directly. */
 export interface AuditRowSource {
   listAuditRows(): Promise<AuditRow[]>;
 }
@@ -162,9 +162,9 @@ function prismaClientOf(store: unknown): PrismaAuditClient | null {
 }
 
 /**
- * The audit rows behind a store. `StorePort` does not yet carry an audit reader, so a
- * Prisma-backed store is read through its client's `auditLog` table; anything that exposes
- * `listAuditRows` is used as is, and anything else is refused by name rather than exported empty.
+ * The audit rows behind a store. A `StorePort` (or anything else with `listAuditRows`) is used as
+ * is; an older Prisma-backed store without the reader is read through its client's `auditLog`
+ * table; anything else is refused by name rather than exported empty.
  */
 export function auditSourceFor(store: unknown): AuditRowSource {
   if (hasListAuditRows(store)) return store;

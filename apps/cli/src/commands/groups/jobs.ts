@@ -8,17 +8,17 @@
  * known to that graph: the store lists job rows per company, and there is no company listing on the
  * REPL store slice. The runtime is released on every exit path.
  *
- * The retry link. `StorePort.JobRunRecord` does not carry the row's `metadata`, so the run behind a
- * failed job is read from it only when the store returns one (a structural read); otherwise the
- * caller passes `--objective`. The new run is linked to the old job by a row of type
- * `orchestration_retry` whose payload (`metadata`) holds `{ retryOf, runId }` and whose summary
- * names both, so a store that drops the payload still keeps the link in text.
+ * The retry link. The row's `metadata` payload names the run behind a failed job (`runId`, as the
+ * wrapped application's drain loop writes it) or the objective itself (`objective`); with neither,
+ * the caller passes `--objective`. The new run is linked to the old job by a row of type
+ * `orchestration_retry` whose payload holds `{ retryOf, runId }` and whose summary names both, so
+ * a store that drops the payload still keeps the link in text.
  */
 import { EXIT, TrentError, type ExitCode } from "@trent/core/errors/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import type { CommandSpec } from "../registry.js";
 import type { CommandContext } from "../context.js";
-import type { ReplConfig, ReplStore } from "../../repl/types.js";
+import type { JobRunRow, ReplConfig, ReplStore } from "../../repl/types.js";
 import { createHeadlessRuntime, type HeadlessRuntime } from "../../runtime/headless.js";
 
 /** How many rows are read from the store before the failed ones are picked out. */
@@ -26,17 +26,11 @@ const SCAN_LIMIT = 500;
 const DEFAULT_LAST = 20;
 const RETRY_ROW_TYPE = "orchestration_retry";
 
-/** The store row as the durable store returns it; `completedAt`, `error` and `metadata` are read structurally. */
-interface JobRow {
-  id: string;
-  type: string;
-  status: string;
+/** The store row as the durable store returns it; `completedAt` and `error` are read structurally. */
+interface JobRow extends JobRunRow {
   trigger: string;
-  summary: string;
-  startedAt: Date;
   completedAt?: Date | null;
   error?: string | null;
-  metadata?: { runId?: unknown } | null;
 }
 
 export interface FailedJob {
@@ -88,17 +82,27 @@ async function withRuntime<T>(ctx: CommandContext, work: (runtime: HeadlessRunti
   }
 }
 
-/** The objective to retry: the linked run's, when the row carries its run id; else the caller's. */
+function metadataString(row: JobRow, key: "runId" | "objective"): string | undefined {
+  const value = row.metadata?.[key];
+  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
+/**
+ * The objective to retry, in order: the caller's `--objective`; the linked run's objective when
+ * the row's metadata names a run that is in the store; the `objective` the metadata itself carries.
+ */
 async function objectiveFor(store: ReplStore, row: JobRow, explicit: string | undefined): Promise<string> {
   if (explicit !== undefined && explicit.trim() !== "") return explicit;
-  const runId = typeof row.metadata?.runId === "string" ? row.metadata.runId : undefined;
+  const runId = metadataString(row, "runId");
   const run = runId === undefined ? null : await store.getRun(runId);
   if (run !== null && run.objective.trim() !== "") return run.objective;
+  const recorded = metadataString(row, "objective");
+  if (recorded !== undefined) return recorded;
   throw new TrentError({
     code: EXIT.CONFIG,
     operation: "jobs.retry",
     message: runId === undefined
-      ? "the store keeps no run link on this job row; pass --objective <text> to say what to run again"
+      ? "the store keeps no run link or objective on this job row; pass --objective <text> to say what to run again"
       : `run ${runId} behind this job is not in the store; pass --objective <text> to say what to run again`,
     target: row.id,
   });
@@ -126,16 +130,15 @@ async function driveRun(events: AsyncIterable<OrcEvent>): Promise<RetryOutcome> 
   return { runId, status, summary };
 }
 
-/** Writes the link row; the payload is accepted by the durable store, the REPL slice type just does not name it. */
+/** Writes the link row: the payload names the failed job and the new run, and so does the summary. */
 async function recordLink(store: ReplStore, companyId: string, retryOf: string, runId: string | null): Promise<string> {
-  const input = {
+  const row = await store.createJobRun({
     type: RETRY_ROW_TYPE,
     trigger: "manual",
     companyId,
     summary: `retry of ${retryOf}${runId === null ? "" : ` as run ${runId}`}`,
     metadata: { retryOf, ...(runId === null ? {} : { runId }) },
-  };
-  const row = await store.createJobRun(input as Parameters<ReplStore["createJobRun"]>[0]);
+  });
   return row.id;
 }
 

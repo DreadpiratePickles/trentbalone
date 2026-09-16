@@ -6,11 +6,16 @@
  * plain JSON-serializable result that the vitest suite asserts on.
  */
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { PrismaClient } from "./generated/client";
 import { PrismaBunSQLite } from "./bun-sqlite-adapter.mjs";
 import { createSqliteStore, readDerivedDdl } from "./createStore.js";
 import { PrismaStore } from "./PrismaStore.js";
-import type { StorePort } from "./StorePort.js";
+import type { JsonObject, StorePort } from "./StorePort.js";
+import { computeAuditRowHash, exportAudit, GENESIS_HASH } from "../audit/export.js";
+import { generateAuditKeyPair } from "../audit/signing.js";
+import { verifyAuditExport } from "../audit/verify.js";
 
 export interface DurabilityResult {
   beforeClose: { companyId: string; runId: string; stepCount: number; approvalStatus: string };
@@ -25,6 +30,7 @@ export interface DurabilityResult {
     approvalFound: boolean;
     approvalStatus: string | null;
     jobRunCount: number;
+    jobRunMetadata: JsonObject[];
   };
   afterCascadeDelete: {
     companyFound: boolean;
@@ -84,7 +90,12 @@ async function seed(store: StorePort): Promise<{
     action: "publish the post",
     reason: "risk level requires a human",
   });
-  await store.createJobRun({ type: "orchestrator", trigger: "cli", companyId: company.id });
+  await store.createJobRun({
+    type: "orchestrator",
+    trigger: "cli",
+    companyId: company.id,
+    metadata: { runId: run.id, action: "execute_step" },
+  });
   return { companyId: company.id, runId: run.id, approvalId: approval.id };
 }
 
@@ -135,6 +146,7 @@ export async function runDurabilityScenario(url: string): Promise<DurabilityResu
       approvalFound: approval !== null,
       approvalStatus: approval?.status ?? null,
       jobRunCount: jobRuns.length,
+      jobRunMetadata: jobRuns.map((job) => job.metadata ?? {}),
     },
     afterCascadeDelete: afterDelete,
   };
@@ -258,6 +270,80 @@ export async function runTransactionScenario(url: string): Promise<TransactionRe
 
   await store.close();
   return { committed, rolledBack, afterRollback, error };
+}
+
+const AUDIT_COMPANY_ID = "cmp_audit";
+
+/**
+ * Three chained AuditLog rows for one company, written the way the wrapped application's
+ * `audit-log.ts` writes them: `prevHash` is `genesis` for the first row and the prior row's hash
+ * after that, and the hash is computed over the ISO `createdAt` string.
+ */
+export async function seedAuditChain(url: string): Promise<{ companyId: string; ids: string[] }> {
+  await (await createSqliteStore({ url })).close();
+  const prisma = new PrismaClient({ adapter: new PrismaBunSQLite({ url }) });
+  const store = new PrismaStore(prisma);
+  try {
+    const company = await store.createCompany({ id: AUDIT_COMPANY_ID, name: "Audit Co", slug: `audit-${Date.now()}` });
+    const ids: string[] = [];
+    let prevHash = GENESIS_HASH;
+    for (let i = 1; i <= 3; i += 1) {
+      const createdAt = new Date(Date.UTC(2026, 8, 15, 9, i));
+      const row = {
+        id: `aud_${i}`,
+        companyId: company.id,
+        actor: "user",
+        action: `run.step_${i}`,
+        objectType: "run",
+        objectId: "run_1",
+        summary: `row ${i}`,
+        prevHash,
+        createdAt: createdAt.toISOString(),
+      };
+      const hash = computeAuditRowHash(row);
+      await prisma.auditLog.create({ data: { ...row, hash, createdAt } });
+      prevHash = hash;
+      ids.push(row.id);
+    }
+    return { companyId: company.id, ids };
+  } finally {
+    await store.close();
+  }
+}
+
+export interface AuditScenarioResult {
+  listedIds: string[];
+  listedPrevHashes: string[];
+  listedForOtherCompany: number;
+  exportedRows: number;
+  lines: number;
+  verified: boolean;
+  failures: readonly unknown[];
+}
+
+/** Seeds the chain, reads it back through `StorePort.listAuditRows`, exports it beside the database and verifies the export. */
+export async function runAuditScenario(url: string): Promise<AuditScenarioResult> {
+  await seedAuditChain(url);
+  const store = await createSqliteStore({ url });
+  try {
+    const listed = await store.listAuditRows();
+    const other = await store.listAuditRows({ companyId: "cmp_none" });
+    const outFile = path.join(path.dirname(url.replace(/^file:/, "")), "audit.ndjson");
+    const exported = await exportAudit({ source: store, outFile, key: generateAuditKeyPair() });
+    const lines = readFileSync(outFile, "utf8").split("\n").filter((line) => line.length > 0).length;
+    const report = await verifyAuditExport(outFile);
+    return {
+      listedIds: listed.map((row) => row.id),
+      listedPrevHashes: listed.map((row) => row.prevHash),
+      listedForOtherCompany: other.length,
+      exportedRows: exported.rows,
+      lines,
+      verified: report.ok,
+      failures: report.failures,
+    };
+  } finally {
+    await store.close();
+  }
 }
 
 export function ddlStatementCount(): number {

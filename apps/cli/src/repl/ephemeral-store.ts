@@ -6,6 +6,7 @@
  * written here survives the process, and `index.ts` prints that before the first turn.
  */
 
+import type { AuditRowRecord } from "@trent/core/store/index.js";
 import type { ApprovalRow, JobRunRow, ReplStore, RunRow, StepRow } from "./types.js";
 
 export class EphemeralStore implements ReplStore {
@@ -53,6 +54,7 @@ export class EphemeralStore implements ReplStore {
     trigger: string;
     companyId?: string | null;
     summary?: string;
+    metadata?: Record<string, unknown>;
   }): Promise<JobRunRow> {
     const record: JobRunRow = {
       id: this.#id("job"),
@@ -61,6 +63,7 @@ export class EphemeralStore implements ReplStore {
       companyId: input.companyId ?? null,
       summary: input.summary ?? "",
       startedAt: new Date(),
+      metadata: { ...(input.metadata ?? {}) },
     };
     this.#jobs.push(record);
     return record;
@@ -68,6 +71,11 @@ export class EphemeralStore implements ReplStore {
 
   async listJobRuns(companyId: string | null, limit = 50): Promise<JobRunRow[]> {
     return this.#jobs.filter((job) => companyId === null || job.companyId === companyId).slice(-limit);
+  }
+
+  /** Nothing here reaches an audit chain, so the signed export has nothing to sign. */
+  async listAuditRows(_filter?: { companyId?: string }): Promise<AuditRowRecord[]> {
+    return [];
   }
 
   /** No runs are recorded here; `/wiki` is empty until a durable store is available. */

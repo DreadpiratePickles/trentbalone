@@ -53,10 +53,12 @@ run `trent setup` and `trent doctor`. No sudo; nothing outside `$HOME`.
 trent                       # the REPL; runs quick setup on first launch
 trent --tui                 # full-screen Ink TUI on the same session engine
 trent --continue            # resume the last conversation
-trent doctor                # 13 health checks; exit 3 on a configuration failure
+trent doctor                # 14 health checks; exit 3 on a configuration failure
 trent fleet list            # 173 agents: 9 core seats plus 164 catalog specialists
 trent fleet install <id>    # install a specialist with its tools, skills and model
 trent improve status        # traces, quarantined drafts, last sweep
+trent cron start            # tick the schedule; trent heartbeat start for the periodic check
+trent jobs failed           # failed job runs, newest first; trent jobs retry <id> re-runs one
 trent --help                # every command, 50 lines
 ```
 
@@ -84,9 +86,17 @@ it for its own runs; the doctor checks the raw environment. Details in
   SQLite database at `~/.trent/trent.db`.
 - **A REPL that streams the run.** Orchestrator events (run start, step start, step output, step
   end) render as they happen. Ctrl+C aborts the in-flight stream and leaves the process alive.
-- **A doctor that fails honestly.** 13 checks; the credentials check makes one cheap authenticated
+- **A doctor that fails honestly.** 14 checks; the credentials check makes one cheap authenticated
   call rather than testing for presence. Exit codes are documented in
   [docs/doctor.md](docs/doctor.md).
+- **Scheduled jobs and a heartbeat.** `trent cron start` ticks the profile's schedule every 30
+  seconds and delivers each result to a gateway target; `trent heartbeat start` runs the founder's
+  `HEARTBEAT.md` checklist against live fleet state on an interval, outside quiet hours, and
+  consolidates fleet memory once a day. Both keep run history and a pid lock. See
+  [docs/cron.md](docs/cron.md) and [docs/heartbeat.md](docs/heartbeat.md).
+- **A concurrent-run cap and a failed-jobs view.** `runtime.max_concurrent_runs` bounds how many
+  runs every surface drives at once; `trent jobs failed` lists the failed job rows and
+  `trent jobs retry <id>` runs one again, linked to the original. See [docs/jobs.md](docs/jobs.md).
 - **A self-improvement loop, human-gated.** See below.
 - **Single-file binaries** for `darwin-arm64`, `darwin-x64`, `linux-x64` and `windows-x64`, compiled
   with `bun build --compile` by `npm run build:binary` and, in CI, executed on each target's native
@@ -106,12 +116,12 @@ Every seat's tools are Hermes-shaped toolsets (`02_plan/output/tools-build-spec.
 | `delegation` | `delegate_task` | On by default; real delegated child steps, max 6 per run |
 | `web` | `web_search`, `web_extract` | On by default; through the egress proxy, skipped with a visible reason when the proxy is off |
 | `skills` | `skills_list`, `skill_view`, `skill_manage` | On by default |
-| `cron` | `cronjob_manage` | On by default; prompt-injection scan on stored prompts |
+| `cron` | `cronjob_manage` | On by default; prompt-injection scan on stored prompts; the same `jobs.json` `trent cron` ticks ([docs/cron.md](docs/cron.md)) |
 | `plugins` | `plugins_list` + `~/.trent/plugins/*/plugin.json` commands | On by default; names cannot shadow built-ins, manifests must be 0600 |
 | `memory` | `memory`, `fleet_search`, `fleet_skill_view` | Always on, registered by the fleet-memory hook |
-| `browser` | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, ... | Opt-in; needs a Chromium on the machine, drives it through the egress proxy |
-| `vision` | `vision_analyze` | Opt-in; sends the image to the configured model |
-| `mcp` | `mcp_<server>_<tool>`, `mcp_status` | Opt-in; servers from `trent mcp add` (stdio or http) |
+| `browser` | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, ... | Opt-in; needs a Chromium on the machine, drives it through the egress proxy ([docs/browser.md](docs/browser.md)) |
+| `vision` | `vision_analyze` | Opt-in; sends the image to the configured model ([docs/browser.md](docs/browser.md)) |
+| `mcp` | `mcp_<server>_<tool>`, `mcp_status` | Opt-in; servers from `trent mcp add` (stdio or http), scanned at install time ([docs/mcp.md](docs/mcp.md)) |
 
 Quick setup turns on the first eight; blank-slate setup turns on `file_ops` and `terminal` only.
 Every tool call goes through the approval floors in `tools/approval-floors.ts`; output over 24K
@@ -121,10 +131,10 @@ characters spills to a file.
 
 | Surface | Command | State |
 |---|---|---|
-| Telegram, Discord, Slack, WhatsApp, Signal, email, Teams, Home Assistant | `trent gateway setup <platform>`, `trent gateway start` | Eight adapters on each platform's real protocol, each with a wire test against a local server; live tests skip without credentials. Device pairing is default-deny; approvals are checked against a durable row. [docs/gateway.md](docs/gateway.md) |
+| Telegram, Discord, Slack, WhatsApp, Signal, email, Teams, Home Assistant | `trent gateway setup <platform>`, `trent gateway start` | Eight adapters on each platform's real protocol, each with a wire test against a local server; live tests skip without credentials. Device pairing is default-deny; approvals are checked against a durable row and can be decided by a reaction on the card; a thread is its own session; a second message on a busy chat queues rather than starting a second turn; push alerts reach the owner. [docs/gateway.md](docs/gateway.md) |
 | Agent-to-Agent protocol | `trent a2a serve`, `trent a2a card <agentId>` | A2A server (default port 7895) and signed agent cards. `trent serve` is a retired alias that exits 2 |
 | Editors (VS Code, Cursor, Zed) | `trent acp` | ACP server |
-| MCP connectors | `trent mcp` | Manage Model Context Protocol connectors |
+| MCP connectors | `trent mcp list\|add\|remove\|test` | Stdio and http servers; `add` scans every tool description at install time and refuses a finding unless `--allow-flagged`; tool results are scrubbed of secrets. [docs/mcp.md](docs/mcp.md) |
 | Web UI | `trent web` | Reports readiness only. `trent web --start` refuses: the server entry point is not built. The desktop app starts the web UI itself |
 | Docker sandbox image | `trent sandbox build` | Builds `trent-sandbox:1` from `scripts/sandbox/Dockerfile`. Not published to a registry. [docs/terminal.md](docs/terminal.md) |
 
@@ -144,7 +154,8 @@ material as applied in
 [01_discovery/references/cs329a-applied.md](01_discovery/references/cs329a-applied.md); all 17
 tasks in its plan landed (session logs `docs/sessions/2026-09-13-cs329a-batch-2.md` and `-3.md`).
 
-Not done: a scheduler (the sweep runs on command), a separate model family for judge and executor,
+Not done: an automatic sweep (it runs on command; `trent cron` schedules prompts, not the sweep,
+and the heartbeat only drafts memory consolidations), a separate model family for judge and executor,
 tree search, an offline reward model for seats without a verifier, and weighting the judge by the
 judge-versus-human agreement ledger (the ledger exists; the weighting does not).
 
@@ -183,23 +194,32 @@ external dependencies to install", not "a single binary": Next.js cannot be comp
   repository.
 - **Human approvals** persist across restarts and are enforced in the REPL, the TUI and the
   messaging gateway.
+- **Policy rules over tool sequences.** Every tool call is classified and a rule list is evaluated
+  against the run's recent history at dispatch, so "read a secret, then send a message" is denied
+  before the second call runs. [docs/security.md](docs/security.md#policy-rules).
+- **Prompt redaction.** With `privacy.redact_prompts: true`, secrets and PII are replaced by
+  numbered tokens before a prompt reaches a provider, and the same token map restores them in the
+  reply. [docs/security.md](docs/security.md#prompt-redaction).
+- **Signed audit export.** `trent audit export` writes the store's hash-chained audit rows as
+  NDJSON with a detached Ed25519 signature; `trent audit verify` re-walks the chain and checks the
+  signature without a database. [docs/security.md](docs/security.md#signed-audit-export).
 
 Known, reported and not fixed defects in the wrapped application are listed in
 [docs/security.md](docs/security.md).
 
 ## Contributing and tests
 
-Measured on 2026-09-13 on this branch (`feature/trent-fleet-v2`):
+Measured on 2026-09-15 on this branch (`feature/trent-fleet-v2`):
 
 ```
 npx vitest run --reporter=dot
-  Test Files  135 passed (135)
-       Tests  1235 passed (1235)
+  Test Files  180 passed | 2 skipped (182)
+       Tests  1765 passed | 27 skipped (1792)
 ```
 
 That covers `packages/` and `apps/cli/`. The wrapped web app has its own suite: `npm run test:web`.
 Live provider and platform tests are gated behind `TRENT_TEST_LIVE=1` and the relevant key, and skip
-without one. CI (`.github/workflows/ci.yml`) also typechecks, lints, scans the output surfaces for
+without one; the durable-store suites run under Bun as child processes and skip without it. CI (`.github/workflows/ci.yml`) also typechecks, lints, scans the output surfaces for
 canned strings, hex colours and emoji, builds the four binaries and runs each on its native OS.
 
 The working rules are in `AGENTS.md` and `CONTEXT.md`: `apps/web/` is read-only; a failing test
@@ -212,12 +232,17 @@ comes first; nothing is "done" without executable evidence. Session logs live in
 | [getting-started.md](docs/getting-started.md) | Clone to first real conversation |
 | [configuration.md](docs/configuration.md) | Config schema, the yaml/env split, profiles, the env contract |
 | [doctor.md](docs/doctor.md) | The 13 checks, exit codes, `--json`, `--fix` |
-| [fleet.md](docs/fleet.md) | The catalog, core seats, packs |
+| [fleet.md](docs/fleet.md) | The catalog, core seats, packs, agent versions with promote and rollback, export and import |
 | [skills.md](docs/skills.md) | The skills hub and the pre-install scanner |
-| [gateway.md](docs/gateway.md) | The eight messaging adapters, pairing, approvals |
+| [gateway.md](docs/gateway.md) | The eight messaging adapters, pairing, approvals and reaction decisions, push alerts, threads as sessions, double texting |
+| [cron.md](docs/cron.md) | `trent cron`: the schedule file, the runner, run history, delivery |
+| [heartbeat.md](docs/heartbeat.md) | `trent heartbeat`: `HEARTBEAT.md`, quiet hours, memory consolidation, history and the lock |
+| [jobs.md](docs/jobs.md) | The concurrent-run cap, `trent jobs failed` and `trent jobs retry` |
+| [mcp.md](docs/mcp.md) | `mcp_servers` config, the CLI, the install-time scan, result scrubbing |
+| [browser.md](docs/browser.md) | The browser and vision toolsets |
 | [terminal.md](docs/terminal.md) | Sandbox backends and `trent sandbox build` |
 | [desktop.md](docs/desktop.md) | The Tauri v2 app |
-| [security.md](docs/security.md) | Egress brokering, redaction, file permissions, approvals |
+| [security.md](docs/security.md) | Egress brokering, sandbox, file permissions, signed audit export, log and prompt redaction, approvals, policy rules |
 | [troubleshooting.md](docs/troubleshooting.md) | Failure modes we have actually hit |
 
 ## License

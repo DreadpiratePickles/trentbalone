@@ -14,16 +14,19 @@
  * which would blank a git SHA, a content hash or an encoded payload the seat asked for. Hits are
  * reported as counts per kind.
  */
+import { z } from "zod";
 import { redactText as errorLayerRedact } from "../../errors/index.js";
 import { redactionToken, type RedactedText, type RedactionHit } from "../../model-gateway/redact.js";
 import { SecurityScan } from "../../skills/SecurityScan.js";
 import { REDACTED_SECRET, secretDetectors } from "../../telemetry/redact.js";
 import type { McpToolInfo } from "./client.js";
 
-export interface McpScanFinding {
-  readonly tool: string;
-  readonly categories: string[];
-}
+/** One flagged tool and the scan categories it tripped; stored on the server's config entry as `flagged`. */
+export const McpScanFindingSchema = z.object({
+  tool: z.string().min(1),
+  categories: z.array(z.string()),
+});
+export type McpScanFinding = z.infer<typeof McpScanFindingSchema>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);

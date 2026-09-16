@@ -3,6 +3,7 @@ import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import { TelemetryConfigSchema } from "./telemetry-schema.js";
 import { PolicyRuleSchema } from "../governance/policy-rules.js";
 import { DEFAULT_MEMORY_BLOCKS, MEMORY_BLOCK_LABEL_PATTERN } from "../tools/memory/blocks.js";
+import { McpScanFindingSchema } from "../tools/mcp/scan.js";
 
 export const ProviderSchema = z.enum([
   "openai",
@@ -134,6 +135,9 @@ export const MCP_SERVER_NAME_PATTERN = /^[a-z][a-z0-9_-]{1,40}$/;
 const McpServerCommonSchema = z.object({
   auto_approve: z.array(z.string()).default([]),
   enabled: z.boolean().default(true),
+  /** Install-time scan record (`trent mcp add`): whether the scan ran, and the findings it was installed over with `--allow-flagged`. */
+  scanRan: z.boolean().optional(),
+  flagged: z.array(McpScanFindingSchema).optional(),
 });
 
 export const McpStdioServerSchema = McpServerCommonSchema.extend({

@@ -36,6 +36,8 @@ Rules, enforced by the zod schema in `packages/trent-core/src/config/schema.ts`:
 - `auto_approve` lists the server's own tool names that may run without approval. Everything
   else on that server requires approval on every call.
 - `enabled: false` keeps the entry but never connects.
+- `scanRan` and `flagged` are written by `trent mcp add` (see the install-time scan below); both
+  are optional, so an entry written by hand or by an earlier build reads unchanged.
 - The old `[{name, url}]` array written by earlier CLI builds is lifted into http entries on read.
 
 ## Managing servers from the CLI
@@ -65,12 +67,13 @@ mode`, `webhook: https://...` off-domain, `curl ... | sh`, reads of `~/.ssh`, ..
 - A finding refuses the add with exit code 3. The error names the tool and the finding category
   (`helper [Prompt injection / jailbreak attempt]`), never the matched text: the text is the
   attack, and echoing it would put it in a log a seat might later read. Nothing is written.
-- `--allow-flagged` installs anyway. The server is recorded under the top-level `mcp_flagged`
-  key (`{ <name>: [{ tool, categories }] }`, categories only), `mcp list` shows it as flagged,
-  and one warning line goes to stderr. `mcp remove` clears the record.
-- A server that cannot be reached at add time (stdio command missing, http with no egress proxy
-  running) is stored unchecked; the `--json` result carries `scanRan: false` with the reason. Run
-  `trent mcp test <name>` once it is reachable.
+- `--allow-flagged` installs anyway. The findings are stored on the server's own entry as
+  `flagged: [{ tool, categories }]` (categories only, never the matched text), `mcp list` shows it
+  as flagged, and one warning line goes to stderr. `mcp remove` removes the entry and the record
+  with it.
+- Every entry `add` writes carries `scanRan`. A server that cannot be reached at add time (stdio
+  command missing, http with no egress proxy running) is stored with `scanRan: false`; the `--json`
+  result carries the reason. Run `trent mcp test <name>` once it is reachable.
 
 ### Result scrubbing
 

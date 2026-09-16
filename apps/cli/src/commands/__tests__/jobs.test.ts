@@ -63,6 +63,16 @@ const OLDER_FAILED: SeededJob = {
   metadata: {},
 };
 
+/** A row whose metadata names the objective but no run: the retry needs neither the run table nor --objective. */
+const FAILED_WITH_OBJECTIVE: SeededJob = {
+  ...FAILED,
+  id: "job_fail_objective",
+  error: "sandbox refused the command",
+  startedAt: new Date("2026-09-13T09:00:00.000Z"),
+  completedAt: new Date("2026-09-13T09:00:10.000Z"),
+  metadata: { objective: "Re-send the launch email to the waitlist" },
+};
+
 const COMPLETED: SeededJob = {
   id: "job_ok",
   type: "orchestration_step",
@@ -87,7 +97,7 @@ interface Fakes {
   cleanup: ReturnType<typeof vi.fn>;
 }
 
-function fakes(rows: SeededJob[] = [FAILED, COMPLETED, OLDER_FAILED], outcome: OrcEvent["kind"] = "run_done"): Fakes {
+function fakes(rows: SeededJob[] = [FAILED, COMPLETED, OLDER_FAILED, FAILED_WITH_OBJECTIVE], outcome: OrcEvent["kind"] = "run_done"): Fakes {
   const f: Fakes = { overrides: {}, built: 0, runs: [], created: [], cleanup: vi.fn(async () => undefined) };
   const store = {
     listJobRuns: async (companyId: string | null, limit = 50) => rows.filter((r) => r.companyId === companyId).slice(0, limit),
@@ -126,7 +136,7 @@ describe("trent jobs failed", () => {
     const result = await runCli(["jobs", "failed", "--json"], { overrides: f.overrides });
     expect(result.exitCode).toBe(EXIT.OK);
     const data = JSON.parse(result.stdout) as FailedData;
-    expect(data.jobs.map((j) => j.id)).toEqual(["job_fail", "job_fail_older"]);
+    expect(data.jobs.map((j) => j.id)).toEqual(["job_fail", "job_fail_older", "job_fail_objective"]);
     expect(data.jobs[0]).toEqual({
       id: "job_fail",
       type: "orchestration_step",
@@ -135,7 +145,7 @@ describe("trent jobs failed", () => {
       error: "provider returned 429",
       summary: "Orchestration step failed.",
     });
-    expect(data.count).toBe(2);
+    expect(data.count).toBe(3);
     expect(f.cleanup).toHaveBeenCalledTimes(1);
   });
 
@@ -158,7 +168,7 @@ describe("trent jobs failed", () => {
     const f = fakes();
     const result = await runCli(["jobs", "failed", "--no-color"], { overrides: f.overrides });
     expect(result.exitCode).toBe(EXIT.OK);
-    expect(result.stdout).toContain("FAILED JOBS (2)");
+    expect(result.stdout).toContain("FAILED JOBS (3)");
     expect(result.stdout).toContain("job_fail");
     expect(result.stdout).toContain("provider returned 429");
     expect(result.stdout).not.toContain("job_ok");
@@ -205,6 +215,14 @@ describe("trent jobs retry", () => {
     const result = await runCli(["jobs", "retry", "job_fail_older", "--objective", "Draft the pricing page", "--json"], { overrides: f.overrides });
     expect(result.exitCode).toBe(EXIT.OK);
     expect(f.runs).toEqual([{ objective: "Draft the pricing page", trigger: "manual" }]);
+  });
+
+  it("a seeded failed row whose metadata carries the objective retries without --objective", async () => {
+    const f = fakes();
+    const result = await runCli(["jobs", "retry", "job_fail_objective", "--json"], { overrides: f.overrides });
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(f.runs).toEqual([{ objective: "Re-send the launch email to the waitlist", trigger: "manual" }]);
+    expect(JSON.parse(result.stdout)).toMatchObject({ retryOf: "job_fail_objective", objective: "Re-send the launch email to the waitlist", runId: "run_new", status: "completed" });
   });
 
   it("a retry that fails again reports the run's status and exits as a provider failure", async () => {
