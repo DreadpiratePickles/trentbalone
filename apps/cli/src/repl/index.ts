@@ -8,19 +8,18 @@
 
 import process from "node:process";
 import { ConfigManager, SessionManager } from "@trent/core";
-import { createAppDelegatedChildRunner, createOrchestrator as createRealOrchestrator, createOrchestratorDelegatePort } from "@trent/core/orchestrator/index.js";
+import type { createOrchestrator as createRealOrchestrator } from "@trent/core/orchestrator/index.js";
 import { InMemoryTraceStore } from "@trent/core/traces/index.js";
 import { autoTheme, canUseRawMode, terminalWidth, type Theme } from "../ui/index.js";
 import { playBoot, type BootStdin } from "../ui/boot.js";
 import { ReplEngine, bindApprovalAnswers, type ReplRunner } from "./engine.js";
-import { EphemeralStore } from "./ephemeral-store.js";
 import { isDegraded } from "./degraded.js";
 import { ESCAPE_TIMEOUT_MS, withKittyProtocol } from "./keys.js";
 import { withRawMode } from "./interrupt.js";
-import { toolsStatusLine, wireTools, type ToolWiring, type ToolWiringDeps } from "./tools.js";
-import { fleetMemoryToolListing, wireFleetMemory } from "./fleet-memory.js";
-import { wireImproveLoop } from "./improve-loop.js";
-import type { ReplConfig, ReplStore } from "./types.js";
+import { toolsStatusLine, type ToolWiringDeps } from "./tools.js";
+import { fleetMemoryToolListing } from "./fleet-memory.js";
+import { createHeadlessRuntime } from "../runtime/headless.js";
+import type { ReplConfig } from "./types.js";
 
 export { ReplEngine, bindApprovalAnswers } from "./engine.js";
 export { TranscriptRenderer, renderTranscript, identityForRole } from "./render.js";
@@ -79,9 +78,6 @@ export interface ReplOptions {
   deps?: ReplDeps;
 }
 
-/** The company a local session runs against when config names none. Found again by slug on restart. */
-const DEFAULT_COMPANY = { name: "Trent Local", slug: "trent-local" } as const;
-
 function processIo(): ReplIo {
   return {
     write: (text) => void process.stdout.write(text),
@@ -89,18 +85,6 @@ function processIo(): ReplIo {
     stdin: process.stdin as unknown as ReplStdin,
     exit: (code) => process.exit(code),
   };
-}
-
-/** Opens the durable store, or says plainly that this session will not persist. */
-async function openStore(databaseUrl: string): Promise<{ store: ReplStore; durable: boolean }> {
-  try {
-    const { createSqliteStore } = await import("@trent/core/store/index.js");
-    return { store: (await createSqliteStore({ url: databaseUrl })) as unknown as ReplStore, durable: true };
-  } catch {
-    // bun:sqlite is unavailable under plain Node. Never silently degrade: the caller
-    // prints a warning, and approvals will not survive this process.
-    return { store: new EphemeralStore(), durable: false };
-  }
 }
 
 export class ClassicRepl {
@@ -139,61 +123,31 @@ export class ClassicRepl {
       return;
     }
 
-    const profileDir = this.#configManager.getProfileDir();
-
-    // `delegate_task` binds to the orchestrator's own delegated child step: the port is built
-    // here so the same object is both the tool's port and the orchestrator's hook.
-    const delegate = createOrchestratorDelegatePort({ runner: createAppDelegatedChildRunner() });
-
-    // The seats' toolsets and the egress proxy, before the first turn. The workspace is where
-    // `trent` was launched, never the home directory. Everything from here on is released by
-    // `tools.cleanup()` on every exit path: stdin end, a throw, and Ctrl+C.
-    const tools: ToolWiring = await wireTools({
-      config: config as unknown as ToolWiringDeps["config"],
-      workspace: this.#deps.workspace ?? process.cwd(),
-      profileDir,
+    // The session's object graph — store, tools, fleet memory, the improve loop, the orchestrator
+    // and the company — is the same one the gateway and the schedulers run on; only the terminal
+    // is this file's own. Everything the runtime holds is released by `runtime.cleanup()` on
+    // every exit path: stdin end, a throw, and Ctrl+C.
+    const runtime = await createHeadlessRuntime({
       configManager: this.#configManager,
+      config,
+      workspace: this.#deps.workspace,
+      createOrchestrator: this.#deps.createOrchestrator,
       buildAdapters: this.#deps.buildAdapters,
       startEgress: this.#deps.startEgress,
       probeDocker: this.#deps.probeDocker,
-      delegate,
     });
+    const { tools, store, durable, fleetMemory, orchestrator, companyId } = runtime;
     writeLine(toolsStatusLine(tools, theme));
 
     let exiting: Promise<void> | undefined;
     const exit = (code: number): void => {
       // Ctrl+C is a key here (raw mode), so the proxy and the sandboxes are stopped BEFORE the
       // process goes; `process.exit` would otherwise leave the listener and the containers behind.
-      exiting ??= tools.cleanup().finally(() => io.exit(code));
+      exiting ??= runtime.cleanup().finally(() => io.exit(code));
     };
 
     try {
-      const databaseUrl = `file:${profileDir}/trent.db`;
-      const { store, durable } = await openStore(databaseUrl);
-
-      // The company memory every seat shares: MEMORY.md / USER.md under the profile, recall over
-      // this company's runs, and the shared skills index when the store carries the improve tables.
-      const fleetMemory = wireFleetMemory({ profileDir, store });
-      // The self-improvement loop: traces from every run, and promoted skills back into every seat.
-      const improve = wireImproveLoop({ store, config });
-
-      // The configured provider/model travel with the orchestrator, which maps them into the env
-      // its model resolver reads before the first apps/web import (live proof, F2).
-      const createOrchestrator = this.#deps.createOrchestrator ?? createRealOrchestrator;
-      const orchestrator = createOrchestrator({
-        ...(durable ? { databaseUrl } : {}),
-        model: { provider: config.provider, model: config.model },
-        tools: tools.adapters,
-        fleetMemory,
-        delegate,
-        ...improve,
-      });
-      // `launchOrchestration` throws "Company not found" for an id nothing created; an explicit
-      // config id is trusted, otherwise the local company is found by slug or created.
-      const configuredId = (config as { company?: { id?: string } }).company?.id;
-      const companyId = configuredId !== undefined ? String(configuredId) : await orchestrator.ensureCompany(DEFAULT_COMPANY);
-      const runner: ReplRunner = ({ objective, signal }) =>
-        orchestrator.run({ companyId, objective, trigger: "manual", signal });
+      const runner: ReplRunner = ({ objective, signal }) => runtime.run(objective, { trigger: "manual", signal });
 
       const engine = new ReplEngine({
         theme,
@@ -223,7 +177,7 @@ export class ClassicRepl {
       await this.#drive(engine);
     } finally {
       // A throw or stdin ending: release now. After Ctrl+C the exit path already owns the cleanup.
-      await (exiting ?? tools.cleanup());
+      await (exiting ?? runtime.cleanup());
     }
   }
 
