@@ -33,6 +33,7 @@ import { desktopSpec, updateSpec } from "./desktop.js";
 import { improveSpec } from "./improve.js";
 import { sandboxSpec } from "./groups/sandbox.js";
 import { cronSpec } from "./groups/cron.js";
+import { auditSpec } from "./groups/audit.js";
 
 export { CLI_VERSION } from "./registry.js";
 export type { CommandContext, CliOverrides } from "./context.js";
@@ -51,6 +52,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   configSpec,
   mcpSpec,
   cronSpec,
+  auditSpec,
   a2aSpec,
   acpSpec,
   gatewaySpec,
