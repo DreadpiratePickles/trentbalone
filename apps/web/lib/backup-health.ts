@@ -18,7 +18,7 @@ export type RestoreResult =
 type ExecFn = (cmd: string, opts: object) => Buffer;
 
 const SCRIPT = path.resolve(process.cwd(), "scripts/backup/pg-backup-health.sh");
-const RESTORE_SCRIPT = path.resolve(process.cwd(), "scripts/backup/pg-restore-test.sh");
+const RESTORE_SCRIPT = path.resolve(process.cwd(), "scripts/backup/pg-restore-drill.sh");
 
 export function checkBackupHealth(
   // Dependency-injected executor — real execSync by default, overridable in tests
@@ -58,7 +58,7 @@ export function checkBackupHealth(
 
 /**
  * Simulate a restore to a scratch database and verify row count.
- * Delegates to scripts/backup/pg-restore-test.sh which must:
+ * Delegates to scripts/backup/pg-restore-drill.sh which must:
  *   - Restore the latest backup into a temp DB
  *   - Emit JSON: { ok: bool, rowCount: number, durationMs: number, error?: string }
  *   - Exit 0 on success, non-zero on failure

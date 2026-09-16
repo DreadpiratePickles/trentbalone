@@ -1,5 +1,6 @@
 // lib/backup-health.test.ts
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import fs from "fs";
 import { checkBackupHealth, simulateRestore, type BackupHealthResult } from "./backup-health";
 
 // We pass a fake exec function directly to checkBackupHealth() instead of
@@ -53,6 +54,20 @@ describe("checkBackupHealth", () => {
 });
 
 describe("simulateRestore", () => {
+  it("invokes a restore script that exists on disk", () => {
+    const commands: string[] = [];
+    const exec = (cmd: string) => {
+      commands.push(cmd);
+      return Buffer.from(JSON.stringify({ ok: true, rowCount: 1, durationMs: 1 }));
+    };
+    simulateRestore(exec);
+    expect(commands).toHaveLength(1);
+    const match = /^bash "(.+)"$/.exec(commands[0]);
+    expect(match).not.toBeNull();
+    const scriptPath = match![1];
+    expect(fs.existsSync(scriptPath), `restore script missing on disk: ${scriptPath}`).toBe(true);
+  });
+
   it("returns ok=true and rowCount when restore script exits 0", () => {
     const payload = { ok: true, rowCount: 12345, durationMs: 4200 };
     const exec = vi.fn().mockReturnValue(Buffer.from(JSON.stringify(payload)));
