@@ -40,3 +40,12 @@ duplicating what already exists, and write that decision down.
 ## Left open
 - Bobby's call on §6 (phase 5 / invariant 1). Phases 0–4 need no new authorization.
 - Next session: start phase 0 at 0.1 (gateway agentHandler) — failing wire test first.
+
+## Approval + implementation (same day)
+- Bobby: "i approve your plan… make an implementation plan and then implement it"; phase 5 is
+  mine to decide → option B+ (5.1 as bug fix, then 5.2, both last, apps/web, own commits + tests).
+- Plan: `02_plan/output/implementation-plan-backlog.md` (T0.0–T5.2). Execution in waves of ≤6 Opus
+  agents with disjoint files; agents don't commit — orchestrator verifies gates and commits.
+- Wave 1 (parallel): T0.0 runtime extract, T0.5 voice stub, T0.6 terminal mocks, T0.7 idempotency,
+  T0.9+T0.10+T0.11 docs/web fix. T0.4 OTel starts after T0.0 (needs headless.ts) — actually the
+  config/traces/doctor parts are independent; only the wiring line waits.
