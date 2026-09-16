@@ -1,9 +1,10 @@
 /**
  * The `cron` toolset: Hermes's `cronjob_manage` over `<profile>/cron/jobs.json`.
  *
- * This adapter WRITES the schedule. Nothing here ticks: a runner that reads jobs.json and
- * launches the prompt is a separate component, and every summary says so, so a seat never
- * believes a job it created has already run.
+ * This adapter WRITES the schedule. Nothing here ticks: the runner that reads jobs.json and
+ * launches the prompt is `cron/CronRunner.ts`, started by `trent cron start`, and it holds
+ * `<profile>/cron/runner.lock` with its pid while it runs. Every mutating summary says whether
+ * such a runner is live, so a seat never believes a job it created has already run.
  *
  * Writes are temp-file-then-rename (0600), so a crash mid-write leaves the previous file whole.
  * The prompt is scanned for injection on create, update and run; a finding is `blocked`.
@@ -12,6 +13,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import process from "node:process";
 import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
 import { NODE_IO, atomicWriteFileSync, type ConfigIO } from "../../config/atomic-fs.js";
 import { fitSummary } from "../spillover.js";
@@ -34,9 +36,10 @@ const argString = (args: Record<string, unknown>, key: string): string | undefin
   return v ? v : undefined;
 };
 const JOBS_FILE_MODE = 0o600;
-const RUNNER_NOTE =
-  "Note: this tool only writes the schedule. The cron runner is out of scope for this adapter and " +
-  "does not run jobs from here; nothing has executed.";
+/** The note every mutating summary carries while no runner holds this profile's lock. */
+export const RUNNER_NOTE =
+  "Note: this tool only writes the schedule. The cron runner is not started for this profile, so " +
+  "nothing has executed; start it with `trent cron start`.";
 const ACTIONS = ["create", "list", "update", "pause", "resume", "remove", "run"] as const;
 type CronAction = (typeof ACTIONS)[number];
 const EDITABLE = ["name", "schedule", "prompt", "deliver", "skills", "enabled_toolsets", "workdir"] as const;
@@ -54,6 +57,10 @@ export interface CronJob {
   created_at: string;
   updated_at: string;
   run_requested_at?: string;
+  /** Stamped by the runner before each launch; absent until the job first runs. */
+  last_run_at?: string;
+  /** The next slot the runner will fire; computed from the schedule when absent. */
+  next_run_at?: string;
 }
 
 export const CRON_TOOL_SCHEMAS: ToolSchema[] = [
@@ -112,6 +119,50 @@ export function readCronJobs(profileDir: string): CronJob[] {
   return Array.isArray(parsed.jobs) ? parsed.jobs : [];
 }
 
+/** `<profile>/cron/runner.lock`: the pid of the runner that ticks this profile's schedule. */
+export function cronRunnerLockPath(profileDir: string): string {
+  return path.join(profileDir, "cron", "runner.lock");
+}
+
+/** What the lock file holds. */
+export interface CronRunnerLock {
+  pid: number;
+  started_at: string;
+}
+
+/** The lock's contents, or null when there is no readable lock. */
+export function readCronRunnerLock(profileDir: string, ioOverride?: Partial<ConfigIO>): CronRunnerLock | null {
+  const io: ConfigIO = { ...NODE_IO, ...(ioOverride ?? {}) };
+  const file = cronRunnerLockPath(profileDir);
+  if (!io.existsSync(file)) return null;
+  try {
+    const parsed = JSON.parse(io.readFileSync(file, "utf8")) as Partial<CronRunnerLock>;
+    return typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0
+      ? { pid: parsed.pid, started_at: typeof parsed.started_at === "string" ? parsed.started_at : "" }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when the lock names a process that is still alive (signal 0 probes without sending). */
+export function cronRunnerActive(profileDir: string, ioOverride?: Partial<ConfigIO>): boolean {
+  const lock = readCronRunnerLock(profileDir, ioOverride);
+  if (lock === null) return false;
+  try {
+    process.kill(lock.pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but belongs to another user: still a live runner.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** The trailer for a mutating summary: the honest "nothing runs" note, or that a live runner will pick it up. */
+export function runnerNote(profileDir: string): string {
+  return cronRunnerActive(profileDir) ? "The cron runner for this profile is running and will pick the change up on its next tick." : RUNNER_NOTE;
+}
+
 /** Temp-file-then-rename at 0600, so a crash mid-write leaves the previous file whole. */
 export function writeCronJobs(profileDir: string, jobs: CronJob[], ioOverride?: Partial<ConfigIO>): void {
   const io: ConfigIO = { ...NODE_IO, ...(ioOverride ?? {}) };
@@ -165,6 +216,7 @@ export function createCronAdapter(options: CronAdapterOptions): TrentToolAdapter
   const record = (action: string, status: ToolCallRecord["status"], summary: string) =>
     toRecord(CRON_ADAPTER_NAME, action, status, fitSummary(summary, options.profileDir, "cron"));
 
+  const note = (): string => runnerNote(options.profileDir);
   const load = (): CronJob[] => readCronJobs(options.profileDir);
   const save = (jobs: CronJob[]): void => writeCronJobs(options.profileDir, jobs, options.io);
 
@@ -201,7 +253,7 @@ export function createCronAdapter(options: CronAdapterOptions): TrentToolAdapter
       now(),
     );
     save([...load(), job]);
-    return record(action, "completed", `Created job id ${job.id} "${job.name}" on ${job.schedule}. ${RUNNER_NOTE}`);
+    return record(action, "completed", `Created job id ${job.id} "${job.name}" on ${job.schedule}. ${note()}`);
   }
 
   function update(action: string, args: Record<string, unknown>, job: CronJob, jobs: CronJob[]): ToolCallRecord {
@@ -228,7 +280,7 @@ export function createCronAdapter(options: CronAdapterOptions): TrentToolAdapter
     }
     next.updated_at = now();
     save(jobs.map((j) => (j.id === job.id ? next : j)));
-    return record(action, "completed", `Updated job ${job.id} (${EDITABLE.filter((k) => args[k] !== undefined).join(", ")}). ${RUNNER_NOTE}`);
+    return record(action, "completed", `Updated job ${job.id} (${EDITABLE.filter((k) => args[k] !== undefined).join(", ")}). ${note()}`);
   }
 
   function mutate(action: string, act: CronAction, args: Record<string, unknown>): ToolCallRecord {
@@ -244,7 +296,7 @@ export function createCronAdapter(options: CronAdapterOptions): TrentToolAdapter
       case "resume": {
         const enabled = act === "resume";
         save(jobs.map((j) => (j.id === job.id ? { ...j, enabled, updated_at: now() } : j)));
-        return record(action, "completed", `Job ${job.id} is now ${enabled ? "enabled" : "paused"}. ${RUNNER_NOTE}`);
+        return record(action, "completed", `Job ${job.id} is now ${enabled ? "enabled" : "paused"}. ${note()}`);
       }
       case "remove":
         save(jobs.filter((j) => j.id !== job.id));
@@ -253,7 +305,7 @@ export function createCronAdapter(options: CronAdapterOptions): TrentToolAdapter
         const blocked = injectionBlock(action, job.prompt);
         if (blocked) return blocked;
         save(jobs.map((j) => (j.id === job.id ? { ...j, run_requested_at: now() } : j)));
-        return record(action, "completed", `Recorded a run request for job ${job.id}. ${RUNNER_NOTE}`);
+        return record(action, "completed", `Recorded a run request for job ${job.id}. ${note()}`);
       }
       default:
         return record(action, "failed", `Unsupported action "${act}".`);
@@ -284,7 +336,7 @@ export function createCronAdapter(options: CronAdapterOptions): TrentToolAdapter
         if (act === "list") {
           const jobs = load();
           const body = jobs.length ? jobs.map(describe).join("\n") : "No scheduled jobs.";
-          return record(action, "completed", `${jobs.length} job(s) in ${file}:\n${body}\n${RUNNER_NOTE}`);
+          return record(action, "completed", `${jobs.length} job(s) in ${file}:\n${body}\n${note()}`);
         }
         return mutate(action, act as CronAction, args);
       } catch (err) {
@@ -292,7 +344,7 @@ export function createCronAdapter(options: CronAdapterOptions): TrentToolAdapter
       }
     },
     async dryRun(action) {
-      return record(action, "mocked", `cron dry-run: would apply "${action}" to ${file}. ${RUNNER_NOTE}`);
+      return record(action, "mocked", `cron dry-run: would apply "${action}" to ${file}. ${note()}`);
     },
     async cleanup() {},
   };

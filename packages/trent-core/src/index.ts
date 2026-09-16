@@ -14,6 +14,7 @@ export * from "./updater/index.js";
 export * from "./traces/index.js";
 export * from "./a2a/index.js";
 export * from "./governance/index.js";
+export * from "./cron/index.js";
 
 
 export * from "./errors/index.js";

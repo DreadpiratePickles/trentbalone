@@ -1,14 +1,18 @@
 /**
- * The `cron` group: `trent cron list|add|pause|resume|remove|run <id>` over the same
+ * The `cron` group: `trent cron list|add|pause|resume|remove|run|runs|start` over the same
  * `<profile>/cron/jobs.json` the `cronjob_manage` tool writes.
  *
  * Every read and write goes through the toolset's own helpers (`readCronJobs`, `writeCronJobs`,
  * `newCronJob`), so the file format has one owner. `add` runs the same cron validation and
  * injection scan as the tool; a finding names its category, never the matched text, because the
- * prompt may carry a credential. `run` is honest: no runner exists in this release, so it is a
- * `TrentError` rather than a summary that looks like execution.
+ * prompt may carry a credential. `run` and `start` execute through the headless runtime — the
+ * same object graph the REPL and the gateway run on — via `CronRunner`, and a job's `deliver`
+ * target (`slack:#channel`, `telegram:<chatId>`) goes through the gateway manager's `send`.
  */
+import process from "node:process";
+import { CronRunner, DEFAULT_TICK_MS, readCronRuns, type CronRunRow } from "@trent/core/cron/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
+import { GatewayManager } from "@trent/core/gateway/index.js";
 import {
   newCronJob,
   readCronJobs,
@@ -19,8 +23,8 @@ import {
 } from "@trent/core/tools/cron/index.js";
 import type { CommandSpec } from "../registry.js";
 import type { CommandContext } from "../context.js";
-
-export const CRON_RUNNER_MISSING = "cron runner not started; run `trent cron start`";
+import type { ReplConfig } from "../../repl/types.js";
+import { createHeadlessRuntime, type HeadlessRuntime } from "../../runtime/headless.js";
 
 function fail(operation: string, message: string, target?: string): never {
   throw new TrentError({ code: EXIT.CONFIG, operation, message, ...(target === undefined ? {} : { target }) });
@@ -72,6 +76,75 @@ function renderFlip(data: unknown, ctx: CommandContext): string[] {
   return [`  ${ctx.theme.success(d.enabled ? "enabled" : "paused")} ${ctx.theme.value(d.id)}`];
 }
 
+/** `platform:channel` — the first colon splits, so a Slack channel or an email address keeps its own colons. */
+function parseDeliverTarget(target: string): { platform: string; channelId: string } {
+  const colon = target.indexOf(":");
+  const platform = colon > 0 ? target.slice(0, colon).trim().toLowerCase() : "";
+  const channelId = colon > 0 ? target.slice(colon + 1).trim() : "";
+  if (platform === "" || channelId === "") {
+    throw new TrentError({ code: EXIT.CONFIG, operation: "cron.deliver", message: "deliver target must be <platform>:<channel>, e.g. slack:#sales or telegram:123456", target });
+  }
+  return { platform, channelId };
+}
+
+/**
+ * The runner over this profile's schedule, on the headless runtime. The gateway manager is built
+ * on first delivery only, so a job with no `deliver` target never touches the gateway config.
+ */
+async function openRunner(ctx: CommandContext): Promise<{ runner: CronRunner; runtime: HeadlessRuntime; close: () => Promise<void> }> {
+  const configManager = ctx.config();
+  const config = configManager.loadConfig();
+  const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config: config as unknown as ReplConfig });
+  const buildManager = ctx.overrides.gatewayManager ?? ((cm, options) => new GatewayManager(cm, options));
+  let manager: GatewayManager | undefined;
+  const runner = new CronRunner({
+    profileDir: configManager.getProfileDir(),
+    run: (prompt, options) => runtime.run(prompt, options),
+    now: ctx.overrides.now,
+    log: (line) => ctx.err(line),
+    deliver: async (target, text, job) => {
+      const { platform, channelId } = parseDeliverTarget(target);
+      manager ??= buildManager(configManager, {});
+      const receipt = await manager.send(platform, { channelId, text, metadata: { subject: `Trent cron: ${job.name}` } });
+      if (!receipt.sent) {
+        throw new TrentError({ code: EXIT.PROVIDER, operation: "cron.deliver", message: `queued as ${receipt.queued} but not sent; the gateway will retry when ${platform} is reachable`, target });
+      }
+    },
+  });
+  return {
+    runner,
+    runtime,
+    close: async () => {
+      runner.stop();
+      await manager?.stopAll();
+      await runtime.cleanup();
+    },
+  };
+}
+
+/**
+ * A keep-alive runner releases the lock, the manager and the runtime on SIGTERM/SIGHUP and on
+ * `process.exit` (Ctrl+C is answered by the binary, which exits at once; the `exit` hook still
+ * removes the lock). Signal handlers are installed once per process.
+ */
+function releaseOnExit(close: () => Promise<void>, stopSync: () => void): void {
+  let releasing: Promise<void> | undefined;
+  for (const signal of ["SIGTERM", "SIGHUP"] as const) {
+    process.once(signal, () => {
+      releasing ??= close().catch(() => undefined);
+      void releasing.finally(() => process.exit(EXIT.INTERRUPT));
+    });
+  }
+  process.once("exit", stopSync);
+}
+
+function runLine(row: CronRunRow, ctx: CommandContext): string {
+  const status = row.status === "completed" ? ctx.theme.success("completed") : ctx.theme.meta("failed   ");
+  const cost = row.costCents !== undefined ? ` ${ctx.theme.meta(`${row.costCents}c`)}` : "";
+  const delivery = row.deliveryError !== undefined ? ` ${ctx.theme.meta(`delivery failed: ${row.deliveryError}`)}` : "";
+  return `  ${status} ${ctx.theme.value(row.startedAt)} ${ctx.theme.meta(row.trigger.padEnd(9, " "))}${cost} ${ctx.theme.body(row.summary)}${delivery}`;
+}
+
 function jobLine(job: CronJob, ctx: CommandContext): string {
   const state = job.enabled ? ctx.theme.success("on ") : ctx.theme.meta("off");
   const deliver = job.deliver ? ` ${ctx.theme.meta(`-> ${job.deliver}`)}` : "";
@@ -93,7 +166,7 @@ export const cronSpec: CommandSpec = {
         const lines = [ctx.theme.emphasis(`SCHEDULED JOBS (${d.jobs.length})`)];
         for (const job of d.jobs) lines.push(jobLine(job, ctx));
         if (d.jobs.length === 0) lines.push(ctx.theme.meta("  none; trent cron add --schedule <cron> --prompt <text> [--deliver <target>] [--name <name>]"));
-        lines.push(ctx.theme.meta("  the schedule is written only; no runner executes it in this release"));
+        lines.push(ctx.theme.meta("  a runner executes this schedule while `trent cron start` is running"));
         return lines;
       },
     },
@@ -131,7 +204,7 @@ export const cronSpec: CommandSpec = {
           return d.problems?.length ? d.problems.map((p) => `  ${ctx.theme.meta("would refuse")}: ${p}`) : [`  ${ctx.theme.meta("would add")} ${String(d.schedule)}`];
         }
         if (!d.added) return [];
-        return [jobLine(d.added, ctx), ctx.theme.meta("  scheduled; nothing runs until a cron runner is started")];
+        return [jobLine(d.added, ctx), ctx.theme.meta("  scheduled; it runs while `trent cron start` is up, or now with `trent cron run <id>`")];
       },
     },
     {
@@ -165,17 +238,87 @@ export const cronSpec: CommandSpec = {
     },
     {
       name: "run <id>",
-      description: "Run a scheduled job now (requires the cron runner)",
-      run(ctx, _opts, args) {
+      description: "Run a scheduled job now on the headless runtime; the summary is recorded and delivered",
+      async run(ctx, _opts, args) {
         const id = String(args[0]);
-        // `--dry-run` reports instead of throwing, and the honest report is that the run would be refused.
-        if (ctx.dryRun) return { data: { dryRun: true, command: "cron run", id, wouldRefuse: CRON_RUNNER_MISSING } };
+        if (ctx.dryRun) return { data: { dryRun: true, command: "cron run", id } };
         findJob(ctx, "cron.run", id);
-        throw new TrentError({ code: EXIT.CONFIG, operation: "cron.run", message: CRON_RUNNER_MISSING, target: id });
+        const { runner, close } = await openRunner(ctx);
+        try {
+          const row = await runner.runNow(id);
+          if (row.status === "failed") {
+            throw new TrentError({ code: EXIT.PROVIDER, operation: "cron.run", message: row.summary, target: id });
+          }
+          return { data: { id, run: row } };
+        } finally {
+          await close();
+        }
       },
       render(data, ctx) {
-        const d = data as { id: string; wouldRefuse: string };
-        return [`  ${ctx.theme.meta("would refuse")} ${ctx.theme.value(d.id)}: ${d.wouldRefuse}`];
+        const d = data as { id: string; run?: CronRunRow; dryRun?: boolean };
+        if (d.dryRun === true) return [`  ${ctx.theme.meta("would run")} ${ctx.theme.value(d.id)}`];
+        return d.run ? [runLine(d.run, ctx)] : [];
+      },
+    },
+    {
+      name: "runs <id>",
+      description: "Show a job's run history from <profile>/cron/runs/<id>.jsonl",
+      options: [{ flags: "--last <n>", description: "Only the newest N rows", defaultValue: "50" }],
+      run(ctx, opts, args) {
+        const id = String(args[0]);
+        const last = Number.parseInt(String(opts.last ?? "50"), 10);
+        if (!Number.isInteger(last) || last < 1) fail("cron.runs", "--last must be a positive integer", String(opts.last));
+        if (ctx.dryRun) return { data: { dryRun: true, command: "cron runs", id, last } };
+        findJob(ctx, "cron.runs", id);
+        const rows = readCronRuns(profileDir(ctx), id);
+        return { data: { id, runs: rows.slice(Math.max(0, rows.length - last)) } };
+      },
+      render(data, ctx) {
+        const d = data as { id: string; runs?: CronRunRow[]; dryRun?: boolean };
+        if (d.dryRun === true) return [`  ${ctx.theme.meta("would list runs of")} ${ctx.theme.value(d.id)}`];
+        const rows = d.runs ?? [];
+        const lines = [ctx.theme.emphasis(`RUNS OF ${d.id} (${rows.length})`)];
+        for (const row of rows) lines.push(runLine(row, ctx));
+        if (rows.length === 0) lines.push(ctx.theme.meta("  none yet; trent cron run <id> runs it now"));
+        return lines;
+      },
+    },
+    {
+      name: "start",
+      description: "Run the scheduler: tick <profile>/cron/jobs.json every 30s and launch due jobs",
+      options: [{ flags: "--once", description: "Tick once and exit (for an external scheduler such as launchd or system cron)" }],
+      async run(ctx, opts) {
+        const jobs = readCronJobs(profileDir(ctx)).filter((j) => j.enabled).length;
+        if (ctx.dryRun) return { data: { dryRun: true, command: "cron start", jobs, intervalMs: DEFAULT_TICK_MS } };
+        const { runner, close } = await openRunner(ctx);
+        if (opts.once === true) {
+          try {
+            const { launched } = await runner.tick();
+            return { data: { once: true, launched, jobs } };
+          } finally {
+            await close();
+          }
+        }
+        try {
+          runner.start();
+        } catch (error) {
+          await close();
+          throw error;
+        }
+        releaseOnExit(close, () => runner.stop());
+        return { data: { started: true, pid: process.pid, intervalMs: DEFAULT_TICK_MS, jobs }, keepAlive: true };
+      },
+      render(data, ctx) {
+        const d = data as { dryRun?: boolean; once?: boolean; launched?: string[]; started?: boolean; jobs: number; intervalMs?: number };
+        if (d.dryRun === true) return [`  ${ctx.theme.meta("would start the runner over")} ${ctx.theme.value(`${d.jobs} enabled job(s)`)}`];
+        if (d.once === true) {
+          const launched = d.launched ?? [];
+          return [`  ${ctx.theme.success("ticked")} ${ctx.theme.value(launched.length > 0 ? launched.join(", ") : "nothing due")}`];
+        }
+        return [
+          `  ${ctx.theme.success("runner started")} ${ctx.theme.meta(`pid ${process.pid}, every ${Math.round((d.intervalMs ?? DEFAULT_TICK_MS) / 1000)}s over ${d.jobs} enabled job(s)`)}`,
+          ctx.theme.meta("  Ctrl+C stops it; run history is under <profile>/cron/runs/"),
+        ];
       },
     },
   ],

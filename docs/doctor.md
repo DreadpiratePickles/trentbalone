@@ -190,7 +190,6 @@ Lists the checks that would run and performs no probes, no network calls and no 
 
 - `--mode connected` requires a running web server to point `--health-url` at. The server is a later
   milestone, so the connected path is exercised by tests and not by a live deployment.
-- `trent cron list|add|pause|resume|remove` is registered and edits the same `<profile>/cron/jobs.json`
-  the `cronjob_manage` tool writes, but nothing executes that schedule yet: `trent cron run <id>`
-  exits 3 with "cron runner not started; run `trent cron start`" until the runner lands, and there
-  is no `start` subcommand until then.
+- `trent cron start` is the only scheduler: nothing ticks `<profile>/cron/jobs.json` while it is
+  not running, and `doctor` does not yet report whether a runner holds `<profile>/cron/runner.lock`.
+  `trent cron run <id>` executes a job now regardless. See [cron.md](cron.md).
