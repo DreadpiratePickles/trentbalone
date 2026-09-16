@@ -332,6 +332,10 @@ export type Task = {
   dueDate?: string;
   approvalId?: string;
   recurringTemplateId?: string;
+  /** The Goal this task advances, when it was planned by a goal round. */
+  goalId?: string;
+  /** The Cycle (round) that ran this task. */
+  cycleId?: string;
   costCents: number;
   createdAt: string;
   updatedAt: string;
@@ -346,6 +350,8 @@ export type Cycle = {
   phases: string[];
   summary: string;
   degraded?: boolean;
+  /** The Goal this cycle is a round of, when started by the goal loop. */
+  goalId?: string;
   startedAt: string;
   completedAt?: string;
 };

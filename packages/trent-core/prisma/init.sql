@@ -95,10 +95,14 @@ CREATE TABLE "Task" (
     "dueDate" DATETIME,
     "approvalId" TEXT,
     "recurringTemplateId" TEXT,
+    "goalId" TEXT,
+    "cycleId" TEXT,
     "costCents" INTEGER NOT NULL DEFAULT 0,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "Task_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    CONSTRAINT "Task_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "Task_goalId_fkey" FOREIGN KEY ("goalId") REFERENCES "Goal" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Task_cycleId_fkey" FOREIGN KEY ("cycleId") REFERENCES "Cycle" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -128,9 +132,11 @@ CREATE TABLE "Cycle" (
     "phases" JSONB NOT NULL,
     "summary" TEXT NOT NULL,
     "degraded" BOOLEAN NOT NULL DEFAULT false,
+    "goalId" TEXT,
     "startedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "completedAt" DATETIME,
-    CONSTRAINT "Cycle_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    CONSTRAINT "Cycle_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "Cycle_goalId_fkey" FOREIGN KEY ("goalId") REFERENCES "Goal" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -1062,6 +1068,14 @@ CREATE TABLE "CompanyPlaybookEntry" (
     CONSTRAINT "CompanyPlaybookEntry_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+-- CreateTable
+CREATE TABLE "_TaskBlocks" (
+    "A" TEXT NOT NULL,
+    "B" TEXT NOT NULL,
+    CONSTRAINT "_TaskBlocks_A_fkey" FOREIGN KEY ("A") REFERENCES "Task" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "_TaskBlocks_B_fkey" FOREIGN KEY ("B") REFERENCES "Task" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
 
@@ -1085,6 +1099,15 @@ CREATE INDEX "AgentEntitlement_productId_idx" ON "AgentEntitlement"("productId")
 
 -- CreateIndex
 CREATE INDEX "AgentEntitlement_profileId_idx" ON "AgentEntitlement"("profileId");
+
+-- CreateIndex
+CREATE INDEX "Task_goalId_idx" ON "Task"("goalId");
+
+-- CreateIndex
+CREATE INDEX "Task_cycleId_idx" ON "Task"("cycleId");
+
+-- CreateIndex
+CREATE INDEX "Cycle_goalId_idx" ON "Cycle"("goalId");
 
 -- CreateIndex
 CREATE INDEX "Goal_companyId_createdAt_idx" ON "Goal"("companyId", "createdAt");
@@ -1364,4 +1387,10 @@ CREATE INDEX "SelfImprovementIteration_companyId_createdAt_idx" ON "SelfImprovem
 
 -- CreateIndex
 CREATE INDEX "CompanyPlaybookEntry_companyId_createdAt_idx" ON "CompanyPlaybookEntry"("companyId", "createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "_TaskBlocks_AB_unique" ON "_TaskBlocks"("A", "B");
+
+-- CreateIndex
+CREATE INDEX "_TaskBlocks_B_index" ON "_TaskBlocks"("B");
 

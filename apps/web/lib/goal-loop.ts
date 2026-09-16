@@ -5,9 +5,9 @@
  *   PLAN     — planner model sees the goal + criteria ledger (unmet first) + the
  *              OperatingStateBundle (§1) + recalled memory, and emits typed,
  *              effort-scaled tasks with dependsOn + outputContractId + boundaries.
- *   EXECUTE  — DAG pool (concurrency-capped) runs each task through the same
- *              runtime cycles use; every step MUST yield a persisted typed
- *              artifact (artifact-first — no prose passes).
+ *   EXECUTE  — the round is a real Cycle, each planned task a real Task, both linked
+ *              to the goal (goal-round-records.ts). A DAG pool runs each task through
+ *              the runtime; every step MUST yield a persisted typed artifact.
  *   CRITIC   — per artifact, evidence-based (artifact body + targeted criterion).
  *   REVIEW   — CEO maps accepted artifacts → criteria, flips criteria to met ONLY
  *              with evidenceArtifactIds, writes the round summary + criteriaDelta,
@@ -45,7 +45,8 @@ import {
   type SuccessCriterion,
   type CriteriaDelta,
 } from "@/lib/goal-types";
-import type { AgentRole, ArtifactType, Company } from "@/lib/types";
+import type { AgentRole, ArtifactType, Company, Task } from "@/lib/types";
+import { closeRoundCycle, createRoundTasks, openRoundCycle } from "@/lib/goal-round-records";
 import { deriveSkillDraftsFromGoalRound } from "@/lib/self-improvement/goal-reflection";
 
 const ROLE_ARTIFACT_TYPE: Record<AgentRole, ArtifactType> = {
@@ -167,6 +168,7 @@ export async function planGoalRound(
 
 type ExecutedStep = {
   task: GoalTask;
+  taskId: string;
   output: string;
   artifactId: string | null;
   costCents: number;
@@ -210,6 +212,8 @@ async function executeRoundDag(
   plan: GoalRoundPlan,
   roundN: number,
   runId: string,
+  cycleId: string,
+  taskRows: Map<string, Task>,
 ): Promise<ExecutedStep[]> {
   const concurrency = getOrcMaxConcurrency();
   const byId = new Map(plan.tasks.map((t) => [t.id, t]));
@@ -230,6 +234,8 @@ async function executeRoundDag(
     const results = await Promise.all(
       batch.map(async (id) => {
         const task = byId.get(id)!;
+        const taskId = taskRows.get(id)?.id ?? id;
+        await store.updateTask(taskId, { status: "running" });
         const step: RuntimeStep = {
           id: task.id,
           title: task.objective.slice(0, 90),
@@ -256,7 +262,7 @@ async function executeRoundDag(
             step,
             company,
             previousOutputs,
-            cycleId: goal.id,
+            cycleId,
             objective: goal.objective,
           });
           output = exec.output ?? "";
@@ -267,7 +273,8 @@ async function executeRoundDag(
           ok = false;
         }
         const artifactId = ok ? await persistArtifactForStep(company, goal, task, output, roundN) : null;
-        const executed: ExecutedStep = { task, output, artifactId, costCents, ok: ok && Boolean(artifactId) };
+        const executed: ExecutedStep = { task, taskId, output, artifactId, costCents, ok: ok && Boolean(artifactId) };
+        await store.updateTask(taskId, { status: executed.ok ? "completed" : "failed", costCents });
         emitJobEvent({
           jobRunId: runId,
           companyId: company.id,
@@ -406,7 +413,9 @@ export async function runGoalRound(goalId: string): Promise<GoalRoundResult> {
   });
 
   // EXECUTE
-  const executed = await executeRoundDag(company, goal, plan, roundN, runId);
+  const cycle = await openRoundCycle(company, goal, roundN);
+  const taskRows = await createRoundTasks(company, goal, plan, cycle.id);
+  const executed = await executeRoundDag(company, goal, plan, roundN, runId, cycle.id, taskRows);
 
   // CRITIC (per artifact)
   const critiques: Record<string, { verdict: string; reason: string }> = {};
@@ -443,6 +452,7 @@ export async function runGoalRound(goalId: string): Promise<GoalRoundResult> {
   const nextStatus: Goal["status"] = allMet ? "completed" : "awaiting_review";
 
   await updateGoal(goalId, { successCriteria: nextCriteria, status: nextStatus });
+  await closeRoundCycle(cycle.id, executed.some((e) => e.ok), review.summary);
   await addGoalRound(goalId, {
     n: roundN,
     runId,

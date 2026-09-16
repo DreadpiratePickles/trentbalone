@@ -175,11 +175,21 @@ model Task {
   dueDate       DateTime?
   approvalId    String?
   recurringTemplateId String?
+  goalId        String?
+  cycleId       String?
   costCents     Int         @default(0)
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  goal          Goal?       @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  cycle         Cycle?      @relation(fields: [cycleId], references: [id], onDelete: SetNull)
   executions    AgentExecution[]
+  /// Tasks that must finish before this one can start (self many-to-many).
+  blockedBy     Task[]      @relation("TaskBlocks")
+  blocks        Task[]      @relation("TaskBlocks")
+
+  @@index([goalId])
+  @@index([cycleId])
 }
 
 model RecurringTaskTemplate {
@@ -207,10 +217,15 @@ model Cycle {
   phases      Json
   summary     String
   degraded    Boolean     @default(false)
+  goalId      String?
   startedAt   DateTime    @default(now())
   completedAt DateTime?
   company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  goal        Goal?       @relation(fields: [goalId], references: [id], onDelete: SetNull)
   executions  AgentExecution[]
+  tasks       Task[]
+
+  @@index([goalId])
 }
 
 /// §2 Goal Loop — a persistent goal with measurable success criteria. The Goal
@@ -230,6 +245,8 @@ model Goal {
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
   company         Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  tasks           Task[]
+  cycles          Cycle[]
 
   @@index([companyId, createdAt])
   @@index([companyId, status])

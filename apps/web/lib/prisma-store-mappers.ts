@@ -152,6 +152,8 @@ export function mapTask(row: PrismaTask): Task {
     dueDate: toIso(row.dueDate),
     approvalId: row.approvalId ?? undefined,
     recurringTemplateId: row.recurringTemplateId ?? undefined,
+    goalId: row.goalId ?? undefined,
+    cycleId: row.cycleId ?? undefined,
     costCents: row.costCents,
     createdAt: toIsoReq(row.createdAt),
     updatedAt: toIsoReq(row.updatedAt)
@@ -184,6 +186,7 @@ export function mapCycle(row: PrismaCycle): Cycle {
     status: row.status as Cycle["status"],
     phases: row.phases as string[],
     summary: row.summary,
+    goalId: row.goalId ?? undefined,
     startedAt: toIsoReq(row.startedAt),
     completedAt: toIso(row.completedAt)
   };

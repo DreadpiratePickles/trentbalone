@@ -560,6 +560,8 @@ export const prismaStoreBase = {
           dueDate: input.dueDate ? new Date(input.dueDate) : null,
           approvalId: input.approvalId ?? null,
           recurringTemplateId: input.recurringTemplateId ?? null,
+          goalId: input.goalId ?? null,
+          cycleId: input.cycleId ?? null,
           costCents: input.costCents ?? 25,
           createdAt: timestamp,
           updatedAt: timestamp
@@ -761,6 +763,8 @@ export const prismaStoreBase = {
     if (patch.dueDate !== undefined) data.dueDate = patch.dueDate ? new Date(patch.dueDate) : null;
     if (patch.approvalId !== undefined) data.approvalId = patch.approvalId ?? null;
     if (patch.recurringTemplateId !== undefined) data.recurringTemplateId = patch.recurringTemplateId ?? null;
+    if (patch.goalId !== undefined) data.goalId = patch.goalId ?? null;
+    if (patch.cycleId !== undefined) data.cycleId = patch.cycleId ?? null;
     if (patch.costCents !== undefined) data.costCents = patch.costCents;
 
     const row = await db.$transaction(async (tx) => {
@@ -818,6 +822,7 @@ export const prismaStoreBase = {
         status: cycle.status,
         phases: cycle.phases,
         summary: cycle.summary,
+        goalId: cycle.goalId ?? null,
         startedAt: new Date(cycle.startedAt),
         completedAt: cycle.completedAt ? new Date(cycle.completedAt) : null
       }
@@ -832,6 +837,7 @@ export const prismaStoreBase = {
     if (patch.phases !== undefined) data.phases = patch.phases;
     if (patch.summary !== undefined) data.summary = patch.summary;
     if (patch.degraded !== undefined) data.degraded = patch.degraded;
+    if (patch.goalId !== undefined) data.goalId = patch.goalId ?? null;
     if (patch.completedAt !== undefined) data.completedAt = patch.completedAt ? new Date(patch.completedAt) : null;
 
     await db.cycle.update({

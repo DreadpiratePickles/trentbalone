@@ -21,6 +21,7 @@ import {
   progressLogEntrySchema,
   successCriterionSchema,
 } from "@/lib/goal-types";
+import type { TaskStatus } from "@/lib/types";
 
 type GoalRow = {
   id: string;
@@ -135,6 +136,42 @@ export async function addGoalRound(goalId: string, round: GoalRound): Promise<vo
       costCents: goal.costCents + round.costCents,
     },
   });
+}
+
+export type GoalProgress = {
+  /** "tasks" when at least one Task is linked to the goal, else the criteria ledger. */
+  source: "tasks" | "criteria";
+  done: number;
+  total: number;
+  /** Integer 0..100. */
+  percent: number;
+};
+
+/**
+ * Progress roll-up. When the goal loop has linked Tasks to the goal, progress is
+ * completed/total over those tasks; a goal nobody has planned yet falls back to
+ * met/total over its success criteria, which is how the cockpit counted before
+ * tasks were linked.
+ */
+export function computeGoalProgress(
+  goal: Pick<Goal, "successCriteria">,
+  tasks: ReadonlyArray<{ status: TaskStatus | string }>,
+): GoalProgress {
+  const ratio = (done: number, total: number): number => (total === 0 ? 0 : Math.round((done / total) * 100));
+  if (tasks.length > 0) {
+    const done = tasks.filter((t) => t.status === "completed").length;
+    return { source: "tasks", done, total: tasks.length, percent: ratio(done, tasks.length) };
+  }
+  const done = goal.successCriteria.filter((c) => c.status === "met").length;
+  const total = goal.successCriteria.length;
+  return { source: "criteria", done, total, percent: ratio(done, total) };
+}
+
+export async function getGoalProgress(goalId: string): Promise<GoalProgress | null> {
+  const goal = await getGoal(goalId);
+  if (!goal) return null;
+  const tasks = await db.task.findMany({ where: { goalId }, select: { status: true } });
+  return computeGoalProgress(goal, tasks);
 }
 
 export async function deleteGoal(goalId: string): Promise<void> {
