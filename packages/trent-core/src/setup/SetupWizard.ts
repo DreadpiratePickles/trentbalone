@@ -5,6 +5,7 @@ import { FullSetup } from "./FullSetup.js";
 import { QuickSetup } from "./QuickSetup.js";
 import { InquirerPrompts } from "./InquirerPrompts.js";
 import { ConsoleOutput } from "./ports.js";
+import { writeDefaultHeartbeatChecklist } from "../heartbeat/checklist.js";
 import type { SetupContext, SetupOptions, SetupResult } from "./types.js";
 
 /**
@@ -29,6 +30,8 @@ export class SetupWizard {
 
   async run(options: SetupOptions): Promise<SetupResult> {
     this.ctx.configManager.ensureDirs();
+    // The heartbeat checklist is the founder's file: written once, never rewritten by setup.
+    writeDefaultHeartbeatChecklist(this.ctx.configManager.getProfileDir());
 
     switch (options.mode) {
       case "quick":

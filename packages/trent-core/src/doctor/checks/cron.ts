@@ -1,11 +1,12 @@
 import fs from "node:fs";
-import path from "node:path";
 import type { CheckResult, DoctorCheck, DoctorContext } from "../types.js";
+import { cronJobsPath, cronRunnerActive, cronRunnerLockPath, readCronRunnerLock } from "../../tools/cron/index.js";
 
 /**
- * This check used to claim "Scheduler ready, no stuck background jobs" unconditionally. Nothing in
- * `lib/` provides a scheduler outside the eval harness, so the only honest thing to report is what
- * the on-disk scheduler state actually says — and to say plainly when there is none.
+ * This check used to claim "Scheduler ready, no stuck background jobs" unconditionally, and then
+ * read a `<profile>/cron.json` that nothing writes. The schedule the `cronjob_manage` tool and
+ * the CLI's cron group share is `<profile>/cron/jobs.json`, and the process ticking it holds
+ * `<profile>/cron/runner.lock`; the check reports what those two files actually say.
  */
 
 const CATEGORY = "Cron";
@@ -17,7 +18,7 @@ export const OVERDUE_TOLERANCE_MS = 6 * 3600_000;
 interface CronJob {
   id?: string;
   schedule?: string;
-  next_run?: string;
+  next_run_at?: string;
   enabled?: boolean;
 }
 
@@ -25,8 +26,13 @@ function result(partial: Omit<CheckResult, "category" | "name">): CheckResult {
   return { category: CATEGORY, name: NAME, ...partial };
 }
 
+function profileDir(ctx: DoctorContext): string {
+  return ctx.configManager.getProfileDir();
+}
+
+/** `<profile>/cron/jobs.json`: the one schedule file both writers share. */
 export function cronStatePath(ctx: DoctorContext): string {
-  return path.join(path.dirname(ctx.configManager.getConfigPath()), "cron.json");
+  return cronJobsPath(profileDir(ctx));
 }
 
 export const checkCron: DoctorCheck = {
@@ -35,12 +41,13 @@ export const checkCron: DoctorCheck = {
   category: CATEGORY,
   async run(ctx: DoctorContext): Promise<CheckResult> {
     const statePath = cronStatePath(ctx);
+    const lockPath = cronRunnerLockPath(profileDir(ctx));
 
     if (!fs.existsSync(statePath)) {
       return result({
         status: "warn",
-        message: `No scheduler state at ${statePath}; nothing is running scheduled jobs on this machine.`,
-        fixHint: `No CLI command manages the scheduler yet. Ignore this if you do not use scheduled jobs; otherwise create ${statePath} with a top-level \`jobs\` array.`,
+        message: `No scheduled jobs: ${statePath} does not exist, so nothing is scheduled on this machine.`,
+        fixHint: "Ignore this if you do not use scheduled jobs; otherwise add one with the CLI's `cron add --schedule <cron> --prompt <text>` or ask a seat to schedule it.",
         details: { statePath, jobs: 0 },
       });
     }
@@ -64,42 +71,42 @@ export const checkCron: DoctorCheck = {
       return result({
         status: "warn",
         message: `Scheduler state exists at ${statePath} but no job is enabled.`,
-        fixHint: `Set \`enabled: true\` on a job in ${statePath}; no CLI command edits the schedule yet.`,
+        fixHint: "Resume a paused job with the CLI's `cron resume <id>`, or add one with `cron add`.",
         details: { statePath, jobs: 0 },
       });
     }
 
     const now = Date.now();
     const overdue = enabled.filter((job) => {
-      const next = job.next_run ? Date.parse(job.next_run) : Number.NaN;
+      const next = job.next_run_at ? Date.parse(job.next_run_at) : Number.NaN;
       return Number.isFinite(next) && now - next > OVERDUE_TOLERANCE_MS;
     });
-    const undated = enabled.filter((job) => !job.next_run || !Number.isFinite(Date.parse(job.next_run)));
+    const lock = readCronRunnerLock(profileDir(ctx));
+    const runner = lock !== null && cronRunnerActive(profileDir(ctx)) ? lock.pid : "none";
 
     if (overdue.length > 0) {
       const names = overdue.map((job) => job.id ?? "unnamed").join(", ");
       return result({
         status: "warn",
         message: `${overdue.length} scheduled job(s) are overdue by more than 6 hours: ${names}. The scheduler is not draining.`,
-        fixHint: `Nothing in the CLI runs the scheduler; start whatever process drains ${statePath}, then re-run \`trent doctor\`.`,
-        details: { statePath, jobs: enabled.length, overdue: overdue.map((job) => job.id) },
+        fixHint: runner === "none" ? "No runner holds the lock: start one with the CLI's `cron start`, then re-run `trent doctor`." : `A runner (pid ${runner}) holds ${lockPath} but is not draining; check its log and restart it.`,
+        details: { statePath, lockPath, jobs: enabled.length, overdue: overdue.map((job) => job.id), runner },
       });
     }
 
-    if (undated.length > 0) {
-      const names = undated.map((job) => job.id ?? "unnamed").join(", ");
+    if (runner === "none") {
       return result({
         status: "warn",
-        message: `${undated.length} scheduled job(s) have no valid next run time: ${names}.`,
-        fixHint: "Re-register the job so the scheduler can compute its next run.",
-        details: { statePath, jobs: enabled.length, undated: undated.map((job) => job.id) },
+        message: `${enabled.length} scheduled job(s) registered but no runner holds ${lockPath}; nothing will fire until one starts.`,
+        fixHint: "Start the scheduler with the CLI's `cron start` (or `cron start --once` from launchd or system cron).",
+        details: { statePath, lockPath, jobs: enabled.length, runner },
       });
     }
 
     return result({
       status: "ok",
-      message: `${enabled.length} scheduled job(s) registered, none overdue.`,
-      details: { statePath, jobs: enabled.length },
+      message: `${enabled.length} scheduled job(s) registered, none overdue; runner pid ${runner} holds the lock.`,
+      details: { statePath, lockPath, jobs: enabled.length, runner },
     });
   },
 };

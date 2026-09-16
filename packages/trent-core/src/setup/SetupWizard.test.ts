@@ -8,6 +8,7 @@ import { SetupWizard } from "./SetupWizard.js";
 import { ScriptedPrompts } from "./ScriptedPrompts.js";
 import { CollectingOutput } from "./ports.js";
 import { PROVIDER_ENV_VARS } from "./detect.js";
+import { DEFAULT_HEARTBEAT_MD, HEARTBEAT_MD } from "../heartbeat/checklist.js";
 
 const EMOJI = /\p{Extended_Pictographic}/u;
 
@@ -113,6 +114,24 @@ describe("SetupWizard", () => {
       expect(res.success).toBe(true);
       expect(ran).toBe(true);
       expect(output.lines.join("\n")).toContain("12 checks passed");
+    });
+
+    it("writes the default HEARTBEAT.md into the profile once and never overwrites an edited one", async () => {
+      const { wizard } = wizardWith({ confirm: true }, { OPENAI_API_KEY: "sk-x" });
+      await wizard.run({ mode: "quick" });
+      const file = path.join(configManager.getProfileDir(), HEARTBEAT_MD);
+      expect(fs.existsSync(file)).toBe(true);
+      const written = fs.readFileSync(file, "utf8");
+      expect(written).toBe(DEFAULT_HEARTBEAT_MD);
+      expect(written).toMatch(/approvals/i);
+      expect(written).toMatch(/80 percent/);
+      expect(written).not.toMatch(EMOJI);
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+
+      fs.writeFileSync(file, "# mine\n");
+      const again = wizardWith({ confirm: true }, { OPENAI_API_KEY: "sk-x" });
+      await again.wizard.run({ mode: "quick" });
+      expect(fs.readFileSync(file, "utf8")).toBe("# mine\n");
     });
 
     it("writes no config when the user declines the confirmation", async () => {

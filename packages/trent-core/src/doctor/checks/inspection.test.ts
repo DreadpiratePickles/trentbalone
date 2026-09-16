@@ -8,7 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { ConfigManager } from "../../config/ConfigManager.js";
 import { checkMcp } from "./mcp.js";
-import { checkCron } from "./cron.js";
+import { checkCron, cronStatePath } from "./cron.js";
+import { cronJobsPath, cronRunnerLockPath } from "../../tools/cron/index.js";
 import { checkWorkbench } from "./workbench.js";
 import { SANDBOX_IMAGE } from "../../terminal/sandbox-image.js";
 import type { DoctorContext } from "../types.js";
@@ -81,40 +82,68 @@ describe("mcp check", () => {
 });
 
 describe("cron check", () => {
+  const jobsFile = (): string => cronJobsPath(configManager.getProfileDir());
+  const writeJobs = (jobs: unknown[]): void => {
+    fs.mkdirSync(path.dirname(jobsFile()), { recursive: true });
+    fs.writeFileSync(jobsFile(), JSON.stringify({ version: 1, jobs }));
+  };
+
+  it("reads the schedule the cron tool and `trent cron` write: <profile>/cron/jobs.json", async () => {
+    expect(cronStatePath(context())).toBe(jobsFile());
+    expect(jobsFile()).toBe(path.join(configManager.getProfileDir(), "cron", "jobs.json"));
+  });
+
   it("warns with a reason when no scheduler state exists", async () => {
     const result = await checkCron.run(context());
     expect(result.status).toBe("warn");
-    expect(result.message.toLowerCase()).toContain("no scheduler state");
+    expect(result.message.toLowerCase()).toContain("no scheduled jobs");
+    expect(result.message).toContain(jobsFile());
     expect(result.fixHint).toBeTruthy();
   });
 
   it("fails when the scheduler state file is unparseable", async () => {
-    fs.writeFileSync(path.join(configManager.getProfileDir(), "cron.json"), "{not json");
+    fs.mkdirSync(path.dirname(jobsFile()), { recursive: true });
+    fs.writeFileSync(jobsFile(), "{not json");
     const result = await checkCron.run(context());
     expect(result.status).toBe("fail");
     expect(result.fixHint).toBeTruthy();
   });
 
-  it("warns and names a job whose next run is long overdue", async () => {
+  it("warns and names a job whose next_run_at is long overdue", async () => {
     const overdue = new Date(Date.now() - 48 * 3600_000).toISOString();
-    fs.writeFileSync(
-      path.join(configManager.getProfileDir(), "cron.json"),
-      JSON.stringify({ jobs: [{ id: "nightly-digest", schedule: "0 3 * * *", next_run: overdue }] }),
-    );
+    writeJobs([{ id: "job_nightly", schedule: "0 3 * * *", enabled: true, next_run_at: overdue }]);
     const result = await checkCron.run(context());
     expect(result.status).toBe("warn");
-    expect(result.message).toContain("nightly-digest");
+    expect(result.message).toContain("job_nightly");
   });
 
-  it("passes only when real jobs are scheduled and on time", async () => {
+  it("warns when jobs are enabled but no runner holds <profile>/cron/runner.lock", async () => {
     const future = new Date(Date.now() + 3600_000).toISOString();
-    fs.writeFileSync(
-      path.join(configManager.getProfileDir(), "cron.json"),
-      JSON.stringify({ jobs: [{ id: "nightly-digest", schedule: "0 3 * * *", next_run: future }] }),
-    );
+    writeJobs([{ id: "job_nightly", schedule: "0 3 * * *", enabled: true, next_run_at: future }]);
+    const result = await checkCron.run(context());
+    expect(result.status).toBe("warn");
+    expect(result.message).toContain("runner");
+    expect(result.details?.runner).toBe("none");
+    expect(result.details?.lockPath).toBe(cronRunnerLockPath(configManager.getProfileDir()));
+  });
+
+  it("passes only when real jobs are scheduled, on time, and a live runner holds the lock", async () => {
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    writeJobs([{ id: "job_nightly", schedule: "0 3 * * *", enabled: true, next_run_at: future }]);
+    fs.writeFileSync(cronRunnerLockPath(configManager.getProfileDir()), JSON.stringify({ pid: process.pid, started_at: new Date().toISOString() }));
     const result = await checkCron.run(context());
     expect(result.status).toBe("ok");
     expect(result.details?.jobs).toBe(1);
+    expect(result.details?.runner).toBe(process.pid);
+  });
+
+  it("a lock left by a dead process counts as no runner", async () => {
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    writeJobs([{ id: "job_nightly", schedule: "0 3 * * *", enabled: true, next_run_at: future }]);
+    fs.writeFileSync(cronRunnerLockPath(configManager.getProfileDir()), JSON.stringify({ pid: 2_147_483_646, started_at: new Date().toISOString() }));
+    const result = await checkCron.run(context());
+    expect(result.status).toBe("warn");
+    expect(result.details?.runner).toBe("none");
   });
 });
 

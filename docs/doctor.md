@@ -37,8 +37,8 @@ TRENT DOCTOR
   ✓ Network & Cloud Connectivity  Network connectivity verified; API endpoints reachable.
   ◆ Database & State Store    No database file at /Users/you/.trent/trent.db; nothing has been
                               persisted yet.
-  ◆ Autonomous Scheduler      No scheduler state at /Users/you/.trent/cron.json; nothing is
-                              running scheduled jobs on this machine.
+  ◆ Autonomous Scheduler      No scheduled jobs: /Users/you/.trent/cron/jobs.json does not exist,
+                              so nothing is scheduled on this machine.
   ✓ Disk & Logs               Log storage healthy (0.0 MB across 0 files).
   ✓ System Binaries           All core binaries present (git, node, npm). Docker sandbox: available.
   ◆ Sandbox & Workbench       Docker daemon is running (server 29.5.3) but the sandbox image
@@ -66,7 +66,7 @@ Glyphs carry the status when colour is off: `✓` ok, `◆` warn, `✗` fail, `�
 | 6 | MCP Connectors | Reads the declared servers and contacts each one. Skips when none are declared | no |
 | 7 | Network & Cloud Connectivity | DNS lookup of the provider API hosts, with a 3-second race | no |
 | 8 | Database & State Store | Standalone: opens the SQLite file and queries SQLite itself. Connected: asks the health endpoint, and distinguishes a real database from the in-memory fallback that answers "ok" while storing nothing | yes |
-| 9 | Autonomous Scheduler | Reads on-disk scheduler state and reports jobs whose next run is overdue. Says plainly when there is no scheduler state | no |
+| 9 | Autonomous Scheduler | Reads `<profile>/cron/jobs.json` (the file the `cronjob_manage` tool and `trent cron` share) and `<profile>/cron/runner.lock`. Warns when no job is scheduled, when an enabled job's `next_run_at` is more than 6 hours in the past, and when jobs are enabled but no live process holds the runner lock (a lock left by a dead pid counts as none); passes only with on-time jobs and a live runner | no |
 | 10 | Disk & Logs | Sums the byte size and file count of the logs directory | no |
 | 11 | System Binaries | Resolves `git`, `node`, `npm` as required and `docker` as optional, recording the version of each | no |
 | 12 | Sandbox & Workbench | Runs `docker info` and checks the sandbox image is present locally. A backend named in YAML is a claim; `docker info` exiting 0 is evidence | no |
@@ -191,5 +191,4 @@ Lists the checks that would run and performs no probes, no network calls and no 
 - `--mode connected` requires a running web server to point `--health-url` at. The server is a later
   milestone, so the connected path is exercised by tests and not by a live deployment.
 - `trent cron start` is the only scheduler: nothing ticks `<profile>/cron/jobs.json` while it is
-  not running, and `doctor` does not yet report whether a runner holds `<profile>/cron/runner.lock`.
-  `trent cron run <id>` executes a job now regardless. See [cron.md](cron.md).
+  not running. `trent cron run <id>` executes a job now regardless. See [cron.md](cron.md).
