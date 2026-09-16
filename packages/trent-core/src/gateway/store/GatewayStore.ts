@@ -61,6 +61,10 @@ export interface ApprovalRow {
   /** The orchestrator run and step this row gates, when the request came off a run's bus. */
   runId?: string;
   stepId?: string;
+  /** An `ask_human` question is answered by a free-text reply, not a button; absent means approval. */
+  kind?: "approval" | "question";
+  /** The reply text that answered a question row. */
+  answer?: string;
 }
 
 export interface GatewayState {

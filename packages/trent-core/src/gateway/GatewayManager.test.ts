@@ -145,6 +145,31 @@ describe("GatewayManager end to end over the Telegram wire", () => {
     ]);
   });
 
+  it("routes a free-text reply to the pending ask_human question in that chat before the agent sees it; a stranger's reply goes nowhere", async () => {
+    await server.start();
+    const seen: string[] = [];
+    const m = make([], async (_agentId, msg) => { seen.push(msg.content); return null; });
+    const bridge = m.getApprovalBridge();
+    m.getPairing().grant({ platform: "telegram", senderId: "555", scope: "dm", tier: "admin" });
+    m.getPairing().grant({ platform: "telegram", senderId: "666", scope: "dm", tier: "regular" });
+    const question = bridge.createApprovalRequest("ceo", "Ship EU or US first?", { kind: "question", question: "Ship EU or US first?" }, { kind: "question", runId: "run_1", stepId: "step_1" });
+    const out = await m.sendApproval(question, "telegram", "555");
+    expect(out.sent).toBe(true);
+    const card = server.find("POST", `/bot${TOKEN}/sendMessage`)[0].json as { text: string; reply_markup?: unknown };
+    expect(card.text).toContain("Ship EU or US first?");
+    expect(card.reply_markup).toBeUndefined();
+
+    const inbound = (from: string, content: string) => ({ id: `m-${from}`, platform: "telegram", channelId: "555", senderId: from, content, timestamp: "t", scope: "dm" as const });
+    await m.handleInbound(inbound("666", "US first"));
+    expect(bridge.getApproval(question.id)?.status).toBe("pending");
+    expect(seen).toEqual(["US first"]);
+    await m.handleInbound(inbound("555", "EU first, the US waits for SOC 2."));
+    expect(bridge.getApproval(question.id)).toEqual(expect.objectContaining({ status: "approved", answer: "EU first, the US waits for SOC 2.", decidedBy: "telegram:555" }));
+    expect(seen).toEqual(["US first"]);
+    await waitFor(() => server.find("POST", `/bot${TOKEN}/sendMessage`).length === 2);
+    expect((server.find("POST", `/bot${TOKEN}/sendMessage`)[1].json as { text: string }).text).toContain(question.id);
+  });
+
   it("keeps a reply on disk when the platform is down and sends it from a fresh process", async () => {
     const file = path.join(tempDir, "gateway.json");
     botApi(server, []);

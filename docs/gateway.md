@@ -108,6 +108,23 @@ admin-pairing checks are identical. A second reaction on a decided card, a react
 sender who is not a paired admin, or a reaction on a message that is not a delivered card
 changes nothing.
 
+### Questions from a seat (`ask_human`)
+
+The `human` toolset gives every seat `ask_human {question, context?, options?}`. The step parks on
+the same gate a tool approval uses, but the card is a question, not a yes/no: no buttons, the
+question with its context and numbered options, and a line asking for a reply. Your next free-text
+message in that chat is the answer. `ApprovalBridge.answerQuestion` matches it to the pending
+question row by where the card was delivered (platform and channel), requires the sender to be a
+paired admin there, stores the text as the row's `answer`, and resolves the row; the link then
+resumes the run through `orchestrator.answer(runId, stepId, text)` and the seat's next turn sees
+your text as the tool's result, verbatim. A reply from a sender who is not a paired admin, or in
+another chat, changes nothing and goes to the agent as an ordinary message. `GatewayManager.
+handleInbound` tries the question path before the agent handler sees the text, so an answer is
+never mistaken for a new objective. In the REPL the same gate is a blocking prompt that reads one
+line; a delegated child that calls `ask_human` gets `blocked` with a one-line reason instead of
+parking, because the parent's tool loop cannot wait for you mid-call. Nothing answers on your
+behalf: a step released without an answer gets a `failed` tool result that says so.
+
 ## Push alerts
 
 With `gateway.owner` set, `gateway start` also pushes three kinds of plain-text alert to the owner

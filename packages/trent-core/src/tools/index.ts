@@ -16,6 +16,7 @@ import { createCronAdapter } from "./cron/index.js";
 import { createDelegateAdapter } from "./delegate/index.js";
 import type { DelegatePort } from "./delegate/types.js";
 import { createFileOpsAdapter } from "./file_ops/index.js";
+import { createHumanAdapter, type HumanAnswers } from "./human/index.js";
 import { createMcpAdapter } from "./mcp/index.js";
 import { createPluginsAdapter } from "./plugins/index.js";
 import { createSkillsAdapter } from "./skills/index.js";
@@ -41,6 +42,8 @@ export { createSkillsAdapter, SKILLS_ADAPTER_NAME, SKILL_TOOL_SCHEMAS } from "./
 export { createCronAdapter, CRON_ADAPTER_NAME, CRON_TOOL_SCHEMAS } from "./cron/index.js";
 export { createBrowserAdapter, findChromium, BROWSER_ADAPTER_NAME, BROWSER_TOOL_SCHEMAS } from "./browser/index.js";
 export { createVisionAdapter, askVision, VISION_ADAPTER_NAME, VISION_TOOL_SCHEMAS, type VisionGateway } from "./vision/index.js";
+export { createHumanAdapter, questionFromEvent, renderQuestion, HumanAnswers, sharedHumanAnswers, HUMAN_ADAPTER_NAME, HUMAN_SCOPES, HUMAN_TOOL_SCHEMAS } from "./human/index.js";
+export type { HumanAdapter, HumanCallerContext, QuestionDetails, QuestionRecord } from "./human/index.js";
 
 /** The config slice the tool builder reads. */
 export type ToolBuildConfig = Pick<TrentConfig, "toolsets" | "disabled_toolsets"> & {
@@ -84,6 +87,11 @@ export interface ToolBuildDeps {
    * Defaults to the shipped rules merged with `config.policy.rules`; tests pass their own.
    */
   readonly policy?: PolicyDispatcher;
+  /**
+   * Where `ask_human` reads the founder's answer on the replay of a parked call. Defaults to the
+   * process-wide `sharedHumanAnswers` the orchestrator's `answer()` writes to; tests pass their own.
+   */
+  readonly humanAnswers?: HumanAnswers;
 }
 
 /** One toolset that was enabled in config but could not be built here, and why the seat cannot use it. */
@@ -103,7 +111,7 @@ export interface TrentToolBuild {
  * every `ToolsetSchema` value is either here or in `NOT_YET_IMPLEMENTED` with a reason, so a new
  * enum value can never be a silent no-op.
  */
-export const IMPLEMENTED_TOOLSETS = ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp"] as const satisfies readonly Toolset[];
+export const IMPLEMENTED_TOOLSETS = ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp", "human"] as const satisfies readonly Toolset[];
 
 /** Enum values this builder does NOT produce, each with the reason a seat will see. */
 export const NOT_YET_IMPLEMENTED: readonly { readonly toolset: Toolset; readonly reason: string }[] = [
@@ -153,6 +161,7 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
     else if (toolset === "skills") adapters.push(createSkillsAdapter({ profileDir: deps.profileDir, ...(deps.skillsDir ? { skillsDir: deps.skillsDir } : {}) }));
     else if (toolset === "cron") adapters.push(createCronAdapter({ profileDir: deps.profileDir }));
     else if (toolset === "mcp") adapters.push(createMcpAdapter(config, { profileDir: deps.profileDir, env: deps.env ?? process.env, ...(egress ? { egress } : {}) }));
+    else if (toolset === "human") adapters.push(createHumanAdapter(deps.humanAnswers ? { answers: deps.humanAnswers } : {}));
     else if (toolset === "vision") {
       // Without a gateway the adapter is built `unavailable`: every call says not_available, never a stub.
       adapters.push(createVisionAdapter({ workspace: deps.workspace, profileDir: deps.profileDir, ...(deps.gateway ? { gateway: deps.gateway } : {}), ...(egress ? { egress } : {}) }));

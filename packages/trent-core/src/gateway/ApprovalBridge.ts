@@ -7,6 +7,12 @@
  * be a paired admin in that scope. A replayed or forged callback fails all three checks
  * and changes nothing. A reaction names no id or nonce; it is matched to the row through
  * the delivery record (platform, channel, message id) and then takes the same path.
+ *
+ * An `ask_human` question (`kind: "question"`) has no buttons: the founder answers with a
+ * free-text reply in the chat the card was delivered to. The reply is matched to the pending
+ * question row through the same delivery record, the sender must be a paired admin in that
+ * scope, and the text becomes the row's `answer`; the row then resolves as `approved` and the
+ * same `approval_decided` event carries it to the run link.
  */
 
 import crypto from "node:crypto";
@@ -41,6 +47,19 @@ export type CallbackResult =
   | { ok: false; reason: "malformed" | "no_matching_pending_approval" | "not_admin" };
 
 export type ReactionResult = CallbackResult | { ok: false; reason: "unknown_emoji" };
+
+export interface AnswerInput {
+  platform: string;
+  senderId: string;
+  scope: Scope;
+  channelId: string;
+  /** The reply text as received; whitespace-only is not an answer. */
+  text: string;
+}
+
+export type AnswerResult =
+  | { ok: true; approval: ApprovalRow }
+  | { ok: false; reason: "no_matching_pending_question" | "not_admin" };
 
 const CALLBACK_RE = /^trent:(approve|deny):([A-Za-z0-9_-]{1,40}):([a-f0-9]{8})$/;
 const EMAIL_RE = /^\s*(APPROVE|DENY)\s+([A-Za-z0-9_-]{1,40})\s+([a-f0-9]{8})\s*$/im;
@@ -88,7 +107,7 @@ export class ApprovalBridge extends EventEmitter {
     agentId: string,
     action: string,
     details: Record<string, unknown>,
-    options?: { budgetImpact?: number; estimatedDurationMs?: number; runId?: string; stepId?: string },
+    options?: { budgetImpact?: number; estimatedDurationMs?: number; runId?: string; stepId?: string; kind?: ApprovalRow["kind"] },
   ): ApprovalRequest {
     const id = `appr_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
     const row: ApprovalRow = {
@@ -101,6 +120,7 @@ export class ApprovalBridge extends EventEmitter {
       estimatedDurationMs: options?.estimatedDurationMs,
       runId: options?.runId,
       stepId: options?.stepId,
+      ...(options?.kind === undefined ? {} : { kind: options.kind }),
       status: "pending",
       createdAt: new Date().toISOString(),
       deliveredTo: [],
@@ -187,6 +207,27 @@ export class ApprovalBridge extends EventEmitter {
     });
   }
 
+  /**
+   * A free-text reply to a delivered question card. The pending question row is found by where it
+   * was delivered (platform and channel), the sender must be a paired admin there, and the text
+   * becomes the answer. An ordinary approval row is never answered by text.
+   */
+  public answerQuestion(input: AnswerInput): AnswerResult {
+    const text = input.text.trim();
+    if (text === "") return { ok: false, reason: "no_matching_pending_question" };
+    const row = this.listPending().find((r) =>
+      r.kind === "question" && (r.deliveredTo ?? []).some((d) => d.platform === input.platform && d.channelId === input.channelId),
+    );
+    if (!row) return { ok: false, reason: "no_matching_pending_question" };
+    if (!this.pairing.isAdmin(input.platform, input.senderId, input.scope)) return { ok: false, reason: "not_admin" };
+    this.store.mutate((s) => {
+      const r = s.approvals[row.id];
+      if (r) r.answer = text;
+    });
+    const approval = this.decide(row.id, "approved", `${input.platform}:${input.senderId}`);
+    return { ok: true, approval };
+  }
+
   public parseEmailReply(body: string): { decision: "approve" | "deny"; id: string; nonce: string } | null {
     const m = EMAIL_RE.exec(body);
     if (!m) return null;
@@ -197,7 +238,9 @@ export class ApprovalBridge extends EventEmitter {
     return `trent:${verb}:${request.id}:${request.nonce}`;
   }
 
+  /** A question has no buttons: the reply is the answer. */
   public buttons(request: ApprovalRequest): OutboundButton[][] {
+    if (request.kind === "question") return [];
     return [
       [
         { id: this.callbackData(request, "approve"), label: "Approve", style: "primary" },
@@ -207,6 +250,7 @@ export class ApprovalBridge extends EventEmitter {
   }
 
   public cardText(request: ApprovalRequest): string {
+    if (request.kind === "question") return this.questionText(request);
     const lines = [
       "APPROVAL REQUIRED",
       `Agent: ${request.agentId}`,
@@ -218,8 +262,23 @@ export class ApprovalBridge extends EventEmitter {
     return lines.join("\n");
   }
 
+  private questionText(request: ApprovalRequest): string {
+    const details = request.details as { question?: unknown; context?: unknown; options?: unknown };
+    const options = Array.isArray(details.options) ? details.options.filter((o): o is string => typeof o === "string") : [];
+    return [
+      `QUESTION FROM ${request.agentId}`,
+      typeof details.question === "string" ? details.question : request.action,
+      ...(typeof details.context === "string" && details.context !== "" ? ["", details.context] : []),
+      ...(options.length ? ["", ...options.map((option, i) => `${i + 1}. ${option}`)] : []),
+      "",
+      "Reply to this message with your answer; the run continues with your reply as the answer.",
+      `Ref: ${request.id}`,
+    ].join("\n");
+  }
+
   /** Email has no buttons: the reply body carries the decision. */
   public emailCardText(request: ApprovalRequest): string {
+    if (request.kind === "question") return this.questionText(request);
     return [
       this.cardText(request),
       "",

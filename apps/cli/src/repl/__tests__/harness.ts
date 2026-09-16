@@ -26,7 +26,7 @@ import type {
   UpdateRunInput,
   UpsertStepInput,
 } from "@trent/core/store/index.js";
-import { ReplEngine, PROMPT } from "../engine.js";
+import { ReplEngine, PROMPT, type ReplEngineDeps } from "../engine.js";
 
 // ── in-memory StorePort ─────────────────────────────────────────────────────
 
@@ -188,6 +188,8 @@ export interface HarnessOptions {
   config?: TrentConfig;
   degraded?: boolean;
   store?: MemoryStore;
+  /** Told when a gate is answered; the questions test asserts the answer text reaches it. */
+  onApprovalAnswer?: ReplEngineDeps["onApprovalAnswer"];
 }
 
 function ev(kind: OrcEvent["kind"], extra: Partial<OrcEvent> = {}): OrcEvent {
@@ -233,6 +235,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
     degraded: options.degraded ?? false,
     write: (text: string) => void out.push(text),
     exit: (code: number) => void exit(code),
+    ...(options.onApprovalAnswer ? { onApprovalAnswer: options.onApprovalAnswer } : {}),
     runner: ({ objective, signal }) =>
       (async function* () {
         objectives.push(objective);

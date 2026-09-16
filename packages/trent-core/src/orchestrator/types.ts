@@ -264,4 +264,10 @@ export interface Orchestrator {
   snapshot(runId: string): Promise<OrchestrationRunSnapshot | undefined>;
   approve(runId: string, stepId: string): Promise<boolean>;
   reject(runId: string, stepId: string): Promise<boolean>;
+  /**
+   * Answers a step parked on `ask_human` (`../tools/human`): the text becomes the tool's result
+   * on the replay, then the step is released exactly as `approve` releases it. Optional only so
+   * the older fakes stay valid; `createOrchestrator` always provides it.
+   */
+  answer?(runId: string, stepId: string, text: string): Promise<boolean>;
 }

@@ -10,6 +10,8 @@ import { BUSY_STATUS_LINE, STOP_COMMAND, type DoubleTextPolicy } from "@trent/co
 import { TranscriptRenderer, identityForRole } from "./render.js";
 import { BudgetLedger } from "./budget.js";
 import { ApprovalGate, renderApprovalCard } from "./approvals.js";
+import { questionFromEvent, renderQuestion } from "@trent/core/tools/human/index.js";
+import { GLYPHS } from "../ui/index.js";
 import { runCommand, commandNames } from "./commands.js";
 import { autocomplete, applyCompletion, renderDropdown } from "./autocomplete.js";
 import { renderDegradedBanner } from "./degraded.js";
@@ -64,13 +66,17 @@ export interface ReplEngineDeps {
    * Told when the human answers, so the orchestrator can release the step. `runId` is the run the
    * gate belongs to — taken from the event itself, never from a side list (live proof, F5).
    */
-  onApprovalAnswer?(runId: string, stepId: string | undefined, answer: "approved" | "rejected"): Promise<void> | void;
+  onApprovalAnswer?(runId: string, stepId: string | undefined, answer: GateAnswer): Promise<void> | void;
 }
 
-/** The two calls an approval answer needs. `Orchestrator` from `@trent/core` satisfies it. */
+/** A decision on an approval card, or the typed line that answers an `ask_human` question. */
+export type GateAnswer = "approved" | "rejected" | { readonly answer: string };
+
+/** The calls a gate answer needs. `Orchestrator` from `@trent/core` satisfies it; `answer` resumes a question. */
 export interface ApprovalTarget {
   approve(runId: string, stepId: string): Promise<boolean>;
   reject(runId: string, stepId: string): Promise<boolean>;
+  answer?(runId: string, stepId: string, text: string): Promise<boolean>;
 }
 
 /**
@@ -81,7 +87,10 @@ export interface ApprovalTarget {
 export function bindApprovalAnswers(target: ApprovalTarget): NonNullable<ReplEngineDeps["onApprovalAnswer"]> {
   return async (runId, stepId, answer) => {
     if (stepId === undefined) return;
-    if (answer === "approved") await target.approve(runId, stepId);
+    if (typeof answer === "object") {
+      if (target.answer === undefined) throw new Error("this orchestrator cannot take an answer to ask_human");
+      await target.answer(runId, stepId, answer.answer);
+    } else if (answer === "approved") await target.approve(runId, stepId);
     else await target.reject(runId, stepId);
   };
 }
@@ -102,7 +111,9 @@ export class ReplEngine {
   #started = false;
   #queued: QueuedTurn[] = [];
   #abort: AbortController | undefined;
-  #answer: ((answer: "approved" | "rejected") => void) | undefined;
+  #answer: ((answer: GateAnswer) => void) | undefined;
+  /** Set while the open gate is an `ask_human` question: keystrokes build the answer line instead of y/n. */
+  #question = false;
   #awaitingStepId: string | undefined;
   #runIds: string[] = [];
   /** Steps already gated this turn: the bus emits step_ AND run_awaiting_approval for one gate. */
@@ -291,6 +302,20 @@ export class ReplEngine {
   }
 
   #answerKey(event: KeyEvent): void {
+    if (this.#question) {
+      // The answer is a typed line: edited like the draft, sent on Enter, never empty.
+      if (event.type === "text") this.#insert(event.value);
+      else if (event.type === "backspace" && this.#cursor > 0) {
+        this.#draft = this.#draft.slice(0, this.#cursor - 1) + this.#draft.slice(this.#cursor);
+        this.#cursor -= 1;
+      } else if (event.type === "submit" && this.#draft.trim() !== "") {
+        const answer = this.#draft.trim();
+        this.#draft = "";
+        this.#cursor = 0;
+        this.#answer?.({ answer });
+      }
+      return;
+    }
     if (event.type !== "text") return;
     const key = event.value.trim().toLowerCase();
     if (key === "y") this.#answer?.("approved");
@@ -402,25 +427,30 @@ export class ReplEngine {
     }
   }
 
-  /** Opens the card and refuses ordinary input until the human answers it. */
+  /** Opens the card and refuses ordinary input until the human answers it. A question reads one typed line instead of y/n. */
   async #blockOnApproval(event: OrcEvent, signal: AbortSignal): Promise<void> {
     const identity = identityForRole(event.step?.agentRole ?? "specialized");
+    const question = questionFromEvent(event);
     const record = await this.approvals.open({
-      action: event.step?.title ?? event.detail ?? "an action",
-      reason: event.detail ?? "this step requires a human decision",
+      action: question?.question ?? event.step?.title ?? event.detail ?? "an action",
+      reason: question?.context ?? event.detail ?? "this step requires a human decision",
       agentRole: identity.role,
       stepId: event.step?.id,
     });
     this.#awaitingStepId = event.step?.id;
-    this.#render(
-      renderApprovalCard(
-        { id: record.id, action: record.action, reason: record.reason, agentRole: identity.displayName },
-        this.#deps.theme,
-        this.#width(),
-      ),
-    );
+    this.#question = question !== undefined;
+    if (question) {
+      const theme = this.#deps.theme;
+      this.#render([
+        theme.needsApproval(`${GLYPHS.needsApproval} QUESTION FROM ${identity.displayName}`),
+        ...renderQuestion(question).split("\n").map((line) => `  ${theme.body(line)}`),
+        theme.needsApproval("  Type your answer and press Enter."),
+      ]);
+    } else {
+      this.#render(renderApprovalCard({ id: record.id, action: record.action, reason: record.reason, agentRole: identity.displayName }, this.#deps.theme, this.#width()));
+    }
 
-    const answer = await new Promise<"approved" | "rejected" | "aborted">((resolve) => {
+    const answer = await new Promise<GateAnswer | "aborted">((resolve) => {
       if (signal.aborted) {
         resolve("aborted");
         return;
@@ -433,11 +463,13 @@ export class ReplEngine {
       };
     });
     this.#answer = undefined;
+    this.#question = false;
 
     if (answer === "aborted") return;
-    await this.approvals.answer(record.id, answer);
+    await this.approvals.answer(record.id, typeof answer === "object" ? "approved" : answer);
     await this.#deps.onApprovalAnswer?.(event.runId, this.#awaitingStepId, answer);
     this.#awaitingStepId = undefined;
-    this.#emit(this.#renderer.push(this.#deps.theme.body(`Approval ${record.id} ${answer}.`)));
+    const line = typeof answer === "object" ? `Answer to ${record.id}: ${answer.answer}` : `Approval ${record.id} ${answer}.`;
+    this.#emit(this.#renderer.push(this.#deps.theme.body(line)));
   }
 }

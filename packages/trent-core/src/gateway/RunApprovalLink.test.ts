@@ -37,7 +37,7 @@ function fixture(options: { owner?: { platform: string; channelId: string } } = 
       return { queued: "q1", sent: true };
     }),
   };
-  const orchestrator = { approve: vi.fn(async () => true), reject: vi.fn(async () => true) };
+  const orchestrator = { approve: vi.fn(async () => true), reject: vi.fn(async () => true), answer: vi.fn(async () => true) };
   const lines: string[] = [];
   const link = linkRunApprovals({ orchestrator, bridge, manager, owner, log: (line) => lines.push(line) });
   return { bridge, manager, orchestrator, sent, link, lines };
@@ -134,5 +134,59 @@ describe("linkRunApprovals", () => {
     const record = JSON.parse(f.lines[0]!) as { event: string; level: string };
     expect(record.event).toBe("gateway.approval_link.disabled");
     expect(record.level).toBe("warn");
+  });
+});
+
+describe("linkRunApprovals with an ask_human question", () => {
+  const ASK = 'ask_human {"question":"Ship EU or US first?","context":"Both are ready.","options":["EU","US"]}';
+  function questionGate(): OrcEvent {
+    return {
+      kind: "run_awaiting_approval",
+      runId: "run_1",
+      at: "2026-09-15T00:00:00.000Z",
+      step: { id: "step_1", title: "Ask the founder", agentRole: "ceo", seatLoopState: { pendingToolCall: { name: "human", action: ASK } } } as OrcEvent["step"],
+      detail: "Awaiting tool approval: Ask the founder",
+    };
+  }
+
+  it("creates a question row carrying the question, runId and stepId, delivered to the owner without buttons", async () => {
+    const f = fixture();
+    f.link.sink(questionGate());
+    await Promise.resolve();
+    const { request, platform, channelId } = f.sent[0]!;
+    expect([platform, channelId]).toEqual(["telegram", "555"]);
+    expect(request.kind).toBe("question");
+    expect(request.runId).toBe("run_1");
+    expect(request.stepId).toBe("step_1");
+    expect(request.action).toBe("Ship EU or US first?");
+    expect(request.details).toEqual(expect.objectContaining({ kind: "question", question: "Ship EU or US first?", context: "Both are ready.", options: ["EU", "US"] }));
+    expect(f.bridge.buttons(request)).toEqual([]);
+  });
+
+  it("the owner's reply answers the row and resumes the run with the text through orchestrator.answer, once", async () => {
+    const f = fixture();
+    f.link.sink(questionGate());
+    await Promise.resolve();
+    const request = f.sent[0]!.request;
+    f.bridge.recordDelivery(request.id, "telegram", "555", "900");
+    const result = f.bridge.answerQuestion({ platform: "telegram", senderId: "555", scope: "dm", channelId: "555", text: "EU first." });
+    expect(result.ok).toBe(true);
+    await Promise.resolve();
+    expect(f.orchestrator.answer).toHaveBeenCalledTimes(1);
+    expect(f.orchestrator.answer).toHaveBeenCalledWith("run_1", "step_1", "EU first.");
+    expect(f.orchestrator.approve).not.toHaveBeenCalled();
+    expect(f.orchestrator.reject).not.toHaveBeenCalled();
+  });
+
+  it("a reply from a sender who is not a paired admin leaves the row pending and the run parked", async () => {
+    const f = fixture();
+    f.link.sink(questionGate());
+    await Promise.resolve();
+    const request = f.sent[0]!.request;
+    f.bridge.recordDelivery(request.id, "telegram", "555", "900");
+    expect(f.bridge.answerQuestion({ platform: "telegram", senderId: "999", scope: "dm", channelId: "555", text: "EU first." })).toEqual({ ok: false, reason: "not_admin" });
+    await Promise.resolve();
+    expect(f.bridge.getApproval(request.id)?.status).toBe("pending");
+    expect(f.orchestrator.answer).not.toHaveBeenCalled();
   });
 });

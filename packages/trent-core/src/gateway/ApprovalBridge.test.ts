@@ -103,3 +103,67 @@ describe("ApprovalBridge.resolveReaction", () => {
     expect(b.resolveReaction({ platform: "discord", channelId: "C1", messageId: "M100", emoji: THUMBS_UP, senderId: "U1", scope: "group" })).toEqual({ ok: false, reason: "no_matching_pending_approval" });
   });
 });
+
+describe("ApprovalBridge questions (ask_human)", () => {
+  let bridge: ApprovalBridge;
+  let pairing: PairingManager;
+  let question: ApprovalRequest;
+
+  const reply = (overrides: Partial<{ platform: string; senderId: string; channelId: string; scope: "dm" | "group"; text: string }> = {}) => ({
+    platform: "telegram",
+    senderId: "555",
+    channelId: "555",
+    scope: "dm" as const,
+    text: "EU first; the US waits for the SOC 2 letter.",
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    const store = new MemoryGatewayStore();
+    pairing = new PairingManager(store);
+    bridge = new ApprovalBridge({ store, pairing });
+    pairing.grant({ platform: "telegram", senderId: "555", scope: "dm", tier: "admin" });
+    pairing.grant({ platform: "telegram", senderId: "666", scope: "dm", tier: "regular" });
+    question = bridge.createApprovalRequest("ceo", "Ship EU or US first?", { kind: "question", question: "Ship EU or US first?", options: ["EU", "US"] }, { kind: "question", runId: "run_1", stepId: "step_1" });
+    bridge.recordDelivery(question.id, "telegram", "555", "900");
+  });
+
+  it("a question row is kind question, renders without buttons, and its card asks for a reply", () => {
+    expect(question.kind).toBe("question");
+    expect(bridge.buttons(question)).toEqual([]);
+    expect(bridge.formatTelegramCard(question).inline_keyboard).toEqual([]);
+    const text = bridge.cardText(question);
+    expect(text).toContain("Ship EU or US first?");
+    expect(text).toContain("EU");
+    expect(text).toMatch(/reply/i);
+    expect(text).not.toContain("APPROVAL REQUIRED");
+    expect(bridge.emailCardText(question)).not.toContain("APPROVE ");
+  });
+
+  it("a free-text reply from the paired admin in the chat the question was delivered to answers it once, and the text is the answer", () => {
+    const decided: ApprovalRequest[] = [];
+    bridge.on("approval_decided", (row: ApprovalRequest) => decided.push(row));
+    const result = bridge.answerQuestion(reply());
+    expect(result).toEqual({ ok: true, approval: expect.objectContaining({ id: question.id, status: "approved", answer: "EU first; the US waits for the SOC 2 letter.", decidedBy: "telegram:555" }) });
+    expect(decided.map((r) => [r.id, r.answer])).toEqual([[question.id, "EU first; the US waits for the SOC 2 letter."]]);
+    expect(bridge.answerQuestion(reply({ text: "second thoughts" }))).toEqual({ ok: false, reason: "no_matching_pending_question" });
+    expect(bridge.getApproval(question.id)?.answer).toBe("EU first; the US waits for the SOC 2 letter.");
+  });
+
+  it("a reply from an unpaired or non-admin sender, in another chat, or empty, changes nothing", () => {
+    expect(bridge.answerQuestion(reply({ senderId: "stranger" }))).toEqual({ ok: false, reason: "not_admin" });
+    expect(bridge.answerQuestion(reply({ senderId: "666" }))).toEqual({ ok: false, reason: "not_admin" });
+    expect(bridge.answerQuestion(reply({ channelId: "777" }))).toEqual({ ok: false, reason: "no_matching_pending_question" });
+    expect(bridge.answerQuestion(reply({ text: "   " }))).toEqual({ ok: false, reason: "no_matching_pending_question" });
+    expect(bridge.getApproval(question.id)?.status).toBe("pending");
+  });
+
+  it("an ordinary approval row in the same chat is never answered by text", () => {
+    const plain = bridge.createApprovalRequest("ceo", "Deploy", {});
+    bridge.recordDelivery(plain.id, "telegram", "555", "901");
+    bridge.decide(question.id, "denied");
+    expect(bridge.answerQuestion(reply())).toEqual({ ok: false, reason: "no_matching_pending_question" });
+    expect(bridge.getApproval(plain.id)?.status).toBe("pending");
+    expect(plain.kind ?? "approval").toBe("approval");
+  });
+});

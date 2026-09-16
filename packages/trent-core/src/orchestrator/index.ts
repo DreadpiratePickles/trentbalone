@@ -51,6 +51,8 @@ import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
 import { runWithToolCallContext } from "../governance/tool-call-context.js";
 import type { FleetMemoryHook } from "../fleet-memory/orchestrator-hook.js";
 import type { OrchestratorDelegatePort } from "./delegate-port.js";
+import { createHumanHook } from "./human-hook.js";
+import type { HumanAnswers } from "../tools/human/index.js";
 import type { TrentToolAdapter } from "../tools/types.js";
 import {
   type OrcEvent,
@@ -108,6 +110,8 @@ export type OrchestratorDepsWithImprove = OrchestratorDeps & {
    * step is delegating, and the run boundaries are reported so a child lands in the right run.
    */
   readonly delegate?: OrchestratorDelegatePort;
+  /** Where `answer()` leaves the founder's text for `ask_human`'s replay; defaults to the shared registry `buildTrentTools` uses. */
+  readonly humanAnswers?: HumanAnswers;
   /**
    * `runtime.max_concurrent_runs`: how many runs this orchestrator drives at once. A run past the
    * cap waits FIFO for a slot before it is launched, and says so with one `heartbeat` event
@@ -230,6 +234,9 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
   // ── delegate-port hook (owned by ./delegate-port.ts) ─────────────────────────────────────────
   const withDelegateCaller = (seat: SeatModelFn): SeatModelFn => (deps.delegate ? deps.delegate.wrapSeatModel(seat) : seat);
   // ── end delegate-port hook ───────────────────────────────────────────────────────────────────
+  // ── human hook (owned by ./human-hook.ts): delegated-step tracking and the answer registry for ask_human ──
+  const human = createHumanHook(allTools, deps.humanAnswers);
+  // ── end human hook ───────────────────────────────────────────────────────────────────────────
 
   const seatInstructions = toolInstructions(allTools);
 
@@ -240,7 +247,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       orchestration: {
         // Default, not test-only: the planner and the critic reach the configured provider.
         createCompletion: deps.createCompletion ?? createCompletionPort(gateway, { onCall: (call) => ports.record(call) }),
-        executeSeatModelFn: withDelegateCaller(withFleetPrelude(guardSeatModel(underlying, chat, tally, seatInstructions))),
+        executeSeatModelFn: human.wrapSeatModel(withDelegateCaller(withFleetPrelude(guardSeatModel(underlying, chat, tally, seatInstructions)))),
       },
     });
   }
@@ -460,6 +467,12 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
     return handle;
   }
 
+  const approve = async (runId: string, stepId: string): Promise<boolean> => {
+    const ok = await (await loadLibs()).orchestrator.approveStep(runId, stepId);
+    wake(runId);
+    return ok;
+  };
+
   return {
     run,
     ensureCompany: async (input) => {
@@ -471,15 +484,12 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       return created.id;
     },
     snapshot: async (runId) => snapshotOf(await loadLibs(), runId),
-    approve: async (runId, stepId) => {
-      const ok = await (await loadLibs()).orchestrator.approveStep(runId, stepId);
-      wake(runId);
-      return ok;
-    },
+    approve,
     reject: async (runId, stepId) => {
       const ok = await (await loadLibs()).orchestrator.rejectStep(runId, stepId);
       wake(runId);
       return ok;
     },
+    answer: (runId, stepId, text) => human.answer(runId, stepId, text, approve),
   };
 }

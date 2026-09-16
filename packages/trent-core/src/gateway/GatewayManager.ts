@@ -234,6 +234,14 @@ export class GatewayManager {
       return;
     }
 
+    // A free-text reply in a chat holding a pending ask_human question is its answer (ApprovalBridge.answerQuestion
+    // checks the delivery record and the admin pairing); the agent never sees it.
+    const answered = this.approvalBridge.answerQuestion({ platform: message.platform, senderId: message.senderId, scope: message.scope, channelId: message.channelId, text: message.content });
+    if (answered.ok) {
+      await this.send(message.platform, { channelId: message.channelId, threadId: message.threadId, text: `Answer recorded for ${answered.approval.id}; the run continues with it.`, metadata: { subject: "Re: Question" } });
+      return;
+    }
+
     if (!this.agentHandler) return;
     const handler = this.agentHandler;
     const agentId = this.getAgentForPlatform(message.platform);

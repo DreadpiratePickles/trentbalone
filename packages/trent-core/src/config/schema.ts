@@ -30,6 +30,7 @@ export const ToolsetSchema = z.enum([
   "skills",
   "plugins",
   "mcp",
+  "human",
 ]);
 
 export type Toolset = z.infer<typeof ToolsetSchema>;
@@ -200,24 +201,24 @@ export const TrentConfigSchema = z.object({
   profile: z.string().default("default"),
   provider: ProviderSchema.default("openai"),
   model: z.string().default("gpt-5.6-terra"),
-  toolsets: z.array(ToolsetSchema).default(["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins"]),
+  toolsets: z.array(ToolsetSchema).default(["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins", "human"]),
   disabled_toolsets: z.array(ToolsetSchema).default([]),
   budget: BudgetConfigSchema.default({}),
   terminal: TerminalConfigSchema.default({}),
   egress: EgressConfigSchema.default({}),
   gateway: GatewayConfigSchema.default({}),
   repl: z.object({ double_text_policy: z.enum(["enqueue", "interrupt", "reject"]).default("enqueue") }).default({}),
+  /** `max_concurrent_runs`: runs driven at once per profile; a run past the cap waits FIFO (docs/jobs.md). */
+  runtime: z.object({ max_concurrent_runs: z.number().int().positive().default(2) }).default({}),
   heartbeat: HeartbeatConfigSchema.default({}),
   fleet: FleetConfigSchema.default({}),
+  memory: MemoryConfigSchema.default({}),
   mcp_servers: McpServersConfigSchema.default({}),
   telemetry: TelemetryConfigSchema.default({}),
   /** Prompt-side redaction in the model gateway (docs/security.md, "Prompt redaction"). */
   privacy: z.object({ redact_prompts: z.boolean().default(false), patterns: z.array(z.string()).default([]) }).default({}),
   /** Trace-level rules over tool classes; appended to the shipped defaults, same id overrides. */
   policy: z.object({ rules: z.array(PolicyRuleSchema).default([]) }).default({}),
-  /** `max_concurrent_runs`: runs driven at once per profile; a run past the cap waits FIFO (docs/jobs.md). */
-  runtime: z.object({ max_concurrent_runs: z.number().int().positive().default(2) }).default({}),
-  memory: MemoryConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
 }).passthrough();

@@ -8,6 +8,12 @@
  * orchestrator. The bus emits both frames for one gate, so a gate is keyed by (runId, stepId) the
  * way the REPL engine keys it, and each key holds at most one pending card at a time.
  *
+ * A gate raised by `ask_human` (`../tools/human`, read off the event with `questionFromEvent`)
+ * becomes a `kind: "question"` row instead: no buttons, the question as the card, and the
+ * owner's free-text reply (`ApprovalBridge.answerQuestion`) arrives on the same
+ * `approval_decided` event with the text in `answer`, which resumes the run through
+ * `orchestrator.answer`.
+ *
  * The link is a bus hook in the shape `improve/trace-writer.ts` uses: whoever iterates the run's
  * events hands each one to `sink`. With no owner configured nothing can be sent, so the link is
  * inert and says so once, in a structured log line.
@@ -15,11 +21,12 @@
 
 import { StructuredLogger } from "../telemetry/logger.js";
 import type { OrcEvent, Orchestrator } from "../orchestrator/types.js";
+import { questionFromEvent } from "../tools/human/index.js";
 import type { ApprovalBridge, ApprovalRequest } from "./ApprovalBridge.js";
 import type { GatewayManager } from "./GatewayManager.js";
 
-/** The two calls an approval decision needs; `Orchestrator` satisfies it, and so does a fake. */
-export type ApprovalTarget = Pick<Orchestrator, "approve" | "reject">;
+/** The calls a decision needs; `Orchestrator` satisfies it, and so does a fake. `answer` resumes a question. */
+export type ApprovalTarget = Pick<Orchestrator, "approve" | "reject" | "answer">;
 
 /** Who receives approval cards: `gateway.owner` in the profile config. */
 export interface GatewayOwner {
@@ -64,10 +71,17 @@ export function linkRunApprovals(deps: RunApprovalLinkDeps): RunApprovalLink {
     const key = keyOf(row.runId, row.stepId);
     if (pending.get(key) !== row.id) return;
     pending.delete(key);
-    const release = row.status === "approved" ? deps.orchestrator.approve : deps.orchestrator.reject;
-    void release
-      .call(deps.orchestrator, row.runId, row.stepId)
-      .then((released) => logger.info("gateway.approval_link.released", { runId: row.runId, stepId: row.stepId, decision: row.status, released }))
+    const { runId, stepId } = row;
+    const target = deps.orchestrator;
+    const release = (): Promise<boolean> => {
+      if (row.kind === "question" && row.status === "approved" && row.answer !== undefined) {
+        if (target.answer === undefined) return Promise.reject(new Error("this orchestrator cannot take an answer"));
+        return target.answer(runId, stepId, row.answer);
+      }
+      return row.status === "approved" ? target.approve(runId, stepId) : target.reject(runId, stepId);
+    };
+    void release()
+      .then((released) => logger.info("gateway.approval_link.released", { runId, stepId, decision: row.status, kind: row.kind ?? "approval", released }))
       .catch((error: unknown) =>
         logger.error("gateway.approval_link.release_failed", { runId: row.runId, stepId: row.stepId, reason: error instanceof Error ? error.message : String(error) }),
       );
@@ -86,12 +100,15 @@ export function linkRunApprovals(deps: RunApprovalLinkDeps): RunApprovalLink {
       }
       const key = keyOf(event.runId, stepId);
       if (pending.has(key)) return;
-      const request = deps.bridge.createApprovalRequest(
-        event.step?.agentRole ?? "orchestrator",
-        event.step?.title ?? event.detail ?? stepId,
-        { runId: event.runId, stepId, reason: event.detail ?? null },
-        { runId: event.runId, stepId },
-      );
+      const question = questionFromEvent(event);
+      const request = question
+        ? deps.bridge.createApprovalRequest(event.step?.agentRole ?? "orchestrator", question.question, { ...question, runId: event.runId, stepId }, { runId: event.runId, stepId, kind: "question" })
+        : deps.bridge.createApprovalRequest(
+            event.step?.agentRole ?? "orchestrator",
+            event.step?.title ?? event.detail ?? stepId,
+            { runId: event.runId, stepId, reason: event.detail ?? null },
+            { runId: event.runId, stepId },
+          );
       pending.set(key, request.id);
       void deps.manager.sendApproval(request, owner.platform, owner.channelId).catch((error: unknown) =>
         logger.error("gateway.approval_link.send_failed", { runId: event.runId, stepId, reason: error instanceof Error ? error.message : String(error) }),

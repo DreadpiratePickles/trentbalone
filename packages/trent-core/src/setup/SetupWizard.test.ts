@@ -247,13 +247,14 @@ describe("SetupWizard", () => {
         "skills",
         "plugins",
         "mcp",
+        "human",
       ]);
       expect(onDisk.disabled_toolsets).toEqual(onDisk.agent.disabled_toolsets);
 
       // A later load must still carry both lists, so `trent update` cannot silently re-enable.
       const reloaded = new ConfigManager({ baseDir: tempDir }).loadConfig() as Record<string, any>;
       expect(reloaded.platform_toolsets.cli).toEqual(["file_ops", "terminal"]);
-      expect(reloaded.agent.disabled_toolsets).toHaveLength(10);
+      expect(reloaded.agent.disabled_toolsets).toHaveLength(11);
     });
 
     it("offers the walkthrough as an opt-in and runs it when accepted", async () => {

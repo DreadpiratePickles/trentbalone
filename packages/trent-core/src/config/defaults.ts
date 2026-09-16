@@ -15,7 +15,7 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // Quick setup enables every toolset that is actually implemented (tools/index.ts
   // IMPLEMENTED_TOOLSETS), the way Hermes's CLI bundle does. Blank-slate mode below is the
   // explicit opt-out. web is skipped with a visible reason while the egress proxy is off.
-  toolsets: ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins"],
+  toolsets: ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins", "human"],
   disabled_toolsets: [],
   budget: {
     daily_cap: 1000,
@@ -81,6 +81,7 @@ export const BLANK_SLATE_CONFIG: TrentConfig = {
     "skills",
     "plugins",
     "mcp",
+    "human",
   ],
   egress: {
     ...DEFAULT_CONFIG.egress,

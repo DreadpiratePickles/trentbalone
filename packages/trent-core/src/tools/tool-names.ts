@@ -22,6 +22,7 @@ export const BUILTIN_TOOLS_BY_TOOLSET: Readonly<Record<string, readonly string[]
   ],
   vision: ["vision", "vision_analyze"],
   mcp: ["mcp", "mcp_status"],
+  human: ["human", "ask_human"],
 };
 
 /** Adapter names owned by `apps/web/lib/tools.ts`; also reserved. */

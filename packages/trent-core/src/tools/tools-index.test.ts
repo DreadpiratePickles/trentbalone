@@ -41,7 +41,7 @@ describe("buildTrentToolAdapters", () => {
       { ...deps, egress: { proxyUrl: "http://127.0.0.1:1", token: "tok", caCertPath } },
     );
     expect(skipped).toEqual([]);
-    expect(adapters.map((a) => a.name)).toEqual(["file_ops", "terminal", "web", "code_execution", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp"]);
+    expect(adapters.map((a) => a.name)).toEqual(["file_ops", "terminal", "web", "code_execution", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp", "human"]);
     // `web:search`-style entries are permission scopes, not tool names a plugin could shadow.
     for (const adapter of adapters) for (const scope of adapter.scopes.filter((s) => !s.includes(":"))) expect(BUILTIN_TOOL_NAMES, scope).toContain(scope);
     await Promise.all(adapters.map((a) => a.cleanup()));
@@ -83,5 +83,16 @@ describe("buildTrentToolAdapters wires web, skills and cron", () => {
       if (pending.has(toolset)) expect(pending.get(toolset)?.length ?? 0).toBeGreaterThan(10);
     }
     for (const toolset of [...implemented, ...pending.keys()]) expect(ToolsetSchema.options as readonly string[]).toContain(toolset);
+  });
+});
+
+describe("buildTrentToolAdapters wires human", () => {
+  it("builds the ask_human adapter when the human toolset is enabled, and the config schema knows the toolset", async () => {
+    expect(ToolsetSchema.options).toContain("human");
+    const built = buildTrentToolAdapters({ toolsets: ["human"], disabled_toolsets: [] }, deps);
+    expect(built.map((a) => a.name)).toEqual(["human"]);
+    expect(built[0]!.scopes).toEqual(["human", "ask_human"]);
+    expect(built[0]!.requiresApproval('ask_human {"question":"Which region first?"}')).toBe(true);
+    await Promise.all(built.map((a) => a.cleanup()));
   });
 });
