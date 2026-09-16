@@ -100,7 +100,9 @@ through `onReaction` (Slack `reaction_added` over Socket Mode or the Events API;
 intents the adapter now identifies with; Telegram `message_reaction`, which only arrives when
 `allowed_updates` names it, as the adapter's `getUpdates` call does). A reaction carries no
 approval id or nonce: `ApprovalBridge.resolveReaction` finds the pending row by the card's
-delivery record (`deliveredTo` platform, channel and message id, written with `recordDelivery`)
+delivery record (`deliveredTo` platform, channel and message id: `sendApproval` puts the approval id
+on the queued row's metadata, and the queue's `onSent` hook calls `recordDelivery` with the platform's
+receipt once the row is actually sent, from whichever process drains it)
 and then resolves it through the same path as a button press, so the pending, nonce and
 admin-pairing checks are identical. A second reaction on a decided card, a reaction from a
 sender who is not a paired admin, or a reaction on a message that is not a delivered card

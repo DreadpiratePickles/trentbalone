@@ -109,6 +109,23 @@ describe("GatewayManager end to end over the Telegram wire", () => {
     expect(replay).toEqual({ ok: false, text: "No matching pending approval." });
   });
 
+  it("records where the approval card was delivered, so a reaction on that message decides it", async () => {
+    await server.start();
+    const m = make([]);
+    const bridge = m.getApprovalBridge();
+    m.getPairing().grant({ platform: "telegram", senderId: "555", scope: "dm", tier: "admin" });
+    const req = bridge.createApprovalRequest("ceo", "Deploy to production", { sha: "abc" });
+    const out = await m.sendApproval(req, "telegram", "555");
+    expect(out.sent).toBe(true);
+    // The Bot API answered sendMessage with message_id 501 (the fake numbers replies from 500 + count).
+    expect(bridge.getApproval(req.id)?.deliveredTo).toEqual([{ platform: "telegram", channelId: "555", messageId: "501" }]);
+    const stranger = bridge.resolveReaction({ platform: "telegram", channelId: "555", messageId: "501", emoji: "\u{1F44D}", senderId: "999", scope: "dm" });
+    expect(stranger).toEqual({ ok: false, reason: "not_admin" });
+    const decided = bridge.resolveReaction({ platform: "telegram", channelId: "555", messageId: "501", emoji: "\u{1F44D}", senderId: "555", scope: "dm" });
+    expect(decided).toEqual(expect.objectContaining({ ok: true, decision: "approved" }));
+    expect(bridge.getApproval(req.id)).toEqual(expect.objectContaining({ status: "approved", decidedBy: "telegram:555" }));
+  });
+
   it("treats an APPROVE reply from a paired email admin as the decision, and ignores it from a stranger", async () => {
     const m = make([]);
     const bridge = m.getApprovalBridge();

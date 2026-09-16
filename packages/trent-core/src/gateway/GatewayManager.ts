@@ -91,7 +91,14 @@ export class GatewayManager {
       adapter.onCallback((c) => this.handleCallback(c));
       adapter.onReaction?.(async (r) => { this.approvalBridge.resolveReaction(r); });
     }
-    this.queue = new MessageQueue(this.store, (platform, message) => this.transmit(platform, message), options.queue);
+    this.queue = new MessageQueue(this.store, (platform, message) => this.transmit(platform, message), {
+      ...(options.queue ?? {}),
+      onSent: (row, receipt) => {
+        options.queue?.onSent?.(row, receipt);
+        const approvalId = row.message.metadata?.approvalId;
+        if (typeof approvalId === "string") this.approvalBridge.recordDelivery(approvalId, row.platform, row.message.channelId, receipt.messageId);
+      },
+    });
     this.routes = { ...DEFAULT_ROUTES, ...(this.configManager.loadConfig().gateway?.routes ?? {}) };
   }
 
@@ -192,13 +199,15 @@ export class GatewayManager {
     return { queued: row.id, sent: result.sent > 0 && this.queue.pending(platform).every((r) => r.id !== row.id) };
   }
 
-  /** Renders an approval card for the platform and queues it. */
+  /** Renders an approval card for the platform and queues it; where it lands is recorded on the approval row. */
   public async sendApproval(request: ApprovalRequest, platform: string, channelId: string, threadId?: string): Promise<{ queued: string; sent: boolean }> {
     const adapter = this.adapters.get(platform);
     if (!adapter) throw new Error(`Unknown platform "${platform}"`);
     const buttons = adapter.capabilities().buttons;
     const text = buttons ? this.approvalBridge.cardText(request) : this.approvalBridge.emailCardText(request);
-    return this.send(platform, { channelId, threadId, text, buttons: buttons ? this.approvalBridge.buttons(request) : undefined, metadata: { subject: `Approval needed: ${request.action}` } });
+    // The approval id rides on the queued row, so the delivery is recorded when the row is actually sent,
+    // from whichever process drains it, and a reaction on that message can find the card.
+    return this.send(platform, { channelId, threadId, text, buttons: buttons ? this.approvalBridge.buttons(request) : undefined, metadata: { subject: `Approval needed: ${request.action}`, approvalId: request.id } });
   }
 
   // ------------------------------------------------------------------ inbound

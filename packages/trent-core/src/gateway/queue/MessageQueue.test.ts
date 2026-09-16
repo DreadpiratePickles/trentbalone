@@ -20,6 +20,18 @@ function sender(behaviour: { failTimes?: number } = {}) {
 }
 
 describe("MessageQueue — durable, per-platform, circuit-broken", () => {
+  it("hands the platform receipt to onSent for every row that was actually sent, and never for a failure", async () => {
+    const store = new MemoryGatewayStore();
+    const s = sender({ failTimes: 1 });
+    const seen: Array<[string, string, string]> = [];
+    const q = new MessageQueue(store, s.send, { onSent: (row, receipt) => { seen.push([row.id, row.message.text, receipt.messageId]); } });
+    const a = q.enqueue("telegram", { channelId: "1", text: "a" });
+    expect((await q.drain()).failed).toBe(1);
+    expect(seen).toEqual([]);
+    expect((await q.drain()).sent).toBe(1);
+    expect(seen).toEqual([[a.id, "a", "m1"]]);
+  });
+
   it("enqueues durably and drains in order", async () => {
     const store = new MemoryGatewayStore();
     const s = sender();

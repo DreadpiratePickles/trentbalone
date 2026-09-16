@@ -17,6 +17,8 @@ export interface MessageQueueOptions {
   /** Delay before a failed row is retried; independent of the breaker. */
   retryDelayMs?: number;
   breaker?: Omit<CircuitBreakerOptions, "now">;
+  /** Called with the platform's receipt after a row is marked sent; a failed attempt never reaches it. */
+  onSent?: (row: QueueRow, receipt: SendReceipt) => void;
 }
 
 export interface DrainResult {
@@ -31,6 +33,7 @@ export class MessageQueue {
   private readonly maxAttempts: number;
   private readonly retryDelayMs: number;
   private readonly breakerOptions: Omit<CircuitBreakerOptions, "now">;
+  private readonly onSent?: (row: QueueRow, receipt: SendReceipt) => void;
   private readonly breakers = new Map<string, CircuitBreaker>();
   private draining = false;
 
@@ -43,6 +46,7 @@ export class MessageQueue {
     this.maxAttempts = options.maxAttempts ?? 8;
     this.retryDelayMs = options.retryDelayMs ?? 0;
     this.breakerOptions = options.breaker ?? {};
+    this.onSent = options.onSent;
   }
 
   breaker(platform: string): CircuitBreaker {
@@ -109,7 +113,7 @@ export class MessageQueue {
           continue;
         }
         try {
-          await this.sender(row.platform, row.message);
+          const receipt = await this.sender(row.platform, row.message);
           breaker.recordSuccess();
           this.update(row.id, (r) => {
             r.status = "sent";
@@ -118,6 +122,7 @@ export class MessageQueue {
             r.lastError = undefined;
           });
           result.sent += 1;
+          this.onSent?.(row, receipt);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           breaker.recordFailure(message);
