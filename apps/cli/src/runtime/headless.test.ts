@@ -188,6 +188,32 @@ describe("createHeadlessRuntime", () => {
   });
 });
 
+describe("createHeadlessRuntime bus hooks", () => {
+  it("an injected bus hook is composed onto the orchestrator's hook, so every run's events reach it and its flush is awaited", async () => {
+    const seen: OrcEvent["kind"][] = [];
+    const flush = vi.fn(async () => undefined);
+    const f = fakes();
+    const runtime = await createHeadlessRuntime({ ...f.deps, busHooks: [{ sink: (event) => seen.push(event.kind), flush }] });
+    runtimes.push(runtime);
+
+    const hook = f.received[0]?.improve;
+    expect(hook).toBeDefined();
+    expect(hook).not.toBe(runtime.improve.improve);
+    // Drive the composed hook the way the orchestrator does: every event, then one flush.
+    for (const event of EVENTS) hook!.sink(event);
+    await hook!.flush();
+    expect(seen).toEqual(["run_start", "run_done"]);
+    expect(flush).toHaveBeenCalledTimes(1);
+  });
+
+  it("with no bus hooks injected the improve hook still goes to the orchestrator unwrapped", async () => {
+    const f = fakes();
+    const runtime = await createHeadlessRuntime({ ...f.deps, busHooks: [] });
+    runtimes.push(runtime);
+    expect(f.received[0]?.improve).toBe(runtime.improve.improve);
+  });
+});
+
 describe("createHeadlessRuntime telemetry", () => {
   it("with no telemetry.otlp_endpoint the improve hook goes to the orchestrator unwrapped and no exporter is built", async () => {
     const f = fakes();

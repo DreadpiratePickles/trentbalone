@@ -217,18 +217,18 @@ export const gatewaySpec: CommandSpec = {
         }
         // The same object graph the REPL runs on, with no terminal: every message that passes the
         // pairing gate becomes a real orchestrated run, and its consolidated summary is the reply.
+        // A gated step on any run this runtime executes becomes a card to `gateway.owner`, and
+        // the owner's decision releases the step. The link rides on the runtime's bus hooks, so
+        // it sees every run, not only those the agent handler starts; it is built after the
+        // manager it sends through, and the runtime before both, so the hook forwards lazily.
+        let link: RunApprovalLink | undefined;
         const config = configManager.loadConfig();
         const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({
           configManager,
           config: config as unknown as ReplConfig,
+          busHooks: [{ sink: (event) => link?.sink(event), flush: async () => undefined }],
         });
-        // A gated step on any run this handler starts becomes a card to `gateway.owner`, and the
-        // owner's decision releases the step. The link needs the manager, which needs the handler,
-        // which observes events into the link: the closure resolves the cycle.
-        let link: RunApprovalLink | undefined;
-        const manager = buildManager(configManager, {
-          agentHandler: createAgentHandler(runtime, { observe: (event) => link?.sink(event) }),
-        });
+        const manager = buildManager(configManager, { agentHandler: createAgentHandler(runtime) });
         link = linkRunApprovals({
           orchestrator: runtime.orchestrator,
           bridge: manager.getApprovalBridge(),

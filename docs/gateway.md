@@ -77,7 +77,9 @@ gateway:
     channelId: "555"
 ```
 
-`packages/trent-core/src/gateway/RunApprovalLink.ts` observes the run's events: on
+`packages/trent-core/src/gateway/RunApprovalLink.ts` rides on the headless runtime's bus hooks
+(`HeadlessRuntimeDeps.busHooks`, composed with the improve loop and telemetry), so it sees every run
+the runtime executes, whichever surface started it. On
 `step_awaiting_approval` / `run_awaiting_approval` it creates one approval row carrying `runId` and
 `stepId` (the bus emits both frames for one gate; the second is not sent again) and queues the card
 to the owner through `GatewayManager.sendApproval`. The owner's decision — a button or an
@@ -91,7 +93,5 @@ gated run stays parked until it is answered from the REPL or the TUI.
 - A published run against every live platform. The live tests exist but skip without credentials;
   only the wire tests run in CI.
 - A `gateway` check in `trent doctor` that probes a configured platform end to end.
-- Cards for gates on runs the gateway did not start (a REPL or cron run): only runs the agent
-  handler starts are observed by the link.
 - A clean release of the runtime on Ctrl+C: `apps/cli/src/index.ts` exits on SIGINT before the
   gateway's shutdown runs. Use SIGTERM for a graceful stop.

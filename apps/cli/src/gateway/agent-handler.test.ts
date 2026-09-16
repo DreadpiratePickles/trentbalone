@@ -75,12 +75,4 @@ describe("createAgentHandler", () => {
     const runtime = fakeRuntime([ev("run_start"), ev("run_cancelled")]);
     expect(await createAgentHandler(runtime)("ceo", message)).toBeNull();
   });
-
-  it("every event is handed to the observer, in order, before the reply is produced", async () => {
-    const events = [ev("run_start"), ev("step_awaiting_approval", { step: { id: "s1" } }), ev("run_done", { run: { summary: "ok" } })];
-    const seen: OrcEvent["kind"][] = [];
-    const handler = createAgentHandler(fakeRuntime(events), { observe: (event) => seen.push(event.kind) });
-    await handler("ceo", message);
-    expect(seen).toEqual(["run_start", "step_awaiting_approval", "run_done"]);
-  });
 });

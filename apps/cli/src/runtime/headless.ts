@@ -21,6 +21,7 @@ import {
   type Orchestrator,
 } from "@trent/core/orchestrator/index.js";
 import type { FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
+import type { BusHook } from "@trent/core/improve/index.js";
 import { OTelExporter, composeBusHooks, createOTelBusHook, type OTelBusHook } from "@trent/core/traces/index.js";
 import type { ImproveRunDeps } from "../commands/improve.js";
 import { EphemeralStore } from "../repl/ephemeral-store.js";
@@ -55,6 +56,12 @@ export interface HeadlessRuntimeDeps {
   readonly probeDocker?: ToolWiringDeps["probeDocker"];
   /** Opens the durable store for a database URL. Defaults to `openStore` below. */
   readonly openStore?: (databaseUrl: string) => Promise<OpenedStore>;
+  /**
+   * Extra hooks on the run bus, composed with the improve loop and telemetry: each sees every
+   * event of every run this runtime executes (REPL, gateway, cron, heartbeat) and is flushed
+   * before a run settles. The gateway's approval link rides here.
+   */
+  readonly busHooks?: readonly BusHook[];
 }
 
 export interface HeadlessRunOptions {
@@ -141,7 +148,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     // OTel export, when config names a collector: composed onto the same bus hook the improve
     // loop uses, so the orchestrator sees one sink and one flush.
     const telemetry = wireTelemetry(config as TelemetrySlice);
-    const busHook = telemetry === undefined ? improve.improve : composeBusHooks(improve.improve, telemetry);
+    const busHook = composeBusHooks(improve.improve, ...(telemetry === undefined ? [] : [telemetry]), ...(deps.busHooks ?? []));
 
     // The configured provider/model travel with the orchestrator, which maps them into the env
     // its model resolver reads before the first apps/web import (live proof, F2).

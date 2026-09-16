@@ -149,7 +149,11 @@ describe("trent gateway start", () => {
 
     const manager = f.managers[0]!;
     const sendApproval = vi.spyOn(manager, "sendApproval").mockResolvedValue({ queued: "q1", sent: true });
-    await f.managerOptions[0]!.agentHandler!("ceo", message);
+    // The link rides on the runtime's bus hooks, so a run started anywhere on this runtime
+    // (REPL, cron, heartbeat) reaches it — not only one the agent handler started.
+    const hooks = f.runtimeDeps[0]?.busHooks ?? [];
+    expect(hooks).toHaveLength(1);
+    for (const event of f.runtimeEvents) hooks[0]!.sink(event);
     expect(sendApproval).toHaveBeenCalledTimes(1);
     const [request, platform, channelId] = sendApproval.mock.calls[0]!;
     expect(platform).toBe("telegram");
