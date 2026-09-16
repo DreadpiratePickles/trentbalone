@@ -188,6 +188,40 @@ CREATE TABLE "McpServer" (
 );
 
 -- CreateTable
+CREATE TABLE "Webhook" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "companyId" TEXT NOT NULL,
+    "url" TEXT NOT NULL,
+    "secretRef" TEXT NOT NULL,
+    "events" JSONB NOT NULL DEFAULT '[]',
+    "action" TEXT,
+    "enabled" BOOLEAN NOT NULL DEFAULT true,
+    "consecutiveFailures" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "Webhook_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "WebhookDelivery" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "webhookId" TEXT NOT NULL,
+    "companyId" TEXT NOT NULL,
+    "direction" TEXT NOT NULL DEFAULT 'outbound',
+    "event" TEXT NOT NULL,
+    "payloadHash" TEXT NOT NULL,
+    "idempotencyKey" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'queued',
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "lastError" TEXT,
+    "nextAttemptAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "deliveredAt" DATETIME,
+    CONSTRAINT "WebhookDelivery_webhookId_fkey" FOREIGN KEY ("webhookId") REFERENCES "Webhook" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "WebhookDelivery_companyId_fkey" FOREIGN KEY ("companyId") REFERENCES "Company" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
 CREATE TABLE "AgentExecution" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "companyId" TEXT NOT NULL,
@@ -1120,6 +1154,24 @@ CREATE INDEX "CompanyCustomSkill_companyId_idx" ON "CompanyCustomSkill"("company
 
 -- CreateIndex
 CREATE INDEX "McpServer_companyId_idx" ON "McpServer"("companyId");
+
+-- CreateIndex
+CREATE INDEX "Webhook_companyId_idx" ON "Webhook"("companyId");
+
+-- CreateIndex
+CREATE INDEX "Webhook_companyId_enabled_idx" ON "Webhook"("companyId", "enabled");
+
+-- CreateIndex
+CREATE INDEX "WebhookDelivery_companyId_createdAt_idx" ON "WebhookDelivery"("companyId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "WebhookDelivery_webhookId_status_idx" ON "WebhookDelivery"("webhookId", "status");
+
+-- CreateIndex
+CREATE INDEX "WebhookDelivery_status_nextAttemptAt_idx" ON "WebhookDelivery"("status", "nextAttemptAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "WebhookDelivery_webhookId_idempotencyKey_key" ON "WebhookDelivery"("webhookId", "idempotencyKey");
 
 -- CreateIndex
 CREATE INDEX "Approval_companyId_status_expiresAt_idx" ON "Approval"("companyId", "status", "expiresAt");

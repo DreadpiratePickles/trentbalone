@@ -6,6 +6,7 @@ import { prismaStoreBilling } from "./prisma-store-billing";
 import { prismaStoreMarketingStripe } from "./prisma-store-marketing-stripe";
 import { prismaStoreMarketing } from "./prisma-store-marketing";
 import { prismaStoreSocial } from "./prisma-store-social";
+import { prismaStoreWebhooks } from "./prisma-store-webhooks";
 
 export const prismaStore = {
   ...prismaStoreBase,
@@ -16,4 +17,5 @@ export const prismaStore = {
   ...prismaStoreMarketingStripe,
   ...prismaStoreMarketing,
   ...prismaStoreSocial,
+  ...prismaStoreWebhooks,
 };

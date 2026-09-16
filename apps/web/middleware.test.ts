@@ -47,6 +47,14 @@ describe("middleware", () => {
     expect(mockGetToken).not.toHaveBeenCalled();
   });
 
+  it("lets /api/hooks reach its bearer-secret inbound trigger without a browser session", async () => {
+    const res = await middleware(request("/api/hooks/wh_123"));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-middleware-next")).toBe("1");
+    expect(mockGetToken).not.toHaveBeenCalled();
+  });
+
   it("still protects ordinary API routes without a browser session", async () => {
     const res = await middleware(request("/api/tasks"));
 

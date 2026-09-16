@@ -6,12 +6,13 @@ import { authSessionCookieName, usesSecureAuthCookies } from "@/lib/auth-cookies
 export default async function middleware(req: NextRequest) {
   const pathname = req.nextUrl.pathname;
 
-  // Skip gating for public, auth, health, and cron routes
+  // Skip gating for public, auth, health, cron, and bearer-secret inbound webhook routes
   if (
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/public") ||
     pathname.startsWith("/api/health") ||
     pathname.startsWith("/api/mcp") ||
+    pathname.startsWith("/api/hooks/") ||
     pathname.startsWith("/api/heartbeat/sweep") ||
     pathname.startsWith("/auth") ||
     pathname.startsWith("/public") ||

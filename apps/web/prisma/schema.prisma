@@ -99,6 +99,8 @@ model Company {
   skillDrafts          SkillDraft[]
   selfImprovementIterations SelfImprovementIteration[]
   companyPlaybookEntries    CompanyPlaybookEntry[]
+  webhooks                  Webhook[]
+  webhookDeliveries         WebhookDelivery[]
 }
 
 enum CompanyMemberRole {
@@ -299,6 +301,53 @@ model McpServer {
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId])
+}
+
+/// Outbound webhook endpoint (lib/webhooks.ts). `secretRef` is the lib/secrets
+/// ciphertext of { secret }; `events` is a JSON string array because the derived
+/// SQLite schema cannot hold scalar lists. `action` enables the inbound trigger
+/// at POST /api/hooks/:id.
+model Webhook {
+  id                  String   @id @default(cuid())
+  companyId           String
+  url                 String
+  secretRef           String
+  events              Json     @default("[]")
+  action              String?
+  enabled             Boolean  @default(true)
+  consecutiveFailures Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  company             Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  deliveries          WebhookDelivery[]
+
+  @@index([companyId])
+  @@index([companyId, enabled])
+}
+
+/// One outbound delivery attempt chain, or one inbound receipt (direction
+/// "inbound", deduplicated by idempotencyKey per webhook).
+model WebhookDelivery {
+  id             String    @id @default(cuid())
+  webhookId      String
+  companyId      String
+  direction      String    @default("outbound")
+  event          String
+  payloadHash    String
+  idempotencyKey String?
+  status         String    @default("queued")
+  attempts       Int       @default(0)
+  lastError      String?
+  nextAttemptAt  DateTime?
+  createdAt      DateTime  @default(now())
+  deliveredAt    DateTime?
+  webhook        Webhook   @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([webhookId, idempotencyKey])
+  @@index([companyId, createdAt])
+  @@index([webhookId, status])
+  @@index([status, nextAttemptAt])
 }
 
 model AgentExecution {

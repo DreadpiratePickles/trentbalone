@@ -10,7 +10,7 @@ import { runWikiIndexRefresh } from "@/lib/trench-wiki-indexer";
 export const QUEUE_NAME = "trent-autonomy-queue";
 const DEFAULT_JOB_TIMEOUT_MS = 1000 * 60 * 10;
 
-export type QueueJobName = "scheduled_cycle_sweep" | "company_scheduled_cycle" | "recurring_task_materialization" | "workbench_session_sweep" | "run_subtask" | "orchestration_step" | "wiki_index_refresh" | "platform_action" | "content_performance_ingest" | "weekly_capability_sweep";
+export type QueueJobName = "scheduled_cycle_sweep" | "company_scheduled_cycle" | "recurring_task_materialization" | "workbench_session_sweep" | "run_subtask" | "orchestration_step" | "wiki_index_refresh" | "platform_action" | "content_performance_ingest" | "weekly_capability_sweep" | "webhook_delivery";
 
 type ScheduledCycleSweepPayload = {
   jobRunId: string;
@@ -95,6 +95,17 @@ type OrchestrationStepPayload = {
   delayMs?: number;
 };
 
+export type WebhookDeliveryPayload = {
+  jobRunId: string;
+  companyId: string;
+  deliveryId: string;
+  /** The exact JSON body to sign and send; the delivery row only keeps its hash. */
+  body: string;
+  timeoutMs?: number;
+  delayMs?: number;
+  retryAttempt?: number;
+};
+
 type QueueJobPayload =
   | ScheduledCycleSweepPayload
   | CompanyCyclePayload
@@ -105,7 +116,8 @@ type QueueJobPayload =
   | WikiIndexRefreshPayload
   | PlatformActionPayload
   | ContentPerformanceIngestPayload
-  | WeeklyCapabilitySweepPayload;
+  | WeeklyCapabilitySweepPayload
+  | WebhookDeliveryPayload;
 
 type QueueAddFunction = (type: QueueJobName, data: QueueJobPayload) => Promise<void>;
 const MAX_PLATFORM_ACTION_RETRIES = 3;
@@ -212,6 +224,8 @@ export async function processJobData(type: QueueJobName, data: QueueJobPayload) 
   if (!jobRunId) throw new Error("Missing jobRunId in job data");
 
   console.log(`[Worker] Starting job ${jobRunId} of type ${type}`);
+  const { ensureWebhookSubscriber } = await import("@/lib/webhooks") as typeof import("@/lib/webhooks");
+  ensureWebhookSubscriber();
   await throwIfCancelled(jobRunId);
   const existing = await store.getJobRun(jobRunId);
   emitJobEvent({
@@ -653,6 +667,62 @@ export async function processJobData(type: QueueJobName, data: QueueJobPayload) 
     return;
   }
 
+  if (type === "webhook_delivery") {
+    const payload = data as WebhookDeliveryPayload;
+    try {
+      const { executeWebhookDeliveryJob } = await import("@/lib/webhooks") as typeof import("@/lib/webhooks");
+      const result = await withTimeout(
+        executeWebhookDeliveryJob({ deliveryId: payload.deliveryId, body: payload.body }),
+        jobTimeoutMs(data),
+        jobRunId
+      );
+      if ((await store.getJobRun(jobRunId))?.status === "cancelled") return;
+      const current = await store.getJobRun(jobRunId);
+      if (result.status === "queued") {
+        const retryAfterSeconds = Math.ceil((result.retryDelayMs ?? 0) / 1000);
+        const retry = {
+          attempts: result.delivery.attempts,
+          retryAfterSeconds,
+          reason: result.delivery.lastError ?? "delivery failed",
+          nextRetryAt: new Date(Date.now() + retryAfterSeconds * 1000).toISOString(),
+        };
+        await updateJobRunWithEvent(jobRunId, {
+          status: "running",
+          error: result.delivery.lastError,
+          summary: `Webhook delivery will retry after ${retryAfterSeconds}s (attempt ${result.delivery.attempts}).`,
+          metadata: { ...(current?.metadata ?? {}), retry },
+        });
+        await enqueueExistingJobRunForProcessing("webhook_delivery", {
+          ...payload,
+          delayMs: result.retryDelayMs,
+          retryAttempt: result.delivery.attempts,
+        });
+        return;
+      }
+      await updateJobRunWithEvent(jobRunId, {
+        status: result.status === "delivered" ? "completed" : "failed",
+        completedAt: nowIso(),
+        resultCount: result.status === "delivered" ? 1 : 0,
+        error: result.status === "delivered" ? undefined : result.delivery.lastError,
+        summary: result.status === "delivered"
+          ? `Delivered webhook after ${result.delivery.attempts} attempt${result.delivery.attempts === 1 ? "" : "s"}.`
+          : `Webhook delivery is dead after ${result.delivery.attempts} attempts.`,
+        metadata: { ...(current?.metadata ?? {}), deliveryStatus: result.status, attempts: result.delivery.attempts },
+      });
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : "Unknown webhook delivery error";
+      if ((await store.getJobRun(jobRunId))?.status === "cancelled") return;
+      await updateJobRunWithEvent(jobRunId, {
+        status: "failed",
+        completedAt: nowIso(),
+        error: errMsg,
+        summary: "Webhook delivery failed.",
+      });
+      throw error;
+    }
+    return;
+  }
+
   throw new Error(`Unknown job type: ${String(type)}`);
 }
 
@@ -696,8 +766,8 @@ async function addBullJobOrMarkFailed(type: QueueJobName, data: QueueJobPayload)
 export function queueJobIdForData(type: QueueJobName, data: QueueJobPayload): string {
   // BullMQ v5+ forbids colons in custom job IDs (conflicts with Redis key namespacing).
   // Use double-underscore as separator instead.
-  if (type === "platform_action") {
-    const payload = data as PlatformActionPayload;
+  if (type === "platform_action" || type === "webhook_delivery") {
+    const payload = data as PlatformActionPayload | WebhookDeliveryPayload;
     if (payload.delayMs && payload.delayMs > 0 && payload.retryAttempt && payload.retryAttempt > 0) {
       return `${payload.jobRunId}__retry__${payload.retryAttempt}`;
     }
@@ -920,6 +990,32 @@ export async function enqueueWeeklyCapabilitySweep(
     jobRun: job,
   });
 
+  return job;
+}
+
+export async function enqueueWebhookDelivery(input: {
+  companyId: string;
+  deliveryId: string;
+  webhookId: string;
+  event: string;
+  body: string;
+}) {
+  const job = await store.createJobRun({
+    type: "webhook_delivery",
+    status: "running",
+    companyId: input.companyId,
+    trigger: "system",
+    summary: `Delivering ${input.event} webhook.`,
+    resultCount: 0,
+    metadata: { at: nowIso(), deliveryId: input.deliveryId, webhookId: input.webhookId, event: input.event },
+  });
+
+  await addBullJobOrMarkFailed("webhook_delivery", {
+    jobRunId: job.id,
+    companyId: input.companyId,
+    deliveryId: input.deliveryId,
+    body: input.body,
+  });
   return job;
 }
 

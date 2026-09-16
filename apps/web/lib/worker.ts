@@ -34,7 +34,8 @@ const worker = new Worker(
       job.name !== "orchestration_step" &&
       job.name !== "wiki_index_refresh" &&
       job.name !== "platform_action" &&
-      job.name !== "content_performance_ingest"
+      job.name !== "content_performance_ingest" &&
+      job.name !== "webhook_delivery"
     ) {
       throw new Error(`Unknown job type: ${job.name}`);
     }
