@@ -57,6 +57,7 @@ export const DEFAULT_CONFIG: TrentConfig = {
   },
   mcp_servers: {},
   telemetry: { service_name: "trent" },
+  privacy: { redact_prompts: false, patterns: [] },
   personality: "default",
   theme: "dark",
 };

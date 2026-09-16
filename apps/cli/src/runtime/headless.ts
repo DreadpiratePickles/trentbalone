@@ -23,6 +23,7 @@ import {
 import type { FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
 import { createAlertHook, type AlertBudgetPort, type AlertHook, type AlertHookDeps } from "@trent/core/gateway/index.js";
 import type { BusHook } from "@trent/core/improve/index.js";
+import { applyPrivacyEnv, createPromptRedactor, type PromptPrivacyConfig } from "@trent/core/model-gateway/index.js";
 import { OTelExporter, composeBusHooks, createOTelBusHook, type OTelBusHook } from "@trent/core/traces/index.js";
 import type { ImproveRunDeps } from "../commands/improve.js";
 import { EphemeralStore } from "../repl/ephemeral-store.js";
@@ -123,7 +124,24 @@ interface GatewaySlice {
   gateway?: { owner?: { platform: string; channelId: string }; alerts?: { approval_wait_minutes?: number } };
 }
 
+/** The `privacy` config block as the model gateway reads it; `TrentConfig` satisfies it structurally. */
+interface PrivacySlice {
+  privacy?: PromptPrivacyConfig;
+}
+
 const DEFAULT_APPROVAL_WAIT_MINUTES = 30;
+
+/**
+ * Prompt redaction (T3.2) for this config. The orchestrator builds the model gateway with no
+ * arguments, so the block travels through the env the gateway reads, the way the model block does.
+ * The redactor is compiled here first so a bad `privacy.patterns[]` entry fails at startup with
+ * its index (exit code 3) rather than on the first prompt. Returns the env names written.
+ */
+export function wirePromptRedaction(config: PrivacySlice): string[] {
+  if (config.privacy === undefined) return [];
+  createPromptRedactor({ enabled: config.privacy.redact_prompts, patterns: config.privacy.patterns });
+  return applyPrivacyEnv(config.privacy);
+}
 
 /**
  * The push-alert hook for this config and sender, or nothing when no sender was injected. The
@@ -197,7 +215,9 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     );
 
     // The configured provider/model travel with the orchestrator, which maps them into the env
-    // its model resolver reads before the first apps/web import (live proof, F2).
+    // its model resolver reads before the first apps/web import (live proof, F2). The privacy
+    // block takes the same road, before the gateway is built.
+    wirePromptRedaction(config as PrivacySlice);
     const createOrchestrator = deps.createOrchestrator ?? createRealOrchestrator;
     const orchestrator = createOrchestrator({
       ...(durable ? { databaseUrl } : {}),

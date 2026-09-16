@@ -180,6 +180,8 @@ export const TrentConfigSchema = z.object({
   mcp_servers: McpServersConfigSchema.default({}),
   repl: z.object({ double_text_policy: z.enum(["enqueue", "interrupt", "reject"]).default("enqueue") }).default({}),
   telemetry: TelemetryConfigSchema.default({}),
+  /** Prompt-side redaction in the model gateway (docs/security.md, "Prompt redaction"). */
+  privacy: z.object({ redact_prompts: z.boolean().default(false), patterns: z.array(z.string()).default([]) }).default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
 }).passthrough();

@@ -101,6 +101,15 @@ export type ModelGatewayConfig = {
   allowedProviders?: ModelProvider[];
   models?: { executor?: string; planner?: string };
   streamProvider?: ProviderStreamFn;
+  /**
+   * The `privacy` block of config. Omitted means "read the env bridge" (`TRENT_PRIVACY_*`), which
+   * the headless runtime writes from config because the orchestrator builds its gateway with no
+   * arguments. When `redact_prompts` is on, every message content is redacted before the provider
+   * call (`redact.ts`); a bad `patterns[]` entry throws at construction, not on the first prompt.
+   */
+  privacy?: { redact_prompts: boolean; patterns: readonly string[] };
+  /** Where the per-request redaction summary goes (hit counts only). Defaults to a stderr logger. */
+  redactionLog?: (event: string, fields: Record<string, unknown>) => void;
 };
 
 export interface ModelGateway {

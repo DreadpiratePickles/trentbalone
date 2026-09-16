@@ -127,3 +127,18 @@ export function containsSecret(text: string): boolean {
 export function redactionRuleNames(): string[] {
   return RULES.map((r) => r.name);
 }
+
+/** One secret detector: the rule name, its pattern and the `$n` template that keeps the context. */
+export interface SecretDetector {
+  readonly name: string;
+  readonly pattern: RegExp;
+  readonly replacement: string;
+}
+
+/**
+ * The detectors themselves, in application order, for a redactor that needs to substitute its own
+ * placeholder (the model gateway's numbered tokens). Same rules, same order, nothing else.
+ */
+export function secretDetectors(): readonly SecretDetector[] {
+  return RULES;
+}

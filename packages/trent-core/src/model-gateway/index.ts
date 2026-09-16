@@ -36,9 +36,23 @@ import type {
 } from "./types.js";
 
 import { priceCall } from "./pricing.js";
+import { createPromptRedactor, privacyFromEnv } from "./redact.js";
+import { StructuredLogger } from "../telemetry/logger.js";
 
 export type * from "./types.js";
 export { MODEL_PRICE_TABLE, priceCall, priceRowFor, normaliseModelId, type ModelPriceRow, type PricedCall, type PriceSource } from "./pricing.js";
+export {
+  applyPrivacyEnv,
+  createPromptRedactor,
+  privacyFromEnv,
+  redactionToken,
+  PRIVACY_ENV,
+  type PromptPrivacyConfig,
+  type PromptRedactor,
+  type RedactedMessages,
+  type RedactedText,
+  type RedactionHit,
+} from "./redact.js";
 
 const API_KEY_ENV: Record<ModelProvider, string> = {
   openai: "OPENAI_API_KEY",
@@ -107,6 +121,13 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
 
   const streamFn = config.streamProvider ?? defaultStreamProvider;
 
+  // T3.2: prompts are redacted here, at the one point every message leaves for a provider. A bad
+  // user pattern throws now (exit code 3), so the operator learns at startup, not mid-run.
+  const privacy = config.privacy ?? privacyFromEnv();
+  const redactor = createPromptRedactor({ enabled: privacy.redact_prompts, patterns: privacy.patterns });
+  const redactionLogger = config.redactionLog === undefined ? new StructuredLogger({ runId: "model-gateway" }) : undefined;
+  const redactionLog = config.redactionLog ?? ((event, fields) => redactionLogger?.info(event, fields));
+
   function resolveRoute(role: StreamRole = "executor"): GatewayRoute {
     const route = gatewayModule.routeWorkbenchStream(role, policy);
     return {
@@ -147,7 +168,13 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
 
     const maxTokens = req.maxTokens ?? DEFAULT_MAX_TOKENS;
     const temperature = req.temperature ?? 0.2;
-    const promptChars = req.messages.map((m) => m.content).join("\n");
+    // Every message content, system prompt and tool results included; hit counts only are logged.
+    const redacted = redactor.redactMessages(req.messages);
+    const messages = redacted.messages;
+    if (redactor.enabled && redacted.hits.length > 0) {
+      redactionLog("prompt.redacted", { role, messageCount: messages.length, hits: redacted.hits });
+    }
+    const promptChars = messages.map((m) => m.content).join("\n");
 
     let lastError: unknown;
 
@@ -172,7 +199,7 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
         // Breaking out of this loop calls the upstream generator's return(),
         // which closes the underlying reader. That is our cancellation (trap 5).
         for await (const frame of streamFn(provider, model, {
-          messages: req.messages as GatewayMessage[],
+          messages: messages as GatewayMessage[],
           temperature,
           maxTokens,
         })) {
