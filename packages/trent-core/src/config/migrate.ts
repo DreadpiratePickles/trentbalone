@@ -38,8 +38,29 @@ function upgradeV1ToV2(raw: Raw, notes: string[]): Raw {
   return next;
 }
 
+const RETIRED_BACKENDS = new Set(["ssh", "e2b"]);
+
+/**
+ * v2 -> v3: the `ssh` and `e2b` terminal backends were mocks that returned a success
+ * string without running anything. They collapse to `docker`, the isolated backend that
+ * actually executes, and the note tells the operator their config was changed.
+ */
+function upgradeV2ToV3(raw: Raw, notes: string[]): Raw {
+  const next: Raw = { ...raw, version: 3 };
+  const terminal = (raw.terminal && typeof raw.terminal === "object" ? raw.terminal : {}) as Raw;
+  const backend = terminal.backend;
+  if (typeof backend === "string" && RETIRED_BACKENDS.has(backend)) {
+    next.terminal = { ...terminal, backend: "docker" };
+    notes.push(
+      `terminal.backend "${backend}" was a mock that never ran commands; it now reads docker`,
+    );
+  }
+  return next;
+}
+
 const STEPS: Record<number, (raw: Raw, notes: string[]) => Raw> = {
   1: upgradeV1ToV2,
+  2: upgradeV2ToV3,
 };
 
 /**

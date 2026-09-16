@@ -38,7 +38,7 @@ through instead of being stripped, so a config written by a newer release is not
 older one.
 
 ```yaml
-version: 2                    # integer on-disk schema version
+version: 3                    # integer on-disk schema version
 profile: default
 provider: openai              # openai anthropic google mistral openrouter deepseek groq ollama
 model: gpt-5.6-terra
@@ -57,12 +57,10 @@ budget:
   alert_thresholds: [50, 80, 100]   # percentages, not money
 
 terminal:
-  backend: docker             # docker | ssh | e2b | local
+  backend: docker             # docker | local
   docker:
     image: trent-sandbox:latest
     network: bridge
-  ssh:
-    port: 22
 
 egress:
   enabled: true
@@ -72,12 +70,6 @@ egress:
     - api.openai.com
     - api.anthropic.com
     - generativelanguage.googleapis.com
-
-voice:
-  enabled: false
-  model: base                 # tiny | base | small | medium
-  trigger_key: Ctrl+B
-  tts_enabled: false
 
 gateway:
   enabled: false
@@ -170,10 +162,13 @@ npm run cli -- doctor --json | grep -A3 '"category": "Environment"'
 
 ## Migrations
 
-`config.yaml` carries an integer `version`. `CONFIG_SCHEMA_VERSION` is currently 2.
+`config.yaml` carries an integer `version`. `CONFIG_SCHEMA_VERSION` is currently 3.
 
 - 1: the pre-versioned layout, with budget in float dollars.
 - 2: an explicit integer `version` key, with budget in integer cents.
+- 3: `terminal.backend` accepts only `docker` and `local`. A stored `ssh` or `e2b` (both were mocks
+  that returned a success string without running anything) is rewritten to `docker`, and the
+  migration result carries a note saying so.
 
 Migration steps live in `packages/trent-core/src/config/migrate.ts`. Bump the constant and add a step
 whenever the stored shape changes.
@@ -183,3 +178,7 @@ whenever the stored shape changes.
 - Cloud profiles or a hosted configuration store. `TRENT_CLOUD_TOKEN` is reserved in the secrets
   schema and nothing consumes it.
 - A `trent config edit` command. Edit the YAML directly.
+- Voice transcription. There is no `voice` section in the schema and no speech engine behind the
+  `/voice` command; calling it raises a `TrentError` (`voice.transcribe: voice transcription is not
+  available in this release`). A `voice:` block left over in an older `config.yaml` is ignored, not
+  migrated: the schema passes unknown top-level keys through untouched.

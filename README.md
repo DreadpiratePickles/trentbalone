@@ -169,8 +169,9 @@ external dependencies to install", not "a single binary": Next.js cannot be comp
   must be in `egress.intercept_domains`) and again on the decrypted request (token must resolve),
   then swaps the token for the secret. The REPL starts a session-scoped proxy; `trent egress start`
   runs a daemon. `packages/trent-core/src/egress/`.
-- **Sandboxed execution.** Docker is the only isolating backend; `local` runs with no isolation;
-  `ssh` and `e2b` are declared in the schema but return canned strings and must not be used.
+- **Sandboxed execution.** Docker is the only isolating backend; `local` runs with no isolation.
+  Those are the only two backends the schema accepts (config v3 collapses older `ssh`/`e2b`
+  values to `docker`).
 - **Secrets never printed.** `trent config get <SECRET>` reports `[set]`. Secrets route to
   `~/.trent/.env`, never `config.yaml`.
 - **Signed releases, once they exist.** The installer embeds two public keys

@@ -43,41 +43,6 @@ export const checkWorkbench: DoctorCheck = {
       });
     }
 
-    if (backend === "ssh") {
-      const host = config.terminal?.ssh?.host;
-      if (!host) {
-        return result({
-          status: "fail",
-          message: "Sandbox backend is \"ssh\" but no host is configured, so no sandbox can be opened.",
-          fixHint: "Run `trent config set terminal.ssh.host <hostname>`.",
-          details: { backend },
-        });
-      }
-      return result({
-        status: "warn",
-        message: `Sandbox backend is "ssh" targeting ${host}; the doctor does not open an SSH session to verify it.`,
-        fixHint: "Verify with `ssh <host> true` before relying on the sandbox.",
-        details: { backend, host },
-      });
-    }
-
-    if (backend === "e2b") {
-      const hasKey = Boolean(process.env.E2B_API_KEY);
-      return hasKey
-        ? result({
-            status: "warn",
-            message: "Sandbox backend is \"e2b\"; a key is present but no sandbox was started to verify it.",
-            fixHint: "Start one sandbox from the web app's workbench to confirm E2B accepts the key; the CLI has no sandbox command.",
-            details: { backend },
-          })
-        : result({
-            status: "fail",
-            message: "Sandbox backend is \"e2b\" but E2B_API_KEY is not set, so no sandbox can start.",
-            fixHint: "Run `trent config set E2B_API_KEY <your-api-key>`.",
-            details: { backend },
-          });
-    }
-
     const info = await dockerInfo(ctx, timeoutMs);
 
     if (info instanceof Error) {

@@ -46,7 +46,7 @@ export const checkDependencies: DoctorCheck = {
       category: "Dependencies",
       name: "System Binaries",
       status: "ok",
-      message: `All core binaries present (git, node, npm). Docker sandbox: ${hasDocker ? "available" : "not detected (fallback to local/E2B)"}.`,
+      message: `All core binaries present (git, node, npm). Docker sandbox: ${hasDocker ? "available" : "not detected (fallback to local)"}.`,
       details: { available, hasDocker },
     };
   },

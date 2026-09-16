@@ -1,19 +1,14 @@
 # Terminal backends
 
-A backend is where an agent-authored command actually runs. Four are declared in the config schema.
-Two execute commands. Two return a canned string.
+A backend is where an agent-authored command actually runs. Two are declared in the config schema,
+and both execute commands.
 
 ```yaml
 terminal:
-  backend: docker             # docker | ssh | e2b | local
+  backend: docker             # docker | local
   docker:
     image: trent-sandbox:latest
     network: bridge
-  ssh:
-    host: build-01.internal
-    port: 22
-    user: trent
-    key_path: ~/.ssh/id_ed25519
 ```
 
 ## Status
@@ -22,11 +17,11 @@ terminal:
 |---|---|:---:|---|
 | Docker sandbox | `docker` | yes | The only real isolation |
 | Local execution | `local` | yes | No isolation. Named "Local Execution Backend (Development Only)" in the source |
-| Remote SSH | `ssh` | no | `execute` returns `[SSH Mock Backend: executed on user@host:port]` |
-| E2B cloud microVM | `e2b` | no | `execute` returns `[E2B Sandbox]: executed command: <command>` |
 
-Choosing `ssh` or `e2b` today gives you a string that looks like success, exit code 0, and no work
-performed. Do not use them.
+Schema version 2 also listed `ssh` and `e2b`. Neither ever ran a command: each returned a string
+that looked like success with exit code 0. Both classes are deleted, and the v2 -> v3 config
+migration rewrites a stored `ssh` or `e2b` to `docker` and reports the change in its notes. A
+leftover `terminal.ssh` block in `config.yaml` is accepted and ignored.
 
 ## Docker
 
@@ -135,8 +130,7 @@ getting `407`; see the threat model in `scripts/installer/THREAT-MODEL.md`.
 
 ## Not yet implemented
 
-- Real SSH execution, host key verification, key-based authentication.
-- Real E2B microVM execution.
+- A remote (SSH) or cloud microVM (E2B) backend. Neither exists; the earlier entries were mocks.
 - A published `trent-sandbox` image (it is built locally by `trent sandbox build`).
 - A PTY backend of any kind.
 - Automatic mounting of the egress CA into a running container. The certificate and the environment

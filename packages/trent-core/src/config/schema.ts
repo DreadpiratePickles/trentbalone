@@ -31,7 +31,7 @@ export const ToolsetSchema = z.enum([
 
 export type Toolset = z.infer<typeof ToolsetSchema>;
 
-export const TerminalBackendSchema = z.enum(["docker", "ssh", "e2b", "local"]);
+export const TerminalBackendSchema = z.enum(["docker", "local"]);
 export type TerminalBackendType = z.infer<typeof TerminalBackendSchema>;
 
 /**
@@ -156,8 +156,9 @@ export type McpServersConfig = z.infer<typeof McpServersConfigSchema>;
  * `migrate.ts` whenever the stored shape changes.
  *   1 -> pre-versioned layout, budget in float dollars.
  *   2 -> integer `version` key, budget in integer cents.
+ *   3 -> terminal.backend ssh|e2b collapsed to docker (the mock backends are gone).
  */
-export const CONFIG_SCHEMA_VERSION = 2;
+export const CONFIG_SCHEMA_VERSION = 3;
 
 /**
  * Unknown top-level keys pass through instead of being silently stripped, so

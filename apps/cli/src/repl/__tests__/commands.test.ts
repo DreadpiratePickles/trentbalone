@@ -154,7 +154,7 @@ describe("every command, without exception", () => {
     for (const name of commandNames()) before.set(name, await runCommand(name, [], ctx));
 
     // One broad mutation touching every state source a command may read.
-    config.terminal.backend = "ssh";
+    config.terminal.backend = "local";
     config.model = "gemini-3.0-pro";
     (config as Record<string, unknown>).mcp = { servers: [{ id: "fs", transport: "stdio", enabled: true }] };
     ctx.budget.record(42);
