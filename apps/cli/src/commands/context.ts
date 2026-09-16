@@ -8,7 +8,9 @@
 
 import { ConfigManager } from "@trent/core/config/index.js";
 import type { DoctorCheck, DoctorReport } from "@trent/core/doctor/index.js";
+import type { GatewayManager, GatewayManagerOptions } from "@trent/core/gateway/index.js";
 import type { SetupMode } from "@trent/core/setup/index.js";
+import type { HeadlessRuntime, HeadlessRuntimeDeps } from "../runtime/headless.js";
 import { createTheme, detectColorMode, type Theme } from "../ui/index.js";
 
 export interface SetupSummary {
@@ -51,6 +53,10 @@ export interface CliOverrides {
   webOpen?: (url: string) => void;
   /** Where `trent web` looks for `apps/web`; defaults to the working directory and its parents. */
   webRepoRoot?: string;
+  /** Replace the headless runtime `trent gateway start` builds (a fake needs no proxy, sandbox or model). */
+  gatewayRuntime?: (deps: HeadlessRuntimeDeps) => Promise<HeadlessRuntime>;
+  /** Replace the gateway manager `trent gateway start` builds (a test records the options it was built with). */
+  gatewayManager?: (configManager: ConfigManager, options: GatewayManagerOptions) => GatewayManager;
 }
 
 export interface CommandContext {

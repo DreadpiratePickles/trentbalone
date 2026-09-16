@@ -59,7 +59,7 @@ export class ApprovalBridge extends EventEmitter {
     agentId: string,
     action: string,
     details: Record<string, unknown>,
-    options?: { budgetImpact?: number; estimatedDurationMs?: number },
+    options?: { budgetImpact?: number; estimatedDurationMs?: number; runId?: string; stepId?: string },
   ): ApprovalRequest {
     const id = `appr_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
     const row: ApprovalRow = {
@@ -70,6 +70,8 @@ export class ApprovalBridge extends EventEmitter {
       details,
       budgetImpact: options?.budgetImpact,
       estimatedDurationMs: options?.estimatedDurationMs,
+      runId: options?.runId,
+      stepId: options?.stepId,
       status: "pending",
       createdAt: new Date().toISOString(),
       deliveredTo: [],

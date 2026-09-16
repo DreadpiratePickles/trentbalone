@@ -6,6 +6,7 @@ export * from "./queue/CircuitBreaker.js";
 export * from "./queue/MessageQueue.js";
 export * from "./registry.js";
 export * from "./ApprovalBridge.js";
+export * from "./RunApprovalLink.js";
 export * from "./GatewayManager.js";
 export * from "./WebhookServer.js";
 export { TelegramAdapter } from "./platforms/telegram.js";

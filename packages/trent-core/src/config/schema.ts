@@ -76,6 +76,8 @@ export const GatewayConfigSchema = z.object({
   enabled: z.boolean().default(false),
   platforms: z.array(z.string()).default([]),
   routes: z.record(z.string(), z.string()).default({}), // platform -> agentId
+  /** Who receives approval cards and heartbeat messages: a platform id and a channel on it. */
+  owner: z.object({ platform: z.string(), channelId: z.string() }).optional(),
 });
 
 export const FleetConfigSchema = z.object({

@@ -58,6 +58,9 @@ export interface ApprovalRow {
   decidedBy?: string;
   /** Where the card was delivered, so the decision can be echoed back. */
   deliveredTo?: Array<{ platform: string; channelId: string; messageId: string }>;
+  /** The orchestrator run and step this row gates, when the request came off a run's bus. */
+  runId?: string;
+  stepId?: string;
 }
 
 export interface GatewayState {

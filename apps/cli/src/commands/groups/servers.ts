@@ -11,12 +11,15 @@
 
 import { A2AServer, generateAgentCard } from "@trent/core/a2a/index.js";
 import { ACPServer } from "@trent/core/acp/index.js";
-import { GatewayManager } from "@trent/core/gateway/index.js";
+import { GatewayManager, linkRunApprovals, type RunApprovalLink } from "@trent/core/gateway/index.js";
 import { egressBindHosts, TokenManager } from "@trent/core/egress/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import type { CommandContext } from "../context.js";
 import type { CommandSpec } from "../registry.js";
+import { createAgentHandler } from "../../gateway/agent-handler.js";
 import { startEgressProxy } from "../../repl/tools.js";
+import type { ReplConfig } from "../../repl/types.js";
+import { createHeadlessRuntime } from "../../runtime/headless.js";
 import {
   BUILD_HINT,
   buildStandalone,
@@ -42,6 +45,21 @@ function parsePort(value: unknown, operation: string, fallback: string): number 
     });
   }
   return port;
+}
+
+/**
+ * A keep-alive command that owns a runtime releases it on SIGTERM and SIGHUP before the process
+ * goes, as `trent web` does for its child. Ctrl+C is answered by the binary itself (`index.ts`),
+ * which exits at once.
+ */
+function releaseOnSignal(release: () => Promise<void>): void {
+  let releasing: Promise<void> | undefined;
+  for (const signal of ["SIGTERM", "SIGHUP"] as const) {
+    process.once(signal, () => {
+      releasing ??= release().catch(() => undefined);
+      void releasing.finally(() => process.exit(EXIT.INTERRUPT));
+    });
+  }
 }
 
 function listeningRender(kind: string) {
@@ -183,9 +201,10 @@ export const gatewaySpec: CommandSpec = {
       name: "start",
       description: "Start listeners for every configured messaging platform",
       async run(ctx) {
-        const manager = new GatewayManager(ctx.config());
+        const configManager = ctx.config();
+        const buildManager = ctx.overrides.gatewayManager ?? ((cm, options) => new GatewayManager(cm, options));
         if (ctx.dryRun) {
-          const status = manager.getStatus();
+          const status = buildManager(configManager, {}).getStatus();
           return {
             data: {
               dryRun: true,
@@ -196,17 +215,60 @@ export const gatewaySpec: CommandSpec = {
             },
           };
         }
+        // The same object graph the REPL runs on, with no terminal: every message that passes the
+        // pairing gate becomes a real orchestrated run, and its consolidated summary is the reply.
+        const config = configManager.loadConfig();
+        const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({
+          configManager,
+          config: config as unknown as ReplConfig,
+        });
+        // A gated step on any run this handler starts becomes a card to `gateway.owner`, and the
+        // owner's decision releases the step. The link needs the manager, which needs the handler,
+        // which observes events into the link: the closure resolves the cycle.
+        let link: RunApprovalLink | undefined;
+        const manager = buildManager(configManager, {
+          agentHandler: createAgentHandler(runtime, { observe: (event) => link?.sink(event) }),
+        });
+        link = linkRunApprovals({
+          orchestrator: runtime.orchestrator,
+          bridge: manager.getApprovalBridge(),
+          manager,
+          owner: config.gateway.owner,
+          log: (line) => ctx.err(line),
+        });
+        const shutdown = async (): Promise<void> => {
+          link?.close();
+          await manager.stopAll();
+          await runtime.cleanup();
+        };
         const started = await manager.startAllConfigured();
-        return { data: { started, count: started.length }, keepAlive: started.length > 0 };
+        if (started.length === 0) {
+          // Nothing is listening, so the process exits: the proxy and the sandboxes go first.
+          await shutdown();
+        } else {
+          releaseOnSignal(shutdown);
+        }
+        return {
+          data: { started, count: started.length, agentHandler: true, approvalLink: link.active },
+          keepAlive: started.length > 0,
+        };
       },
       render(data, ctx) {
-        const d = data as { started?: string[]; wouldStart?: string[]; dryRun?: boolean };
+        const d = data as { started?: string[]; wouldStart?: string[]; dryRun?: boolean; approvalLink?: boolean };
         const list = (d.dryRun === true ? d.wouldStart : d.started) ?? [];
-        return [
+        const lines = [
           `  ${ctx.theme.success(d.dryRun === true ? "would start" : "started")} ${ctx.theme.value(
             list.length > 0 ? list.join(", ") : "none",
           )}`,
         ];
+        if (d.approvalLink !== undefined) {
+          lines.push(
+            d.approvalLink
+              ? `  ${ctx.theme.meta("run approvals go to")} ${ctx.theme.value("gateway.owner")}`
+              : `  ${ctx.theme.meta("run approvals stay local: set gateway.owner { platform, channelId } in config.yaml")}`,
+          );
+        }
+        return lines;
       },
     },
   ],
