@@ -2,6 +2,7 @@ import { z } from "zod";
 import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import { TelemetryConfigSchema } from "./telemetry-schema.js";
 import { PolicyRuleSchema } from "../governance/policy-rules.js";
+import { DEFAULT_MEMORY_BLOCKS, MEMORY_BLOCK_LABEL_PATTERN } from "../tools/memory/blocks.js";
 
 export const ProviderSchema = z.enum([
   "openai",
@@ -97,6 +98,21 @@ export const HeartbeatConfigSchema = z.object({
   consolidate_memory: z.boolean().default(true),
 });
 export type HeartbeatConfig = z.infer<typeof HeartbeatConfigSchema>;
+
+/**
+ * `memory.blocks`: the named memory blocks every seat reads in its prelude (T4.3). Each is one
+ * file under `<profile>/memories/` with its own character limit; `read_only` blocks are written
+ * by the founder or the heartbeat, never by a seat. Defaults: `memory`, `user`, `company`.
+ */
+export const MemoryBlockSchema = z.object({
+  label: z.string().regex(MEMORY_BLOCK_LABEL_PATTERN),
+  file: z.string().min(1),
+  description: z.string().min(1),
+  limit: z.number().int().positive(),
+  read_only: z.boolean().default(false),
+});
+export type MemoryBlockConfig = z.infer<typeof MemoryBlockSchema>;
+export const MemoryConfigSchema = z.object({ blocks: z.array(MemoryBlockSchema).default([...DEFAULT_MEMORY_BLOCKS]) });
 
 export const FleetConfigSchema = z.object({
   installed_agents: z.array(z.string()).default(["ceo", "eng-ai-engineer", "support-responder"]),
@@ -199,6 +215,7 @@ export const TrentConfigSchema = z.object({
   privacy: z.object({ redact_prompts: z.boolean().default(false), patterns: z.array(z.string()).default([]) }).default({}),
   /** Trace-level rules over tool classes; appended to the shipped defaults, same id overrides. */
   policy: z.object({ rules: z.array(PolicyRuleSchema).default([]) }).default({}),
+  memory: MemoryConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
 }).passthrough();

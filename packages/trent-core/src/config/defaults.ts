@@ -1,6 +1,7 @@
 import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import type { TrentConfig } from "./schema.js";
 import { CONFIG_SCHEMA_VERSION } from "./schema.js";
+import { DEFAULT_MEMORY_BLOCKS } from "../tools/memory/blocks.js";
 
 /** Money fields are INTEGER CENTS. daily_cap 1000 = USD 10.00 per day. */
 export const DEFAULT_CONFIG: TrentConfig = {
@@ -56,6 +57,7 @@ export const DEFAULT_CONFIG: TrentConfig = {
     active_agents: ["ceo"],
     default_agent: "ceo",
   },
+  memory: { blocks: [...DEFAULT_MEMORY_BLOCKS] },
   mcp_servers: {},
   telemetry: { service_name: "trent" },
   privacy: { redact_prompts: false, patterns: [] },

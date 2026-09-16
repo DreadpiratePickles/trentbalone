@@ -1,22 +1,35 @@
 /**
- * The two memory files and the rule that governs them: a hard character cap checked on the FINAL
+ * The memory files and the rule that governs them: a hard character cap checked on the FINAL
  * state of a batch, so a seat can remove-and-add in one atomic operation. Writes are temp-file
  * then rename, owner-only, and a failed batch leaves the file byte-identical.
  *
- * The files are COMPANY memory: every seat in the fleet reads and writes the same two files
+ * The files are COMPANY memory: every seat in the fleet reads and writes the same files
  * (see `../../fleet-memory/README.md`). `commitOperations` is the only writer: it takes a lock,
  * re-reads the file, applies the batch against that fresh state and renames the result in, so two
  * seats committing in parallel steps merge by entry and neither loses the other's write.
+ *
+ * Every function here addresses a file by `MemoryFileRef`: either a configured `MemoryBlock`
+ * (`blocks.ts`) or one of the two legacy `MemoryTarget` labels `"memory" | "user"`, which resolve
+ * to the default MEMORY.md / USER.md so the consolidation path and older callers keep working.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { NODE_IO, atomicWriteFileSync } from "../../config/atomic-fs.js";
+import { DEFAULT_MEMORY_BLOCKS, findBlock, type MemoryBlock } from "./blocks.js";
 
 export type MemoryTarget = "memory" | "user";
+export type MemoryFileRef = MemoryTarget | MemoryBlock;
 export type MemoryAction = "add" | "replace" | "remove";
 
-export const MEMORY_CAPS: Record<MemoryTarget, number> = { memory: 2200, user: 1375 };
-export const MEMORY_FILES: Record<MemoryTarget, string> = { memory: "MEMORY.md", user: "USER.md" };
+function defaultBlock(label: MemoryTarget): MemoryBlock {
+  const block = findBlock(DEFAULT_MEMORY_BLOCKS, label);
+  if (!block) throw new Error(`default memory block "${label}" is missing`);
+  return block;
+}
+
+/** The two legacy blocks' caps and files, derived from `DEFAULT_MEMORY_BLOCKS` so there is one source. */
+export const MEMORY_CAPS: Record<MemoryTarget, number> = { memory: defaultBlock("memory").limit, user: defaultBlock("user").limit };
+export const MEMORY_FILES: Record<MemoryTarget, string> = { memory: defaultBlock("memory").file, user: defaultBlock("user").file };
 export const ENTRY_SEPARATOR = "\n§\n";
 const OWNER_ONLY = 0o600;
 
@@ -30,11 +43,16 @@ export type ApplyResult =
   | { ok: true; entries: string[]; rendered: string; remaining: number }
   | { ok: false; reason: string };
 
-export function memoryPath(profileDir: string, target: MemoryTarget): string {
-  return path.join(profileDir, "memories", MEMORY_FILES[target]);
+/** The file name a target resolves to: the block's own, or the default block for a legacy label. */
+export function memoryFileName(target: MemoryFileRef): string {
+  return typeof target === "string" ? MEMORY_FILES[target] : target.file;
 }
 
-export function readEntries(profileDir: string, target: MemoryTarget): string[] {
+export function memoryPath(profileDir: string, target: MemoryFileRef): string {
+  return path.join(profileDir, "memories", memoryFileName(target));
+}
+
+export function readEntries(profileDir: string, target: MemoryFileRef): string[] {
   const file = memoryPath(profileDir, target);
   if (!fs.existsSync(file)) return [];
   const raw = fs.readFileSync(file, "utf8");
@@ -103,7 +121,7 @@ export function applyOperations(
 }
 
 /** Write-then-rename, 0600. The previous file survives any failure. */
-export function writeEntries(profileDir: string, target: MemoryTarget, rendered: string): void {
+export function writeEntries(profileDir: string, target: MemoryFileRef, rendered: string): void {
   const file = memoryPath(profileDir, target);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   atomicWriteFileSync(NODE_IO, file, rendered, OWNER_ONLY);
@@ -159,7 +177,7 @@ function acquireLock(file: string): () => void {
  */
 export function commitOperations(
   profileDir: string,
-  target: MemoryTarget,
+  target: MemoryFileRef,
   operations: readonly MemoryOperation[],
   cap: number
 ): ApplyResult {

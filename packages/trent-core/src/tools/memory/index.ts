@@ -1,70 +1,86 @@
 /**
- * The `memory` toolset: Hermes's `memory(target, action|operations)` over `<profile>/memories/`.
+ * The `memory` toolset: Hermes's `memory(target, action|operations)` over `<profile>/memories/`,
+ * generalised to named blocks (T4.3).
  *
- * MEMORY.md holds what the fleet learned (2200 chars); USER.md holds what it knows about the
- * person (1375 chars). Both are COMPANY memory: one pair of files per profile, shared by every
- * seat (ceo, engineer, growth, ... and any installed specialist). They are rendered once per run by
- * `frozenSnapshot()` for every seat's prelude, so each model reasons over a stable view while
- * writes land on disk for the NEXT run (`thaw()` ends the freeze; the fleet hook calls it when a
- * run settles). Delegated children read the snapshot like everyone else but can never write:
- * either the adapter is constructed `readOnly`, or `callerContext()` reports the current step as
- * delegated. Hermes blocks subagent memory entirely; Trent allows the read.
+ * A block is one file with a label, a description, a character limit and a write rule, listed in
+ * config `memory.blocks[]` (`blocks.ts` holds the defaults: `memory` = MEMORY.md, 2200 chars,
+ * `user` = USER.md, 1375 chars, and the read-only `company` = COMPANY.md, 1500 chars). All are
+ * COMPANY memory: one set of files per profile, shared by every seat (ceo, engineer, growth, ...
+ * and any installed specialist). They are rendered once per run by `frozenSnapshot()` for every
+ * seat's prelude, so each model reasons over a stable view while writes land on disk for the NEXT
+ * run (`thaw()` ends the freeze; the fleet hook calls it when a run settles). Delegated children
+ * read the snapshot like everyone else but can never write: either the adapter is constructed
+ * `readOnly`, or `callerContext()` reports the current step as delegated. A `read_only` block is
+ * refused for every seat, naming the label. Hermes blocks subagent memory entirely; Trent allows
+ * the read.
  */
 import fs from "node:fs";
 import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
 import { parseAction, record as toRecord, type ToolSpec } from "../action.js";
 import { renderToolInstructions, type ToolSchema } from "../web/schemas.js";
-import {
-  ENTRY_SEPARATOR,
-  MEMORY_CAPS,
-  commitOperations,
-  memoryPath,
-  type MemoryOperation,
-  type MemoryTarget,
-} from "./store.js";
+import { DEFAULT_MEMORY_BLOCKS, assertDistinctBlocks, findBlock, type MemoryBlock } from "./blocks.js";
+import { ENTRY_SEPARATOR, commitOperations, memoryPath, type MemoryOperation } from "./store.js";
 
+export { DEFAULT_MEMORY_BLOCKS, MEMORY_BLOCK_LABEL_PATTERN, assertDistinctBlocks, findBlock } from "./blocks.js";
+export type { MemoryBlock } from "./blocks.js";
 export { MEMORY_CAPS, ENTRY_SEPARATOR, MEMORY_FILES, applyOperations, commitOperations, readEntries } from "./store.js";
-export type { MemoryOperation, MemoryTarget } from "./store.js";
+export type { MemoryFileRef, MemoryOperation, MemoryTarget } from "./store.js";
 
 export const MEMORY_ADAPTER_NAME = "memory";
+const DEFAULT_BLOCK_LABEL = "memory";
 const SPECS: readonly ToolSpec[] = [{ name: "memory", primary: "content", signature: ["target"] }];
 const ROUTING_TEXT =
   "remember this, save a note for later, memory, recall preferences, record a fact about the user, " +
   "persist across sessions, forget, update what you know";
 
-export const MEMORY_TOOL_SCHEMAS: ToolSchema[] = [
-  {
-    name: "memory",
-    description:
-      "Persist a durable note shared by every seat in the company. target=memory for what the fleet learned " +
-      "about the work (2200 chars total), target=user for facts about the person (1375 chars total). Use a single action, or a batch of " +
-      "operations that is applied atomically; the cap is checked on the final state, so remove and " +
-      "add in one call to make room. Entries are short; the current contents are already in your prompt.",
-    parameters: {
-      type: "object",
-      properties: {
-        target: { type: "string", enum: ["memory", "user"] },
-        action: { type: "string", enum: ["add", "replace", "remove"] },
-        content: { type: "string", description: "New entry text (add, replace)." },
-        old_text: { type: "string", description: "Unique substring of the entry to replace or remove." },
-        operations: {
-          type: "array",
-          description: "Batch form: [{action, content?, old_text?}] applied in order, all or nothing.",
-          items: {
-            type: "object",
-            properties: {
-              action: { type: "string", enum: ["add", "replace", "remove"] },
-              content: { type: "string" },
-              old_text: { type: "string" },
+function describeBlocks(blocks: readonly MemoryBlock[]): string {
+  return blocks
+    .map((b) => `${b.label} = ${b.description} (${b.limit} chars total${b.read_only ? ", read-only for seats" : ""})`)
+    .join("; ");
+}
+
+/** The tool schema for one configured block list; the enum and the description name every label. */
+export function memoryToolSchemas(blocks: readonly MemoryBlock[]): ToolSchema[] {
+  const writable = blocks.filter((b) => !b.read_only).map((b) => b.label);
+  return [
+    {
+      name: "memory",
+      description:
+        "Persist a durable note shared by every seat in the company. Blocks: " +
+        `${describeBlocks(blocks)}. \`block\` (alias \`target\`) names the block and defaults to "${DEFAULT_BLOCK_LABEL}". ` +
+        "Use a single action, or a batch of " +
+        "operations that is applied atomically; the cap is checked on the final state, so remove and " +
+        "add in one call to make room. Entries are short; the current contents are already in your prompt.",
+      parameters: {
+        type: "object",
+        properties: {
+          target: { type: "string", enum: writable, description: `Block label to write; defaults to "${DEFAULT_BLOCK_LABEL}".` },
+          block: { type: "string", enum: writable, description: "Same as target." },
+          action: { type: "string", enum: ["add", "replace", "remove"] },
+          content: { type: "string", description: "New entry text (add, replace)." },
+          old_text: { type: "string", description: "Unique substring of the entry to replace or remove." },
+          operations: {
+            type: "array",
+            description: "Batch form: [{action, content?, old_text?}] applied in order, all or nothing.",
+            items: {
+              type: "object",
+              properties: {
+                action: { type: "string", enum: ["add", "replace", "remove"] },
+                content: { type: "string" },
+                old_text: { type: "string" },
+              },
+              required: ["action"],
             },
-            required: ["action"],
           },
         },
+        required: ["target"],
       },
-      required: ["target"],
     },
-  },
-];
+  ];
+}
+
+/** The schema over the default blocks, for surfaces that list tools before any config is loaded. */
+export const MEMORY_TOOL_SCHEMAS: ToolSchema[] = memoryToolSchemas(DEFAULT_MEMORY_BLOCKS);
 
 /** What the fleet hook knows about the step currently calling the tool. */
 export interface MemoryCallerContext {
@@ -74,6 +90,8 @@ export interface MemoryCallerContext {
 
 export interface MemoryAdapterOptions {
   profileDir: string;
+  /** The named blocks (config `memory.blocks`); the three defaults when omitted. */
+  blocks?: readonly MemoryBlock[];
   /** A permanently read-only adapter: every write is refused. */
   readOnly?: boolean;
   /** Consulted on every write; lets one shared adapter refuse writes from delegated child steps. */
@@ -81,7 +99,9 @@ export interface MemoryAdapterOptions {
 }
 
 export interface MemoryAdapter extends TrentToolAdapter {
-  /** Both files rendered once; later calls return the same text even if the files change. */
+  /** The blocks this adapter serves, in prelude order. */
+  readonly blocks: readonly MemoryBlock[];
+  /** Every block rendered once; later calls return the same text even if the files change. */
   frozenSnapshot(): string;
   /** Ends the freeze: the next `frozenSnapshot()` re-reads the files. Called between runs. */
   thaw(): void;
@@ -89,8 +109,11 @@ export interface MemoryAdapter extends TrentToolAdapter {
   bindCallerContext(provider: () => MemoryCallerContext): void;
 }
 
-function isTarget(v: unknown): v is MemoryTarget {
-  return v === "memory" || v === "user";
+/** `block` wins, `target` is the Hermes-era alias, and the default block takes an unnamed write. */
+function requestedLabel(args: Record<string, unknown>): string {
+  if (typeof args.block === "string") return args.block;
+  if (typeof args.target === "string") return args.target;
+  return DEFAULT_BLOCK_LABEL;
 }
 
 function toOperations(args: Record<string, unknown>): MemoryOperation[] | string {
@@ -118,13 +141,21 @@ function toOperations(args: Record<string, unknown>): MemoryOperation[] | string
   ];
 }
 
-function renderFile(profileDir: string, target: MemoryTarget): string {
-  const file = memoryPath(profileDir, target);
+/** One prelude section per block: file, label, description, limit, bytes used and the write rule. */
+function renderBlock(profileDir: string, block: MemoryBlock): string {
+  const file = memoryPath(profileDir, block);
   const text = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "";
-  return text || "(empty)";
+  const rule = block.read_only ? "; read-only for seats" : "";
+  return (
+    `## ${block.file} (${block.label}: ${block.description}; ${block.limit}-char cap, ${text.length} chars used${rule})\n` +
+    (text || "(empty)")
+  );
 }
 
 export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapter {
+  const blocks = options.blocks ?? DEFAULT_MEMORY_BLOCKS;
+  assertDistinctBlocks(blocks);
+  const labels = blocks.map((b) => b.label).join(", ");
   let snapshot: string | null = null;
   let callerContext = options.callerContext;
 
@@ -133,20 +164,17 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
 
   return {
     name: MEMORY_ADAPTER_NAME,
+    blocks,
     scopes: [MEMORY_ADAPTER_NAME, "memory:write", "memory:read"],
     availability: "real",
-    instructions: renderToolInstructions(MEMORY_TOOL_SCHEMAS),
+    instructions: renderToolInstructions(memoryToolSchemas(blocks)),
     routingText: ROUTING_TEXT,
     healthCheck: async () => "connected",
     estimateCost: () => 0,
     requiresApproval: () => false,
     async cleanup() {},
     frozenSnapshot() {
-      if (snapshot === null) {
-        snapshot =
-          `## MEMORY.md (agent notes, ${MEMORY_CAPS.memory}-char cap)\n${renderFile(options.profileDir, "memory")}\n\n` +
-          `## USER.md (about the person, ${MEMORY_CAPS.user}-char cap)\n${renderFile(options.profileDir, "user")}`;
-      }
+      snapshot ??= blocks.map((block) => renderBlock(options.profileDir, block)).join("\n\n");
       return snapshot;
     },
     thaw() {
@@ -158,26 +186,35 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
     async execute(action) {
       const { args, error } = parseAction(action, SPECS);
       if (error) return record(action, "failed", error);
-      if (!isTarget(args.target)) return record(action, "failed", "\"target\" must be \"memory\" or \"user\".");
+      const label = requestedLabel(args);
+      const block = findBlock(blocks, label);
+      if (!block) return record(action, "failed", `memory: unknown block "${label}"; the blocks are ${labels}.`);
       if (options.readOnly || callerContext?.().delegated) {
         return record(action, "blocked", "This seat is delegated and has read-only memory. Report the fact to the parent instead.");
+      }
+      if (block.read_only) {
+        return record(
+          action,
+          "blocked",
+          `memory(${label}) is read-only for seats: ${block.file} is edited by the founder or the heartbeat. ` +
+            "Ask the founder to record the fact, or use a writable block."
+        );
       }
       const ops = toOperations(args);
       if (typeof ops === "string") return record(action, "failed", `memory: ${ops}.`);
 
-      const target = args.target;
-      const cap = MEMORY_CAPS[target];
+      const cap = block.limit;
       let result: ReturnType<typeof commitOperations>;
       try {
-        result = commitOperations(options.profileDir, target, ops, cap);
+        result = commitOperations(options.profileDir, block, ops, cap);
       } catch (err) {
-        return record(action, "failed", `memory(${target}) write failed: ${(err as Error).message}`);
+        return record(action, "failed", `memory(${label}) write failed: ${(err as Error).message}`);
       }
-      if (!result.ok) return record(action, "failed", `memory(${target}) refused: ${result.reason}`);
+      if (!result.ok) return record(action, "failed", `memory(${label}) refused: ${result.reason}`);
       return record(
         action,
         "completed",
-        `memory(${target}): applied ${ops.length} operation(s); ${result.entries.length} entries, ` +
+        `memory(${label}): applied ${ops.length} operation(s); ${result.entries.length} entries, ` +
           `${result.rendered.length} chars used, ${result.remaining} remaining of ${cap}. ` +
           `Shared with every seat in the company from the next run on; your prompt keeps this run's snapshot.`
       );

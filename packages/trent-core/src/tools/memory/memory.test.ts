@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createMemoryAdapter, MEMORY_CAPS, MEMORY_TOOL_SCHEMAS, ENTRY_SEPARATOR } from "./index.js";
+import { createMemoryAdapter, DEFAULT_MEMORY_BLOCKS, MEMORY_CAPS, MEMORY_TOOL_SCHEMAS, ENTRY_SEPARATOR } from "./index.js";
+import { TrentConfigSchema } from "../../config/schema.js";
 
 let profileDir: string;
 const memoryFile = () => path.join(profileDir, "memories", "MEMORY.md");
@@ -185,5 +186,70 @@ describe("shared company memory (fleet)", () => {
     expect(a.frozenSnapshot()).toBe(run1);
     a.thaw();
     expect(a.frozenSnapshot()).toContain("rate limit is 60/min");
+  });
+});
+
+describe("named memory blocks (T4.3)", () => {
+  const companyFile = () => path.join(profileDir, "memories", "COMPANY.md");
+
+  it("a seat write to the read_only company block is refused naming the label, and the file is untouched", async () => {
+    const a = createMemoryAdapter({ profileDir });
+    const rec = await call(a, { block: "company", action: "add", content: "We sell to mid-market fintech." });
+    expect(rec.status).toBe("blocked");
+    expect(rec.summary).toMatch(/company/);
+    expect(rec.summary).toMatch(/read.only/i);
+    expect(fs.existsSync(companyFile())).toBe(false);
+  });
+
+  it("the prelude lists every default block with its label, description, limit and current bytes", async () => {
+    const a = createMemoryAdapter({ profileDir });
+    await call(a, { block: "memory", action: "add", content: "first fact" });
+    fs.writeFileSync(companyFile(), "Founded 2024.");
+    const snap = a.frozenSnapshot();
+    for (const block of DEFAULT_MEMORY_BLOCKS) {
+      expect(snap).toContain(block.label);
+      expect(snap).toContain(block.file);
+      expect(snap).toContain(block.description);
+      expect(snap).toContain(`${block.limit}`);
+    }
+    expect(snap).toMatch(/company[^\n]*read-only/);
+    expect(snap).toMatch(/COMPANY\.md[^\n]*13 chars used/);
+    expect(snap).toMatch(/MEMORY\.md[^\n]*10 chars used/);
+    expect(snap).toContain("Founded 2024.");
+  });
+
+  it("a configured fourth block shows up in the prelude and enforces its own limit", async () => {
+    const product = { label: "product", file: "PRODUCT.md", description: "what we are building and why", limit: 800, read_only: false };
+    const a = createMemoryAdapter({ profileDir, blocks: [...DEFAULT_MEMORY_BLOCKS, product] });
+    expect(a.frozenSnapshot()).toMatch(/PRODUCT\.md[^\n]*product[^\n]*800/);
+    expect(a.instructions).toContain("product");
+    const ok = await call(a, { block: "product", action: "add", content: "p".repeat(800) });
+    expect(ok.status, ok.summary).toBe("completed");
+    expect(fs.readFileSync(path.join(profileDir, "memories", "PRODUCT.md"), "utf8")).toBe("p".repeat(800));
+    const over = await call(a, { block: "product", action: "replace", old_text: "pppp", content: "p".repeat(801) });
+    expect(over.status).toBe("failed");
+    expect(over.summary).toMatch(/800/);
+    expect(fs.readFileSync(path.join(profileDir, "memories", "PRODUCT.md"), "utf8")).toBe("p".repeat(800));
+  });
+
+  it("block defaults to memory, an unknown block is refused naming the known labels, and target stays an alias", async () => {
+    const a = createMemoryAdapter({ profileDir });
+    expect((await call(a, { action: "add", content: "defaulted" })).status).toBe("completed");
+    expect(fs.readFileSync(memoryFile(), "utf8")).toBe("defaulted");
+    const rec = await call(a, { block: "vault", action: "add", content: "x" });
+    expect(rec.status).toBe("failed");
+    expect(rec.summary).toMatch(/vault/);
+    expect(rec.summary).toMatch(/memory, user, company/);
+    expect((await call(a, { target: "user", action: "add", content: "alias" })).status).toBe("completed");
+  });
+
+  it("the config schema defaults memory.blocks to the three blocks and validates a custom one", () => {
+    const parsed = TrentConfigSchema.parse({});
+    expect(parsed.memory.blocks.map((b) => b.label)).toEqual(["memory", "user", "company"]);
+    expect(parsed.memory.blocks.find((b) => b.label === "company")?.read_only).toBe(true);
+    const custom = TrentConfigSchema.parse({ memory: { blocks: [{ label: "product", file: "PRODUCT.md", description: "the product", limit: 800 }] } });
+    expect(custom.memory.blocks).toEqual([{ label: "product", file: "PRODUCT.md", description: "the product", limit: 800, read_only: false }]);
+    expect(() => TrentConfigSchema.parse({ memory: { blocks: [{ label: "Bad Label", file: "X.md", description: "x", limit: 1 }] } })).toThrow();
+    expect(() => TrentConfigSchema.parse({ memory: { blocks: [{ label: "x1", file: "X.md", description: "x", limit: 0 }] } })).toThrow();
   });
 });

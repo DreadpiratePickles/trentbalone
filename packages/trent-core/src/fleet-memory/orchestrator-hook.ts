@@ -6,7 +6,8 @@
  *
  * Prelude, per run, computed at the first seat call and then byte-identical for the rest of the
  * run (Hermes `memory_tool_store.py:347-350`: a stable prefix caches; a moving one does not):
- *   1. MEMORY.md / USER.md, the company's shared memory (frozen snapshot);
+ *   1. every named memory block (MEMORY.md / USER.md / COMPANY.md by default, config
+ *      `memory.blocks`), the company's shared memory (frozen snapshot);
  *   2. the shared skills index (org tier + this seat's own — the one per-seat part, so it is
  *      rendered for the seat that calls first and stays; the body is a tool call away);
  *   3. the cross-agent recall block, bounded by `recallBudgetChars`.
@@ -14,7 +15,7 @@
  * per-step context (`model-gateway.ts` `buildSeatUserPrompt`), after the pipeline's own text.
  */
 
-import { createMemoryAdapter, type MemoryAdapter } from "../tools/memory/index.js";
+import { createMemoryAdapter, type MemoryAdapter, type MemoryBlock } from "../tools/memory/index.js";
 import type { TrentToolAdapter } from "../tools/types.js";
 import { DEFAULT_FLEET_MEMORY_CONFIG, type FleetMemoryConfig } from "./config.js";
 import type { EmbedFn } from "./lexical.js";
@@ -58,6 +59,8 @@ export interface FleetMemoryHookOptions {
   /** An existing memory adapter (tests), or `profileDir` to build one. */
   readonly memory?: MemoryAdapter;
   readonly profileDir?: string;
+  /** Config `memory.blocks` for the adapter built from `profileDir`; the three defaults when omitted. */
+  readonly blocks?: readonly MemoryBlock[];
   readonly config?: FleetMemoryConfig;
   readonly embed?: EmbedFn;
 }
@@ -76,7 +79,7 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
     options.memory ??
     (() => {
       if (!options.profileDir) throw new Error("createFleetMemoryHook needs `memory` or `profileDir`");
-      return createMemoryAdapter({ profileDir: options.profileDir });
+      return createMemoryAdapter({ profileDir: options.profileDir, blocks: options.blocks });
     })();
   memory.bindCallerContext(() => ({ delegated: caller.delegated }));
   const search = createFleetSearchAdapter({ source: options.source, config, seat: () => caller.seat || undefined });

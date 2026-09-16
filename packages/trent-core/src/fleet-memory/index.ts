@@ -14,6 +14,7 @@ export {
   type FleetStep,
 } from "./source.js";
 export { createAppFleetSource } from "./app-source.js";
+export { DEFAULT_MEMORY_BLOCKS, type MemoryBlock } from "../tools/memory/index.js";
 export { recallForObjective, type RecallInput, type RecallItem, type RecallKind, type RecallResult } from "./recall.js";
 export { createFleetSearchAdapter, FLEET_SEARCH_ADAPTER_NAME, FLEET_SEARCH_TOOL_SCHEMAS, type FleetSearchAdapterOptions } from "./search.js";
 export { listSharedSkills, renderSharedSkillsIndex, findSharedSkill, type SharedSkill, type SharedSkillTier } from "./shared-skills.js";

@@ -13,7 +13,7 @@ touched — and plugs into `createOrchestrator({ fleetMemory })` through a delim
 
 | # | Shared thing | Mechanism | Proof (`fleet-memory.test.ts`, `../tools/memory/memory.test.ts`, `fleet-memory.orchestrator.test.ts`) |
 |---|---|---|---|
-| 1 | **MEMORY.md / USER.md** | One pair of files per profile, written only through the `memory` tool (2200 / 1375 char caps). The frozen snapshot is injected into EVERY seat's prelude for the run, delegated children included. Children read; their writes are `blocked` (`callerContext().delegated`). `thaw()` at run end makes this run's writes visible to the next. | engineer writes in run 1 -> support's prelude in run 2; not in run 1 (frozen); delegated child blocked, file unchanged; end-to-end through the real pipeline with a `[delegated]` step. |
+| 1 | **Named memory blocks** (`MEMORY.md` / `USER.md` / `COMPANY.md` by default) | One set of files per profile, listed in config `memory.blocks[] {label, file, description, limit, read_only}` (`../tools/memory/blocks.ts` holds the defaults: `memory` 2200, `user` 1375, `company` 1500 read-only), written only through the `memory` tool (`block` = label, default `memory`). The frozen snapshot renders every block with its label, description, limit and characters in use and is injected into EVERY seat's prelude for the run, delegated children included. Children read; their writes are `blocked` (`callerContext().delegated`). A `read_only` block is `blocked` for every seat, naming the label; the founder edits the file, or the heartbeat does. `thaw()` at run end makes this run's writes visible to the next. | engineer writes in run 1 -> support's prelude in run 2; not in run 1 (frozen); delegated child blocked, file unchanged; seat write to `company` blocked naming the label; a configured `product` block (800) appears in the prelude and refuses the 801st char; end-to-end through the real pipeline with a `[delegated]` step. |
 | 2 | **Cross-agent recall** | `recallForObjective`: completed step outputs of ANY agent, consolidated run briefs, live skills (own + org) and playbook bullets, ranked against the run objective + derived task type by the semantic router's lexical TF-IDF embedder (reproduced in `lexical.ts`; the router does not export it), cut at `recallBudgetChars` (default 3000, `TRENT_FLEET_RECALL_BUDGET_CHARS`), rendered once per run and byte-identical for every seat call (Hermes `memory_tool_store.py:347-350`, prefix-cache stability). | analyst's churn output reaches a growth run about churn; an invoice run recalls nothing; 700-char budget honoured with drops counted; deterministic. |
 | 3 | **Fleet-wide session search** | `fleet_search {"query","limit"}`: full text over every agent's completed step outputs and run summaries in the company store, delegated steps included and tagged `[seat, delegated]`. Hermes hides subagent sessions; we tag them. | hit carries `[analyst]` and the run id; delegated hit tagged; consolidated brief searchable; limit honoured. |
 | 4 | **Shared skills** | `listSharedSkills`: the `__org__` tier's live drafts plus the seat's own, consumer copies folded by content hash; rendered as an index in every prelude; `fleet_skill_view {"skill"}` returns the body of a skill another agent earned. | org skill promoted by the engineer is listed for finance; finance views it; a quarantined engineer draft is not listed. |
@@ -21,7 +21,7 @@ touched — and plugs into `createOrchestrator({ fleetMemory })` through a delim
 
 ## Sleep-time consolidation (T1.4, `consolidate.ts`)
 
-By night the two files carry duplicates, near-duplicates and facts a later entry superseded.
+By night the `memory` and `user` blocks (the two default files; extra blocks are not consolidated) carry duplicates, near-duplicates and facts a later entry superseded.
 `consolidateMemory({ profileDir, companyId, gateway, store, meter?, now? })` makes ONE model call
 (temperature 0, both blocks and both caps in the prompt, the body never logged) asking for a
 deduplicated, merged rewrite of each block that keeps every fact still true, as strict JSON
@@ -72,7 +72,8 @@ heartbeat's job, not this module's. Proof: `consolidate.test.ts`.
 ```ts
 const fleetMemory = createFleetMemoryHook({
   source: createAppFleetSource({ improve: store.improve() }), // runs + skills + playbook from the company's SQLite
-  profileDir,                                                  // <profile>/memories/{MEMORY,USER}.md
+  profileDir,                                                  // <profile>/memories/<block file>
+  blocks: config.memory.blocks,                                // optional; the three defaults when omitted
 });
 createOrchestrator({ fleetMemory, tools, ... });
 ```

@@ -80,6 +80,9 @@ gateway:
 repl:
   double_text_policy: enqueue # the same three modes for input typed during a REPL turn
 
+runtime:
+  max_concurrent_runs: 2      # runs driven at once per profile; the next one waits FIFO (docs/jobs.md)
+
 heartbeat:
   enabled: false              # trent heartbeat start, and gateway start, run the loop only when true
   interval_minutes: 60        # one model turn over <profile>/HEARTBEAT.md per interval
@@ -87,12 +90,28 @@ heartbeat:
   #   start: "08:00"          # HH:MM on the wall clock of tz; the end is exclusive
   #   end: "20:00"            # a window that crosses midnight (22:00-06:00) wraps
   #   tz: Europe/Berlin       # IANA zone, default UTC
-  consolidate_memory: true    # once a day, inside quiet hours, draft a MEMORY.md/USER.md rewrite
+  consolidate_memory: true    # once a day, inside quiet hours, draft a rewrite of the memory and user blocks
 
 fleet:
   installed_agents: [ceo, eng-ai-engineer, support-responder]
   active_agents: [ceo]
   default_agent: ceo
+
+memory:
+  blocks:                     # named memory blocks; every seat reads all of them in its prelude
+    - label: memory           # ^[a-z][a-z0-9_-]{1,30}$; the memory tool's default block
+      file: MEMORY.md         # under <profile>/memories/
+      description: durable facts about the company and how it works
+      limit: 2200             # hard character cap, checked on the final state of a batch
+    - label: user
+      file: USER.md
+      description: who the founder is and how they want to be worked with
+      limit: 1375
+    - label: company
+      file: COMPANY.md
+      description: shared facts every seat reads; edited by the founder or the heartbeat
+      limit: 1500
+      read_only: true         # a seat write is refused naming the label; edit the file yourself
 
 telemetry:
   # otlp_endpoint: http://127.0.0.1:4318/v1/traces   # unset means tracing off
@@ -105,6 +124,26 @@ privacy:
 policy:
   rules: []                   # appended to the shipped rules; a rule with a shipped id replaces it
 ```
+
+### Memory blocks
+
+`memory.blocks` lists the files under `<profile>/memories/` that make up the company memory
+(`packages/trent-core/src/tools/memory/`, [fleet-memory README](../packages/trent-core/src/fleet-memory/README.md)).
+Every seat's prelude renders every block with its label, description, limit and the characters in
+use; the `memory` tool writes one block per call (`block`, alias `target`, default `memory`) and
+refuses a `read_only` block or a write that would leave the block over its limit. Add a block
+(`product`, `PRODUCT.md`, 800) and it appears in the prelude and accepts writes up to 800
+characters. Labels and files must be distinct. The heartbeat's consolidation pass works on the two
+default blocks `memory` and `user`.
+
+### Runtime
+
+`runtime.max_concurrent_runs` (integer, at least 1, default 2) is the per-profile cap on runs the
+orchestrator drives at once: every surface on the headless runtime (REPL, TUI, gateway, cron,
+heartbeat, `trent jobs retry`) shares it. A run past the cap is not launched: it waits in FIFO
+order for a slot, has no row in the store yet, and its event stream starts with one `heartbeat`
+frame whose `detail` reads `queued: N ahead; max_concurrent_runs is <cap>`. A run parked on an
+approval keeps its slot. See [jobs.md](jobs.md).
 
 ### Heartbeat
 

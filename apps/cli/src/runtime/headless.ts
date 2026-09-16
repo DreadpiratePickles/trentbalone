@@ -20,7 +20,7 @@ import {
   type OrchestrationTrigger,
   type Orchestrator,
 } from "@trent/core/orchestrator/index.js";
-import type { FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
+import type { FleetMemoryHook, MemoryBlock } from "@trent/core/fleet-memory/index.js";
 import { createAlertHook, type AlertBudgetPort, type AlertHook, type AlertHookDeps } from "@trent/core/gateway/index.js";
 import type { BusHook } from "@trent/core/improve/index.js";
 import { applyPrivacyEnv, createPromptRedactor, type PromptPrivacyConfig } from "@trent/core/model-gateway/index.js";
@@ -129,6 +129,11 @@ interface PrivacySlice {
   privacy?: PromptPrivacyConfig;
 }
 
+/** The `memory` config block the fleet memory wiring reads; `TrentConfig` satisfies it structurally. */
+interface MemorySlice {
+  memory?: { blocks?: MemoryBlock[] };
+}
+
 const DEFAULT_APPROVAL_WAIT_MINUTES = 30;
 
 /**
@@ -198,7 +203,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
 
     // The company memory every seat shares: MEMORY.md / USER.md under the profile, recall over
     // this company's runs, and the shared skills index when the store carries the improve tables.
-    const fleetMemory = wireFleetMemory({ profileDir, store });
+    const fleetMemory = wireFleetMemory({ profileDir, store, blocks: (config as MemorySlice).memory?.blocks });
     // The self-improvement loop: traces from every run, and promoted skills back into every seat.
     const improve = wireImproveLoop({ store, config });
     // OTel export, when config names a collector: composed onto the same bus hook the improve
@@ -219,6 +224,8 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     // block takes the same road, before the gateway is built.
     wirePromptRedaction(config as PrivacySlice);
     const createOrchestrator = deps.createOrchestrator ?? createRealOrchestrator;
+    // `runtime.max_concurrent_runs` (T3.5): runs past the cap wait FIFO for a slot; absent, the
+    // orchestrator's own default applies.
     const orchestrator = createOrchestrator({
       ...(durable ? { databaseUrl } : {}),
       model: { provider: config.provider, model: config.model },
