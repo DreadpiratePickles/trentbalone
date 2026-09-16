@@ -87,8 +87,24 @@ export interface ButtonCallback {
   raw?: unknown;
 }
 
+/**
+ * An emoji added to a message we sent. `emoji` is the platform's own identifier: a Slack
+ * reaction name such as `+1` or `white_check_mark`, a unicode emoji on Discord and Telegram,
+ * or `<name>:<id>` for a Discord custom emoji. Reactions on an approval card decide it.
+ */
+export interface InboundReaction {
+  platform: string;
+  channelId: string;
+  /** The id of the message reacted to, as returned in our `SendReceipt`. */
+  messageId: string;
+  emoji: string;
+  senderId: string;
+  scope: Scope;
+}
+
 export type InboundHandler = (message: InboundMessage) => Promise<void>;
 export type CallbackHandler = (callback: ButtonCallback) => Promise<CallbackAck>;
+export type ReactionHandler = (reaction: InboundReaction) => Promise<void>;
 
 /** What the adapter should tell the platform after the callback has been resolved server-side. */
 export interface CallbackAck {
@@ -123,6 +139,8 @@ export interface TransportAdapter {
   send(message: OutboundMessage): Promise<SendReceipt>;
   onMessage(handler: InboundHandler): void;
   onCallback(handler: CallbackHandler): void;
+  /** Present on adapters whose `capabilities().reactions` is true and that receive reaction events. */
+  onReaction?(handler: ReactionHandler): void;
   health(): Promise<HealthStatus>;
   /** Present on adapters that can receive over an HTTP webhook. */
   handleWebhook?(request: WebhookRequest): Promise<WebhookResponse>;

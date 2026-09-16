@@ -3,7 +3,7 @@ import { ConfigManager } from "../../config/ConfigManager.js";
 import { TelegramAdapter } from "./telegram.js";
 import { MemoryGatewayStore } from "../store/GatewayStore.js";
 import { FakeServer, json, waitFor } from "../testing/fakeServer.js";
-import type { InboundMessage, ButtonCallback } from "../transport/types.js";
+import type { InboundMessage, ButtonCallback, InboundReaction } from "../transport/types.js";
 
 const TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11";
 
@@ -80,7 +80,7 @@ describe("TelegramAdapter against a local Bot API server", () => {
     await waitFor(() => server.find("POST", `/bot${TOKEN}/answerCallbackQuery`).length === 1);
     expect(server.find("POST", `/bot${TOKEN}/answerCallbackQuery`)[0].json).toEqual({ callback_query_id: "cbq1", text: "Approved." });
     const first = server.find("POST", `/bot${TOKEN}/getUpdates`)[0].json as Record<string, unknown>;
-    expect(first.allowed_updates).toEqual(["message", "callback_query"]);
+    expect(first.allowed_updates).toEqual(["message", "callback_query", "message_reaction"]);
     expect(first.timeout).toBeGreaterThan(0);
     const health = await adapter.health();
     expect(health.state).toBe("up");
@@ -98,6 +98,21 @@ describe("TelegramAdapter against a local Bot API server", () => {
     await waitFor(() => inbound.length === 1);
     expect(inbound[0].scope).toBe("group");
     expect(inbound[0].channelId).toBe("-100");
+  });
+
+  it("surfaces a message_reaction update as one InboundReaction per new emoji, and skips anonymous actors", async () => {
+    const reactions: InboundReaction[] = [];
+    adapter.onReaction(async (r) => { reactions.push(r); });
+    const update = (id: number, body: Record<string, unknown>) => JSON.stringify({ update_id: id, message_reaction: { chat: { id: 555, type: "private" }, message_id: 99, date: 1_700_000_100, ...body } });
+    const headers = { "x-telegram-bot-api-secret-token": "whsec" };
+    const ok = await adapter.handleWebhook({ method: "POST", url: "/webhooks/telegram", headers, body: update(6, { user: { id: 555, first_name: "Ada" }, old_reaction: [], new_reaction: [{ type: "emoji", emoji: "\u{1F44D}" }, { type: "custom_emoji", custom_emoji_id: "5368324170671202286" }] }) });
+    expect(ok.status).toBe(200);
+    const anonymous = await adapter.handleWebhook({ method: "POST", url: "/webhooks/telegram", headers, body: update(7, { actor_chat: { id: -100, type: "supergroup" }, old_reaction: [], new_reaction: [{ type: "emoji", emoji: "\u{1F44E}" }] }) });
+    expect(anonymous.status).toBe(200);
+    const removed = await adapter.handleWebhook({ method: "POST", url: "/webhooks/telegram", headers, body: update(8, { user: { id: 555, first_name: "Ada" }, old_reaction: [{ type: "emoji", emoji: "\u{1F44D}" }], new_reaction: [] }) });
+    expect(removed.status).toBe(200);
+    await waitFor(() => reactions.length === 1);
+    expect(reactions).toEqual([{ platform: "telegram", channelId: "555", messageId: "99", emoji: "\u{1F44D}", senderId: "555", scope: "dm" }]);
   });
 
   it("never puts the token in an error message", async () => {

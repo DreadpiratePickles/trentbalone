@@ -5,7 +5,7 @@ import { SlackAdapter } from "./slack.js";
 import { MemoryGatewayStore } from "../store/GatewayStore.js";
 import { FakeServer, json, waitFor } from "../testing/fakeServer.js";
 import { FakeSocketServer } from "../testing/fakeSocket.js";
-import type { InboundMessage, ButtonCallback } from "../transport/types.js";
+import type { InboundMessage, ButtonCallback, InboundReaction } from "../transport/types.js";
 
 const BOT = "xoxb-test-bot-token-000";
 const APP = "xapp-1-test-app-token-000";
@@ -84,6 +84,28 @@ describe("SlackAdapter against local Web API + Socket Mode servers", () => {
     await waitFor(() => http.find("POST", "/actions/resp").length === 1);
     expect(http.find("POST", "/actions/resp")[0].json).toEqual({ text: "Approved.", replace_original: false, response_type: "ephemeral" });
     expect((await adapter.health()).state).toBe("up");
+  });
+
+  it("surfaces a reaction_added on a delivered message as an InboundReaction, over Socket Mode and the Events API", async () => {
+    const reactions: InboundReaction[] = [];
+    adapter.onReaction(async (r) => { reactions.push(r); });
+    socket.whenConnected((s) => {
+      s.send(JSON.stringify({ type: "hello", num_connections: 1, connection_info: { app_id: "A1" } }));
+      s.send(JSON.stringify({ envelope_id: "env-r1", type: "events_api", accepts_response_payload: false, payload: { type: "event_callback", event: { type: "reaction_added", user: "U1", reaction: "+1::skin-tone-2", item_user: "UBOT", item: { type: "message", channel: "C1", ts: "1700000000.000100" }, event_ts: "1700000002.000300" } } }));
+      s.send(JSON.stringify({ envelope_id: "env-r2", type: "events_api", accepts_response_payload: false, payload: { type: "event_callback", event: { type: "reaction_added", user: "UBOT", reaction: "eyes", item: { type: "file", file: "F1" }, event_ts: "1700000002.000301" } } }));
+    });
+    await adapter.start();
+    await waitFor(() => reactions.length === 1);
+    expect(reactions[0]).toEqual({ platform: "slack", channelId: "C1", messageId: "1700000000.000100", emoji: "+1::skin-tone-2", senderId: "U1", scope: "group" });
+    await waitFor(() => socket.received.length >= 2);
+    expect(socket.received).toEqual(expect.arrayContaining([{ envelope_id: "env-r1" }, { envelope_id: "env-r2" }]));
+
+    const ts = String(Math.floor(Date.now() / 1000));
+    const body = JSON.stringify({ type: "event_callback", event: { type: "reaction_added", user: "U2", reaction: "x", item: { type: "message", channel: "D2", ts: "1700000000.000500" }, event_ts: "1700000003.000100" } });
+    const sig = "v0=" + crypto.createHmac("sha256", SIGNING).update(`v0:${ts}:${body}`).digest("hex");
+    const ok = await adapter.handleWebhook({ method: "POST", url: "/webhooks/slack", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": sig }, body });
+    expect(ok.status).toBe(200);
+    expect(reactions[1]).toEqual({ platform: "slack", channelId: "D2", messageId: "1700000000.000500", emoji: "x", senderId: "U2", scope: "dm" });
   });
 
   it("verifies the Events API signature and answers url_verification", async () => {

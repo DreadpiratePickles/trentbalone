@@ -4,7 +4,7 @@ import { DiscordAdapter, DISCORD_INTENTS } from "./discord.js";
 import { MemoryGatewayStore } from "../store/GatewayStore.js";
 import { FakeServer, json, waitFor } from "../testing/fakeServer.js";
 import { FakeSocketServer } from "../testing/fakeSocket.js";
-import type { InboundMessage, ButtonCallback } from "../transport/types.js";
+import type { InboundMessage, ButtonCallback, InboundReaction } from "../transport/types.js";
 
 const TOKEN = "MTIzNDU2Nzg5MDEyMzQ1Njc4.GhIjKl.mnopqrstuvwxyz1234567890ABCDEF";
 
@@ -87,5 +87,30 @@ describe("DiscordAdapter against local REST v10 + gateway servers", () => {
     const hb = socket.received.find((f) => (f as { op: number }).op === 1) as { op: number; d: number | null };
     expect(hb.d).toBeGreaterThanOrEqual(1); // last sequence number
     expect((await adapter.health()).state).toBe("up");
+  });
+
+  it("identifies with the reaction intents and surfaces MESSAGE_REACTION_ADD as an InboundReaction, skipping its own", async () => {
+    const reactions: InboundReaction[] = [];
+    adapter.onReaction(async (r) => { reactions.push(r); });
+    socket.whenConnected((s) => {
+      s.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 60 } }));
+      s.on("message", (raw) => {
+        const frame = JSON.parse(raw.toString()) as { op: number; d?: unknown };
+        if (frame.op === 2) {
+          s.send(JSON.stringify({ op: 0, t: "READY", s: 1, d: { v: 10, user: { id: "BOT1", username: "trent" }, session_id: "sess", resume_gateway_url: socket.url } }));
+          s.send(JSON.stringify({ op: 0, t: "MESSAGE_REACTION_ADD", s: 2, d: { user_id: "BOT1", channel_id: "C1", message_id: "M100", guild_id: "G1", emoji: { id: null, name: "\u{1F44D}" } } }));
+          s.send(JSON.stringify({ op: 0, t: "MESSAGE_REACTION_ADD", s: 3, d: { user_id: "U1", channel_id: "C1", message_id: "M100", guild_id: "G1", member: { user: { id: "U1", username: "ada" } }, emoji: { id: null, name: "\u{1F44D}" } } }));
+          s.send(JSON.stringify({ op: 0, t: "MESSAGE_REACTION_ADD", s: 4, d: { user_id: "U1", channel_id: "D9", message_id: "M101", emoji: { id: "123456789012345678", name: "custom_yes" } } }));
+        }
+        if (frame.op === 1) s.send(JSON.stringify({ op: 11 }));
+      });
+    });
+    await adapter.start();
+    await waitFor(() => reactions.length === 2);
+    const identify = socket.received.find((f) => (f as { op: number }).op === 2) as { op: number; d: Record<string, unknown> };
+    expect((identify.d.intents as number) & (1 << 10)).toBe(1 << 10); // GUILD_MESSAGE_REACTIONS
+    expect((identify.d.intents as number) & (1 << 13)).toBe(1 << 13); // DIRECT_MESSAGE_REACTIONS
+    expect(reactions[0]).toEqual({ platform: "discord", channelId: "C1", messageId: "M100", emoji: "\u{1F44D}", senderId: "U1", scope: "group" });
+    expect(reactions[1]).toEqual({ platform: "discord", channelId: "D9", messageId: "M101", emoji: "custom_yes:123456789012345678", senderId: "U1", scope: "dm" });
   });
 });

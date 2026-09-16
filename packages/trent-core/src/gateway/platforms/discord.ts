@@ -14,7 +14,9 @@ import {
   type HealthStatus,
   type InboundHandler,
   type InboundMessage,
+  type InboundReaction,
   type OutboundMessage,
+  type ReactionHandler,
   type SendReceipt,
   type TransportAdapter,
 } from "../transport/types.js";
@@ -22,14 +24,16 @@ import { toBlobPart, expectOk, httpRequest, nowIso, TransportError } from "../tr
 
 export const DISCORD_API = "https://discord.com";
 export const DISCORD_API_VERSION = "v10";
-/** GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT */
-export const DISCORD_INTENTS = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
+/** GUILDS | GUILD_MESSAGES | GUILD_MESSAGE_REACTIONS | DIRECT_MESSAGES | DIRECT_MESSAGE_REACTIONS | MESSAGE_CONTENT */
+export const DISCORD_INTENTS = (1 << 0) | (1 << 9) | (1 << 10) | (1 << 12) | (1 << 13) | (1 << 15);
 const USER_AGENT = "DiscordBot (https://github.com/trent-fleet/trent, 1.0.0)";
 const STYLE: Record<string, number> = { primary: 1, default: 2, danger: 4 };
 
 interface DcUser { id: string; username?: string; bot?: boolean }
 interface DcMessage { id: string; channel_id: string; guild_id?: string; author: DcUser; content: string; timestamp: string }
 interface DcInteraction { id: string; token: string; type: number; channel_id?: string; guild_id?: string; member?: { user: DcUser }; user?: DcUser; data?: { custom_id?: string; component_type?: number } }
+/** MESSAGE_REACTION_ADD: a unicode emoji has `id: null`; a custom emoji carries its snowflake. */
+interface DcReactionAdd { user_id: string; channel_id: string; message_id: string; guild_id?: string; emoji: { id: string | null; name: string | null } }
 interface GatewayFrame { op: number; t?: string; s?: number | null; d?: unknown }
 
 export class DiscordAdapter implements TransportAdapter {
@@ -39,6 +43,7 @@ export class DiscordAdapter implements TransportAdapter {
   private readonly fetch: typeof fetch;
   private messageHandler?: InboundHandler;
   private callbackHandler?: CallbackHandler;
+  private reactionHandler?: ReactionHandler;
   private ws?: WebSocket;
   private running = false;
   private seq: number | null = null;
@@ -74,6 +79,7 @@ export class DiscordAdapter implements TransportAdapter {
 
   onMessage(handler: InboundHandler): void { this.messageHandler = handler; }
   onCallback(handler: CallbackHandler): void { this.callbackHandler = handler; }
+  onReaction(handler: ReactionHandler): void { this.reactionHandler = handler; }
 
   async start(): Promise<void> {
     if (this.running) return;
@@ -131,6 +137,17 @@ export class DiscordAdapter implements TransportAdapter {
         metadata: m.guild_id ? { guildId: m.guild_id } : undefined,
       };
       await this.messageHandler?.(msg);
+      return;
+    }
+    if (event === "MESSAGE_REACTION_ADD") {
+      const r = d as DcReactionAdd;
+      if (r.user_id === this.selfId || !r.emoji.name) return;
+      const reaction: InboundReaction = {
+        platform: "discord", channelId: r.channel_id, messageId: r.message_id,
+        emoji: r.emoji.id ? `${r.emoji.name}:${r.emoji.id}` : r.emoji.name,
+        senderId: r.user_id, scope: r.guild_id ? "group" : "dm",
+      };
+      await this.reactionHandler?.(reaction);
       return;
     }
     if (event === "INTERACTION_CREATE") {

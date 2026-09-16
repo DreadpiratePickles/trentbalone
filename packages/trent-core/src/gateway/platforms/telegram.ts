@@ -1,7 +1,8 @@
 /**
  * Telegram Bot API. Pinned to the Bot API 9.x method set: getMe, getUpdates (long-poll),
  * sendMessage, sendPhoto/sendDocument, answerCallbackQuery, sendChatAction, plus an
- * optional webhook receiver guarded by X-Telegram-Bot-Api-Secret-Token.
+ * optional webhook receiver guarded by X-Telegram-Bot-Api-Secret-Token. `message_reaction`
+ * updates arrive only when named in `allowed_updates` (getUpdates here; setWebhook likewise).
  * https://core.telegram.org/bots/api
  */
 
@@ -16,7 +17,9 @@ import {
   type HealthStatus,
   type InboundHandler,
   type InboundMessage,
+  type InboundReaction,
   type OutboundMessage,
+  type ReactionHandler,
   type SendReceipt,
   type TransportAdapter,
   type WebhookRequest,
@@ -28,11 +31,15 @@ interface TgUser { id: number; first_name?: string; username?: string }
 interface TgChat { id: number; type: "private" | "group" | "supergroup" | "channel" }
 interface TgMessage { message_id: number; from?: TgUser; chat: TgChat; date: number; text?: string; caption?: string; message_thread_id?: number }
 interface TgCallbackQuery { id: string; from: TgUser; message?: { message_id: number; chat: TgChat }; data?: string }
-interface TgUpdate { update_id: number; message?: TgMessage; callback_query?: TgCallbackQuery }
+interface TgReactionType { type: "emoji" | "custom_emoji" | "paid"; emoji?: string; custom_emoji_id?: string }
+/** A user changed their reaction on a message; `user` is absent when an anonymous chat reacted. */
+interface TgMessageReaction { chat: TgChat; message_id: number; user?: TgUser; actor_chat?: TgChat; date: number; old_reaction: TgReactionType[]; new_reaction: TgReactionType[] }
+interface TgUpdate { update_id: number; message?: TgMessage; callback_query?: TgCallbackQuery; message_reaction?: TgMessageReaction }
 interface TgEnvelope<T> { ok: boolean; result?: T; description?: string }
 
 export const TELEGRAM_API = "https://api.telegram.org";
 export const TELEGRAM_POLL_TIMEOUT_S = 25;
+export const TELEGRAM_ALLOWED_UPDATES = ["message", "callback_query", "message_reaction"] as const;
 
 export class TelegramAdapter implements TransportAdapter {
   readonly platformId = "telegram";
@@ -41,6 +48,7 @@ export class TelegramAdapter implements TransportAdapter {
   private readonly fetch: typeof fetch;
   private messageHandler?: InboundHandler;
   private callbackHandler?: CallbackHandler;
+  private reactionHandler?: ReactionHandler;
   private running = false;
   private pollAbort?: AbortController;
   private pollLoop?: Promise<void>;
@@ -86,6 +94,10 @@ export class TelegramAdapter implements TransportAdapter {
     this.callbackHandler = handler;
   }
 
+  onReaction(handler: ReactionHandler): void {
+    this.reactionHandler = handler;
+  }
+
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -111,7 +123,7 @@ export class TelegramAdapter implements TransportAdapter {
       try {
         const updates = await this.call<TgUpdate[]>(
           "getUpdates",
-          { offset, timeout: TELEGRAM_POLL_TIMEOUT_S, allowed_updates: ["message", "callback_query"] },
+          { offset, timeout: TELEGRAM_POLL_TIMEOUT_S, allowed_updates: [...TELEGRAM_ALLOWED_UPDATES] },
           (TELEGRAM_POLL_TIMEOUT_S + 10) * 1000,
           signal,
         );
@@ -158,6 +170,25 @@ export class TelegramAdapter implements TransportAdapter {
       };
       const ack = (await this.callbackHandler?.(cb)) ?? { ok: false, text: "No handler." };
       await this.call("answerCallbackQuery", { callback_query_id: q.id, text: ack.text });
+    }
+    if (update.message_reaction) await this.dispatchReaction(update.message_reaction);
+  }
+
+  /** Each newly added unicode emoji is one reaction; removals, custom and paid reactions are not decisions. */
+  private async dispatchReaction(r: TgMessageReaction): Promise<void> {
+    if (!r.user) return;
+    const before = new Set(r.old_reaction.filter((x) => x.type === "emoji").map((x) => x.emoji));
+    for (const added of r.new_reaction) {
+      if (added.type !== "emoji" || !added.emoji || before.has(added.emoji)) continue;
+      const reaction: InboundReaction = {
+        platform: "telegram",
+        channelId: String(r.chat.id),
+        messageId: String(r.message_id),
+        emoji: added.emoji,
+        senderId: String(r.user.id),
+        scope: r.chat.type === "private" ? "dm" : "group",
+      };
+      await this.reactionHandler?.(reaction);
     }
   }
 

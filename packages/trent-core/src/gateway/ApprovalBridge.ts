@@ -1,10 +1,12 @@
 /**
  * Approvals over chat, enforced server-side.
  *
- * A button in Telegram, Discord or Slack, or an `APPROVE <id> <nonce>` email reply, is a
- * VIEW. The decision resolves against the durable approval row: the id must be pending,
- * the nonce must match the row, and the sender must be a paired admin in that scope. A
- * replayed or forged callback fails all three checks and changes nothing.
+ * A button in Telegram, Discord or Slack, an `APPROVE <id> <nonce>` email reply, or a
+ * thumbs-up on the delivered card, is a VIEW. The decision resolves against the durable
+ * approval row: the id must be pending, the nonce must match the row, and the sender must
+ * be a paired admin in that scope. A replayed or forged callback fails all three checks
+ * and changes nothing. A reaction names no id or nonce; it is matched to the row through
+ * the delivery record (platform, channel, message id) and then takes the same path.
  */
 
 import crypto from "node:crypto";
@@ -13,7 +15,7 @@ import type { ApprovalRow, GatewayStore } from "./store/GatewayStore.js";
 import { MemoryGatewayStore } from "./store/GatewayStore.js";
 import { PairingManager } from "./security/PairingManager.js";
 import type { StorePort } from "../store/StorePort.js";
-import type { OutboundButton, Scope } from "./transport/types.js";
+import type { InboundReaction, OutboundButton, Scope } from "./transport/types.js";
 
 export type ApprovalRequest = ApprovalRow;
 
@@ -38,8 +40,35 @@ export type CallbackResult =
   | { ok: true; approval: ApprovalRow; decision: "approved" | "denied" }
   | { ok: false; reason: "malformed" | "no_matching_pending_approval" | "not_admin" };
 
+export type ReactionResult = CallbackResult | { ok: false; reason: "unknown_emoji" };
+
 const CALLBACK_RE = /^trent:(approve|deny):([A-Za-z0-9_-]{1,40}):([a-f0-9]{8})$/;
 const EMAIL_RE = /^\s*(APPROVE|DENY)\s+([A-Za-z0-9_-]{1,40})\s+([a-f0-9]{8})\s*$/im;
+
+/**
+ * Reactions that carry a decision, keyed by the platform identifier: Slack reaction names,
+ * and the unicode emoji Discord and Telegram deliver (thumbs up U+1F44D, check mark U+2705,
+ * thumbs down U+1F44E, cross mark U+274C). Anything else is not a decision.
+ */
+const REACTION_VERBS: Record<string, "approve" | "deny"> = {
+  "+1": "approve",
+  thumbsup: "approve",
+  white_check_mark: "approve",
+  heavy_check_mark: "approve",
+  "\u{1F44D}": "approve",
+  "\u2705": "approve",
+  "-1": "deny",
+  thumbsdown: "deny",
+  x: "deny",
+  "\u{1F44E}": "deny",
+  "\u274C": "deny",
+};
+/** Slack skin-tone suffix (`+1::skin-tone-3`), Fitzpatrick modifiers U+1F3FB..U+1F3FF, variation selector U+FE0F. */
+const EMOJI_MODIFIERS_RE = /::skin-tone-\d+$|[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu;
+
+export function reactionVerb(emoji: string): "approve" | "deny" | undefined {
+  return REACTION_VERBS[emoji.replace(EMOJI_MODIFIERS_RE, "")];
+}
 
 export class ApprovalBridge extends EventEmitter {
   private readonly store: GatewayStore;
@@ -134,6 +163,28 @@ export class ApprovalBridge extends EventEmitter {
     const decision = verb === "approve" ? "approved" : "denied";
     const approval = this.decide(id, decision, `${input.platform}:${input.senderId}`);
     return { ok: true, approval, decision };
+  }
+
+  /**
+   * A reaction on a delivered card. The card is found by where it was delivered, then the
+   * decision is resolved exactly as a button press on that card would be, so the pending,
+   * nonce and admin-pairing checks are the same code. Only a reaction that names a decision
+   * counts; every other emoji is ignored.
+   */
+  public resolveReaction(reaction: InboundReaction): ReactionResult {
+    const verb = reactionVerb(reaction.emoji);
+    if (!verb) return { ok: false, reason: "unknown_emoji" };
+    const row = this.listPending().find((r) =>
+      (r.deliveredTo ?? []).some((d) => d.platform === reaction.platform && d.channelId === reaction.channelId && d.messageId === reaction.messageId),
+    );
+    if (!row) return { ok: false, reason: "no_matching_pending_approval" };
+    return this.resolveCallback({
+      platform: reaction.platform,
+      senderId: reaction.senderId,
+      scope: reaction.scope,
+      channelId: reaction.channelId,
+      data: this.callbackData(row, verb),
+    });
   }
 
   public parseEmailReply(body: string): { decision: "approve" | "deny"; id: string; nonce: string } | null {

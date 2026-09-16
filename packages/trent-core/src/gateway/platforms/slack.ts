@@ -17,7 +17,9 @@ import {
   type HealthStatus,
   type InboundHandler,
   type InboundMessage,
+  type InboundReaction,
   type OutboundMessage,
+  type ReactionHandler,
   type SendReceipt,
   type TransportAdapter,
   type WebhookRequest,
@@ -30,6 +32,8 @@ export const SLACK_SIGNATURE_MAX_AGE_S = 300;
 
 interface SlackEnvelope<T = unknown> { ok: boolean; error?: string; ts?: string; url?: string; user?: string; team?: string; data?: T }
 interface SlackEvent { type: string; subtype?: string; user?: string; bot_id?: string; channel: string; channel_type?: string; text?: string; ts: string; thread_ts?: string }
+/** `reaction_added`: https://api.slack.com/events/reaction_added */
+interface SlackReactionEvent { type: "reaction_added"; user: string; reaction: string; item: { type: string; channel?: string; ts?: string } }
 interface BlockActions { type: "block_actions"; user: { id: string }; channel?: { id: string }; actions: Array<{ action_id: string; value?: string }>; response_url?: string }
 interface SocketFrame { type: string; envelope_id?: string; payload?: { type?: string; event?: SlackEvent } & Partial<BlockActions>; reason?: string }
 
@@ -40,6 +44,7 @@ export class SlackAdapter implements TransportAdapter {
   private readonly fetch: typeof fetch;
   private messageHandler?: InboundHandler;
   private callbackHandler?: CallbackHandler;
+  private reactionHandler?: ReactionHandler;
   private ws?: WebSocket;
   private running = false;
 
@@ -79,6 +84,7 @@ export class SlackAdapter implements TransportAdapter {
 
   onMessage(handler: InboundHandler): void { this.messageHandler = handler; }
   onCallback(handler: CallbackHandler): void { this.callbackHandler = handler; }
+  onReaction(handler: ReactionHandler): void { this.reactionHandler = handler; }
 
   async start(): Promise<void> {
     if (this.running) return;
@@ -117,6 +123,7 @@ export class SlackAdapter implements TransportAdapter {
   }
 
   private async dispatchEvent(ev: SlackEvent): Promise<void> {
+    if (ev.type === "reaction_added") { await this.dispatchReaction(ev as unknown as SlackReactionEvent); return; }
     if (ev.type !== "message" || ev.bot_id || ev.subtype === "bot_message" || !ev.user) return;
     const msg: InboundMessage = {
       id: ev.ts,
@@ -129,6 +136,20 @@ export class SlackAdapter implements TransportAdapter {
       threadId: ev.thread_ts,
     };
     await this.messageHandler?.(msg);
+  }
+
+  /** Only reactions on messages carry a channel and ts. Whether the reactor may decide is the bridge's call. */
+  private async dispatchReaction(ev: SlackReactionEvent): Promise<void> {
+    if (ev.item.type !== "message" || !ev.item.channel || !ev.item.ts || !ev.user) return;
+    const reaction: InboundReaction = {
+      platform: "slack",
+      channelId: ev.item.channel,
+      messageId: ev.item.ts,
+      emoji: ev.reaction,
+      senderId: ev.user,
+      scope: ev.item.channel.startsWith("D") ? "dm" : "group",
+    };
+    await this.reactionHandler?.(reaction);
   }
 
   private async dispatchActions(p: BlockActions, callbackId: string): Promise<void> {
