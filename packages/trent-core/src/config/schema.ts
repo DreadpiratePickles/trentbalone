@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import { TelemetryConfigSchema } from "./telemetry-schema.js";
+import { PolicyRuleSchema } from "../governance/policy-rules.js";
 
 export const ProviderSchema = z.enum([
   "openai",
@@ -179,6 +180,8 @@ export const TrentConfigSchema = z.object({
   fleet: FleetConfigSchema.default({}),
   mcp_servers: McpServersConfigSchema.default({}),
   repl: z.object({ double_text_policy: z.enum(["enqueue", "interrupt", "reject"]).default("enqueue") }).default({}),
+  /** Trace-level rules over tool classes; appended to the shipped defaults, same id overrides. */
+  policy: z.object({ rules: z.array(PolicyRuleSchema).default([]) }).default({}),
   telemetry: TelemetryConfigSchema.default({}),
   /** Prompt-side redaction in the model gateway (docs/security.md, "Prompt redaction"). */
   privacy: z.object({ redact_prompts: z.boolean().default(false), patterns: z.array(z.string()).default([]) }).default({}),

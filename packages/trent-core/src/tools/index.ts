@@ -9,6 +9,7 @@ import process from "node:process";
 import type { Toolset, TrentConfig } from "../config/schema.js";
 import { IdempotencyManager } from "../governance/IdempotencyManager.js";
 import { idempotentAdapters } from "../governance/idempotent-dispatch.js";
+import { PolicyDispatcher } from "../governance/policy-dispatch.js";
 import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import { createCodeExecutionAdapter } from "./code_execution/index.js";
 import { createCronAdapter } from "./cron/index.js";
@@ -44,6 +45,7 @@ export { createVisionAdapter, askVision, VISION_ADAPTER_NAME, VISION_TOOL_SCHEMA
 /** The config slice the tool builder reads. */
 export type ToolBuildConfig = Pick<TrentConfig, "toolsets" | "disabled_toolsets"> & {
   readonly mcp_servers?: TrentConfig["mcp_servers"];
+  readonly policy?: TrentConfig["policy"];
   readonly terminal?: { readonly backend?: TrentConfig["terminal"]["backend"]; readonly docker?: { readonly image?: string } };
 };
 
@@ -77,6 +79,11 @@ export interface ToolBuildDeps {
    * to a manager persisted at `<profileDir>/idempotency.json`; tests pass an in-memory one.
    */
   readonly idempotency?: IdempotencyManager;
+  /**
+   * Trace-level policy rules (`governance/policy-dispatch.ts`), evaluated before idempotency.
+   * Defaults to the shipped rules merged with `config.policy.rules`; tests pass their own.
+   */
+  readonly policy?: PolicyDispatcher;
 }
 
 /** One toolset that was enabled in config but could not be built here, and why the seat cannot use it. */
@@ -174,7 +181,8 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
     }
   }
   const idempotency = deps.idempotency ?? new IdempotencyManager({ dir: deps.profileDir });
-  return { adapters: idempotentAdapters(adapters, idempotency), skipped };
+  const policy = deps.policy ?? new PolicyDispatcher(undefined, config.policy?.rules ?? []);
+  return { adapters: policy.wrap(idempotentAdapters(adapters, idempotency)), skipped };
 }
 
 /** `buildTrentTools(...).adapters`: the shape the orchestrator and the older callers take. */
