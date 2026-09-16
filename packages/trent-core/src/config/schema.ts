@@ -71,13 +71,6 @@ export const EgressConfigSchema = z.object({
   intercept_domains: z.array(z.string()).default(["api.openai.com", "api.anthropic.com", "generativelanguage.googleapis.com"]),
 });
 
-export const VoiceConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  model: z.enum(["tiny", "base", "small", "medium"]).default("base"),
-  trigger_key: z.string().default("Ctrl+B"),
-  tts_enabled: z.boolean().default(false),
-});
-
 export const GatewayConfigSchema = z.object({
   enabled: z.boolean().default(false),
   platforms: z.array(z.string()).default([]),
@@ -175,7 +168,6 @@ export const TrentConfigSchema = z.object({
   budget: BudgetConfigSchema.default({}),
   terminal: TerminalConfigSchema.default({}),
   egress: EgressConfigSchema.default({}),
-  voice: VoiceConfigSchema.default({}),
   gateway: GatewayConfigSchema.default({}),
   fleet: FleetConfigSchema.default({}),
   mcp_servers: McpServersConfigSchema.default({}),

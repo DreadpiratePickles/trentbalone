@@ -16,7 +16,6 @@ const ALL_TOOLSETS = [
   { id: "git", label: "Git VCS Operations", desc: "Branches, commits, diff inspection, PR creation" },
   { id: "search", label: "Web Search Gateway", desc: "Real-time web queries and citations" },
   { id: "mcp", label: "MCP Connectors", desc: "Model Context Protocol tool execution" },
-  { id: "voice", label: "Whisper Voice Mode", desc: "Local push-to-talk speech transcription" },
   { id: "cron", label: "Scheduled Autonomy", desc: "Recurring background sweep triggers" },
 ];
 

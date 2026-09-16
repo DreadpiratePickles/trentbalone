@@ -4,9 +4,9 @@ import {
   FleetManager,
   SkillsHub,
   PersonalityManager,
-  VoiceManager,
   SessionManager,
   DoctorRunner,
+  transcribeVoice,
 } from "@trent/core";
 import { formatBudgetTicker } from "../repl/output.js";
 import { TOKEN_HEX } from "../ui/theme.js";
@@ -16,7 +16,6 @@ export interface SlashCommandContext {
   fleetManager: FleetManager;
   skillsHub: SkillsHub;
   personalityManager: PersonalityManager;
-  voiceManager: VoiceManager;
   sessionManager: SessionManager;
   doctorRunner: DoctorRunner;
 }
@@ -224,17 +223,10 @@ export const SLASH_COMMANDS: Record<string, SlashCommandDefinition> = {
 
   voice: {
     name: "voice",
-    description: "Toggle voice mode (offline faster-whisper)",
-    args: "[on|off]",
-    async execute(args, ctx) {
-      let target: boolean | undefined;
-      if (args[0] === "on") target = true;
-      if (args[0] === "off") target = false;
-
-      const enabled = await ctx.voiceManager.toggle(target);
-      return enabled
-        ? chalk.green("Voice mode enabled. Press Ctrl+B to start/stop speaking.")
-        : chalk.yellow("Voice mode disabled.");
+    description: "Voice transcription (not available in this release)",
+    async execute() {
+      // The only honest answer: a TrentError, never a string that looks like a toggle succeeded.
+      return transcribeVoice();
     },
   },
 

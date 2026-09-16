@@ -54,10 +54,6 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
         <Text color="white">Interrupt active agent reasoning</Text>
       </Box>
       <Box marginY={0}>
-        <Text bold color={P.info}>Ctrl+B     </Text>
-        <Text color="white">Toggle push-to-talk voice recording</Text>
-      </Box>
-      <Box marginY={0}>
         <Text bold color={P.info}>Alt+Enter  </Text>
         <Text color="white">Insert multi-line newline in chat input</Text>
       </Box>

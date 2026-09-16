@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { SLASH_COMMANDS, type SlashCommandContext } from "./index.js";
+import { isTrentError } from "@trent/core";
 import {
   ConfigManager,
   FleetManager,
   SkillsHub,
   PersonalityManager,
-  VoiceManager,
   SessionManager,
   DoctorRunner,
 } from "@trent/core";
@@ -15,7 +15,6 @@ describe("Slash Commands Suite", () => {
   const fleetManager = new FleetManager(configManager);
   const skillsHub = new SkillsHub(configManager);
   const personalityManager = new PersonalityManager(configManager);
-  const voiceManager = new VoiceManager(configManager);
   const sessionManager = new SessionManager(configManager);
   const doctorRunner = new DoctorRunner(configManager);
 
@@ -24,7 +23,6 @@ describe("Slash Commands Suite", () => {
     fleetManager,
     skillsHub,
     personalityManager,
-    voiceManager,
     sessionManager,
     doctorRunner,
   };
@@ -39,6 +37,12 @@ describe("Slash Commands Suite", () => {
     expect(out).toContain("/workbench");
     expect(out).toContain("/marketplace");
     expect(out).toContain("/traces");
+  });
+
+  it("/voice rejects with a TrentError rather than pretending to toggle a feature", async () => {
+    await expect(SLASH_COMMANDS["voice"].execute(["on"], ctx)).rejects.toSatisfy(
+      (err: unknown) => isTrentError(err) && err.message.includes("not available in this release"),
+    );
   });
 
   it("executes /mcp to view connectors and policies", async () => {

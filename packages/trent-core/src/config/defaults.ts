@@ -42,12 +42,6 @@ export const DEFAULT_CONFIG: TrentConfig = {
       "generativelanguage.googleapis.com",
     ],
   },
-  voice: {
-    enabled: false,
-    model: "base",
-    trigger_key: "Ctrl+B",
-    tts_enabled: false,
-  },
   gateway: {
     enabled: false,
     platforms: [],
