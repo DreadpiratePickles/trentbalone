@@ -158,6 +158,14 @@ status — so a stale index entry for an already-answered approval is harmless.
 The test that matters kills the process mid-approval and asserts the approval is still pending and
 still answerable, and that the budget and the audit chain persisted with it.
 
+Approval floors are matched over deobfuscated command variants:
+`packages/trent-core/src/tools/approval-floors.ts` (`floorBlock`, `dangerous`, `detectionVariants`)
+runs every rule in `approval-patterns.ts` (`HARDLINE_PATTERNS`, `DANGEROUS_PATTERNS`, ported from
+Hermes `tools/approval_detection.py`) against each variant, so `r\m -rf /`, `rm${IFS}-rf${IFS}/`,
+`$(echo rm) -rf ~`, `env rm -rf /` and `sh -c 'rm -rf /'` all reach the same rule; the hardline floor
+is checked inside `execute`, not only at `requiresApproval`, so it is never bypassed by an earlier
+approval. Tested in `approval-floors.test.ts`.
+
 ## Skill installation
 
 Every skill is scanned before it loads. See [skills.md](skills.md).
@@ -187,7 +195,5 @@ Every skill is scanned before it loads. See [skills.md](skills.md).
   `gh release create`; but no tag has been pushed, so no release exists, and the repository is
   private, so the release URLs the installer uses would 404 for the public anyway
   (`05_release/output/release-runbook.md`).
-- Approval floors matched over deobfuscated command variants. The design calls for them; they are not
-  built.
 - Automatic CA injection into a running container. The certificate path and the environment are
   built; wiring the mount into every backend is not finished.

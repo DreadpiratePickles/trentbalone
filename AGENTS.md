@@ -60,3 +60,12 @@ Money is **integer cents**, never floats. Tenant data access goes through `withR
    standalone builds ship with no dependencies.
 4. `apps/web/lib/heartbeat.ts:335-336` builds fresh in-memory stores, so the production
    self-improvement sweep is a no-op.
+5. `apps/web/lib/session.ts:75` hardcodes `permissions: ["*"]` on every owner membership. Neither
+   `CompanyMember.permissions` (`prisma/schema.prisma:116`) nor `Agent.permissions` (`:131`) is ever
+   enforced: the only `companyMember` reads (`session.ts:53`, `:90`, `prisma-store-base.ts:52`) select
+   existence, `companyId` or `role`, never `permissions`; `Agent.permissions` is only mapped
+   (`prisma-store-mappers.ts:112`), displayed (`components/sub-pages.tsx:2372`, `:3528`) and merged
+   (`app/api/agent-plug/route.ts:158`). No authorization path consults either column.
+6. `apps/web/lib/outbound/sequences.ts:22` returns `step: input.steps[0]` after `.find()` matched a
+   different step, so every ready sequence re-sends the first step; the `.sort()` on `:20` also mutates
+   the caller's array in place.
