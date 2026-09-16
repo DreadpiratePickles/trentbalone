@@ -221,14 +221,26 @@ export const gatewaySpec: CommandSpec = {
         // the owner's decision releases the step. The link rides on the runtime's bus hooks, so
         // it sees every run, not only those the agent handler starts; it is built after the
         // manager it sends through, and the runtime before both, so the hook forwards lazily.
+        // Push alerts (failures, unanswered gates) go through the same manager, handed to the
+        // runtime as a sender that resolves the manager lazily for the same reason.
         let link: RunApprovalLink | undefined;
+        let manager: GatewayManager | undefined;
         const config = configManager.loadConfig();
         const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({
           configManager,
           config: config as unknown as ReplConfig,
           busHooks: [{ sink: (event) => link?.sink(event), flush: async () => undefined }],
+          alerts: {
+            manager: {
+              send: (platform, message) => {
+                if (manager === undefined) return Promise.reject(new Error("the gateway manager is not built yet"));
+                return manager.send(platform, message);
+              },
+            },
+            log: (line) => ctx.err(line),
+          },
         });
-        const manager = buildManager(configManager, { agentHandler: createAgentHandler(runtime) });
+        manager = buildManager(configManager, { agentHandler: createAgentHandler(runtime) });
         link = linkRunApprovals({
           orchestrator: runtime.orchestrator,
           bridge: manager.getApprovalBridge(),

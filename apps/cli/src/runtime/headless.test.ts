@@ -214,6 +214,51 @@ describe("createHeadlessRuntime bus hooks", () => {
   });
 });
 
+describe("createHeadlessRuntime alerts", () => {
+  it("with gateway.owner set and an alert sender injected, a run_failed event becomes one message to the owner", async () => {
+    const f = fakes((manager) => {
+      const config = manager.loadConfig();
+      config.gateway.owner = { platform: "telegram", channelId: "555" };
+      manager.saveConfig(config);
+    });
+    const send = vi.fn(async () => ({ queued: "q1", sent: true }));
+    const runtime = await createHeadlessRuntime({ ...f.deps, alerts: { manager: { send } } });
+    runtimes.push(runtime);
+    expect(runtime.alerts?.active).toBe(true);
+
+    const hook = f.received[0]?.improve;
+    expect(hook).toBeDefined();
+    hook!.sink(ev("run_start", { run: { objective: "hello" } }));
+    hook!.sink(ev("run_failed", { detail: "the model gateway returned 503" }));
+    await hook!.flush();
+    expect(send).toHaveBeenCalledTimes(1);
+    const [platform, message] = send.mock.calls[0] as unknown as [string, { channelId: string; text: string }];
+    expect(platform).toBe("telegram");
+    expect(message.channelId).toBe("555");
+    expect(message.text).toContain("run_h");
+    expect(message.text).toContain("the model gateway returned 503");
+  });
+
+  it("with no gateway.owner the alert hook is inert and the sender is never called", async () => {
+    const f = fakes();
+    const send = vi.fn(async () => ({ queued: "q1", sent: true }));
+    const runtime = await createHeadlessRuntime({ ...f.deps, alerts: { manager: { send } } });
+    runtimes.push(runtime);
+    expect(runtime.alerts?.active).toBe(false);
+    const hook = f.received[0]?.improve;
+    hook!.sink(ev("run_failed", { detail: "boom" }));
+    await hook!.flush();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("with no alert sender injected no alert hook is built", async () => {
+    const f = fakes();
+    const runtime = await createHeadlessRuntime(f.deps);
+    runtimes.push(runtime);
+    expect(runtime.alerts).toBeUndefined();
+  });
+});
+
 describe("createHeadlessRuntime telemetry", () => {
   it("with no telemetry.otlp_endpoint the improve hook goes to the orchestrator unwrapped and no exporter is built", async () => {
     const f = fakes();

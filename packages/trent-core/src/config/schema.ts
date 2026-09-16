@@ -78,6 +78,8 @@ export const GatewayConfigSchema = z.object({
   routes: z.record(z.string(), z.string()).default({}), // platform -> agentId
   /** Who receives approval cards and heartbeat messages: a platform id and a channel on it. */
   owner: z.object({ platform: z.string(), channelId: z.string() }).optional(),
+  /** Push alerts to `owner`: how long a gate may wait unanswered before one reminder is sent. */
+  alerts: z.object({ approval_wait_minutes: z.number().int().positive().default(30) }).default({}),
 });
 
 export const FleetConfigSchema = z.object({

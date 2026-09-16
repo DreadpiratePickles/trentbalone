@@ -46,6 +46,7 @@ export const DEFAULT_CONFIG: TrentConfig = {
     enabled: false,
     platforms: [],
     routes: {},
+    alerts: { approval_wait_minutes: 30 },
   },
   fleet: {
     installed_agents: ["ceo", "eng-ai-engineer", "sup-support-responder"],

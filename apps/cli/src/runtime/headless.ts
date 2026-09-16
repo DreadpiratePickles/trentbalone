@@ -21,6 +21,7 @@ import {
   type Orchestrator,
 } from "@trent/core/orchestrator/index.js";
 import type { FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
+import { createAlertHook, type AlertBudgetPort, type AlertHook, type AlertHookDeps } from "@trent/core/gateway/index.js";
 import type { BusHook } from "@trent/core/improve/index.js";
 import { OTelExporter, composeBusHooks, createOTelBusHook, type OTelBusHook } from "@trent/core/traces/index.js";
 import type { ImproveRunDeps } from "../commands/improve.js";
@@ -62,6 +63,18 @@ export interface HeadlessRuntimeDeps {
    * before a run settles. The gateway's approval link rides here.
    */
   readonly busHooks?: readonly BusHook[];
+  /**
+   * Where push alerts go: the gateway manager (or anything with its `send`) and, optionally,
+   * the budget to watch. The owner and the approval wait come from `config.gateway`; with no
+   * owner the hook is inert and says so once. Absent, no alert hook is built at all.
+   */
+  readonly alerts?: HeadlessAlertDeps;
+}
+
+export interface HeadlessAlertDeps {
+  readonly manager: AlertHookDeps["manager"];
+  readonly budget?: AlertBudgetPort;
+  readonly log?: (line: string) => void;
 }
 
 export interface HeadlessRunOptions {
@@ -80,6 +93,8 @@ export interface HeadlessRuntime {
   readonly improve: ImproveRunDeps;
   /** The OTel export hook, present only when `telemetry.otlp_endpoint` is configured. */
   readonly telemetry: OTelBusHook | undefined;
+  /** The push-alert hook, present only when `alerts` was injected; `active` says whether an owner is set. */
+  readonly alerts: AlertHook | undefined;
   /** One run against the session's company: the orchestrator's event stream. */
   run(objective: string, options?: HeadlessRunOptions): AsyncIterable<OrcEvent>;
   /** Releases the proxy and the sandboxes. Idempotent, so every exit path may call it. */
@@ -101,6 +116,29 @@ export async function openStore(databaseUrl: string): Promise<OpenedStore> {
 /** The `telemetry` config block as the runtime reads it; `TrentConfig` satisfies it structurally. */
 interface TelemetrySlice {
   telemetry?: { otlp_endpoint?: string; service_name?: string };
+}
+
+/** The `gateway` config block as the alert hook reads it; `TrentConfig` satisfies it structurally. */
+interface GatewaySlice {
+  gateway?: { owner?: { platform: string; channelId: string }; alerts?: { approval_wait_minutes?: number } };
+}
+
+const DEFAULT_APPROVAL_WAIT_MINUTES = 30;
+
+/**
+ * The push-alert hook for this config and sender, or nothing when no sender was injected. The
+ * owner and the wait are config; a missing owner leaves the hook inert, and it says so once.
+ */
+export function wireAlerts(config: GatewaySlice, deps: HeadlessAlertDeps | undefined): AlertHook | undefined {
+  if (deps === undefined) return undefined;
+  const minutes = config.gateway?.alerts?.approval_wait_minutes ?? DEFAULT_APPROVAL_WAIT_MINUTES;
+  return createAlertHook({
+    manager: deps.manager,
+    owner: config.gateway?.owner,
+    budget: deps.budget,
+    approvalWaitMs: minutes * 60_000,
+    log: deps.log,
+  });
 }
 
 /**
@@ -148,7 +186,15 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     // OTel export, when config names a collector: composed onto the same bus hook the improve
     // loop uses, so the orchestrator sees one sink and one flush.
     const telemetry = wireTelemetry(config as TelemetrySlice);
-    const busHook = composeBusHooks(improve.improve, ...(telemetry === undefined ? [] : [telemetry]), ...(deps.busHooks ?? []));
+    // Push alerts to `gateway.owner`: failures, unanswered gates and budget thresholds ride the
+    // same hook, so they see every run this runtime executes.
+    const alerts = wireAlerts(config as GatewaySlice, deps.alerts);
+    const busHook = composeBusHooks(
+      improve.improve,
+      ...(telemetry === undefined ? [] : [telemetry]),
+      ...(alerts === undefined ? [] : [alerts]),
+      ...(deps.busHooks ?? []),
+    );
 
     // The configured provider/model travel with the orchestrator, which maps them into the env
     // its model resolver reads before the first apps/web import (live proof, F2).
@@ -176,9 +222,13 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       fleetMemory,
       improve,
       telemetry,
+      alerts,
       run: (objective, options = {}) =>
         orchestrator.run({ companyId, objective, trigger: options.trigger ?? "manual", signal: options.signal }),
-      cleanup: () => tools.cleanup(),
+      cleanup: async () => {
+        alerts?.close();
+        await tools.cleanup();
+      },
     };
   } catch (error) {
     // The graph did not come up: the proxy and the sandboxes already running must not outlive it.
