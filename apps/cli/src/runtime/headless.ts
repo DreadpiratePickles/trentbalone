@@ -134,6 +134,11 @@ interface MemorySlice {
   memory?: { blocks?: MemoryBlock[] };
 }
 
+/** The `runtime` config block the orchestrator's run cap comes from; `TrentConfig` satisfies it structurally. */
+interface RuntimeSlice {
+  runtime?: { max_concurrent_runs?: number };
+}
+
 const DEFAULT_APPROVAL_WAIT_MINUTES = 30;
 
 /**
@@ -226,8 +231,10 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     const createOrchestrator = deps.createOrchestrator ?? createRealOrchestrator;
     // `runtime.max_concurrent_runs` (T3.5): runs past the cap wait FIFO for a slot; absent, the
     // orchestrator's own default applies.
+    const maxConcurrentRuns = (config as RuntimeSlice).runtime?.max_concurrent_runs;
     const orchestrator = createOrchestrator({
       ...(durable ? { databaseUrl } : {}),
+      ...(maxConcurrentRuns === undefined ? {} : { maxConcurrentRuns }),
       model: { provider: config.provider, model: config.model },
       tools: tools.adapters,
       fleetMemory,

@@ -51,6 +51,7 @@ export const DEFAULT_CONFIG: TrentConfig = {
     alerts: { approval_wait_minutes: 30 },
   },
   repl: { double_text_policy: "enqueue" },
+  runtime: { max_concurrent_runs: 2 },
   heartbeat: { enabled: false, interval_minutes: 60, consolidate_memory: true },
   fleet: {
     installed_agents: ["ceo", "eng-ai-engineer", "sup-support-responder"],

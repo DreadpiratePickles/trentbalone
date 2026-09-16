@@ -215,6 +215,8 @@ export const TrentConfigSchema = z.object({
   privacy: z.object({ redact_prompts: z.boolean().default(false), patterns: z.array(z.string()).default([]) }).default({}),
   /** Trace-level rules over tool classes; appended to the shipped defaults, same id overrides. */
   policy: z.object({ rules: z.array(PolicyRuleSchema).default([]) }).default({}),
+  /** `max_concurrent_runs`: runs driven at once per profile; a run past the cap waits FIFO (docs/jobs.md). */
+  runtime: z.object({ max_concurrent_runs: z.number().int().positive().default(2) }).default({}),
   memory: MemoryConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),

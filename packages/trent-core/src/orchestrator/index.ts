@@ -45,6 +45,7 @@ import { EventChannel } from "./event-channel.js";
 import { loadLibs, type Libs } from "./libs.js";
 import { applyModelEnv } from "./model-env.js";
 import { PortShaper, PortTally } from "./provider-ports.js";
+import { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots, type ReleaseSlot } from "./run-slots.js";
 import { SeatTally, guardSeatModel, shapeEvent, type SeatModelFn } from "./seat-guard.js";
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
 import { runWithToolCallContext } from "../governance/tool-call-context.js";
@@ -69,6 +70,7 @@ export { wireSeatTools, toolsetEnvironment, SEAT_ROLES } from "./seat-wiring.js"
 export { createOrchestratorDelegatePort, DELEGATE_MAX_CHILDREN, DELEGATE_MAX_DEPTH } from "./delegate-port.js";
 export type { OrchestratorDelegatePort, DelegatedChildRunner, DelegatedChildSpec, DelegatedChildOutcome } from "./delegate-port.js";
 export { createAppDelegatedChildRunner } from "./delegate-child.js";
+export { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots } from "./run-slots.js";
 
 /**
  * Default drain bound. A 12-step plan (the planner's Zod maximum) costs one plan job, up to 12
@@ -106,6 +108,12 @@ export type OrchestratorDepsWithImprove = OrchestratorDeps & {
    * step is delegating, and the run boundaries are reported so a child lands in the right run.
    */
   readonly delegate?: OrchestratorDelegatePort;
+  /**
+   * `runtime.max_concurrent_runs`: how many runs this orchestrator drives at once. A run past the
+   * cap waits FIFO for a slot before it is launched, and says so with one `heartbeat` event
+   * (`detail: "queued: N ahead ..."`). A run parked on an approval keeps its slot (`./run-slots.ts`).
+   */
+  readonly maxConcurrentRuns?: number;
 };
 
 // --- The drain loop -----------------------------------------------------------------------------
@@ -180,6 +188,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
   assertStandaloneEnv();
 
   const defaultMaxJobs = deps.maxJobs ?? DEFAULT_MAX_JOBS;
+  const slots = new RunSlots(deps.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS);
 
   /** Parked runs waiting for approve()/reject()/cancel(), by run id. */
   const resumers = new Map<string, Set<() => void>>();
@@ -315,7 +324,22 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       channel.push(event);
     };
 
+    let releaseSlot: ReleaseSlot | undefined;
     const started: Promise<string> = (async () => {
+      // The cap is enforced before the run exists: a queued run has no row and no drain loop. The
+      // one heartbeat tells the caller why nothing is happening yet. It goes to the handle and the
+      // trace sink only: the run has no id, and the bus hooks key their state by run.
+      releaseSlot = await slots.acquire((ahead) => {
+        const queued: OrcEvent = {
+          kind: "heartbeat",
+          runId: "",
+          at: new Date().toISOString(),
+          detail: `queued: ${ahead} ahead; max_concurrent_runs is ${slots.capacity}`,
+        };
+        deps.traceSink?.(queued);
+        channel.push(queued);
+      });
+      if (isInterrupted()) throw new Error("run cancelled while queued for a slot");
       const libs = await loadLibs();
       const gateway = await loadGateway();
       assertStandaloneEnv();
@@ -401,6 +425,8 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       } finally {
         unsubscribe?.();
         channel.close();
+        // The slot goes to the oldest waiter, if any, before this handle's caller can observe the end.
+        releaseSlot?.();
         libs.overrides.clearRuntimeEvalOverrides();
         // fleet-memory hook: this run's memory writes become visible to the next run.
         if (runId !== undefined) deps.fleetMemory?.runFinished(runId);
@@ -422,7 +448,9 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       result: () => finished,
       cancel: async () => {
         cancelRequested = true;
-        const id = await started;
+        // A run that never launched (still queued, or the launch failed) has nothing to cancel.
+        const id = await started.catch(() => undefined);
+        if (id === undefined) return true;
         const libs = await loadLibs();
         const cancelled = await libs.orchestrator.cancelOrchestration(id);
         wake(id);
