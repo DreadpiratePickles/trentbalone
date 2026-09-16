@@ -21,8 +21,10 @@ import {
   type Orchestrator,
 } from "@trent/core/orchestrator/index.js";
 import type { FleetMemoryHook, MemoryBlock } from "@trent/core/fleet-memory/index.js";
+import { createVersionPinHook, type VersionPinHook } from "@trent/core/fleet/index.js";
 import { createAlertHook, type AlertBudgetPort, type AlertHook, type AlertHookDeps } from "@trent/core/gateway/index.js";
 import type { BusHook } from "@trent/core/improve/index.js";
+import type { ImproveStorePort } from "@trent/core/store/index.js";
 import { applyPrivacyEnv, createPromptRedactor, type PromptPrivacyConfig } from "@trent/core/model-gateway/index.js";
 import { OTelExporter, composeBusHooks, createOTelBusHook, type OTelBusHook } from "@trent/core/traces/index.js";
 import type { ImproveRunDeps } from "../commands/improve.js";
@@ -96,6 +98,8 @@ export interface HeadlessRuntime {
   readonly telemetry: OTelBusHook | undefined;
   /** The push-alert hook, present only when `alerts` was injected; `active` says whether an owner is set. */
   readonly alerts: AlertHook | undefined;
+  /** T4.1: the live agent version ids each run was pinned to at its `run_start`; absent without a durable store. */
+  readonly versionPins: VersionPinHook | undefined;
   /** One run against the session's company: the orchestrator's event stream. */
   run(objective: string, options?: HeadlessRunOptions): AsyncIterable<OrcEvent>;
   /** Releases the proxy and the sandboxes. Idempotent, so every exit path may call it. */
@@ -217,8 +221,15 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     // Push alerts to `gateway.owner`: failures, unanswered gates and budget thresholds ride the
     // same hook, so they see every run this runtime executes.
     const alerts = wireAlerts(config as GatewaySlice, deps.alerts);
+    // Run pinning (T4.1): at every `run_start` the live version of each agent is snapshotted into
+    // the run, so a promote mid-run changes the next run. Versions live in the durable store's
+    // improve tables; a store without them (plain Node) has no versions to pin, and the hook is
+    // not composed at all, so the improve hook still reaches the orchestrator unwrapped.
+    const improveStore = (store as { improve?: () => ImproveStorePort }).improve?.();
+    const versionPins = improveStore === undefined ? undefined : createVersionPinHook({ store: improveStore });
     const busHook = composeBusHooks(
       improve.improve,
+      ...(versionPins === undefined ? [] : [versionPins]),
       ...(telemetry === undefined ? [] : [telemetry]),
       ...(alerts === undefined ? [] : [alerts]),
       ...(deps.busHooks ?? []),
@@ -257,6 +268,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       improve,
       telemetry,
       alerts,
+      versionPins,
       run: (objective, options = {}) =>
         orchestrator.run({ companyId, objective, trigger: options.trigger ?? "manual", signal: options.signal }),
       cleanup: async () => {

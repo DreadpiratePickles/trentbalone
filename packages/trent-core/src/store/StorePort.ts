@@ -205,8 +205,12 @@ export interface StorePort {
 // because a plugged specialist and the seat it sits in learn separately.
 
 export type ImproveDraftStatus = "quarantine" | "live" | "rejected" | "stale" | "archived";
-/** `memory`: a consolidated rewrite of MEMORY.md + USER.md (`../fleet-memory/consolidate.ts`). */
-export type ImproveArtifactKind = "skill" | "prompt" | "memory";
+/**
+ * `memory`: a consolidated rewrite of MEMORY.md + USER.md (`../fleet-memory/consolidate.ts`).
+ * `agent`: a versioned agent definition (`../fleet/AgentVersions.ts`); its ledger rows carry
+ * version ids, not bytes, and never touch the SkillDraft table.
+ */
+export type ImproveArtifactKind = "skill" | "prompt" | "memory" | "agent";
 export type ImproveLedgerAction = "stage" | "promote" | "fix" | "reject" | "retire" | "archive" | "recover" | "rollback";
 
 export interface AgentTraceRow {
@@ -347,7 +351,57 @@ export interface GateCacheRow {
   createdAt: string;
 }
 
+// ─── Agent versions (T4.1) ─────────────────────────────────────────────────────
+// One immutable row per (company, agent, version). Exactly one row per agent is `live`; a
+// promote archives the previous live and the improve ledger records the flip by version id, so
+// `rollback(iterationId)` restores it. Rows are never edited except for their label.
+
+export type AgentVersionLabel = "live" | "candidate" | "archived";
+
+/** What a seat runs as: the prompt it reads, the model it is routed to, its toolsets and its skills. */
+export interface AgentDefinition {
+  prompt: string;
+  model: { provider: string; model: string };
+  toolsets: string[];
+  /** Skill bodies keyed by slug; exported as `skills/<slug>/SKILL.md`. */
+  skills: Array<{ slug: string; content: string }>;
+}
+
+export interface AgentVersionRow {
+  id: string;
+  companyId: string;
+  agentId: string;
+  /** Monotonic per agent, starting at 1. */
+  version: number;
+  promptHash: string;
+  model: { provider: string; model: string };
+  toolsets: string[];
+  skillsHash: string;
+  label: AgentVersionLabel;
+  createdAt: string;
+  /** The ledger iteration that promoted this version; null until it is promoted. */
+  iterationId: string | null;
+  /** The full snapshot, so export and rollback need no other source. */
+  definition: AgentDefinition;
+}
+
+export interface AgentVersionFilter {
+  agentId?: string;
+  label?: AgentVersionLabel;
+}
+
+export interface AgentVersionPatch {
+  label?: AgentVersionLabel;
+  iterationId?: string | null;
+}
+
 export interface ImproveStorePort {
+  createAgentVersion(row: AgentVersionRow): Promise<void>;
+  getAgentVersion(id: string): Promise<AgentVersionRow | null>;
+  updateAgentVersion(id: string, patch: AgentVersionPatch): Promise<AgentVersionRow>;
+  /** Highest version first. */
+  listAgentVersions(companyId: string, filter?: AgentVersionFilter): Promise<AgentVersionRow[]>;
+
   appendTrace(row: AgentTraceRow): Promise<void>;
   listTraces(companyId: string, filter?: TraceFilter): Promise<AgentTraceRow[]>;
   tracesByRun(runId: string): Promise<AgentTraceRow[]>;

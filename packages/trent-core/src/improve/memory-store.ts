@@ -5,6 +5,9 @@
 
 import type {
   AgentTraceRow,
+  AgentVersionFilter,
+  AgentVersionPatch,
+  AgentVersionRow,
   DraftFilter,
   DraftPatch,
   GateCacheRow,
@@ -32,6 +35,36 @@ export class InMemoryImproveStore implements ImproveStorePort {
   readonly #frontiers = new Map<string, GepaFrontierRow>();
   readonly #ledger: SkillLedgerRow[] = [];
   readonly #gateCache = new Map<string, GateCacheRow>();
+  readonly #agentVersions = new Map<string, AgentVersionRow>();
+
+  async createAgentVersion(row: AgentVersionRow): Promise<void> {
+    if (this.#agentVersions.has(row.id)) throw new Error(`agent version ${row.id} already exists`);
+    this.#agentVersions.set(row.id, structuredClone(row));
+  }
+
+  async getAgentVersion(id: string): Promise<AgentVersionRow | null> {
+    const row = this.#agentVersions.get(id);
+    return row ? structuredClone(row) : null;
+  }
+
+  async updateAgentVersion(id: string, patch: AgentVersionPatch): Promise<AgentVersionRow> {
+    const row = this.#agentVersions.get(id);
+    if (!row) throw new Error(`agent version ${id} not found`);
+    const next: AgentVersionRow = { ...row };
+    if (patch.label !== undefined) next.label = patch.label;
+    if (patch.iterationId !== undefined) next.iterationId = patch.iterationId;
+    this.#agentVersions.set(id, next);
+    return structuredClone(next);
+  }
+
+  async listAgentVersions(companyId: string, filter: AgentVersionFilter = {}): Promise<AgentVersionRow[]> {
+    return [...this.#agentVersions.values()]
+      .filter((v) => v.companyId === companyId)
+      .filter((v) => filter.agentId === undefined || v.agentId === filter.agentId)
+      .filter((v) => filter.label === undefined || v.label === filter.label)
+      .sort((a, b) => b.version - a.version || b.createdAt.localeCompare(a.createdAt))
+      .map((v) => structuredClone(v));
+  }
 
   async appendTrace(row: AgentTraceRow): Promise<void> {
     this.#traces.push({ ...row, toolCalls: [...row.toolCalls], failureTags: [...(row.failureTags ?? [])] });

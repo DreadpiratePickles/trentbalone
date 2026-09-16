@@ -93,8 +93,11 @@ Every skill gets a slash command derived from its slug: `repo-audit` becomes `/r
 
 - A remote skills registry. `skills install` installs from the built-in catalog or from content you
   supply; there is no network fetch and therefore no manifest hash to verify.
-- A `<slug>/SKILL.md` directory layout with `scripts/` and `tools/` subdirectories. Earlier
-  documentation described this; the loader reads a single file per skill.
+- A `<slug>/SKILL.md` directory layout with `scripts/` and `tools/` subdirectories for *installed*
+  skills. The loader reads a single file per skill in the profile. The directory layout is the
+  export and import format: `fleet export <id> <dir>` writes `<dir>/skills/<slug>/SKILL.md` and
+  `fleet import <dir>` reads it back, scanning every file first, and installs each as `<slug>.md`
+  (see [fleet.md](fleet.md), "Export and import"). `scripts/` and `tools/` are not carried.
 - Repository-local `.trent/skills/` discovery. Only the profile directory is read.
 - A trust-and-verdict install table where a `dangerous` verdict cannot be forced. Today the scan is
   simply pass or fail.

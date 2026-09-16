@@ -8,6 +8,7 @@ import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { CommandSpec } from "../registry.js";
+import { fleetVersionSpecs } from "./fleet-versions.js";
 
 const DEFAULT_BUDGET_USD = "1.0";
 
@@ -197,6 +198,7 @@ export const fleetSpec: CommandSpec = {
         return [`  ${ctx.theme.success("created")} ${ctx.theme.value(String(d.agent?.id))}`];
       },
     },
+    ...fleetVersionSpecs,
   ],
 };
 

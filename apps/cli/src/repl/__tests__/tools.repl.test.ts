@@ -166,7 +166,7 @@ describe("ClassicRepl wires the toolsets into the orchestrator", () => {
     expect(names).toEqual(expect.arrayContaining(["file_ops", "terminal"]));
     // Quick-setup default (config/defaults.ts): every implemented toolset. This session runs with
     // no egress proxy, so web is skipped with a visible reason rather than registered.
-    expect(names).toEqual(["file_ops", "terminal", "code_execution", "delegation", "cron", "skills", "plugins"]);
+    expect(names).toEqual(["file_ops", "terminal", "code_execution", "delegation", "cron", "skills", "plugins", "human"]);
     const everything = s.out.join("");
     expect(everything).toContain("file_ops");
     expect(everything).toContain("terminal");
@@ -233,7 +233,7 @@ describe("ClassicRepl and the egress proxy lifecycle", () => {
     expect(await portOpen(port)).toBe(true);
     const handed = (recorder.received[0]?.tools ?? []).map((tool) => tool.name);
     // With the proxy listening, web is registered too — the full quick-setup default.
-    expect(handed).toEqual(["file_ops", "terminal", "web", "code_execution", "delegation", "cron", "skills", "plugins"]);
+    expect(handed).toEqual(["file_ops", "terminal", "web", "code_execution", "delegation", "cron", "skills", "plugins", "human"]);
 
     s.stdin.emit("end");
     await started;

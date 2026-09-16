@@ -6,8 +6,9 @@
  * (read-only), whose AgentTrace / SkillDraft / SelfImprovementIteration models predate the fleet
  * loop and carry no agent id, no ledger and no frontier. This module bootstraps what the loop needs
  * idempotently on first use: nullable columns added to the three existing tables (the app's client
- * never selects them, so it is unaffected) and three new tables: GepaFrontier, SkillLedger and
- * GateCache (content-addressed gate results, so a sweep never re-buys a measurement it has).
+ * never selects them, so it is unaffected) and four new tables: GepaFrontier, SkillLedger,
+ * GateCache (content-addressed gate results, so a sweep never re-buys a measurement it has) and
+ * AgentVersion (T4.1, `./sqlite-agent-versions.ts`).
  *
  * Every write is a single bound statement; every read normalises the driver's typed columns
  * (DATETIME -> ISO string, BOOLEAN -> boolean, JSONB -> parsed) so callers see one row shape.
@@ -15,6 +16,9 @@
 
 import type {
   AgentTraceRow,
+  AgentVersionFilter,
+  AgentVersionPatch,
+  AgentVersionRow,
   DraftFilter,
   DraftPatch,
   GateCacheRow,
@@ -32,6 +36,7 @@ import type {
   SkillLedgerRow,
   TraceFilter,
 } from "../store/StorePort.js";
+import { AGENT_VERSION_TABLES, insertAgentVersion, patchAgentVersion, selectAgentVersion, selectAgentVersions } from "./sqlite-agent-versions.js";
 
 /** The two raw-query primitives the store needs. `PrismaStore` supplies them from the client. */
 export interface RawSql {
@@ -248,8 +253,18 @@ export class SqliteImproveStore implements ImproveStorePort {
       if (columns.length === 0 || columns.some((c) => c.name === column)) continue;
       await this.raw.execute(`ALTER TABLE "${table}" ADD COLUMN "${column}" ${ddl}`);
     }
-    for (const statement of NEW_TABLES) await this.raw.execute(statement);
+    for (const statement of [...NEW_TABLES, ...AGENT_VERSION_TABLES]) await this.raw.execute(statement);
   }
+
+  /** T4.1: the AgentVersion table (`./sqlite-agent-versions.ts`); every call bootstraps first. */
+  private async versions<T>(op: (raw: RawSql) => Promise<T>): Promise<T> {
+    await this.ensure();
+    return op(this.raw);
+  }
+  createAgentVersion = (row: AgentVersionRow): Promise<void> => this.versions((raw) => insertAgentVersion(raw, row));
+  getAgentVersion = (id: string): Promise<AgentVersionRow | null> => this.versions((raw) => selectAgentVersion(raw, id));
+  updateAgentVersion = (id: string, patch: AgentVersionPatch): Promise<AgentVersionRow> => this.versions((raw) => patchAgentVersion(raw, id, patch));
+  listAgentVersions = (companyId: string, filter: AgentVersionFilter = {}): Promise<AgentVersionRow[]> => this.versions((raw) => selectAgentVersions(raw, companyId, filter));
 
   async appendTrace(row: AgentTraceRow): Promise<void> {
     await this.ensure();

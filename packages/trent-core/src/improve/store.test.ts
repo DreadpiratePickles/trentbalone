@@ -32,14 +32,14 @@ describe("improve store contract — in-memory (Node)", () => {
 });
 
 describe("improve store contract — real SQLite through PrismaStore (Bun)", () => {
-  it("satisfies the same contract on the six durable tables, and survives a reopen", () => {
+  it("satisfies the same contract on the seven durable tables, and survives a reopen", () => {
     const file = path.join(mkdtempSync(path.join(tmpdir(), "trent-improve-")), "trent.db");
     const stdout = execFileSync(findBun(), [path.join(here, "sqlite-scenario.ts"), file], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const parsed = JSON.parse(stdout) as { first: StoreContractResult; reopened: { traces: number; drafts: number; ledger: number; gateCache: number } };
+    const parsed = JSON.parse(stdout) as { first: StoreContractResult; reopened: { traces: number; drafts: number; ledger: number; gateCache: number; agentVersions: number } };
     expect(parsed.first).toEqual(expectedStoreContract());
-    expect(parsed.reopened).toEqual({ traces: 4, drafts: 2, ledger: 2, gateCache: 1 });
+    expect(parsed.reopened).toEqual({ traces: 4, drafts: 2, ledger: 2, gateCache: 1, agentVersions: 3 });
   });
 });

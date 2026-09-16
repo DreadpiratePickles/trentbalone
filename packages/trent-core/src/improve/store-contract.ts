@@ -31,6 +31,11 @@ export interface StoreContractResult {
   gateCacheRoundTrip: unknown;
   gateCacheOtherCompany: unknown;
   gateCacheMissing: boolean;
+  /** T4.1: agent versions round-trip their JSON columns, list highest version first, patch labels only, and miss cleanly. */
+  agentVersionsNewestFirst: Array<[version: number, label: string]>;
+  agentVersionLive: { id: string; prompt: string; skills: number; toolsets: string[]; model: { provider: string; model: string } } | null;
+  agentVersionOtherAgent: number;
+  agentVersionMissing: boolean;
 }
 
 export async function runStoreContract(store: ImproveStorePort): Promise<StoreContractResult> {
@@ -169,8 +174,29 @@ export async function runStoreContract(store: ImproveStorePort): Promise<StoreCo
   await store.putGateCache({ companyId, key: "baseline:s:v1:h1", value: { score: 0.75, failureClusters: { rubric_failed: 1 } }, createdAt: t1 });
   await store.putGateCache({ companyId: "co_other", key: "baseline:s:v1:h1", value: { score: 1 }, createdAt: t1 });
 
+  const version = (id: string, agentId: string, version: number, prompt: string, createdAt: string) => ({
+    id,
+    companyId,
+    agentId,
+    version,
+    promptHash: `ph_${version}`,
+    model: { provider: "anthropic", model: "claude-sonnet-4-5" },
+    toolsets: ["file_ops", "terminal"],
+    skillsHash: "sh_1",
+    label: "candidate" as const,
+    createdAt,
+    iterationId: null,
+    definition: { prompt, model: { provider: "anthropic", model: "claude-sonnet-4-5" }, toolsets: ["file_ops", "terminal"], skills: [{ slug: "repo-audit", content: "# Repository Audit" }] },
+  });
+  await store.createAgentVersion(version("av_1", "engineer", 1, "engineer v1", t0));
+  await store.createAgentVersion(version("av_2", "engineer", 2, "engineer v2", t1));
+  await store.createAgentVersion(version("av_3", "growth", 1, "growth v1", t1));
+  await store.updateAgentVersion("av_1", { label: "archived" });
+  await store.updateAgentVersion("av_2", { label: "live", iterationId: "iter_1" });
+
   const draft = await store.getDraft("draft_1");
   const iter = await store.getIteration("iter_1");
+  const liveVersion = (await store.listAgentVersions(companyId, { agentId: "engineer", label: "live" }))[0];
   const frontier = await store.getFrontier(companyId, "engineer");
   const ledger = await store.listLedger(companyId, { iterationId: "iter_1" });
 
@@ -195,6 +221,12 @@ export async function runStoreContract(store: ImproveStorePort): Promise<StoreCo
     gateCacheRoundTrip: (await store.getGateCache(companyId, "baseline:s:v1:h1"))?.value ?? null,
     gateCacheOtherCompany: (await store.getGateCache("co_other", "baseline:s:v1:h1"))?.value ?? null,
     gateCacheMissing: (await store.getGateCache(companyId, "baseline:s:v1:nope")) === null,
+    agentVersionsNewestFirst: (await store.listAgentVersions(companyId, { agentId: "engineer" })).map((v) => [v.version, v.label]),
+    agentVersionLive: liveVersion
+      ? { id: liveVersion.id, prompt: liveVersion.definition.prompt, skills: liveVersion.definition.skills.length, toolsets: liveVersion.toolsets, model: liveVersion.model }
+      : null,
+    agentVersionOtherAgent: (await store.listAgentVersions(companyId, { agentId: "growth" })).length,
+    agentVersionMissing: (await store.getAgentVersion("av_nope")) === null,
   };
 }
 
@@ -221,5 +253,12 @@ export function expectedStoreContract(): StoreContractResult {
     gateCacheRoundTrip: { score: 0.75, failureClusters: { rubric_failed: 1 } },
     gateCacheOtherCompany: { score: 1 },
     gateCacheMissing: true,
+    agentVersionsNewestFirst: [
+      [2, "live"],
+      [1, "archived"],
+    ],
+    agentVersionLive: { id: "av_2", prompt: "engineer v2", skills: 1, toolsets: ["file_ops", "terminal"], model: { provider: "anthropic", model: "claude-sonnet-4-5" } },
+    agentVersionOtherAgent: 1,
+    agentVersionMissing: true,
   };
 }

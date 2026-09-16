@@ -3,3 +3,7 @@ export * from "./FleetUsage.js";
 export * from "./FleetPacks.js";
 export * from "./AgentInstaller.js";
 export * from "./FleetManager.js";
+export * from "./AgentVersions.js";
+export * from "./agent-definition.js";
+export * from "./version-pin-hook.js";
+export * from "./export.js";

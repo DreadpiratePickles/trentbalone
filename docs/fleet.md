@@ -106,6 +106,56 @@ npm run cli -- fleet create my-analyst \
 `--budget` is in USD at this boundary and is stored as integer cents. See
 [configuration.md](configuration.md).
 
+## Versions, promote and rollback
+
+An agent definition — the prompt the seat reads, the configured model, its toolsets and the skill
+bodies it carries — can be snapshotted as an immutable, numbered version. Exactly one version per
+agent is live; the rest are candidates or archived.
+
+```bash
+npm run cli -- fleet versions engineer --snapshot   # file the current definition as the next candidate
+npm run cli -- fleet versions engineer              # every version, highest first, with the live one marked
+npm run cli -- fleet promote engineer 2             # candidate -> live; the previous live is archived
+npm run cli -- fleet rollback engineer              # the previous live version returns
+```
+
+`promote` is a human command, like `improve promote`: it writes an iteration of kind `agent` and a
+ledger row to the same improve ledger, carrying the previous and new version ids, so `improve
+rollback <iterationId>` and `fleet rollback <id>` are the same operation. An archived version is
+never promoted again — versions are immutable — so the way back to one is a new candidate, which
+keeps the history linear. `--dry-run` reports what would happen and writes nothing.
+
+Runs are pinned. At every `run_start` the runtime records the live version id of each agent (and the
+skill bodies that version carries) into the run. A promotion made while a run is in flight changes
+the next run, never the one that already started — the same per-run freeze the fleet memory prelude
+uses. The snapshot is `runtime.versionPins.pinnedFor(runId)` (present when the profile store is durable).
+
+Versions live in the profile's `trent.db` (the `AgentVersion` table, beside the improve loop's
+tables). Under a runtime without bun:sqlite the commands still answer, from a process-local store.
+
+## Export and import
+
+```bash
+npm run cli -- fleet export engineer ./engineer-v2
+npm run cli -- fleet import ./engineer-v2
+```
+
+`export` writes the agent's live version (or its newest candidate, or a fresh snapshot when it was
+never versioned) as a directory:
+
+```
+engineer-v2/
+  agent.json                 schema, agentId, version, prompt, model, toolsets, hashes, skill slugs
+  skills/<slug>/SKILL.md     one file per skill the version carries
+```
+
+`import` reads the whole bundle, runs the [pre-install scan](skills.md#the-pre-install-scan) over the prompt in
+`agent.json` and over every `SKILL.md`, and refuses on any finding before a single write. The error
+names the file and the scanner's category, never the offending text. What passes is filed as a NEW
+candidate version — never live; `fleet promote` is the human step — and the agent's record and its
+skill files land in the profile so `fleet deploy` can seat it. Exporting the imported agent from the
+fresh profile reproduces `agent.json` byte for byte.
+
 ## Colour
 
 An agent line renders as `● [Name]`. The dot carries state colour, the name carries division colour,

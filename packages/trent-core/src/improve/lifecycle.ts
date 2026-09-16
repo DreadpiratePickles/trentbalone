@@ -226,6 +226,26 @@ export async function rollback(store: ImproveStorePort, iterationId: string, act
 
   const report: RollbackReport = { iterationId, reverted: [], restored: [] };
   for (const row of [...rows].reverse()) {
+    // An agent version (T4.1) is a label flip, not bytes: `after` is the promoted version id and
+    // `before` the one it archived. Neither ever lived in the SkillDraft table.
+    if (row.artifactKind === "agent") {
+      await store.updateAgentVersion(row.artifactId, { label: "archived" });
+      report.reverted.push(row.artifactId);
+      if (row.before !== null) {
+        await store.updateAgentVersion(row.before, { label: "live" });
+        report.restored.push({ artifactId: row.before, taskType: row.taskType });
+      }
+      await recordLedger(store, {
+        action: "rollback",
+        artifact: { id: row.artifactId, companyId: row.companyId, agentId: row.agentId, taskType: row.taskType, kind: row.artifactKind },
+        before: row.after,
+        after: row.before,
+        iterationId,
+        actor,
+        now,
+      });
+      continue;
+    }
     // A memory artifact lives on disk as well as in the row: put the prior bytes back first, so a
     // refused file write (over the cap, or locked by a writer) leaves the ledger untouched.
     if (row.artifactKind === "memory" && row.before !== null) {

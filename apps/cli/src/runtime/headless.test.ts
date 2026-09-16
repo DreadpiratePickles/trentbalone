@@ -313,3 +313,37 @@ describe("createHeadlessRuntime telemetry", () => {
     }
   });
 });
+
+describe("createHeadlessRuntime version pins (T4.1)", () => {
+  it("with a store that carries the improve tables, run_start pins every live agent version through the composed hook", async () => {
+    const { InMemoryImproveStore } = await import("@trent/core/improve/index.js");
+    const { createAgentVersions } = await import("@trent/core/fleet/index.js");
+    const improve = new InMemoryImproveStore();
+    const versions = createAgentVersions({
+      store: improve,
+      companyId: COMPANY_ID,
+      source: { definition: async (agentId) => ({ prompt: `You are ${agentId}.`, model: { provider: "anthropic", model: "m" }, toolsets: ["file_ops"], skills: [] }) },
+    });
+    const v1 = await versions.createCandidate("engineer");
+    await versions.promote("engineer", 1, { actor: "human" });
+
+    const f = fakes();
+    const store = Object.assign(f.store, { improve: () => improve });
+    const runtime = await createHeadlessRuntime({ ...f.deps, openStore: async () => ({ store: store as unknown as ReplStore, durable: true }) });
+    runtimes.push(runtime);
+    expect(runtime.versionPins).toBeDefined();
+
+    const hook = f.received[0]?.improve;
+    expect(hook).not.toBe(runtime.improve.improve);
+    hook!.sink(ev("run_start", { run: { companyId: COMPANY_ID, objective: "hello" } }));
+    await hook!.flush();
+    expect(runtime.versionPins?.pinnedFor("run_h")).toEqual({ engineer: v1.id });
+  });
+
+  it("without the improve tables no pin hook is built", async () => {
+    const f = fakes();
+    const runtime = await createHeadlessRuntime(f.deps);
+    runtimes.push(runtime);
+    expect(runtime.versionPins).toBeUndefined();
+  });
+});

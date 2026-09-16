@@ -33,6 +33,7 @@ async function main(): Promise<void> {
       drafts: (await improve.listDrafts("co_contract")).length,
       ledger: (await improve.listLedger("co_contract")).length,
       gateCache: (await improve.getGateCache("co_contract", "baseline:s:v1:h1")) === null ? 0 : 1,
+      agentVersions: (await improve.listAgentVersions("co_contract")).length,
     },
   };
   await reopened.close();
