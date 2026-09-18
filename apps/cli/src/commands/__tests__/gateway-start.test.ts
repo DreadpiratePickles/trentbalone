@@ -32,6 +32,36 @@ function ev(kind: OrcEvent["kind"], extra: Partial<OrcEvent> = {}): OrcEvent {
   return { kind, runId: "run_gw", at: "2026-09-15T00:00:00.000Z", ...extra } as OrcEvent;
 }
 
+/**
+ * A stand-in for `process`: it records the order of what happened, so a test can say the shutdown
+ * hook finished BEFORE the exit, which is the whole point of owning Ctrl+C.
+ */
+function fakeSignals(order: string[]) {
+  const listeners = new Map<string, Array<() => void>>();
+  return {
+    order,
+    once(event: string, listener: () => void): unknown {
+      const forEvent = listeners.get(event) ?? [];
+      forEvent.push(listener);
+      listeners.set(event, forEvent);
+      return undefined;
+    },
+    exit(code: number): void {
+      order.push(`exit:${code}`);
+    },
+    handled(event: string): boolean {
+      return (listeners.get(event) ?? []).length > 0;
+    },
+    async raise(event: string): Promise<void> {
+      for (const listener of listeners.get(event) ?? []) listener();
+      // Give the release its turns; stop as soon as the process would have gone, or after 100.
+      for (let i = 0; i < 100 && !order.some((entry) => entry.startsWith("exit:")); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+    },
+  };
+}
+
 interface Fakes {
   overrides: CliOverrides;
   runtimeDeps: HeadlessRuntimeDeps[];
@@ -43,6 +73,10 @@ interface Fakes {
   runtimeEvents: OrcEvent[];
   /** Platforms the manager reports as started; empty means nothing listens and the command returns. */
   listening: string[];
+  /** What happened, in order: the release steps, then the exit. */
+  order: string[];
+  /** The `process` the command's signal handling runs against; the worker's own is left alone. */
+  signals: ReturnType<typeof fakeSignals>;
 }
 
 function fakes(): Fakes {
@@ -50,7 +84,13 @@ function fakes(): Fakes {
   const managerOptions: GatewayManagerOptions[] = [];
   const managers: GatewayManager[] = [];
   const objectives: string[] = [];
-  const cleanup = vi.fn(async () => undefined);
+  const order: string[] = [];
+  const cleanup = vi.fn(async () => {
+    // A real cleanup awaits the proxy and the sandboxes; the await is what a synchronous exit pre-empts.
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    order.push("cleanup");
+    return undefined;
+  });
   const approve = vi.fn(async () => true);
   const runtimeEvents: OrcEvent[] = [];
   const listening: string[] = [];
@@ -66,7 +106,10 @@ function fakes(): Fakes {
     },
     cleanup,
   } as unknown as HeadlessRuntime;
+  const signals = fakeSignals(order);
   return {
+    order,
+    signals,
     runtimeDeps,
     managerOptions,
     managers,
@@ -76,6 +119,7 @@ function fakes(): Fakes {
     runtimeEvents,
     listening,
     overrides: {
+      signals,
       gatewayRuntime: async (deps) => {
         runtimeDeps.push(deps);
         return runtime;
@@ -170,6 +214,26 @@ describe("trent gateway start", () => {
     const f = fakes();
     const result = await runCli(["gateway", "start", "--json"], { overrides: f.overrides });
     expect(JSON.parse(result.stdout)).toMatchObject({ approvalLink: false });
+  });
+
+  it("Ctrl+C is owned by the command: the shutdown hook finishes before the exit, as SIGTERM and SIGHUP already do", async () => {
+    const f = fakes();
+    f.listening.push("telegram");
+    const result = await runCli(["gateway", "start", "--json"], { overrides: f.overrides });
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(result.keepAlive).toBe(true);
+    expect(f.signals.handled("SIGINT")).toBe(true);
+
+    const stopAll = vi.spyOn(f.managers[0]!, "stopAll").mockImplementation(async () => {
+      f.order.push("stopAll");
+    });
+    expect(f.cleanup).not.toHaveBeenCalled();
+
+    await f.signals.raise("SIGINT");
+    expect(stopAll).toHaveBeenCalledTimes(1);
+    expect(f.cleanup).toHaveBeenCalledTimes(1);
+    // The release ran to completion first; only then did the process go.
+    expect(f.order).toEqual(["stopAll", "cleanup", `exit:${String(EXIT.INTERRUPT)}`]);
   });
 
   it("--dry-run builds no runtime and no listener", async () => {

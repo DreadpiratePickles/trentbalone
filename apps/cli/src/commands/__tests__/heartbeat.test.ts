@@ -76,6 +76,8 @@ function fakes(reply = NO_REPLY, at = "2026-09-15T09:00:00.000Z"): Fakes {
     managers,
     cleanup,
     overrides: {
+      // `gateway start` claims Ctrl+C through this seam; a stub keeps the worker's own signals alone.
+      signals: { once: () => undefined, exit: () => undefined },
       now: () => new Date(at),
       gatewayRuntime: async () => runtime,
       gatewayManager: (configManager, options) => {

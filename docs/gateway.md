@@ -59,8 +59,10 @@ summary as carried by `consolidate_end` / `run_done`, or the reason a `run_faile
 A run that ends with neither sends nothing. The route's agent id is recorded on the manager but the
 run is planned by the orchestrator, which picks the seats. `--dry-run` builds no runtime and reports
 which platforms would start. When no platform has a credential the command releases the runtime and
-exits; otherwise it stays up, and SIGTERM or SIGHUP stops the adapters, the proxy and the sandboxes
-before the process exits. Ctrl+C is answered by the binary itself and exits at once.
+exits; otherwise it stays up, and Ctrl+C, SIGTERM or SIGHUP stops the heartbeat, the approval link,
+the adapters, the proxy and the sandboxes before the process exits with 130. The command claims the
+interrupt (`apps/cli/src/signals.ts`), so the binary's own Ctrl+C handler waits for that release
+instead of exiting on top of it; a second Ctrl+C exits at once.
 
 ## The approval bridge
 

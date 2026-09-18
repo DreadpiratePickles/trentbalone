@@ -20,6 +20,7 @@ import { createAgentHandler } from "../../gateway/agent-handler.js";
 import { startEgressProxy } from "../../repl/tools.js";
 import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime } from "../../runtime/headless.js";
+import { releaseOnSignal } from "../../signals.js";
 import { openHeartbeat } from "./heartbeat.js";
 import {
   BUILD_HINT,
@@ -46,21 +47,6 @@ function parsePort(value: unknown, operation: string, fallback: string): number 
     });
   }
   return port;
-}
-
-/**
- * A keep-alive command that owns a runtime releases it on SIGTERM and SIGHUP before the process
- * goes, as `trent web` does for its child. Ctrl+C is answered by the binary itself (`index.ts`),
- * which exits at once.
- */
-function releaseOnSignal(release: () => Promise<void>): void {
-  let releasing: Promise<void> | undefined;
-  for (const signal of ["SIGTERM", "SIGHUP"] as const) {
-    process.once(signal, () => {
-      releasing ??= release().catch(() => undefined);
-      void releasing.finally(() => process.exit(EXIT.INTERRUPT));
-    });
-  }
 }
 
 function listeningRender(kind: string) {
@@ -271,7 +257,9 @@ export const gatewaySpec: CommandSpec = {
             await shutdown();
             throw error;
           }
-          releaseOnSignal(shutdown);
+          // Ctrl+C too, not only SIGTERM/SIGHUP: the claim makes the binary's global handler wait
+          // for this release instead of exiting on top of it (../../signals.ts).
+          releaseOnSignal(shutdown, ctx.overrides.signals);
         }
         return {
           data: { started, count: started.length, agentHandler: true, approvalLink: link.active, heartbeat: heartbeat !== undefined && started.length > 0 },

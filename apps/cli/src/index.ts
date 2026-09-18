@@ -2,21 +2,25 @@
 /**
  * The `trent` binary.
  *
- * The only place in the CLI that touches `process.exit`. Everything else returns an exit code, which
- * is what makes the whole command surface testable in-process.
+ * The only place in the CLI that touches `process.exit` on a command's behalf (a keep-alive command
+ * exits through `./signals.ts` once its release settles). Everything else returns an exit code,
+ * which is what makes the whole command surface testable in-process.
  *
  * Exit codes: 0 ok, 2 usage, 3 config, 4 auth, 5 provider, 6 budget, 130 interrupt.
  */
 
 import { EXIT } from "@trent/core/errors/index.js";
 import { runCli } from "./commands/index.js";
+import { interruptIsOwned } from "./signals.js";
 
 let interrupted = false;
 
 process.on("SIGINT", () => {
-  if (interrupted) process.exit(EXIT.INTERRUPT);
+  // A long-running command (`trent gateway start`) claims the interrupt so it can release its
+  // pid lock, its adapters and its runtime first; exiting here would pre-empt that. A second
+  // Ctrl+C means the founder is done waiting and goes immediately.
+  if (interrupted || !interruptIsOwned()) process.exit(EXIT.INTERRUPT);
   interrupted = true;
-  process.exit(EXIT.INTERRUPT);
 });
 
 async function main(): Promise<void> {
