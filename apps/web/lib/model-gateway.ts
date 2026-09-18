@@ -290,6 +290,11 @@ function cacheKeyForSeatModel(input: SeatModelExecutionInput) {
       input.subtask.objective,
       JSON.stringify(input.subtask.input ?? {}),
       JSON.stringify(input.subtask.contextBundle),
+      // `dynamicPrompt` is half the question: it carries the per-step context and, for a CLI
+      // session, the memory prelude and the conversation so far. Two runs with the same objective
+      // and a different prompt are different questions, and the key has to say so. The whole
+      // string is hashed by `semanticCacheKey`, so nothing raw is stored.
+      input.dynamicPrompt ?? "",
     ].join("\n"),
   });
 }

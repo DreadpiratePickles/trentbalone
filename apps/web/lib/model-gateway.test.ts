@@ -303,4 +303,49 @@ describe("model gateway policy", () => {
     expect(second.output).toEqual(first.output);
     expect(second.fallback).toBe(false);
   });
+
+  it("does not serve a cached analyst result to a different dynamic prompt", async () => {
+    // `dynamicPrompt` carries the fleet-memory prelude and, now, the session's conversation. Two
+    // runs with the same objective and different history are different questions; a key built
+    // from the objective alone answers the second one with the first one's result.
+    clearModelGatewayCache();
+    let calls = 0;
+    const createChatCompletion = async () => {
+      calls++;
+      return {
+        choices: [{ message: { content: JSON.stringify({ summary: `answer ${calls}` }) } }],
+        usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+      };
+    };
+    const subtask = {
+      id: "sub_history",
+      seat: "analyst" as const,
+      objective: "Summarize activation metrics",
+      outputContractId: "analyst.v1",
+      toolGuidance: [],
+      boundaries: [],
+      input: {},
+      contextBundle: {},
+      classification: { type: "analysis", complexity: "standard" as const, reversibility: "reversible" as const },
+      budgetCents: 10,
+    };
+
+    const first = await executeSeatModel({
+      companyId: "co_1",
+      subtask,
+      systemPrompt: "analyst",
+      dynamicPrompt: "## Conversation so far\nuser: which region?\n\nassistant: EMEA.",
+      createChatCompletion,
+    });
+    const second = await executeSeatModel({
+      companyId: "co_1",
+      subtask,
+      systemPrompt: "analyst",
+      dynamicPrompt: "## Conversation so far\nuser: which region?\n\nassistant: APAC.",
+      createChatCompletion,
+    });
+
+    expect(calls).toBe(2);
+    expect(second.output).not.toEqual(first.output);
+  });
 });
