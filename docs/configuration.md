@@ -91,7 +91,7 @@ heartbeat:
   #   start: "08:00"          # HH:MM on the wall clock of tz; the end is exclusive
   #   end: "20:00"            # a window that crosses midnight (22:00-06:00) wraps
   #   tz: Europe/Berlin       # IANA zone, default UTC
-  consolidate_memory: true    # once a day, inside quiet hours, draft a rewrite of the memory and user blocks
+  consolidate_memory: true    # once a day, inside quiet hours, draft a rewrite of every writable memory block
 
 fleet:
   installed_agents: [ceo, eng-ai-engineer, support-responder]
@@ -134,8 +134,10 @@ Every seat's prelude renders every block with its label, description, limit and 
 use; the `memory` tool writes one block per call (`block`, alias `target`, default `memory`) and
 refuses a `read_only` block or a write that would leave the block over its limit. Add a block
 (`product`, `PRODUCT.md`, 800) and it appears in the prelude and accepts writes up to 800
-characters. Labels and files must be distinct. The heartbeat's consolidation pass works on the two
-default blocks `memory` and `user`.
+characters. Labels and files must be distinct. The heartbeat's consolidation pass covers every
+configured block: `memory` and `user` always, each other writable block under its own `limit`, and
+a `read_only` block never — it is not even sent to the model. One draft carries the whole set, so
+`trent improve promote` moves every block at once and a rollback puts every block back.
 
 ### Runtime
 

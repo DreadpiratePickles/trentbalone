@@ -51,8 +51,9 @@ consolidation (`fleet-memory/consolidate.ts`) once per local calendar day, at th
 tick; with no `active_hours` it runs at the first tick of each day. The CLI binds it to the
 runtime's store and the configured provider, built on first use. The row of the tick that ran it
 carries `consolidated: true`, and a fresh loop over the same profile reads that back so a restart
-never runs it twice in one day. Consolidation only drafts; promotion stays a human step
-(`trent improve promote`).
+never runs it twice in one day. The pass covers every block `memory.blocks` configures, each under
+its own limit, and leaves `read_only` blocks alone. Consolidation only drafts; promotion stays a
+human step (`trent improve promote`).
 
 ## Delivery
 

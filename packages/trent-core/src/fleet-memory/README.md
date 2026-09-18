@@ -21,12 +21,16 @@ touched — and plugs into `createOrchestrator({ fleetMemory })` through a delim
 
 ## Sleep-time consolidation (T1.4, `consolidate.ts`)
 
-By night the `memory` and `user` blocks (the two default files; extra blocks are not consolidated) carry duplicates, near-duplicates and facts a later entry superseded.
-`consolidateMemory({ profileDir, companyId, gateway, store, meter?, now? })` makes ONE model call
-(temperature 0, both blocks and both caps in the prompt, the body never logged) asking for a
-deduplicated, merged rewrite of each block that keeps every fact still true, as strict JSON
-`{ memory, user, dropped }` validated with zod. The outcome is one of three, and the files are
-never touched here:
+By night the memory blocks carry duplicates, near-duplicates and facts a later entry superseded.
+`consolidateMemory({ profileDir, companyId, gateway, store, blocks?, meter?, now? })` makes ONE
+model call (temperature 0, every block and its own cap in the prompt, the body never logged)
+asking for a deduplicated, merged rewrite of each block that keeps every fact still true, as
+strict JSON `{ memory, user, dropped }` validated with zod — plus one key per extra block when
+`blocks` (`config.memory.blocks`) configures any. `memory` and `user` are always in the turn;
+every other configured block joins it under its OWN `limit`, and a `read_only` block is never
+sent to the model and never rewritten. One draft carries the whole set, so one promotion (or one
+rollback) moves every block together. The outcome is one of three, and the files are never
+touched here:
 
 | Outcome | When | What is written |
 |---|---|---|

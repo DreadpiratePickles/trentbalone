@@ -11,6 +11,7 @@ import { InMemoryImproveStore } from "../improve/memory-store.js";
 import { SweepMeter } from "../improve/meter.js";
 import { rollback } from "../improve/lifecycle.js";
 import type { GatewayCompletion } from "../model-gateway/types.js";
+import { DEFAULT_MEMORY_BLOCKS, type MemoryBlock } from "../tools/memory/blocks.js";
 import { ENTRY_SEPARATOR, MEMORY_CAPS, commitOperations, memoryPath } from "../tools/memory/store.js";
 import { MEMORY_DRAFT_KIND, consolidateMemory, decodeMemoryDraft, promoteMemoryDraft } from "./consolidate.js";
 
@@ -25,6 +26,18 @@ function profile(memory: string, user: string): string {
   fs.writeFileSync(memoryPath(dir, "memory"), memory, "utf8");
   fs.writeFileSync(memoryPath(dir, "user"), user, "utf8");
   return dir;
+}
+
+/** An extra writable block the founder added to `memory.blocks`, and a read-only one. */
+const NOTES: MemoryBlock = { label: "notes", file: "NOTES.md", description: "open questions the fleet is carrying", limit: 400, read_only: false };
+const PLAYBOOK: MemoryBlock = { label: "playbook", file: "PLAYBOOK.md", description: "how the founder runs the company", limit: 400, read_only: true };
+
+function writeBlock(dir: string, block: MemoryBlock, text: string): void {
+  fs.writeFileSync(memoryPath(dir, block), text, "utf8");
+}
+
+function readBlock(dir: string, block: MemoryBlock): string {
+  return fs.readFileSync(memoryPath(dir, block), "utf8");
 }
 
 function readBytes(dir: string): { memory: string; user: string } {
@@ -67,6 +80,9 @@ const MEMORY_AFTER = ["Ship on Fridays only after the smoke suite is green.", "I
 const USER_AFTER = ["Prefers short replies.", "Timezone is Europe/London."].join(ENTRY_SEPARATOR);
 const DROPPED = ["Ship on Fridays after smoke is green.", "Prefers brief replies."];
 const GOOD_REPLY = JSON.stringify({ memory: MEMORY_AFTER, user: USER_AFTER, dropped: DROPPED });
+const NOTES_BEFORE = ["Does the EU launch wait for SOC 2?", "Is the EU launch blocked on SOC 2?", "Who signs the renewal?"].join(ENTRY_SEPARATOR);
+const NOTES_AFTER = ["Does the EU launch wait for SOC 2?", "Who signs the renewal?"].join(ENTRY_SEPARATOR);
+const PLAYBOOK_TEXT = ["Never ship on a Friday afternoon."].join(ENTRY_SEPARATOR);
 
 afterEach(() => {
   for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -201,6 +217,82 @@ describe("consolidateMemory", () => {
     expect(result).toMatchObject({ status: "unchanged", costCents: 3 });
     expect(await store.listDrafts(COMPANY)).toEqual([]);
     expect(await store.listLedger(COMPANY)).toEqual([]);
+  });
+
+  it("every configured block is consolidated in the same turn: the extra block rides on the draft, promote writes its file, rollback restores it", async () => {
+    const dir = profile(MEMORY_BEFORE, USER_BEFORE);
+    writeBlock(dir, NOTES, NOTES_BEFORE);
+    const store = new InMemoryImproveStore();
+    const gateway = fakeGateway(JSON.stringify({ memory: MEMORY_AFTER, user: USER_AFTER, notes: NOTES_AFTER, dropped: [...DROPPED, "Does the EU launch wait for SOC 2?"] }));
+
+    const result = await consolidateMemory({ profileDir: dir, companyId: COMPANY, gateway, store, blocks: [...DEFAULT_MEMORY_BLOCKS, NOTES], now: NOW });
+    expect(result.status).toBe("drafted");
+    if (result.status !== "drafted") throw new Error(result.status);
+
+    // The model saw the extra block, its file name and its own cap.
+    expect(gateway.calls).toHaveLength(1);
+    expect(gateway.calls[0]!.system).toContain(String(NOTES.limit));
+    expect(gateway.calls[0]!.user).toContain(NOTES.file);
+    expect(gateway.calls[0]!.user).toContain("Does the EU launch wait for SOC 2?");
+
+    expect(result.before.blocks).toEqual([{ label: "notes", file: "NOTES.md", limit: 400, text: NOTES_BEFORE }]);
+    expect(result.after.blocks).toEqual([{ label: "notes", file: "NOTES.md", limit: 400, text: NOTES_AFTER }]);
+    expect(decodeMemoryDraft(result.draft.content).blocks).toEqual([{ label: "notes", file: "NOTES.md", limit: 400, text: NOTES_AFTER }]);
+    // Nothing on disk moved until a human promotes.
+    expect(readBlock(dir, NOTES)).toBe(NOTES_BEFORE);
+
+    await promoteMemoryDraft({ store, draftId: result.draft.id, actor: "human", now: NOW });
+    expect(readBlock(dir, NOTES)).toBe(NOTES_AFTER);
+    expect(fs.statSync(memoryPath(dir, NOTES)).mode & 0o777).toBe(0o600);
+
+    await rollback(store, result.iterationId, "human", NOW);
+    expect(readBlock(dir, NOTES)).toBe(NOTES_BEFORE);
+    expect(readBytes(dir)).toEqual({ memory: MEMORY_BEFORE, user: USER_BEFORE });
+  });
+
+  it("an extra block rewritten over its own limit is rejected: no draft, no file touched", async () => {
+    const dir = profile(MEMORY_BEFORE, USER_BEFORE);
+    writeBlock(dir, NOTES, NOTES_BEFORE);
+    const store = new InMemoryImproveStore();
+    const reply = JSON.stringify({ memory: MEMORY_AFTER, user: USER_AFTER, notes: "x".repeat(NOTES.limit + 1), dropped: [] });
+    const result = await consolidateMemory({ profileDir: dir, companyId: COMPANY, gateway: fakeGateway(reply), store, blocks: [...DEFAULT_MEMORY_BLOCKS, NOTES], now: NOW });
+    expect(result.status).toBe("rejected");
+    if (result.status !== "rejected") throw new Error(result.status);
+    expect(result.reason).toContain(NOTES.file);
+    expect(result.reason).toContain(String(NOTES.limit));
+    expect(await store.listDrafts(COMPANY)).toEqual([]);
+    expect(readBlock(dir, NOTES)).toBe(NOTES_BEFORE);
+  });
+
+  it("a read_only block is never shown to the model, never drafted and never rewritten", async () => {
+    const dir = profile(MEMORY_BEFORE, USER_BEFORE);
+    writeBlock(dir, PLAYBOOK, PLAYBOOK_TEXT);
+    const store = new InMemoryImproveStore();
+    const gateway = fakeGateway(JSON.stringify({ memory: MEMORY_AFTER, user: USER_AFTER, playbook: "rewritten by the model", dropped: DROPPED }));
+
+    const result = await consolidateMemory({ profileDir: dir, companyId: COMPANY, gateway, store, blocks: [...DEFAULT_MEMORY_BLOCKS, PLAYBOOK], now: NOW });
+    expect(result.status).toBe("drafted");
+    if (result.status !== "drafted") throw new Error(result.status);
+    expect(gateway.calls[0]!.user).not.toContain(PLAYBOOK.file);
+    expect(gateway.calls[0]!.user).not.toContain(PLAYBOOK_TEXT);
+    expect(result.after.blocks).toBeUndefined();
+    expect(decodeMemoryDraft(result.draft.content).blocks).toBeUndefined();
+
+    await promoteMemoryDraft({ store, draftId: result.draft.id, actor: "human", now: NOW });
+    expect(readBlock(dir, PLAYBOOK)).toBe(PLAYBOOK_TEXT);
+  });
+
+  it("the shipped blocks alone change nothing: one turn over the two files, the same reply shape, the same draft payload", async () => {
+    const dir = profile(MEMORY_BEFORE, USER_BEFORE);
+    const store = new InMemoryImproveStore();
+    const gateway = fakeGateway(GOOD_REPLY);
+    const result = await consolidateMemory({ profileDir: dir, companyId: COMPANY, gateway, store, blocks: DEFAULT_MEMORY_BLOCKS, now: NOW });
+    expect(result.status).toBe("drafted");
+    if (result.status !== "drafted") throw new Error(result.status);
+    expect(gateway.calls).toHaveLength(1);
+    expect(result.before).toEqual({ memory: MEMORY_BEFORE, user: USER_BEFORE });
+    expect(result.after).toEqual({ memory: MEMORY_AFTER, user: USER_AFTER });
+    expect(decodeMemoryDraft(result.draft.content)).toEqual({ profileDir: dir, memory: MEMORY_AFTER, user: USER_AFTER, dropped: DROPPED });
   });
 
   it("an exhausted meter budget rejects before the call is made", async () => {

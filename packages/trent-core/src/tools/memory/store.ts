@@ -18,7 +18,8 @@ import { NODE_IO, atomicWriteFileSync } from "../../config/atomic-fs.js";
 import { DEFAULT_MEMORY_BLOCKS, findBlock, type MemoryBlock } from "./blocks.js";
 
 export type MemoryTarget = "memory" | "user";
-export type MemoryFileRef = MemoryTarget | MemoryBlock;
+/** A configured block, or anything that names its file — a consolidation draft carries only the name. */
+export type MemoryFileRef = MemoryTarget | Pick<MemoryBlock, "file">;
 export type MemoryAction = "add" | "replace" | "remove";
 
 function defaultBlock(label: MemoryTarget): MemoryBlock {

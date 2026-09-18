@@ -11,8 +11,13 @@
  * the memory tool's commit path; the existing `rollback(iterationId)` restores the previous
  * bytes because `improve/lifecycle.ts` applies a memory row's `before` payload to disk.
  *
+ * The turn covers every block `config.memory.blocks` configures, not only the two defaults: an
+ * extra writable block is rewritten in the same turn under its OWN `limit` and rides on the same
+ * draft, so one promotion (or one rollback) moves the whole set. A `read_only` block is never
+ * sent to the model and never rewritten.
+ *
  * Scheduling (once a day inside quiet hours) is the heartbeat's job; this module only exposes
- * the function it calls. The prompt body (both memory blocks) goes to the model and is never
+ * the function it calls. The prompt body (every memory block) goes to the model and is never
  * logged.
  */
 import { z } from "zod";
@@ -24,6 +29,7 @@ import type { SweepMeter } from "../improve/meter.js";
 import type { ActualsRunner } from "../improve/gate-types.js";
 import type { GatewayMessage, ModelGateway } from "../model-gateway/types.js";
 import type { ImproveStorePort, SkillDraftRow } from "../store/StorePort.js";
+import type { MemoryBlock } from "../tools/memory/blocks.js";
 import { ENTRY_SEPARATOR, MEMORY_CAPS, MEMORY_FILES } from "../tools/memory/store.js";
 import {
   MEMORY_DRAFT_AGENT,
@@ -36,6 +42,7 @@ import {
   decodeMemoryDraft,
   encodeMemoryDraft,
   readMemoryBytes,
+  type MemoryBlockBytes,
   type MemoryBytes,
 } from "./memory-draft.js";
 
@@ -47,6 +54,8 @@ export {
   decodeMemoryDraft,
   encodeMemoryDraft,
   readMemoryBytes,
+  type MemoryBlockBytes,
+  type MemoryBlockSpec,
   type MemoryBytes,
   type MemoryDraftPayload,
 } from "./memory-draft.js";
@@ -57,6 +66,12 @@ const DEFAULT_MAX_TOKENS = 2048;
 
 export interface ConsolidateMemoryOptions {
   readonly profileDir: string;
+  /**
+   * `config.memory.blocks`. MEMORY.md and USER.md are always in the turn; every other configured
+   * block joins it unless `read_only` is set, and a read-only block is never sent to the model and
+   * never rewritten. Omitted (or only the shipped blocks) means exactly the two-file turn.
+   */
+  readonly blocks?: readonly MemoryBlock[];
   readonly companyId: string;
   readonly gateway: Pick<ModelGateway, "complete">;
   readonly store: ImproveStorePort;
@@ -79,23 +94,45 @@ export type ConsolidateMemoryResult =
   | { status: "unchanged"; costCents: number }
   | { status: "rejected"; reason: string; costCents: number };
 
-const ReplySchema = z.object({
-  memory: z.string(),
-  user: z.string(),
-  dropped: z.array(z.string()),
-});
+/** `dropped` is the reply's own key, and the two legacy labels are the pair the turn always carries. */
+const RESERVED_LABELS = new Set<string>(["dropped", ...MEMORY_TARGETS]);
 
-export function consolidationSystemPrompt(): string {
+/**
+ * The configured blocks this turn rewrites beyond MEMORY.md and USER.md: writable, not one of the
+ * two defaults, and not named after a key the reply already uses.
+ */
+export function extraWritableBlocks(blocks: readonly MemoryBlock[] | undefined): readonly MemoryBlock[] {
+  return (blocks ?? []).filter((block) => !block.read_only && !RESERVED_LABELS.has(block.label));
+}
+
+/** Keeps `unknown` for keys the caller did not ask for, so an extra block's text survives the parse. */
+const ReplySchema = z
+  .object({
+    memory: z.string(),
+    user: z.string(),
+    dropped: z.array(z.string()),
+  })
+  .catchall(z.unknown());
+
+export function consolidationSystemPrompt(extra: readonly MemoryBlock[] = []): string {
+  const count = 2 + extra.length;
+  const shape = [
+    '"memory": "<full MEMORY.md text>"',
+    '"user": "<full USER.md text>"',
+    ...extra.map((block) => `"${block.label}": "<full ${block.file} text>"`),
+    '"dropped": ["<each entry you removed or merged away, verbatim>"]',
+  ];
   return [
-    "You consolidate two shared memory files for a company of AI agents while they sleep.",
+    `You consolidate ${count === 2 ? "two" : String(count)} shared memory files for a company of AI agents while they sleep.`,
     `MEMORY.md holds what the fleet learned about the work (hard cap ${MEMORY_CAPS.memory} characters). ` +
       `USER.md holds facts about the person they work for (hard cap ${MEMORY_CAPS.user} characters).`,
+    ...extra.map((block) => `${block.file} holds ${block.description} (hard cap ${block.limit} characters).`),
     `Entries are separated by a line containing only "${SEPARATOR_LINE}". Keep that format in your answer.`,
     "Rewrite each file so that: duplicates and near-duplicates are merged into one entry; an entry superseded by a later, more specific one is folded into it; " +
       "every fact that is still true is kept; nothing is invented; wording stays concrete and short; entries keep their original order where possible.",
-    "Never move a fact between the two files. Never add commentary. If a file needs no change, return it unchanged.",
+    `Never move a fact between the ${count === 2 ? "two " : ""}files. Never add commentary. If a file needs no change, return it unchanged.`,
     "Reply with a single JSON object and nothing else:",
-    '{"memory": "<full MEMORY.md text>", "user": "<full USER.md text>", "dropped": ["<each entry you removed or merged away, verbatim>"]}',
+    `{${shape.join(", ")}}`,
   ].join("\n");
 }
 
@@ -106,6 +143,7 @@ export function consolidationUserPrompt(bytes: MemoryBytes): string {
     "",
     `${MEMORY_FILES.user} (${bytes.user.length} of ${MEMORY_CAPS.user} chars):`,
     bytes.user || "(empty)",
+    ...(bytes.blocks ?? []).flatMap((block) => ["", `${block.file} (${block.text.length} of ${block.limit} chars):`, block.text || "(empty)"]),
   ].join("\n");
 }
 
@@ -142,7 +180,20 @@ function validateProposal(after: MemoryBytes): string | null {
     const cap = MEMORY_CAPS[target];
     if (after[target].length > cap) return `${MEMORY_FILES[target]} rewrite is ${after[target].length} chars, over the ${cap}-char cap by ${after[target].length - cap}`;
   }
+  for (const block of after.blocks ?? []) {
+    if (block.text.length > block.limit) {
+      return `${block.file} rewrite is ${block.text.length} chars, over the ${block.limit}-char cap by ${block.text.length - block.limit}`;
+    }
+  }
   return null;
+}
+
+/** Same blocks, same text: nothing for the founder to decide. */
+function sameBytes(before: MemoryBytes, after: MemoryBytes): boolean {
+  if (before.memory !== after.memory || before.user !== after.user) return false;
+  const left = before.blocks ?? [];
+  const right = after.blocks ?? [];
+  return left.length === right.length && left.every((block, i) => block.label === right[i]?.label && block.text === right[i]?.text);
 }
 
 /**
@@ -151,9 +202,10 @@ function validateProposal(after: MemoryBytes): string | null {
  */
 export async function consolidateMemory(options: ConsolidateMemoryOptions): Promise<ConsolidateMemoryResult> {
   const now = options.now ?? nowIso();
-  const before = readMemoryBytes(options.profileDir);
+  const extra = extraWritableBlocks(options.blocks);
+  const before = readMemoryBytes(options.profileDir, extra);
   const inner = runnerFor(options.gateway, options.maxTokens ?? DEFAULT_MAX_TOKENS);
-  const input = { systemPrompt: consolidationSystemPrompt(), prompt: consolidationUserPrompt(before), fixtureId: MEMORY_DRAFT_TASK_TYPE };
+  const input = { systemPrompt: consolidationSystemPrompt(extra), prompt: consolidationUserPrompt(before), fixtureId: MEMORY_DRAFT_TASK_TYPE };
 
   let text: string;
   let costCents = 0;
@@ -167,10 +219,20 @@ export async function consolidateMemory(options: ConsolidateMemoryOptions): Prom
 
   const parsed = parseConsolidationReply(text);
   if (!parsed.ok) return { status: "rejected", reason: parsed.reason, costCents };
-  const after: MemoryBytes = { memory: canonicalBlock(parsed.value.memory), user: canonicalBlock(parsed.value.user) };
+  const blocks: MemoryBlockBytes[] = [];
+  for (const block of extra) {
+    const raw = parsed.value[block.label];
+    if (typeof raw !== "string") return { status: "rejected", reason: `the consolidation reply carries no text for ${block.file}`, costCents };
+    blocks.push({ label: block.label, file: block.file, limit: block.limit, text: canonicalBlock(raw) });
+  }
+  const after: MemoryBytes = {
+    memory: canonicalBlock(parsed.value.memory),
+    user: canonicalBlock(parsed.value.user),
+    ...(blocks.length === 0 ? {} : { blocks }),
+  };
   const overCap = validateProposal(after);
   if (overCap) return { status: "rejected", reason: overCap, costCents };
-  if (after.memory === before.memory && after.user === before.user) return { status: "unchanged", costCents };
+  if (sameBytes(before, after)) return { status: "unchanged", costCents };
 
   const dropped = parsed.value.dropped.map((entry) => entry.trim()).filter(Boolean);
   const content = encodeMemoryDraft({ profileDir: options.profileDir, ...after, dropped });
@@ -226,7 +288,7 @@ export interface PromoteMemoryDraftOptions extends Pick<PromoteOptions, "actor" 
 
 async function baselineRow(store: ImproveStorePort, draft: SkillDraftRow, now: string): Promise<void> {
   const payload = decodeMemoryDraft(draft.content);
-  const current = encodeMemoryDraft({ profileDir: payload.profileDir, ...readMemoryBytes(payload.profileDir), dropped: [] });
+  const current = encodeMemoryDraft({ profileDir: payload.profileDir, ...readMemoryBytes(payload.profileDir, payload.blocks ?? []), dropped: [] });
   const live = (await store.listDrafts(draft.companyId, { agentId: draft.agentId, taskType: draft.taskType, kind: MEMORY_DRAFT_KIND, status: "live" })).find(
     (row) => row.id !== draft.id,
   );
@@ -269,6 +331,10 @@ export async function promoteMemoryDraft(options: PromoteMemoryDraftOptions): Pr
   for (const target of MEMORY_TARGETS) {
     const reason = checkReplaceBlock(payload.profileDir, target, payload[target]);
     if (reason !== null) throw new Error(`memory(${target}) refused: ${reason}`);
+  }
+  for (const block of payload.blocks ?? []) {
+    const reason = checkReplaceBlock(payload.profileDir, block, block.text);
+    if (reason !== null) throw new Error(`memory(${block.label}) refused: ${reason}`);
   }
   await baselineRow(options.store, draft, now);
   const promoted = await promoteDraft(options.store, draft.id, { actor: options.actor, now, ...(options.iterationId ? { iterationId: options.iterationId } : {}) });
