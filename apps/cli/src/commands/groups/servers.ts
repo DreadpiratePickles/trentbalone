@@ -22,6 +22,7 @@ import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime } from "../../runtime/headless.js";
 import { releaseOnSignal } from "../../signals.js";
 import { openHeartbeat } from "./heartbeat.js";
+import { openProtocolRuntime } from "./protocol-runtime.js";
 import {
   BUILD_HINT,
   buildStandalone,
@@ -73,9 +74,24 @@ export const a2aSpec: CommandSpec = {
       async run(ctx, opts) {
         const port = parsePort(opts.port, "a2a.serve", A2A_DEFAULT_PORT);
         if (ctx.dryRun) return { data: { dryRun: true, command: "a2a serve", port } };
-        const server = new A2AServer({ port });
-        await server.start();
-        return { data: { server: "a2a", port: server.getPort(), listening: true }, keepAlive: true };
+        // A delegated task is one real run on this runtime. Without it the endpoint can only
+        // refuse (HTTP 503); it never answers on the runtime's behalf.
+        const { runner, release } = await openProtocolRuntime(ctx);
+        const server = new A2AServer({ port, runner });
+        try {
+          await server.start();
+        } catch (error) {
+          await release();
+          throw error;
+        }
+        releaseOnSignal(async () => {
+          await server.stop();
+          await release();
+        }, ctx.overrides.signals);
+        return {
+          data: { server: "a2a", port: server.getPort(), listening: true, runner: server.hasRunner() },
+          keepAlive: true,
+        };
       },
       render: listeningRender("a2a"),
     },
@@ -121,9 +137,24 @@ export const acpSpec: CommandSpec = {
   async run(ctx, opts) {
     const port = parsePort(opts.port, "acp", ACP_DEFAULT_PORT);
     if (ctx.dryRun) return { data: { dryRun: true, command: "acp", port } };
-    const server = new ACPServer({ port, configManager: ctx.config() });
-    await server.start();
-    return { data: { server: "acp", port: server.getPort(), listening: true }, keepAlive: true };
+    // `agent/chat` from the editor is one real run on this runtime; with none attached the
+    // method returns a JSON-RPC error rather than a string this process wrote.
+    const { runner, release } = await openProtocolRuntime(ctx);
+    const server = new ACPServer({ port, configManager: ctx.config(), runner });
+    try {
+      await server.start();
+    } catch (error) {
+      await release();
+      throw error;
+    }
+    releaseOnSignal(async () => {
+      await server.stop();
+      await release();
+    }, ctx.overrides.signals);
+    return {
+      data: { server: "acp", port: server.getPort(), listening: true, runner: server.hasRunner() },
+      keepAlive: true,
+    };
   },
   render: listeningRender("acp"),
 };

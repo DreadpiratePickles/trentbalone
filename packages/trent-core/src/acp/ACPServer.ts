@@ -1,11 +1,29 @@
+/**
+ * The ACP server behind `trent acp`, for VS Code, Cursor and Zed: a THIN adapter over `chat.ts`.
+ *
+ * `agent/chat` used to answer every editor request with a template string built from the prompt —
+ * no model, no orchestrator, the defect AGENTS.md invariant 2 exists to prevent. The behaviour now
+ * lives in `runAgentChat`, which has no transport in it; this file only routes a request to it and
+ * puts the outcome into a JSON-RPC envelope. The handshake (`initialize`), `fleet/status` and
+ * `file/read` are unchanged.
+ *
+ * WIRE SHAPE IS PROVISIONAL. The Agent Client Protocol is stdio JSON-RPC; this server speaks
+ * JSON-RPC over HTTP on port 7890. That transport is expected to be replaced, so nothing here is
+ * hardened for it; keep new behaviour in `chat.ts`.
+ */
+
 import http from "node:http";
 import fs from "node:fs";
 import { FleetManager } from "../fleet/FleetManager.js";
 import { ConfigManager } from "../config/ConfigManager.js";
+import type { AgentRunner } from "../agent-runner/index.js";
+import { runAgentChat, type ACPChatParams } from "./chat.js";
 
 export interface ACPServerOptions {
   port?: number;
   configManager?: ConfigManager;
+  /** The agent runtime `agent/chat` runs on. Absent, `agent/chat` refuses. */
+  runner?: AgentRunner;
 }
 
 export class ACPServer {
@@ -13,15 +31,23 @@ export class ACPServer {
   private server: http.Server | null = null;
   private running = false;
   private fleetManager: FleetManager;
+  private runner: AgentRunner | undefined;
+  private inFlight = new Set<AbortController>();
 
   constructor(options?: ACPServerOptions) {
     this.port = options?.port || 7890;
     const cfg = options?.configManager || new ConfigManager();
     this.fleetManager = new FleetManager(cfg);
+    this.runner = options?.runner;
   }
 
   public isRunning(): boolean {
     return this.running;
+  }
+
+  /** True when `agent/chat` will reach a real agent runtime. */
+  public hasRunner(): boolean {
+    return this.runner !== undefined;
   }
 
   public getPort(): number {
@@ -69,6 +95,8 @@ export class ACPServer {
 
   public async stop(): Promise<void> {
     if (!this.running || !this.server) return;
+    // No orchestration outlives the server that started it.
+    for (const controller of this.inFlight) controller.abort();
 
     return new Promise((resolve) => {
       this.server?.close(() => {
@@ -115,14 +143,7 @@ export class ACPServer {
         };
 
       case "agent/chat":
-        return {
-          jsonrpc: "2.0",
-          id,
-          result: {
-            agent: params?.agent || "engineer",
-            response: `[ACP Editor Dispatch]: Processing task "${params?.prompt || "inspect"}" in editor workspace.`,
-          },
-        };
+        return await this.handleChat(id, params);
 
       default:
         return {
@@ -130,6 +151,19 @@ export class ACPServer {
           id,
           error: { code: -32601, message: `Method "${method}" not found` },
         };
+    }
+  }
+
+  /** Routes the request to `runAgentChat` and envelopes whatever comes back. Nothing else. */
+  private async handleChat(id: unknown, params: ACPChatParams | undefined): Promise<unknown> {
+    const controller = new AbortController();
+    this.inFlight.add(controller);
+    try {
+      const outcome = await runAgentChat(this.runner, params, controller.signal);
+      if (!outcome.ok) return { jsonrpc: "2.0", id, error: outcome.error };
+      return { jsonrpc: "2.0", id, result: outcome.result };
+    } finally {
+      this.inFlight.delete(controller);
     }
   }
 }

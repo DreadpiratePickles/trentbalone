@@ -48,6 +48,13 @@ const CANNED_PATTERNS = [
   { id: "placeholder-reply", re: /\b(?:This is a (?:mock|placeholder|canned|stub|simulated) (?:response|reply|answer))\b/i },
   { id: "lorem-ipsum", re: /\blorem ipsum\b/i },
   { id: "todo-implement-me", re: /\b(?:not implemented yet|coming soon|implement me)\b/i },
+  // The two protocol servers shipped their own canned replies (harness-parity audit C.6):
+  // `agent/chat` answered every editor request with `[ACP Editor Dispatch]: Processing task ...`,
+  // and `POST /a2a/tasks` answered `status: "completed"` with `... resolved successfully.` —
+  // both with no model and no orchestrator behind them. Both endpoints now run the real agent
+  // runtime or refuse honestly; these two entries are what stops the literals coming back.
+  { id: "acp-editor-dispatch", re: /ACP Editor Dispatch/i },
+  { id: "a2a-resolved-successfully", re: /resolved successfully\./i },
 ];
 // Deliberately NOT grepped: the hard-coded budget figures (checklist #14). A grep for
 // `costCents = 0` cannot tell an accumulator's initial value from a fabricated total. That
