@@ -9,24 +9,36 @@
  * routinely carries request bodies and response headers — is never serialized at all.
  */
 
-/** Process exit codes. 0 ok, 2 usage, 3 config, 4 auth, 5 provider, 6 budget, 130 interrupt. */
-export type ExitCode = 0 | 2 | 3 | 4 | 5 | 6 | 130;
+/**
+ * Process exit codes. 0 ok, 1 run failed, 2 usage, 3 config, 4 auth, 5 provider, 6 budget,
+ * 7 awaiting approval, 130 interrupt.
+ *
+ * `RUN_FAILED` and `APPROVAL_REQUIRED` exist for the one-shot `trent run`, where "the work I asked
+ * for did not succeed" and "the work stopped because a human has to decide" are different answers a
+ * script must be able to branch on. They are classified outcomes, not the unclassified-throw
+ * default below, which stays 2.
+ */
+export type ExitCode = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 130;
 
 export const EXIT: {
   readonly OK: 0;
+  readonly RUN_FAILED: 1;
   readonly USAGE: 2;
   readonly CONFIG: 3;
   readonly AUTH: 4;
   readonly PROVIDER: 5;
   readonly BUDGET: 6;
+  readonly APPROVAL_REQUIRED: 7;
   readonly INTERRUPT: 130;
 } = {
   OK: 0,
+  RUN_FAILED: 1,
   USAGE: 2,
   CONFIG: 3,
   AUTH: 4,
   PROVIDER: 5,
   BUDGET: 6,
+  APPROVAL_REQUIRED: 7,
   INTERRUPT: 130,
 } as const;
 

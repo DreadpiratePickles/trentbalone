@@ -60,13 +60,18 @@ describe("TrentError construction", () => {
   });
 
   it("exposes the documented exit code table", () => {
+    // RUN_FAILED and APPROVAL_REQUIRED are `trent run`'s two classified outcomes: the work failed,
+    // and the work is parked on a human decision. A script has to be able to tell them apart, and
+    // from each other's neighbours. Documented in docs/troubleshooting.md.
     expect(EXIT).toEqual({
       OK: 0,
+      RUN_FAILED: 1,
       USAGE: 2,
       CONFIG: 3,
       AUTH: 4,
       PROVIDER: 5,
       BUDGET: 6,
+      APPROVAL_REQUIRED: 7,
       INTERRUPT: 130,
     });
   });

@@ -162,6 +162,46 @@ npm run cli -- --continue
 Both surfaces run on the same session engine and the same model gateway. In the REPL, Ctrl+C aborts
 the in-flight stream and leaves the process alive; Ctrl+J inserts a newline.
 
+### One shot, for scripts, pipes and CI
+
+```bash
+npm run cli -- run "Draft the launch email"            # the REPL transcript, without the prompt
+echo "Draft the launch email" | npm run cli -- run -   # objective on stdin
+npm run cli -- run "..." --format stream-json          # one JSON object per line
+npm run cli -- run "..." --json                        # the final result object only
+npm run cli -- run "..." --max-cost-cents 200          # stop the run once it passes $2.00
+```
+
+`trent run` builds the same headless runtime the REPL, the gateway and `trent cron` build, runs one
+objective on it, and exits. It is not interactive: a step that needs an approval cannot be answered
+here, so the run parks, the approval is persisted, and the command prints the id and exits 7. Decide
+it in the REPL with `/approvals approve <id>` or `/approvals reject <id>`, then run the objective
+again. Ctrl+C aborts the run and releases the runtime before the process goes.
+
+`--format stream-json` emits a `system` line (run id, profile, provider, model), then **every
+orchestrator event verbatim**, then one final `result` line. The event lines are the run bus's own
+`OrcEvent` objects — `{kind, runId, at, step?, run?, detail?}`, the same objects the gateway handler
+folds into a reply and the REPL records in a session — with a `type` field mirroring `kind` so one
+field switches every line. Nothing is renamed, dropped or invented here: a tool call is on
+`step.toolCalls` of a `step_output` event, a step's cost is `step.costCents`, a run's summary is
+`run.summary` on `run_done`. The kinds are listed in `packages/trent-core/src/orchestrator/types.ts`.
+
+The last line is `{"type":"result","status":"completed","cost_cents":0,"duration_ms":0,"run_id":"..."}`,
+whose keys are the session store's own (`run_id`, `cost_cents`, `duration_ms`). `status` is
+`completed`, `failed`, `paused` (an approval, and then `approval_id` names it) or `cancelled` (the
+cost cap, or Ctrl+C), and `error` carries the reason when there is one. Costs are integer cents,
+never dollars.
+
+| Exit | Meaning |
+|---|---|
+| 0 | The run completed |
+| 1 | The run failed; the `result` line carries the reason in `error` |
+| 2 | No objective was given |
+| 3 | Configuration: an unknown `--format`, a `--max-cost-cents` that is not a positive whole number, an empty stdin |
+| 6 | The run passed `--max-cost-cents` and was stopped |
+| 7 | The run is parked on an approval; `approval_id` names it |
+| 130 | Interrupted (Ctrl+C); the run was aborted and the runtime released |
+
 ## 9. Serve the web UI
 
 ```bash
@@ -188,7 +228,13 @@ npm run cli -- --version        # 1.0.0
 npm run cli -- doctor --json    # machine-readable report, exit 3 on failure
 npm run cli -- fleet status     # active, installed, catalog, budget
 npm run cli -- sessions list
+npm run cli -- sessions export <id>                 # structure and metrics, no message bodies
+npm run cli -- sessions export <id> --include-content --out run.json
 ```
+
+`sessions export` is the boundary a transcript crosses on its way off the machine: bodies are left
+out unless `--include-content` says otherwise, and what does leave has been through the redactor, so
+a key someone pasted into a prompt does not travel with it. `--out` writes the file mode 0600.
 
 ## Not yet implemented
 

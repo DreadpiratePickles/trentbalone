@@ -164,25 +164,32 @@ stop at `resolve-version`.
 
 ## `trent web --start` refuses to start
 
-Expected. The command validates the target and reports readiness; starting the server from the CLI
-is not built, and it says so (the desktop app starts its own sidecar instead):
+`trent web --start` serves the real UI: it runs the same `apps/web/.next/standalone` tree the
+desktop sidecar runs, on loopback, and polls `/` before it reports the port
+(`apps/cli/src/commands/web-server.ts`, test `apps/cli/src/commands/__tests__/web.test.ts`).
+
+It refuses in exactly one case — the standalone tree has not been built — and it says which:
 
 ```
-the web server entry point is not built yet (Milestone 5); run without --start to check readiness
+web.start: the standalone web build is missing; run `cd apps/web && npm run build` or pass --build to build it now
 ```
 
-Run it without `--start` to confirm the application directory is where the command expects it.
+Build it once, or let the command do it: `trent web --start --build`. A different message,
+`no web application found`, means the command is not running from a clone and no desktop bundle is
+installed; run it from the repository root, or `trent desktop install`.
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | Success |
+| 1 | `trent run`: the run itself failed (the objective did not complete) |
 | 2 | Usage error |
 | 3 | Configuration problem, including a failing doctor check |
 | 4 | Authentication failure |
 | 5 | Provider failure |
-| 6 | Budget exceeded |
+| 6 | Budget exceeded, including `trent run --max-cost-cents` |
+| 7 | `trent run`: the run is parked on an approval a human has to decide |
 | 130 | Interrupted |
 
 Add `--json` to any command for a machine-readable error envelope. Secrets are redacted from it by

@@ -51,6 +51,8 @@ run `trent setup` and `trent doctor`. No sudo; nothing outside `$HOME`.
 
 ```bash
 trent                       # the REPL; runs quick setup on first launch
+trent run "<objective>"     # one shot, no terminal: streams the run, exits 0/1/3/6/7/130
+trent run - --format stream-json   # objective on stdin, one JSON object per line
 trent --tui                 # full-screen Ink TUI on the same session engine
 trent --continue            # resume the last conversation
 trent doctor                # 14 health checks; exit 3 on a configuration failure
@@ -132,10 +134,10 @@ characters spills to a file.
 | Surface | Command | State |
 |---|---|---|
 | Telegram, Discord, Slack, WhatsApp, Signal, email, Teams, Home Assistant | `trent gateway setup <platform>`, `trent gateway start` | Eight adapters on each platform's real protocol, each with a wire test against a local server; live tests skip without credentials. Device pairing is default-deny; approvals are checked against a durable row and can be decided by a reaction on the card; a thread is its own session; a second message on a busy chat queues rather than starting a second turn; push alerts reach the owner. [docs/gateway.md](docs/gateway.md) |
-| Agent-to-Agent protocol | `trent a2a serve`, `trent a2a card <agentId>` | A2A server (default port 7895) and signed agent cards. `trent serve` is a retired alias that exits 2 |
-| Editors (VS Code, Cursor, Zed) | `trent acp` | ACP server |
+| Agent-to-Agent protocol | `trent a2a serve`, `trent a2a card <agentId>` | A2A server (default port 7895) and signed agent cards. `POST /a2a/tasks` is one real orchestration run: the task moves `submitted` -> `working` -> `completed` \| `failed` \| `input-required`, the run's own summary is stored as the task artifact, and `GET /a2a/tasks/:id` returns that record. Started without an agent runtime, the endpoint refuses with HTTP 503. **The task payload is Trent-specific and is not yet the A2A specification's `Task`/`Message`/`Part`/`Artifact` schema**; the lifecycle lives in `packages/trent-core/src/a2a/TaskLifecycle.ts` and the HTTP layer is a thin adapter over it, so the wire shape can be replaced without touching the behaviour. `trent serve` is a retired alias that exits 2 |
+| Editors (VS Code, Cursor, Zed) | `trent acp` | ACP server (default port 7890). `agent/chat` runs one real orchestration and returns that run's output; a failed run is a JSON-RPC error carrying the run's own reason, never a composed reply. **This server speaks JSON-RPC over HTTP, not the Agent Client Protocol's stdio transport**; the behaviour lives in `packages/trent-core/src/acp/chat.ts` and the HTTP layer is a thin adapter over it |
 | MCP connectors | `trent mcp list\|add\|remove\|test` | Stdio and http servers; `add` scans every tool description at install time and refuses a finding unless `--allow-flagged`; tool results are scrubbed of secrets. [docs/mcp.md](docs/mcp.md) |
-| Web UI | `trent web` | Reports readiness only. `trent web --start` refuses: the server entry point is not built. The desktop app starts the web UI itself |
+| Web UI | `trent web`, `trent web --start` | `trent web` reports readiness; `--start` serves the real UI from `apps/web/.next/standalone` on loopback, deriving a 0600 per-profile `AUTH_SECRET` the way the desktop app does, and polls `/` before it reports the port. It refuses in exactly one case: the standalone tree is not built and `--build` was not passed ([docs/getting-started.md](docs/getting-started.md)) |
 | Docker sandbox image | `trent sandbox build` | Builds `trent-sandbox:1` from `scripts/sandbox/Dockerfile`. Not published to a registry. [docs/terminal.md](docs/terminal.md) |
 
 ## Self-improvement

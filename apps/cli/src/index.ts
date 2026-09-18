@@ -6,7 +6,8 @@
  * exits through `./signals.ts` once its release settles). Everything else returns an exit code,
  * which is what makes the whole command surface testable in-process.
  *
- * Exit codes: 0 ok, 2 usage, 3 config, 4 auth, 5 provider, 6 budget, 130 interrupt.
+ * Exit codes: 0 ok, 1 run failed, 2 usage, 3 config, 4 auth, 5 provider, 6 budget,
+ * 7 awaiting approval, 130 interrupt.
  */
 
 import { EXIT } from "@trent/core/errors/index.js";

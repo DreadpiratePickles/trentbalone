@@ -23,6 +23,7 @@ import {
   type ContextFactory,
 } from "./registry.js";
 import { doctorSpec, runSetup, setupSpec } from "./groups/diagnostics.js";
+import { runSpec } from "./groups/run.js";
 import { configSpec, modelSpec, toolsSpec } from "./groups/configuration.js";
 import { fleetSpec, skillsSpec } from "./groups/fleet.js";
 import { sessionsSpec } from "./groups/sessions.js";
@@ -42,6 +43,7 @@ export type { CommandContext, CliOverrides } from "./context.js";
 
 /** The whole surface, in help order. Adding a command here is the only way to add one. */
 export const COMMAND_SPECS: readonly CommandSpec[] = [
+  runSpec,
   doctorSpec,
   setupSpec,
   modelSpec,
