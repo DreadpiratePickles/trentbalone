@@ -51,9 +51,26 @@ function generateRsaPem(): string {
   return privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 }
 
-/** A positive, even-length hex serial. A leading 00 keeps it from being read as negative. */
+/**
+ * A positive serial that node-forge encodes as a MINIMAL DER INTEGER.
+ *
+ * `00` + random is not safe here. node-forge hands the hex straight to `asn1.toDer`, which
+ * strips exactly ONE leading zero octet (and only when the next octet's high bit is clear).
+ * So when the first random byte is itself 0x00 and the second has its high bit clear - about
+ * 1 certificate in 512 - the wire value keeps a second, redundant 0x00. DER requires the
+ * shortest form, and OpenSSL rejects the long one with ASN1_R_ILLEGAL_PADDING. Nothing about
+ * the runner caused this: measured at 10/5000 on macOS/OpenSSL 3.5.8 and 8/5000 on
+ * OpenSSL 3.0.15. CI just drew the losing serial first.
+ *
+ * Forcing the leading octet into 0x01..0x7f makes the integer positive with no pad octet at
+ * all: nothing for forge to strip, nothing for OpenSSL to reject. 127 bits of entropy over
+ * 16 octets, well inside RFC 5280's 20-octet ceiling.
+ */
 function serial(): string {
-  return `00${crypto.randomBytes(16).toString("hex")}`;
+  const bytes = crypto.randomBytes(16);
+  bytes[0] = bytes[0]! & 0x7f;
+  if (bytes[0] === 0) bytes[0] = 0x01;
+  return bytes.toString("hex");
 }
 
 type ForgeAttr = { name?: string; shortName?: string; value: string };
