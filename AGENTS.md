@@ -72,3 +72,18 @@ Money is **integer cents**, never floats. Tenant data access goes through `withR
 7. `apps/web/lib/worker.ts` job-name allowlist omits `weekly_capability_sweep`, so the Redis worker
    refuses that job. `apps/web/middleware.ts` does not bypass session auth for
    `/api/marketing/stripe/webhook`, so Stripe posts get 401 (found while adding `/api/hooks/`).
+8. `apps/web/lib/model-gateway.ts` `cacheKeyForSeatModel` omits `toolLoopContext` (it omitted
+   `dynamicPrompt` too until 59ffde1), so an analyst tool loop can be served its own first iteration
+   from the cache. `apps/web/lib/seat-manifest.ts:277` `writesOnFinish` is rendered into prompts
+   (`agent-runtime.ts:209`) and never executed. `apps/web/lib/orchestration-golden-capture.ts:112`
+   writes goldens 0644 (the 0700 directory is the boundary). `executeSeatModel` logs the raw
+   objective text inside its provider-error line, so an objective containing a secret is echoed
+   to stderr unredacted.
+9. Wrapper-side, recorded 2026-09-18 (audits in `01_discovery/output/`): under Node every durable
+   layer is `EphemeralStore` (`apps/cli/src/runtime/headless.ts:110-119`), so durability holds under
+   Bun only; two divergent skill stores (`packages/trent-core/src/tools/skills/store.ts:1-9`); the
+   memory-draft lock bypass (`fleet-memory/memory-draft.ts:109-114`); the dead
+   `TRENT_FLEET_RECALL_BUDGET_CHARS` reader (`fleet-memory/config.ts:34-38`); the fleet-memory
+   prelude is memoised with the first seat's scope (`fleet-memory/orchestrator-hook.ts:127`); a host
+   that minted an egress root with a non-minimal serial before 8b369d6 keeps it in
+   `~/.trent/egress/ca.crt` until the file is deleted.
