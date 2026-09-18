@@ -28,7 +28,7 @@ const message: InboundMessage = {
 };
 
 interface FakeRuntime extends AgentRuntime {
-  calls: Array<{ objective: string; trigger: string | undefined }>;
+  calls: Array<{ objective: string; trigger: string | undefined; history: Array<{ role: string; content: string }> }>;
 }
 
 function fakeRuntime(events: OrcEvent[]): FakeRuntime {
@@ -36,7 +36,7 @@ function fakeRuntime(events: OrcEvent[]): FakeRuntime {
   return {
     calls,
     run: (objective, options) => {
-      calls.push({ objective, trigger: options?.trigger });
+      calls.push({ objective, trigger: options?.trigger, history: [...(options?.history ?? [])] });
       return (async function* () {
         for (const event of events) yield event;
       })();
@@ -67,7 +67,8 @@ describe("createAgentHandler", () => {
 
     const reply = await handler("ceo", message);
 
-    expect(runtime.calls).toEqual([{ objective: "draft the launch note", trigger: "manual" }]);
+    // The first message on a thread has nothing before it.
+    expect(runtime.calls).toEqual([{ objective: "draft the launch note", trigger: "manual", history: [] }]);
     expect(reply).toBe("Launch note drafted: three paragraphs, one call to action.");
   });
 
@@ -143,6 +144,39 @@ describe("createAgentHandler threads are sessions", () => {
       ["user", "and the follow-up"],
       ["assistant", "first reply"],
     ]);
+  });
+
+  it("hands the second run the thread's earlier turns, as a message list, not as text in the objective", async () => {
+    const runtime = fakeRuntime(events("Three paragraphs, one call to action."));
+    const handler = createAgentHandler(runtime, { store, sessions });
+    const threaded: InboundMessage = { ...message, platform: "slack", channelId: "C2", threadId: "180.0" };
+
+    await handler("ceo", threaded);
+    await handler("ceo", { ...threaded, id: "m2", content: "now shorten it" });
+
+    expect(runtime.calls[0]?.history).toEqual([]);
+    expect(runtime.calls[1]?.objective).toBe("now shorten it");
+    expect(runtime.calls[1]?.history).toEqual([
+      { role: "user", content: "draft the launch note" },
+      { role: "assistant", content: "Three paragraphs, one call to action." },
+    ]);
+  });
+
+  it("does not re-thread an assistant message the user interrupted", async () => {
+    const runtime = fakeRuntime(events("complete answer"));
+    const handler = createAgentHandler(runtime, { store, sessions });
+    const threaded: InboundMessage = { ...message, platform: "slack", channelId: "C3", threadId: "190.0" };
+
+    await handler("ceo", threaded);
+    const sessionId = store.snapshot().conversations["slack:C3:190.0"]!;
+    sessions.appendMessage(sessionId, {
+      role: "assistant",
+      content: "half an ans",
+      metadata: { status: "interrupted" },
+    });
+
+    await handler("ceo", { ...threaded, id: "m2", content: "carry on" });
+    expect(runtime.calls[1]?.history.map((m) => m.content)).toEqual(["draft the launch note", "complete answer"]);
   });
 
   it("a message in a different thread of the same chat gets its own session", async () => {

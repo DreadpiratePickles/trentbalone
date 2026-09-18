@@ -27,6 +27,12 @@ import {
   type InboundMessage,
 } from "@trent/core/gateway/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
+import {
+  DEFAULT_HISTORY_CHARS,
+  DEFAULT_HISTORY_TURNS,
+  trimHistory,
+  type HistoryMessage,
+} from "../repl/conversation.js";
 import type { HeadlessRuntime } from "../runtime/headless.js";
 
 /** What the handler needs of the runtime: one run per message. */
@@ -80,6 +86,24 @@ export function resolveThreadSession(
   return session.id;
 }
 
+/**
+ * The turns this thread has already had, bounded exactly as the REPL bounds its own. An assistant
+ * message the user interrupted is in the transcript but is not re-threaded: it was never a reply.
+ */
+export function threadHistory(session: { messages: readonly SessionMessageLike[] } | null): HistoryMessage[] {
+  const messages = (session?.messages ?? [])
+    .filter((m) => (m.role === "user" || m.role === "assistant") && m.metadata?.status !== "interrupted")
+    .map((m) => ({ role: m.role as HistoryMessage["role"], content: m.content }));
+  return trimHistory(messages, { maxTurns: DEFAULT_HISTORY_TURNS, maxChars: DEFAULT_HISTORY_CHARS });
+}
+
+/** The slice of a stored message the history reads; `SessionMessage` satisfies it structurally. */
+interface SessionMessageLike {
+  readonly role: string;
+  readonly content: string;
+  readonly metadata?: { readonly status?: string };
+}
+
 export function createAgentHandler(runtime: AgentRuntime, deps: AgentHandlerDeps = {}): AgentHandler {
   const configManager = deps.configManager ?? new ConfigManager();
   const store = deps.store ?? new FileGatewayStore(path.join(configManager.getProfileDir(), "gateway.json"));
@@ -95,10 +119,13 @@ export function createAgentHandler(runtime: AgentRuntime, deps: AgentHandlerDeps
       provider: config.provider,
       model: config.model,
     });
+    // The thread's earlier turns, read BEFORE this message joins them, so the run sees the
+    // conversation and not its own new line twice. The objective stays the raw message text.
+    const history = threadHistory(sessions.getSession(sessionId));
     sessions.appendMessage(sessionId, { role: "user", content: message.content });
 
     let reply: string | null = null;
-    for await (const event of runtime.run(message.content, { trigger: "manual", signal })) {
+    for await (const event of runtime.run(message.content, { trigger: "manual", signal, history })) {
       reply = replyFromEvent(reply, event);
     }
     if (reply !== null) sessions.appendMessage(sessionId, { role: "assistant", agent: agentId, content: reply });
