@@ -158,3 +158,7 @@ Model routing: Fable reasons and decides; Opus agents do the reading, research a
   reversed. Wave 1 launched: A1 (context management + per-seat prelude + personality), A2.1
   (workspace context files), A2.2 (autonomy + hooks + deny globs), B1 (unshelve seats, apps/web
   scoped exception), B0.2 (skill stores), A0.6 (leftovers).
+- Bobby answered the gate one question at a time: TS harness; sales seat + browser toolset;
+  scoped apps/web exception for the shrink; eval suites from goldens only (not agent-drafted);
+  slash module merge-then-delete; judge = different Gemini model on the same key; Gemini
+  embeddings allowed; sweep cap = per_run_cap; release after Phases A and B. Plan header updated.

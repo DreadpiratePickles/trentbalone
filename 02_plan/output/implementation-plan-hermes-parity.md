@@ -1,16 +1,20 @@
 # Implementation plan: Hermes parity, nine seats, shared brain, self-improvement
 
-Approved by Bobby on 2026-09-18 ("approved") against
-`02_plan/output/hermes-parity-roadmap-2026-09-18.md` v2. Decisions taken as approved with the
-roadmap's recommendations: (1) build the TypeScript harness, Hermes interop later over the A2A spec;
-(2) `sales` is the ninth seat, `browser` a toolset; (3) a scoped invariant 1 exception for the seat
-shrink in `apps/web/lib/orchestrator-runtime.ts` (one file, own commit, tests); (4) seat eval suites
-are drafted by agents from real failures and existing skills and stay quarantined until Bobby
-promotes them; (5) `apps/cli/src/slash/` is merged where a command is real and deleted otherwise;
-(6) sweep cap defaults from `budget.per_run_cap`, the judge uses a different Gemini model from the
-executor on the existing key (a different model, not yet a different family; recorded as a limit),
-the embedder may use the Gemini embedding endpoint on the existing key. Any of these can be reversed
-by Bobby at the next gate.
+Approved by Bobby on 2026-09-18, question by question, against
+`02_plan/output/hermes-parity-roadmap-2026-09-18.md` v2:
+1. Direction: build the TypeScript harness; Hermes interop later over the A2A specification.
+2. Ninth seat: `sales` is the seat; `browser` is a toolset every seat may use.
+3. Seat shrink: a scoped invariant 1 exception for `apps/web/lib/orchestrator-runtime.ts` (one
+   file, own commit, tests, web suite green).
+4. Eval suites: goldens only. Suites grow from failure goldens captured on real runs; no authoring
+   by agents or by Bobby. D1 therefore builds a seat's suite from that seat's goldens (quarantined
+   until promoted) and reflection waits until a seat has enough of them.
+5. `apps/cli/src/slash/`: merge the real commands into the REPL, delete the rest.
+6. Judge: a different Gemini model from the executor on the existing key (same family; recorded
+   as a limit until a second key exists).
+7. Embedder: may use the Gemini embedding endpoint on the existing key; lexical stays the fallback.
+8. Sweep cap: defaults to `budget.per_run_cap`, overridable as `improve.sweep_cap_cents`.
+9. Release: after Phases A and B land; the release checklist is prepared before then.
 
 Rules for every task: one Opus agent, a written brief (roadmap section 5), failing test first,
 files under 500 lines, no canned strings, apps/web read-only except B1, no subagents, no commits.
@@ -44,7 +48,7 @@ reports. Waves hold at most six agents with disjoint file ownership.
 | C2 | Brain repository `<profile>/brain/` git-versioned, `system/` always loaded, file tree as signposts, FTS5 index, one-time block migration. | After migration `MEMORY.md` content lives in `brain/system/`, the prelude shows the tree, and a commit exists per write. |
 | C3 | Core embedder behind `EmbedFn` (Gemini, OpenAI, none) with lexical fallback and a doctor line. | Recall ranks a paraphrase above a keyword collision when the embedder is on; with none configured the doctor says lexical. |
 | C4 | Delta-only memory writes and the write gates by layer; lock bypass and dead env reader closed. | Consolidation emits entries, never a whole-block rewrite; a semantic write outside consolidation is refused. |
-| D1 | Every seat can promote: suites from `SLOT_ENVIRONMENTS`, drafted suites per seat in quarantine, reflection on under the cap. | A seat with a promoted suite and a passing holdout can promote; a seat without one is blocked with `no_suite` naming the seat. |
+| D1 | Every seat can promote: suite lookup by seat id, a seat's suite assembled from its promoted goldens (goldens only, decision 4), reflection on under `improve.sweep_cap_cents`, judge on a different Gemini model. | A seat with a promoted golden suite and a passing holdout can promote; a seat without one is blocked with `no_suite` naming the seat and the golden count. |
 | C5 | Provenance tags and propagation: untrusted-derived output cannot reach shared layers without approval; failures get a recall class. | A memory write from a step that used MCP is held for approval; a failed step is recallable as a failure. |
 
 ## Wave 4
