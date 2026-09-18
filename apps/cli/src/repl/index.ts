@@ -13,6 +13,7 @@ import { InMemoryTraceStore } from "@trent/core/traces/index.js";
 import { autoTheme, canUseRawMode, terminalWidth, type Theme } from "../ui/index.js";
 import { playBoot, type BootStdin } from "../ui/boot.js";
 import { ReplEngine, bindApprovalAnswers, type ReplRunner } from "./engine.js";
+import { Conversation, historyLimits, recapLines, sessionSink, type HistoryMessage } from "./conversation.js";
 import { isDegraded } from "./degraded.js";
 import { ESCAPE_TIMEOUT_MS, withKittyProtocol } from "./keys.js";
 import { withRawMode } from "./interrupt.js";
@@ -24,6 +25,15 @@ import type { ReplConfig } from "./types.js";
 export { ReplEngine, bindApprovalAnswers } from "./engine.js";
 export { TranscriptRenderer, renderTranscript, identityForRole } from "./render.js";
 export { BudgetLedger, formatCents } from "./budget.js";
+export {
+  Conversation,
+  DEFAULT_HISTORY_CHARS,
+  DEFAULT_HISTORY_TURNS,
+  historyLimits,
+  recapLines,
+  trimHistory,
+} from "./conversation.js";
+export type { HistoryMessage, TurnMetadata } from "./conversation.js";
 export { ApprovalGate, renderApprovalCard } from "./approvals.js";
 export { REPL_COMMANDS, runCommand, commandNames } from "./commands.js";
 export { isDegraded, renderDegradedBanner } from "./degraded.js";
@@ -92,13 +102,46 @@ export class ClassicRepl {
   readonly #sessions: SessionManager;
   readonly #io: ReplIo;
   readonly #deps: ReplDeps;
+  readonly #continue: boolean;
 
   constructor(options: ReplOptions = {}) {
     this.#configManager = new ConfigManager({ profile: options.profile });
     this.#sessions = new SessionManager(this.#configManager);
     this.#io = options.io ?? processIo();
     this.#deps = options.deps ?? {};
-    if (options.continueSession === true) this.#sessions.resumeLastSession();
+    this.#continue = options.continueSession === true;
+  }
+
+  /**
+   * The transcript this session runs on: the profile's last session when `--continue` restored
+   * one, a new one on the first turn otherwise. The session file is the durable copy; the
+   * `Conversation` is what the next run is told, bounded by `historyLimits`.
+   */
+  #openConversation(config: ReplConfig, write: (line: string) => void, width: number, theme: Theme): {
+    conversation: Conversation;
+    openingCents: number;
+  } {
+    const resumed = this.#continue ? this.#sessions.resumeLastSession() : null;
+    if (resumed !== null) for (const line of recapLines(resumed, width)) write(theme.meta(line));
+    const agent = config.fleet.default_agent;
+    let sessionId = resumed?.id;
+    // An interrupted answer is in the transcript but is not re-threaded: it was never a reply.
+    const seed: HistoryMessage[] = (resumed?.messages ?? [])
+      .filter((message) => message.role === "user" || message.role === "assistant")
+      .filter((message) => message.metadata?.status !== "interrupted")
+      .map((message) => ({ role: message.role as HistoryMessage["role"], content: message.content }));
+    return {
+      conversation: new Conversation({
+        ...historyLimits(config),
+        seed,
+        sink: sessionSink(
+          this.#sessions,
+          () => (sessionId ??= this.#sessions.startSession(agent, config.model, config.provider).id),
+          agent,
+        ),
+      }),
+      openingCents: resumed?.total_cost_cents ?? 0,
+    };
   }
 
   async start(): Promise<void> {
@@ -122,6 +165,10 @@ export class ClassicRepl {
       io.exit(BOOT_INTERRUPT_EXIT_CODE);
       return;
     }
+
+    // The conversation before the object graph: a resumed session's recap belongs on screen
+    // whether or not the store, the proxy or the sandboxes come up.
+    const { conversation, openingCents } = this.#openConversation(config, writeLine, width, theme);
 
     // The session's object graph — store, tools, fleet memory, the improve loop, the orchestrator
     // and the company — is the same one the gateway and the schedulers run on; only the terminal
@@ -147,7 +194,8 @@ export class ClassicRepl {
     };
 
     try {
-      const runner: ReplRunner = ({ objective, signal }) => runtime.run(objective, { trigger: "manual", signal });
+      const runner: ReplRunner = ({ objective, signal, history }) =>
+        runtime.run(objective, { trigger: "manual", signal, ...(history === undefined ? {} : { history }) });
 
       const engine = new ReplEngine({
         theme,
@@ -155,6 +203,8 @@ export class ClassicRepl {
         store,
         companyId,
         runner,
+        conversation,
+        openingCents,
         traces: new InMemoryTraceStore(),
         degraded,
         width,

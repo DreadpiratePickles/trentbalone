@@ -16,6 +16,18 @@ export interface BudgetLedgerOptions {
   thresholds: readonly number[];
   /** Cents already spent today, if a previous session is being resumed. */
   openingCents?: number;
+  /** Per-run cap in integer cents (`config.budget.per_run_cap`). Zero or absent disables it. */
+  perRunCapCents?: number;
+}
+
+/**
+ * A cap that has been reached. The thresholds only warn; this is the refusal — the turn does not
+ * start, and a run already in flight is stopped. Both figures are integer cents, never dollars.
+ */
+export interface BudgetStop {
+  readonly kind: "daily" | "per_run";
+  readonly capCents: number;
+  readonly spentCents: number;
 }
 
 const DOLLAR = "$";
@@ -32,19 +44,27 @@ export function formatCents(cents: number): string {
 
 export class BudgetLedger {
   readonly capCents: number;
+  readonly perRunCapCents: number;
   readonly #thresholds: number[];
   #spent: number;
+  #runSpent = 0;
   #announced = new Set<number>();
   #pending: number[] = [];
 
   constructor(options: BudgetLedgerOptions) {
     this.capCents = options.capCents;
+    this.perRunCapCents = options.perRunCapCents ?? 0;
     this.#thresholds = [...options.thresholds].sort((a, b) => a - b);
     this.#spent = options.openingCents ?? 0;
   }
 
   get spentCents(): number {
     return this.#spent;
+  }
+
+  /** Cents spent by the run in progress. Reset by `beginRun()`. */
+  get runSpentCents(): number {
+    return this.#runSpent;
   }
 
   /** Percentage of the cap consumed, rounded down. */
@@ -59,6 +79,7 @@ export class BudgetLedger {
       throw new TypeError(`budget costs must be integer cents, received ${costCents}`);
     }
     this.#spent += costCents;
+    this.#runSpent += costCents;
     for (const threshold of this.#thresholds) {
       if (this.percent >= threshold && !this.#announced.has(threshold)) {
         this.#announced.add(threshold);
@@ -70,6 +91,38 @@ export class BudgetLedger {
   /** Thresholds crossed since the last call. Each is announced exactly once. */
   takeCrossed(): number[] {
     return this.#pending.splice(0);
+  }
+
+  /** Opens a new run's allowance. The daily total is untouched. */
+  beginRun(): void {
+    this.#runSpent = 0;
+  }
+
+  /**
+   * The cap that has been reached, or nothing. Checked before a turn starts — so a refusal costs
+   * no model call — and again after every recorded cost, so a run that blows its per-run cap
+   * mid-flight is stopped rather than merely warned about.
+   */
+  exceeded(): BudgetStop | null {
+    if (this.capCents > 0 && this.#spent >= this.capCents) {
+      return { kind: "daily", capCents: this.capCents, spentCents: this.#spent };
+    }
+    if (this.perRunCapCents > 0 && this.#runSpent >= this.perRunCapCents) {
+      return { kind: "per_run", capCents: this.perRunCapCents, spentCents: this.#runSpent };
+    }
+    return null;
+  }
+
+  /** The refusal text, uncoloured. Integer cents, because that is what the cap is expressed in. */
+  stopText(stop: BudgetStop): string {
+    const name = stop.kind === "daily" ? "daily cap" : "per-run cap";
+    const key = stop.kind === "daily" ? "budget.daily_cap" : "budget.per_run_cap";
+    return `Budget stop: the ${name} of ${stop.capCents} cents is reached; ${stop.spentCents} cents are spent. Raise ${key} to continue.`;
+  }
+
+  /** The one-line refusal shown in place of the turn. */
+  stopLine(stop: BudgetStop, theme: Theme): string {
+    return theme.needsApproval(this.stopText(stop));
   }
 
   /** True once any configured threshold has been crossed. */

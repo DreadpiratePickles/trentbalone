@@ -162,6 +162,14 @@ npm run cli -- --continue
 Both surfaces run on the same session engine and the same model gateway. In the REPL, Ctrl+C aborts
 the in-flight stream and leaves the process alive; Ctrl+J inserts a newline.
 
+A REPL session is a conversation, not a series of unrelated runs: your line and the run's own
+consolidated output are appended to a session under `~/.trent/sessions/`, and the last few turns
+travel with the next run, so "now do the second one" has something to refer to. `--continue` resumes
+the most recent session — it prints a short recap, re-threads its turns and carries its spend into
+the budget ticker. Nothing is written until your first turn, so opening and closing the REPL leaves
+no empty session behind. A turn you interrupt is recorded as interrupted and is not offered to the
+next run as if it had been an answer.
+
 ### One shot, for scripts, pipes and CI
 
 ```bash

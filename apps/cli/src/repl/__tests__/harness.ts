@@ -28,6 +28,7 @@ import type {
   UpsertStepInput,
 } from "@trent/core/store/index.js";
 import { ReplEngine, PROMPT, type ReplEngineDeps } from "../engine.js";
+import type { Conversation, HistoryMessage } from "../conversation.js";
 
 // ── in-memory StorePort ─────────────────────────────────────────────────────
 
@@ -197,6 +198,10 @@ export interface HarnessOptions {
   store?: MemoryStore;
   /** Told when a gate is answered; the questions test asserts the answer text reaches it. */
   onApprovalAnswer?: ReplEngineDeps["onApprovalAnswer"];
+  /** The transcript the engine threads into each run; omitted, the engine builds its own. */
+  conversation?: Conversation;
+  /** Cents already spent when this session opened, as a resumed session reports them. */
+  openingCents?: number;
 }
 
 function ev(kind: OrcEvent["kind"], extra: Partial<OrcEvent> = {}): OrcEvent {
@@ -223,6 +228,8 @@ export interface Harness {
   readonly promptsRendered: number;
   /** Every objective the runner was asked to run, in order. */
   readonly objectives: string[];
+  /** The conversation history each run was handed, in the same order. */
+  readonly histories: HistoryMessage[][];
 }
 
 export function makeHarness(options: HarnessOptions = {}): Harness {
@@ -233,6 +240,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
   let completed = false;
   let produced = 0;
   const objectives: string[] = [];
+  const histories: HistoryMessage[][] = [];
 
   const engine = new ReplEngine({
     theme: createTheme("none"),
@@ -243,9 +251,12 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
     write: (text: string) => void out.push(text),
     exit: (code: number) => void exit(code),
     ...(options.onApprovalAnswer ? { onApprovalAnswer: options.onApprovalAnswer } : {}),
-    runner: ({ objective, signal }) =>
+    ...(options.conversation ? { conversation: options.conversation } : {}),
+    ...(options.openingCents === undefined ? {} : { openingCents: options.openingCents }),
+    runner: ({ objective, signal, history }) =>
       (async function* () {
         objectives.push(objective);
+        histories.push([...(history ?? [])]);
         for (const event of events) {
           if (signal.aborted) return;
           // A real stream yields to the event loop between frames; so must this one,
@@ -279,6 +290,9 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
     },
     get objectives() {
       return [...objectives];
+    },
+    get histories() {
+      return histories.map((entry) => [...entry]);
     },
   };
 }

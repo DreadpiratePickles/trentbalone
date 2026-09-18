@@ -46,6 +46,7 @@ import { loadLibs, type Libs } from "./libs.js";
 import { applyModelEnv } from "./model-env.js";
 import { PortShaper, PortTally } from "./provider-ports.js";
 import { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots, type ReleaseSlot } from "./run-slots.js";
+import { closeRunScope, openRunScope } from "./run-hooks.js";
 import { SeatTally, guardSeatModel, shapeEvent, type SeatModelFn } from "./seat-guard.js";
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
 import { runWithToolCallContext } from "../governance/tool-call-context.js";
@@ -361,9 +362,9 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
           fullTeam: options.fullTeam ?? false,
         });
         runId = launched.id;
-        // fleet-memory hook: the prelude for this run is built on the first seat call.
-        deps.fleetMemory?.runStarted({ runId: launched.id, companyId: options.companyId, objective: options.objective });
-        deps.delegate?.runStarted({ runId: launched.id, companyId: options.companyId, objective: options.objective });
+        // The per-run hooks (`run-hooks.ts`): the fleet-memory prelude is built on the first seat
+        // call, and the conversation rides along so the hook renders it AFTER that frozen prelude.
+        openRunScope([deps.fleetMemory, deps.delegate], launched.id, options);
         // The bus emits run_start inside launchOrchestration, before anyone can subscribe. The
         // launch result carries the same fields, so the stream starts with it after all (D2).
         deliver({
@@ -435,9 +436,8 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
         // The slot goes to the oldest waiter, if any, before this handle's caller can observe the end.
         releaseSlot?.();
         libs.overrides.clearRuntimeEvalOverrides();
-        // fleet-memory hook: this run's memory writes become visible to the next run.
-        if (runId !== undefined) deps.fleetMemory?.runFinished(runId);
-        if (runId !== undefined) deps.delegate?.runFinished(runId);
+        // This run's memory writes become visible to the next run.
+        closeRunScope([deps.fleetMemory, deps.delegate], runId);
       }
     })();
     // The handle exposes this through result(); nothing is unhandled if the caller only iterates.

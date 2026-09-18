@@ -13,6 +13,7 @@ Configuration is split in two. Non-secret settings live in `config.yaml` as YAML
   sessions/                      transcripts, mode 0600
   skills/                        installed skills
   traces/                        self-improvement trace store
+  goldens/                       failure fixtures from failed runs, mode 0700
   egress/                        CA certificate, CA key (0600), tokens.json
   profiles/<name>/config.yaml    a named profile's settings
   profiles/<name>/.env           a named profile's secrets
@@ -40,7 +41,8 @@ older one.
 ```yaml
 version: 3                    # integer on-disk schema version
 profile: default
-provider: openai              # openai anthropic google mistral openrouter deepseek groq ollama
+provider: openai              # openai anthropic google mistral openrouter
+                              # deepseek groq ollama lmstudio  (see "Providers" below)
 model: gpt-5.6-terra
 personality: default
 theme: dark                   # dark | light
@@ -80,6 +82,8 @@ gateway:
 
 repl:
   double_text_policy: enqueue # the same three modes for input typed during a REPL turn
+  history_turns: 8            # turns of this session threaded into the next run (optional)
+  history_chars: 6000         # character ceiling for that transcript; oldest turns dropped first
 
 runtime:
   max_concurrent_runs: 2      # runs driven at once per profile; the next one waits FIFO (docs/jobs.md)
@@ -118,6 +122,8 @@ telemetry:
   # otlp_endpoint: http://127.0.0.1:4318/v1/traces   # unset means tracing off
   service_name: trent
 
+model_overrides: {}           # per-model price and context window; see "Model pricing" below
+
 privacy:
   redact_prompts: false       # true: mask secrets and PII in every prompt before the provider call
   patterns: []                # extra regular expressions (JavaScript syntax) to mask as well
@@ -138,6 +144,15 @@ characters. Labels and files must be distinct. The heartbeat's consolidation pas
 configured block: `memory` and `user` always, each other writable block under its own `limit`, and
 a `read_only` block never — it is not even sent to the model. One draft carries the whole set, so
 `trent improve promote` moves every block at once and a rollback puts every block back.
+
+### Failure goldens
+
+A run that fails, or whose critic escalates or replans, writes one quarantined regression fixture
+to `<profile>/goldens/golden-<runId>.json` — the sanitised objective, the reason and the trajectory
+failure tags. The directory is created with mode 0700 on the first run of any surface, and every
+surface captures: REPL, TUI, gateway, cron, heartbeat and `trent run` all wire the same loop. A
+fixture starts `quarantined` and is promoted to blocking only by human review. Nothing in
+`config.yaml` turns capture off; delete the directory's contents to discard fixtures.
 
 ### Runtime
 
@@ -224,6 +239,24 @@ and run it as the next turn, the default), `interrupt` (abort the running turn a
 message once it has settled) or `reject` (refuse it with one status line; the model never sees
 it). `/stop` interrupts the running turn under every policy. See [gateway.md](gateway.md).
 
+### Conversation history
+
+Each REPL turn is one orchestration run, and the runs of one session are a conversation: the last
+`repl.history_turns` turns (default 8), trimmed to `repl.history_chars` characters (default 6000,
+oldest dropped first), travel with the next run as a message list. The line you type stays the
+objective; the transcript is rendered into the seat prompt *after* the frozen fleet-memory prelude,
+so the cacheable prefix does not move between turns. A turn you interrupted with Ctrl+C is kept in
+the session marked `interrupted` and is never re-threaded: a fragment is not an answer. Chat threads
+through the gateway get the same treatment, bounded by the same two numbers.
+
+### Budget caps refuse a turn
+
+`budget.alert_thresholds` warns; `budget.daily_cap` and `budget.per_run_cap` refuse. A turn whose
+ledger has already reached the daily cap does not start a run at all, and a run that passes
+`per_run_cap` mid-flight is stopped. Both print the cap and the spend in integer cents and name the
+key to raise. `--continue` seeds the ledger from the resumed session's `total_cost_cents`, so the
+cap survives a restart rather than resetting with the process.
+
 ### Money is integer cents
 
 Every monetary field in the schema is `z.number().int()`. `daily_cap: 1000` is ten dollars.
@@ -232,6 +265,66 @@ is not negotiable: a float dollar value in a cents field is how a ten-dollar cap
 ten-cent cap, which the setup wizard rebuild found and fixed.
 
 Percentages are the exception. `alert_thresholds` is a list of percentages of `daily_cap`.
+
+## Providers
+
+Nine names are accepted. Five are routed by the wrapped application itself; the other four are
+OpenAI-compatible endpoints that the gateway resolves at the boundary into the `openai` client plus
+a base URL, so the same streaming path serves all of them.
+
+| `provider` | Key | Endpoint (override with) | Default model |
+|---|---|---|---|
+| `openai` | `OPENAI_API_KEY` | OpenAI (`OPENAI_BASE_URL`) | `gpt-5.6-terra` |
+| `anthropic` | `ANTHROPIC_API_KEY` | Anthropic | `claude-sonnet-4-6` |
+| `google` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | Gemini (`GOOGLE_BASE_URL`) | `gemini-2.5-pro` |
+| `mistral` | `MISTRAL_API_KEY` | Mistral (`MISTRAL_BASE_URL`) | `mistral-large-latest` |
+| `openrouter` | `OPENROUTER_API_KEY` | OpenRouter (`OPENROUTER_BASE_URL`) | `openrouter/auto` |
+| `deepseek` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/v1` (`DEEPSEEK_BASE_URL`) | `deepseek-chat` |
+| `groq` | `GROQ_API_KEY` | `https://api.groq.com/openai/v1` (`GROQ_BASE_URL`) | `llama-3.3-70b-versatile` |
+| `ollama` | none | `http://127.0.0.1:11434/v1` (`OLLAMA_BASE_URL`) | `llama3.2` |
+| `lmstudio` | none | `http://127.0.0.1:1234/v1` (`LMSTUDIO_BASE_URL`) | `local-model` |
+
+`ollama` and `lmstudio` need no account. The OpenAI-compatible client always sends an
+`Authorization` header, so a placeholder bearer is sent to them unless you set `OLLAMA_API_KEY` or
+`LMSTUDIO_API_KEY` — and a real `OPENAI_API_KEY` in your environment is deliberately NOT forwarded
+to a local endpoint.
+
+A provider that cannot be routed fails at startup with exit code 3 and says which variable to set.
+It is never quietly swapped for another provider: that was the old behaviour and it billed you for
+a model you did not choose.
+
+## Retry and fallback
+
+Every provider attempt is bounded: **3 attempts**, exponential backoff with full jitter, 500 ms
+base, 8 s cap. Only transient failures are retried — HTTP 429, 5xx, 408 and transport errors
+(`ECONNRESET`, `ETIMEDOUT`, a failed fetch). A 400, 401, 403, 404 or 422 is never retried, because
+the next attempt is the same request. A `Retry-After` header (seconds or an HTTP date) is obeyed
+instead of the curve, capped at 8 s. Every retry writes one line naming the provider, model,
+attempt, delay, error class and status — never a credential.
+
+When the attempts are spent the next provider in the fallback chain is tried. Once a token has
+reached you the answer is half-delivered, so there is no retry and no fallback: you get the error
+rather than a duplicated paragraph. Cancelling (Ctrl+C) ends a backoff wait immediately and starts
+no further attempt.
+
+## Model pricing
+
+Cost is priced per model id, not per tier. `model_overrides` beats the shipped table:
+
+```yaml
+model_overrides:
+  gemini-3.5-flash-lite:
+    input_cents_per_million: 30      # CENTS per million tokens (USD 0.30 / 1M)
+    output_cents_per_million: 250
+    context_window: 1000000
+  my-private-finetune:
+    input_cents_per_million: 0
+```
+
+Rates are cents per million tokens; the cost itself is always integer cents. Models served by
+`ollama` and `lmstudio` are priced at zero — the tokens were produced on your hardware. A model
+nothing can price is reported with `unpriced` on the usage row and its cost is the wrapped app's
+tier estimate: visibly a guess, not a bill. Add a `model_overrides` entry to make it exact.
 
 ## The yaml and env split
 
@@ -248,7 +341,8 @@ npm run cli -- config unset personality
 ```
 
 Recognised secret names include `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
-`GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `E2B_API_KEY`,
+`GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `GROQ_API_KEY`,
+`OLLAMA_API_KEY`, `LMSTUDIO_API_KEY`, `E2B_API_KEY`,
 `DAYTONA_API_KEY`, the messaging tokens (`TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`,
 `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `WHATSAPP_TOKEN`, `SIGNAL_NUMBER`, the `EMAIL_SMTP_*`
 group, the `TEAMS_*` group) and `TRENT_CLOUD_TOKEN`. Any other key found in `.env` is kept rather

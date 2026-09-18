@@ -9,7 +9,8 @@ import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { BUSY_STATUS_LINE, STOP_COMMAND, type DoubleTextPolicy } from "@trent/core/gateway/index.js";
 import { TranscriptRenderer, identityForRole } from "./render.js";
 import { BudgetLedger } from "./budget.js";
-import { ApprovalGate, renderApprovalCard } from "./approvals.js";
+import { Conversation, historyLimits, TurnOutcome, type HistoryMessage } from "./conversation.js";
+import { ApprovalGate, renderApprovalCard, type GateAnswer } from "./approvals.js";
 import { questionFromEvent, renderQuestion } from "@trent/core/tools/human/index.js";
 import { GLYPHS } from "../ui/index.js";
 import { runCommand, commandNames } from "./commands.js";
@@ -42,6 +43,8 @@ interface QueuedTurn {
 export interface ReplRunnerInput {
   objective: string;
   signal: AbortSignal;
+  /** The turns before this one, oldest first. The objective stays the raw new line. */
+  history?: readonly HistoryMessage[];
 }
 
 /** Produces the event stream for one turn. Bound to `createOrchestrator()` in index.ts. */
@@ -58,6 +61,10 @@ export interface ReplEngineDeps {
   degraded?: boolean;
   traces?: ReplTraceStore;
   width?: number;
+  /** This session's transcript, seeded on resume and persisted per turn. Its own, when absent. */
+  conversation?: Conversation;
+  /** Cents a resumed session had already spent, so the ticker continues rather than restarts. */
+  openingCents?: number;
   /** The registered toolset adapters, the sandbox they run in and the egress state, for `/tools` and `/status`. */
   tools?: readonly ReplToolListing[];
   sandbox?: ReplSandbox;
@@ -69,31 +76,8 @@ export interface ReplEngineDeps {
   onApprovalAnswer?(runId: string, stepId: string | undefined, answer: GateAnswer): Promise<void> | void;
 }
 
-/** A decision on an approval card, or the typed line that answers an `ask_human` question. */
-export type GateAnswer = "approved" | "rejected" | { readonly answer: string };
-
-/** The calls a gate answer needs. `Orchestrator` from `@trent/core` satisfies it; `answer` resumes a question. */
-export interface ApprovalTarget {
-  approve(runId: string, stepId: string): Promise<boolean>;
-  reject(runId: string, stepId: string): Promise<boolean>;
-  answer?(runId: string, stepId: string, text: string): Promise<boolean>;
-}
-
-/**
- * The `onApprovalAnswer` that releases a parked orchestrator step. Shared by `index.ts` and the
- * tests so the REPL's real approval path is the one under test. A gate with no step id (a
- * restored card from an earlier session) has nothing to release and is a no-op.
- */
-export function bindApprovalAnswers(target: ApprovalTarget): NonNullable<ReplEngineDeps["onApprovalAnswer"]> {
-  return async (runId, stepId, answer) => {
-    if (stepId === undefined) return;
-    if (typeof answer === "object") {
-      if (target.answer === undefined) throw new Error("this orchestrator cannot take an answer to ask_human");
-      await target.answer(runId, stepId, answer.answer);
-    } else if (answer === "approved") await target.approve(runId, stepId);
-    else await target.reject(runId, stepId);
-  };
-}
+export { bindApprovalAnswers } from "./approvals.js";
+export type { ApprovalTarget, GateAnswer } from "./approvals.js";
 
 const EMPTY_TRACES: ReplTraceStore = { query: async () => [], byRun: async () => [] };
 
@@ -104,6 +88,7 @@ export class ReplEngine {
   readonly #interrupts: InterruptController;
   readonly budget: BudgetLedger;
   readonly approvals: ApprovalGate;
+  readonly conversation: Conversation;
 
   #draft = "";
   #cursor = 0;
@@ -125,8 +110,11 @@ export class ReplEngine {
     this.#renderer = new TranscriptRenderer({ theme: deps.theme, degraded: deps.degraded ?? false });
     this.budget = new BudgetLedger({
       capCents: deps.config.budget.daily_cap,
+      perRunCapCents: deps.config.budget.per_run_cap,
       thresholds: deps.config.budget.alert_thresholds,
+      openingCents: deps.openingCents ?? 0,
     });
+    this.conversation = deps.conversation ?? new Conversation(historyLimits(deps.config));
     this.approvals = new ApprovalGate(deps.store, deps.companyId);
     this.#interrupts = new InterruptController({
       isBusy: () => this.#busy,
@@ -376,13 +364,26 @@ export class ReplEngine {
   }
 
   async #runTurn(objective: string): Promise<void> {
+    // The cap refuses the turn before a single token is bought. Thresholds still only warn.
+    const stop = this.budget.exceeded();
+    if (stop !== null) {
+      this.#emit(this.#renderer.push(this.budget.stopLine(stop, this.#deps.theme)));
+      this.prompt();
+      this.#drainQueued();
+      return;
+    }
     const abort = new AbortController();
     this.#abort = abort;
     this.#busy = true;
     this.#gated.clear();
+    this.budget.beginRun();
+    const history = this.conversation.history();
+    this.conversation.recordUser(objective);
+    const outcome = new TurnOutcome();
     let interrupted = false;
     try {
-      for await (const event of this.#deps.runner({ objective, signal: abort.signal })) {
+      for await (const event of this.#deps.runner({ objective, signal: abort.signal, history })) {
+        outcome.observe(event);
         this.#render(this.#renderer.handle(event));
         await this.#afterEvent(event, abort.signal);
         if (abort.signal.aborted) {
@@ -399,6 +400,11 @@ export class ReplEngine {
       if (abort.signal.aborted) interrupted = true;
       this.#busy = false;
       this.#abort = undefined;
+      // An interrupted turn is persisted as interrupted, never threaded as this turn's answer.
+      this.conversation.recordAssistant(
+        outcome.content,
+        interrupted ? { ...outcome.metadata(), status: "interrupted" } : outcome.metadata(),
+      );
       if (interrupted) this.#emit(this.#renderer.push(this.#deps.theme.meta("Interrupted. The run was stopped.")));
       this.prompt();
       this.#drainQueued();
@@ -416,6 +422,11 @@ export class ReplEngine {
         this.budget.record(cost);
         for (const threshold of this.budget.takeCrossed()) {
           this.#emit(this.#renderer.push(this.budget.warningLine(threshold, this.#deps.theme)));
+        }
+        const stop = this.budget.exceeded();
+        if (stop !== null) {
+          this.#emit(this.#renderer.push(this.budget.stopLine(stop, this.#deps.theme)));
+          this.#abort?.abort(new Error(ABORT_REASON));
         }
       }
     }

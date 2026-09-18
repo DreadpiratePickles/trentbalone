@@ -5,7 +5,10 @@
  * vetted connector gallery from `@trent/core/mcp` and the servers configured in this profile.
  */
 
+import fs from "node:fs";
+import path from "node:path";
 import { SessionManager } from "@trent/core/sessions/index.js";
+import { exportSession, type ExportedSession } from "@trent/core/telemetry/index.js";
 import { MCP_CONNECTOR_GALLERY, mcpConnectorTemplateById } from "@trent/core/mcp/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import type { CommandSpec } from "../registry.js";
@@ -23,9 +26,12 @@ function readServers(raw: unknown): ConfiguredServer[] {
   return raw.filter((s): s is ConfiguredServer => typeof s === "object" && s !== null);
 }
 
+/** Owner-only, like the transcript it came from: an export is the same bytes in another place. */
+const EXPORT_FILE_MODE = 0o600;
+
 export const sessionsSpec: CommandSpec = {
   name: "sessions",
-  description: "List, resume and prune conversation sessions",
+  description: "List, resume, export and prune conversation sessions",
   subcommands: [
     {
       name: "list",
@@ -88,6 +94,52 @@ export const sessionsSpec: CommandSpec = {
         const d = data as { id?: string; title?: string; dryRun?: boolean };
         if (d.dryRun === true) return [`  ${ctx.theme.meta("would resume")} ${String(d.id ?? "latest")}`];
         return [`  ${ctx.theme.success("resumed")} ${ctx.theme.value(String(d.id))} ${ctx.theme.body(String(d.title))}`];
+      },
+    },
+    {
+      name: "export <sessionId>",
+      description: "Export a session's structure and metrics; message bodies only on request",
+      options: [
+        { flags: "--include-content", description: "Include message bodies, redacted" },
+        { flags: "--out <path>", description: "Write the export to this file instead of stdout" },
+      ],
+      run(ctx, opts, args) {
+        const requested = String(args[0]);
+        const out = typeof opts.out === "string" ? path.resolve(opts.out) : undefined;
+        // Before the lookup: a dry run reads nothing and writes nothing, whatever the id.
+        if (ctx.dryRun) {
+          return { data: { dryRun: true, command: "sessions export", sessionId: requested, path: out ?? null } };
+        }
+        const session = new SessionManager(ctx.config()).getSession(requested);
+        if (!session) {
+          throw new TrentError({
+            code: EXIT.CONFIG,
+            operation: "sessions.export",
+            message: "no session with that id",
+            target: requested,
+          });
+        }
+        // The default is the point: no bodies leave the machine unless the caller says so, and
+        // what does leave has been through the redactor first (`telemetry/session-export.ts`).
+        const exported = exportSession(session, { includeContent: opts.includeContent === true });
+        if (out !== undefined) {
+          fs.mkdirSync(path.dirname(out), { recursive: true });
+          fs.writeFileSync(out, `${JSON.stringify(exported, null, 2)}\n`, { mode: EXPORT_FILE_MODE });
+          fs.chmodSync(out, EXPORT_FILE_MODE);
+        }
+        return { data: { session: exported as unknown as Record<string, unknown>, path: out ?? null } };
+      },
+      render(data, ctx) {
+        const d = data as { session?: ExportedSession; path?: string | null; dryRun?: boolean; sessionId?: string };
+        if (d.dryRun === true) return [`  ${ctx.theme.meta("would export")} ${String(d.sessionId)}`];
+        const session = d.session;
+        if (session === undefined) return [];
+        const bodies = session.contentIncluded ? "with bodies" : "no bodies";
+        const where = d.path ?? "stdout";
+        return [
+          `  ${ctx.theme.success("exported")} ${ctx.theme.value(session.id)} ${ctx.theme.meta(`${session.messageCount} msgs · ${bodies}`)}`,
+          `  ${ctx.theme.meta("written to")} ${ctx.theme.value(where)}`,
+        ];
       },
     },
     {

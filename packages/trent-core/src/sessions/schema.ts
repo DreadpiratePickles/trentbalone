@@ -24,6 +24,20 @@ export interface SessionMessageMetadata {
   durationMs?: number;
   model?: string;
   tokens?: { prompt: number; completion: number; total: number };
+  /**
+   * Total tokens when that is all the producer knows. The orchestrator's event stream reports one
+   * number per step and never a prompt/completion split, so writing `tokens` would mean inventing
+   * the two halves. Additive, so every existing reader of `tokens` is unaffected.
+   */
+  tokens_total?: number;
+  /** The orchestration run that produced this message, when a surface ran one. */
+  run_id?: string;
+  /**
+   * `interrupted` when the user stopped the turn that produced this message. The transcript keeps
+   * whatever had streamed — it must not lie about what happened — and readers that re-thread a
+   * session into a new run skip these, because a fragment is not an answer.
+   */
+  status?: "completed" | "interrupted";
   tool_calls?: Array<{ name: string; args: unknown; result: unknown }>;
   files?: string[];
 }

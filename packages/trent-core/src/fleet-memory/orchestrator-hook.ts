@@ -34,10 +34,21 @@ export interface FleetSeatInput {
   readonly dynamicPrompt?: string;
 }
 
+/** One earlier turn of the surface's conversation, as the run carries it. */
+export interface ConversationTurn {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+}
+
 export interface RunStartedInput {
   readonly runId: string;
   readonly companyId: string;
   readonly objective: string;
+  /**
+   * The session's earlier turns, oldest first. Rendered LAST, after the frozen prelude: the
+   * prelude is the cacheable prefix, and a transcript in front of it moves that prefix every turn.
+   */
+  readonly history?: readonly ConversationTurn[];
 }
 
 export interface FleetMemoryHook {
@@ -69,7 +80,15 @@ interface ActiveRun {
   readonly runId: string;
   readonly companyId: string;
   readonly objective: string;
+  readonly history?: readonly ConversationTurn[];
   prelude?: Promise<string>;
+}
+
+/** The session transcript block. Plain roles, oldest first; the new objective is not repeated here. */
+export function renderConversation(history: readonly ConversationTurn[]): string {
+  if (history.length === 0) return "";
+  const lines = history.map((turn) => `${turn.role}: ${turn.content}`);
+  return `## Conversation so far (this session, oldest first; the objective above is the newest line)\n${lines.join("\n\n")}`;
 }
 
 export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMemoryHook {
@@ -104,6 +123,9 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
       embed: options.embed,
     });
     if (recall.block) parts.push(recall.block);
+    // Last, always: everything above is the same bytes for every seat of this run.
+    const conversation = renderConversation(run.history ?? []);
+    if (conversation) parts.push(conversation);
     return parts.join("\n\n");
   }
 
@@ -134,7 +156,12 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
       };
     },
     runStarted(input) {
-      const run: ActiveRun = { runId: input.runId, companyId: input.companyId, objective: input.objective };
+      const run: ActiveRun = {
+        runId: input.runId,
+        companyId: input.companyId,
+        objective: input.objective,
+        ...(input.history === undefined ? {} : { history: input.history }),
+      };
       runs.set(input.runId, run);
       current = run;
     },

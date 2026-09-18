@@ -33,6 +33,34 @@ export interface ApprovalCard {
 
 export type ApprovalAnswer = "approved" | "rejected";
 
+/** A decision on an approval card, or the typed line that answers an `ask_human` question. */
+export type GateAnswer = "approved" | "rejected" | { readonly answer: string };
+
+/** The calls a gate answer needs. `Orchestrator` from `@trent/core` satisfies it; `answer` resumes a question. */
+export interface ApprovalTarget {
+  approve(runId: string, stepId: string): Promise<boolean>;
+  reject(runId: string, stepId: string): Promise<boolean>;
+  answer?(runId: string, stepId: string, text: string): Promise<boolean>;
+}
+
+/**
+ * The `onApprovalAnswer` that releases a parked orchestrator step. Shared by `index.ts` and the
+ * tests so the REPL's real approval path is the one under test. A gate with no step id (a
+ * restored card from an earlier session) has nothing to release and is a no-op.
+ */
+export function bindApprovalAnswers(
+  target: ApprovalTarget,
+): (runId: string, stepId: string | undefined, answer: GateAnswer) => Promise<void> {
+  return async (runId, stepId, answer) => {
+    if (stepId === undefined) return;
+    if (typeof answer === "object") {
+      if (target.answer === undefined) throw new Error("this orchestrator cannot take an answer to ask_human");
+      await target.answer(runId, stepId, answer.answer);
+    } else if (answer === "approved") await target.approve(runId, stepId);
+    else await target.reject(runId, stepId);
+  };
+}
+
 export class ApprovalGate {
   readonly #store: ReplStore;
   readonly #companyId: string;

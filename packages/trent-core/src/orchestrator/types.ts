@@ -133,6 +133,12 @@ export type TraceSink = (event: OrcEvent) => void;
 export interface OrchestratorModelConfig {
   readonly provider: string;
   readonly model: string;
+  /**
+   * `model_overrides` from config. Travels to the gateway through the env bridge that
+   * `applyModelEnv` writes, because the orchestrator builds its gateway with no arguments — the
+   * same route the `privacy` block takes.
+   */
+  readonly overrides?: Readonly<Record<string, { context_window?: number; input_cents_per_million?: number; output_cents_per_million?: number }>>;
 }
 
 /** One chat-completion request as the seat executor issues it. Mirrors `ChatCompletionInput`. */
@@ -219,9 +225,21 @@ export interface OrchestratorDeps {
   readonly maxJobs?: number;
 }
 
+/**
+ * One earlier message of the surface's conversation. Threaded ALONGSIDE the objective, never
+ * folded into it: the planner keeps receiving the raw new line, and the fleet-memory hook renders
+ * the transcript after its frozen prelude so the cacheable prefix stays byte-stable.
+ */
+export interface ConversationMessage {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+}
+
 export interface OrchestratorRunOptions {
   readonly companyId: string;
   readonly objective: string;
+  /** The turns before this one, oldest first. Bounded by the caller, not here. */
+  readonly history?: readonly ConversationMessage[];
   readonly trigger?: OrchestrationTrigger;
   readonly fullTeam?: boolean;
   /** Hard upper bound on drain iterations. Coding rule 9: every loop is bounded. */

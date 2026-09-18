@@ -16,6 +16,7 @@ import {
   createAppDelegatedChildRunner,
   createOrchestrator as createRealOrchestrator,
   createOrchestratorDelegatePort,
+  type ConversationMessage,
   type OrcEvent,
   type OrchestrationTrigger,
   type Orchestrator,
@@ -84,6 +85,11 @@ export interface HeadlessRunOptions {
   /** Defaults to `manual`; schedulers pass `scheduled` or `heartbeat`. */
   readonly trigger?: OrchestrationTrigger;
   readonly signal?: AbortSignal;
+  /**
+   * The surface's earlier turns, oldest first. The objective stays the raw new line; the
+   * transcript is rendered after the fleet-memory prelude, never before it.
+   */
+  readonly history?: readonly ConversationMessage[];
 }
 
 export interface HeadlessRuntime {
@@ -270,7 +276,13 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       alerts,
       versionPins,
       run: (objective, options = {}) =>
-        orchestrator.run({ companyId, objective, trigger: options.trigger ?? "manual", signal: options.signal }),
+        orchestrator.run({
+          companyId,
+          objective,
+          trigger: options.trigger ?? "manual",
+          signal: options.signal,
+          ...(options.history === undefined ? {} : { history: options.history }),
+        }),
       cleanup: async () => {
         alerts?.close();
         await tools.cleanup();
