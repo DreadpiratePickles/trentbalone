@@ -126,6 +126,22 @@ describe("GatewayManager end to end over the Telegram wire", () => {
     expect(bridge.getApproval(req.id)).toEqual(expect.objectContaining({ status: "approved", decidedBy: "telegram:555" }));
   });
 
+  it("titles the card by kind: an approval asks for approval, an ask_human card says the founder is being asked", async () => {
+    const m = make([]);
+    const bridge = m.getApprovalBridge();
+    const approval = bridge.createApprovalRequest("ceo", "Refund the October invoice", { amountCents: 4200 });
+    await m.sendApproval(approval, "email", "ops@example.com");
+    const question = bridge.createApprovalRequest("ceo", "Ship EU or US first?", { kind: "question", question: "Ship EU or US first?" }, { kind: "question", runId: "run_1", stepId: "step_1" });
+    await m.sendApproval(question, "email", "ops@example.com");
+
+    // No SMTP server here, so both rows stay queued with the metadata the adapter would title on.
+    const queued = m.getQueue().pending("email").map((r) => r.message.metadata);
+    expect(queued).toEqual([
+      { subject: `Approval needed: ${approval.action}`, approvalId: approval.id },
+      { subject: `A question for you: ${question.action}`, approvalId: question.id },
+    ]);
+  });
+
   it("treats an APPROVE reply from a paired email admin as the decision, and ignores it from a stranger", async () => {
     const m = make([]);
     const bridge = m.getApprovalBridge();

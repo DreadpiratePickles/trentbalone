@@ -249,6 +249,15 @@ export class ApprovalBridge extends EventEmitter {
     ];
   }
 
+  /**
+   * The line a platform uses as the card's title (an email subject, a push notification). A
+   * question from `ask_human` is not an approval: the founder is being asked something, and the
+   * title says so rather than asking them to approve their own answer.
+   */
+  public cardSubject(request: ApprovalRequest): string {
+    return request.kind === "question" ? `A question for you: ${request.action}` : `Approval needed: ${request.action}`;
+  }
+
   public cardText(request: ApprovalRequest): string {
     if (request.kind === "question") return this.questionText(request);
     const lines = [

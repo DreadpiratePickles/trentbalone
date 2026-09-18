@@ -199,7 +199,12 @@ export class GatewayManager {
     return { queued: row.id, sent: result.sent > 0 && this.queue.pending(platform).every((r) => r.id !== row.id) };
   }
 
-  /** Renders an approval card for the platform and queues it; where it lands is recorded on the approval row. */
+  /**
+   * Renders an approval card for the platform and queues it; where it lands is recorded on the
+   * approval row. The title follows the kind — an approval asks for a decision, an `ask_human`
+   * card asks the founder a question — while the callback, the nonce and the delivery record are
+   * the same either way, so reactions and decisions resolve exactly as before.
+   */
   public async sendApproval(request: ApprovalRequest, platform: string, channelId: string, threadId?: string): Promise<{ queued: string; sent: boolean }> {
     const adapter = this.adapters.get(platform);
     if (!adapter) throw new Error(`Unknown platform "${platform}"`);
@@ -207,7 +212,7 @@ export class GatewayManager {
     const text = buttons ? this.approvalBridge.cardText(request) : this.approvalBridge.emailCardText(request);
     // The approval id rides on the queued row, so the delivery is recorded when the row is actually sent,
     // from whichever process drains it, and a reaction on that message can find the card.
-    return this.send(platform, { channelId, threadId, text, buttons: buttons ? this.approvalBridge.buttons(request) : undefined, metadata: { subject: `Approval needed: ${request.action}`, approvalId: request.id } });
+    return this.send(platform, { channelId, threadId, text, buttons: buttons ? this.approvalBridge.buttons(request) : undefined, metadata: { subject: this.approvalBridge.cardSubject(request), approvalId: request.id } });
   }
 
   // ------------------------------------------------------------------ inbound
