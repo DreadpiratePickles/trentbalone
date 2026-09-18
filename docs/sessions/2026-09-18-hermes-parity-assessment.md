@@ -151,3 +151,10 @@ Model routing: Fable reasons and decides; Opus agents do the reading, research a
 - Follow-ups not yet built: doctor hint for a persisted bad egress root; cache key still omits
   toolLoopContext; cron/heartbeat start claim only SIGTERM/SIGHUP; MEMORY_CAPS override for the
   default blocks; the 16 live tests never run in the standard gate.
+
+## Design gate: approved (Bobby, "approved")
+- Read as approval of the roadmap direction and of every recommendation in section 4; the
+  reading is written into `02_plan/output/implementation-plan-hermes-parity.md` so it can be
+  reversed. Wave 1 launched: A1 (context management + per-seat prelude + personality), A2.1
+  (workspace context files), A2.2 (autonomy + hooks + deny globs), B1 (unshelve seats, apps/web
+  scoped exception), B0.2 (skill stores), A0.6 (leftovers).
