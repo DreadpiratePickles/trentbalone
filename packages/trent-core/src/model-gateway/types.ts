@@ -7,6 +7,13 @@
  * See 01_discovery/output/model-gateway-contract.md, "Other notes".
  */
 
+/**
+ * The five provider identities `apps/web` understands. This union does NOT grow when Trent gains a
+ * new endpoint: `ollama`, `lmstudio`, `deepseek` and `groq` are OpenAI-compatible, so they are
+ * resolved at the boundary (`providers.ts`) into one of these plus a base URL. Adding them here
+ * would mean teaching a read-only app, its doctor probes and its tier tables about identities they
+ * can never route.
+ */
 export type ModelProvider = "anthropic" | "openai" | "google" | "mistral" | "openrouter";
 export type ModelTier = "haiku" | "sonnet" | "opus";
 export type StreamRole = "executor" | "planner";
@@ -55,6 +62,15 @@ export type GatewayStreamEvent =
        * app's tier price (Anthropic list for haiku/sonnet/opus) priced the call instead.
        */
       priced_as_default: boolean;
+      /**
+       * True when NOTHING priced this model: no table row, no prefix rule, no `model_overrides`
+       * entry. `costCents` is then the app's tier estimate and must not be read as a bill. The
+       * flag exists so an unpriced model is visible on the meter instead of quietly billing at
+       * the Anthropic tier, which is wrong by up to 10x (audit A.6).
+       */
+      unpriced: boolean;
+      /** The user-facing provider name when the call was routed through an alias (`ollama`, …). */
+      providerAlias?: string;
     }
   | { type: "finish"; reason: GatewayFinishReason; provider: ModelProvider; model: string };
 
@@ -68,6 +84,9 @@ export type GatewayCompletion = {
   costCents: number;
   estimated: boolean;
   priced_as_default: boolean;
+  /** See the usage event. Optional here only so existing fakes keep compiling. */
+  unpriced?: boolean;
+  providerAlias?: string;
   finishReason: GatewayFinishReason;
 };
 
@@ -85,11 +104,18 @@ export type ProviderStreamFrame =
   | { type: "finish"; reason: string }
   | { type: "usage"; inputTokens: number; outputTokens: number };
 
-/** Injection point used by the offline tests; the default hits the real providers. */
+/**
+ * Injection point used by the offline tests; the default hits the real providers.
+ *
+ * `signal` is forwarded so an implementation that CAN cancel its request does. The default
+ * implementation calls `apps/web/lib/ai-client.ts`, whose two stream functions take no signal, so
+ * for those the gateway stops consuming and calls the generator's `return()` instead — see the
+ * cancellation note in `index.ts`.
+ */
 export type ProviderStreamFn = (
   provider: ModelProvider,
   model: string,
-  input: { messages: GatewayMessage[]; temperature: number; maxTokens: number },
+  input: { messages: GatewayMessage[]; temperature: number; maxTokens: number; signal?: AbortSignal },
 ) => AsyncGenerator<ProviderStreamFrame>;
 
 export type ModelGatewayConfig = {
@@ -110,7 +136,36 @@ export type ModelGatewayConfig = {
   privacy?: { redact_prompts: boolean; patterns: readonly string[] };
   /** Where the per-request redaction summary goes (hit counts only). Defaults to a stderr logger. */
   redactionLog?: (event: string, fields: Record<string, unknown>) => void;
+  /**
+   * Bounded retry for one provider attempt. Omitted means `DEFAULT_RETRY_POLICY` (3 attempts,
+   * 500 ms base, 8 s cap). `sleep` and `random` are test seams: they let a suite ASSERT a backoff
+   * instead of waiting for it.
+   */
+  retry?: {
+    attempts?: number;
+    baseMs?: number;
+    capMs?: number;
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+    random?: () => number;
+  };
+  /** Where retry lines go (provider, status, attempt, delay — never a credential). */
+  retryLog?: (event: string, fields: Record<string, unknown>) => void;
+  /**
+   * `model_overrides` from config: a per-model price and context window that beats the shipped
+   * table. Omitted means "read the env bridge" (`TRENT_MODEL_OVERRIDES`), because the orchestrator
+   * builds its gateway with no arguments.
+   */
+  modelOverrides?: ModelOverrides;
 };
+
+/** One `model_overrides` entry. Rates are CENTS per million tokens; the cost itself is integer cents. */
+export interface ModelOverride {
+  readonly context_window?: number;
+  readonly input_cents_per_million?: number;
+  readonly output_cents_per_million?: number;
+}
+
+export type ModelOverrides = Readonly<Record<string, ModelOverride>>;
 
 export interface ModelGateway {
   stream(req: GatewayStreamRequest): AsyncGenerator<GatewayStreamEvent>;

@@ -1,3 +1,4 @@
+import { KEYLESS_ALIASES } from "../model-gateway/providers.js";
 import { classifyProbe, probeHttp, type ProbeOptions, type ProbeOutcome } from "./probe.js";
 
 /**
@@ -171,8 +172,12 @@ export const PROVIDER_CREDENTIALS: Readonly<Record<string, ProviderCredential>> 
   groq: bearerProvider("groq", "Groq", "GROQ_API_KEY", "https://api.groq.com/openai/v1/models", "gsk_"),
 };
 
-/** Providers that run locally and need no credential at all. */
-export const KEYLESS_PROVIDERS: ReadonlySet<string> = new Set(["ollama"]);
+/**
+ * Providers that run locally and need no credential at all. Derived from the gateway's alias
+ * registry rather than hand-kept here: a second list is how `lmstudio` would end up routable but
+ * failing the credentials check for a key it does not have.
+ */
+export const KEYLESS_PROVIDERS: ReadonlySet<string> = KEYLESS_ALIASES;
 
 export function credentialForProvider(provider: string): ProviderCredential | undefined {
   return PROVIDER_CREDENTIALS[provider];

@@ -16,6 +16,9 @@
  * mapping only fills variables that are unset or empty. Values are never logged.
  */
 
+import { EXIT, TrentError } from "../errors/index.js";
+import { applyModelOverridesEnv } from "../model-gateway/pricing.js";
+import { aliasEnvKeys, applyProviderAliasEnv, resolveProviderAlias } from "../model-gateway/providers.js";
 import type { OrchestratorModelConfig } from "./types.js";
 
 /** Providers the orchestrator's router knows. `parsePreferredProvider` ignores anything else. */
@@ -39,6 +42,12 @@ export interface ModelEnvReport {
   readonly kept: readonly string[];
   /** True when the provider is outside the router's vocabulary and nothing could be mapped. */
   readonly unsupportedProvider: boolean;
+  /**
+   * Set when the provider IS known but this machine cannot route it — a hosted alias with no key.
+   * Names the variable to set, never a value. The caller must fail with a typed configuration
+   * error; before this existed the run silently drifted to whichever provider had a key.
+   */
+  readonly unroutableProvider?: string;
 }
 
 function setIfUnset(name: string, value: string, written: string[], kept: string[]): void {
@@ -62,16 +71,57 @@ export function applyModelEnv(config: OrchestratorModelConfig | undefined): Mode
 
   const provider = config.provider.trim().toLowerCase();
   const model = config.model.trim();
-  if (!ROUTER_PROVIDERS.has(provider)) return { written, kept, unsupportedProvider: true };
+  // Prices are not routing, so they are written whatever the provider turns out to be.
+  const pricing = applyModelOverridesEnv(config.overrides);
+
+  // `ollama`, `lmstudio`, `deepseek` and `groq` are OpenAI-compatible endpoints, not new provider
+  // identities: the alias boundary resolves them into `openai` plus a base URL, which is what the
+  // app's client already speaks (`apps/web/lib/ai-client.ts:116` honours OPENAI_BASE_URL).
+  const alias = resolveProviderAlias(provider);
+  if (alias) {
+    const report = applyProviderAliasEnv(alias.alias, model);
+    return {
+      written: [...report.written, ...pricing],
+      kept: report.kept,
+      unsupportedProvider: false,
+      ...(report.unroutable === undefined ? {} : { unroutableProvider: report.unroutable }),
+    };
+  }
+
+  if (!ROUTER_PROVIDERS.has(provider)) return { written: [...written, ...pricing], kept, unsupportedProvider: true };
 
   setIfUnset("MODEL_PREFERRED_PROVIDER", provider, written, kept);
   if (model !== "") {
     for (const name of TIER_VARS[provider] ?? []) setIfUnset(name, model, written, kept);
   }
-  return { written, kept, unsupportedProvider: false };
+  return { written: [...written, ...pricing], kept, unsupportedProvider: false };
 }
 
 /** The variables `applyModelEnv` may write for a provider, for `trent doctor`. Values never read. */
 export function modelEnvKeys(provider: string): readonly string[] {
-  return ["MODEL_PREFERRED_PROVIDER", ...(TIER_VARS[provider.trim().toLowerCase()] ?? [])];
+  const key = provider.trim().toLowerCase();
+  if (resolveProviderAlias(key)) return aliasEnvKeys();
+  return ["MODEL_PREFERRED_PROVIDER", ...(TIER_VARS[key] ?? [])];
+}
+
+/**
+ * The report is READ, not ignored (harness audit D-7). Before this, `unsupportedProvider` came back
+ * true for `ollama`, `deepseek` and `groq` and no caller looked at it, so a user who picked one got
+ * a config Trent accepted, a doctor that passed and a run that quietly routed to whichever provider
+ * happened to have a key — or degraded to the deterministic planner. A provider nothing can route
+ * is a configuration failure (exit code 3) at construction. The message names a variable, never a
+ * value.
+ */
+export function assertRoutableModel(report: ModelEnvReport, provider: string | undefined): void {
+  if (!report.unsupportedProvider && report.unroutableProvider === undefined) return;
+  const name = provider ?? "";
+  throw new TrentError({
+    code: EXIT.CONFIG,
+    operation: "model.route",
+    message:
+      report.unroutableProvider
+      ?? `provider "${name}" has no model gateway path; use one of anthropic, openai, google, mistral, openrouter, ollama, lmstudio, deepseek, groq`,
+    target: name,
+    context: { provider: name, envKeys: modelEnvKeys(name) },
+  });
 }

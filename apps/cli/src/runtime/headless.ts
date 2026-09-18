@@ -144,6 +144,18 @@ interface MemorySlice {
   memory?: { blocks?: MemoryBlock[] };
 }
 
+/**
+ * The `model_overrides` block. It is not routing, so it does not belong in `provider`/`model`, but
+ * it has to reach the model gateway — which the orchestrator builds with NO arguments. It therefore
+ * travels with the model config and `applyModelEnv` writes the env bridge the gateway reads, the
+ * same road the `privacy` block takes (docs/configuration.md, "Model pricing").
+ */
+interface ModelOverridesSlice {
+  model_overrides?: Readonly<
+    Record<string, { context_window?: number; input_cents_per_million?: number; output_cents_per_million?: number }>
+  >;
+}
+
 /** The `runtime` config block the orchestrator's run cap comes from; `TrentConfig` satisfies it structurally. */
 interface RuntimeSlice {
   runtime?: { max_concurrent_runs?: number };
@@ -249,10 +261,13 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     // `runtime.max_concurrent_runs` (T3.5): runs past the cap wait FIFO for a slot; absent, the
     // orchestrator's own default applies.
     const maxConcurrentRuns = (config as RuntimeSlice).runtime?.max_concurrent_runs;
+    // An empty map is the default, and passing it would write an empty bridge variable for nothing.
+    const overrides = (config as ModelOverridesSlice).model_overrides;
+    const modelOverrides = overrides && Object.keys(overrides).length > 0 ? { overrides } : {};
     const orchestrator = createOrchestrator({
       ...(durable ? { databaseUrl } : {}),
       ...(maxConcurrentRuns === undefined ? {} : { maxConcurrentRuns }),
-      model: { provider: config.provider, model: config.model },
+      model: { provider: config.provider, model: config.model, ...modelOverrides },
       tools: tools.adapters,
       fleetMemory,
       delegate,

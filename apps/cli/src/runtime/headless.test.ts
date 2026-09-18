@@ -165,6 +165,46 @@ describe("createHeadlessRuntime", () => {
     expect(deps?.databaseUrl).toBe(`file:${f.deps.configManager.getProfileDir()}/trent.db`);
   });
 
+  it("carries model_overrides from config to the orchestrator, and on to the gateway's env bridge", async () => {
+    // The orchestrator builds its model gateway with no arguments, so a configured price reaches it
+    // only if the runtime hands the block over and `applyModelEnv` writes the bridge — the same road
+    // the privacy block takes. Without this line `model_overrides` is config that does nothing.
+    const OVERRIDES = { "my-private-finetune": { input_cents_per_million: 7, output_cents_per_million: 21 } };
+    const guarded = ["TRENT_MODEL_OVERRIDES", "MODEL_PREFERRED_PROVIDER", "GOOGLE_MODEL_FAST", "GOOGLE_MODEL_DEFAULT", "GOOGLE_MODEL_STRONG"];
+    const saved = new Map(guarded.map((name) => [name, process.env[name]]));
+    for (const name of guarded) delete process.env[name];
+
+    try {
+      const f = fakes((manager) => {
+        const config = manager.loadConfig();
+        config.model_overrides = OVERRIDES;
+        manager.saveConfig(config);
+      });
+      await createHeadlessRuntime(f.deps);
+
+      expect(f.received[0]?.model?.overrides).toEqual(OVERRIDES);
+
+      const { applyModelEnv } = await import("@trent/core/orchestrator/index.js");
+      const report = applyModelEnv(f.received[0]?.model);
+      expect(report.written).toContain("TRENT_MODEL_OVERRIDES");
+      expect(JSON.parse(process.env.TRENT_MODEL_OVERRIDES ?? "{}")).toEqual(OVERRIDES);
+    } finally {
+      for (const [name, value] of saved) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  it("leaves the model dep exactly provider+model when no override is configured", async () => {
+    const f = fakes();
+    await createHeadlessRuntime(f.deps);
+    expect(f.received[0]?.model).toEqual({
+      provider: f.deps.configManager.loadConfig().provider,
+      model: f.deps.configManager.loadConfig().model,
+    });
+  });
+
   it("cleanup() releases the tools (adapters and the proxy) exactly once", async () => {
     const f = fakes();
     const runtime = await createHeadlessRuntime(f.deps);

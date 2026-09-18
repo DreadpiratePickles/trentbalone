@@ -5,6 +5,12 @@ import { PolicyRuleSchema } from "../governance/policy-rules.js";
 import { DEFAULT_MEMORY_BLOCKS, MEMORY_BLOCK_LABEL_PATTERN } from "../tools/memory/blocks.js";
 import { McpScanFindingSchema } from "../tools/mcp/scan.js";
 
+/**
+ * The five provider identities `apps/web` routes natively, then the four OpenAI-compatible
+ * endpoints the gateway resolves at the boundary (`model-gateway/providers.ts`) into `openai`
+ * plus a base URL. Every name here must be routable: `providers-schema.test.ts` fails if one is
+ * accepted by this enum and reaches no model.
+ */
 export const ProviderSchema = z.enum([
   "openai",
   "anthropic",
@@ -14,9 +20,23 @@ export const ProviderSchema = z.enum([
   "deepseek",
   "groq",
   "ollama",
+  "lmstudio",
 ]);
 
 export type Provider = z.infer<typeof ProviderSchema>;
+
+/**
+ * A per-model price and context window that beats the gateway's shipped table
+ * (`model-gateway/pricing.ts`). Rates are CENTS per million tokens — the computed cost is still
+ * integer cents — so a $3.00/1M list price is written as 300.
+ */
+export const ModelOverrideSchema = z.object({
+  context_window: z.number().int().positive().optional(),
+  input_cents_per_million: z.number().nonnegative().optional(),
+  output_cents_per_million: z.number().nonnegative().optional(),
+}).strict();
+
+export type ModelOverride = z.infer<typeof ModelOverrideSchema>;
 
 export const ToolsetSchema = z.enum([
   "file_ops",
@@ -219,6 +239,12 @@ export const TrentConfigSchema = z.object({
   memory: MemoryConfigSchema.default({}),
   mcp_servers: McpServersConfigSchema.default({}),
   telemetry: TelemetryConfigSchema.default({}),
+  /**
+   * Per-model price and context-window overrides, keyed by model id. An entry wins over the
+   * gateway's table; a model nothing prices is reported `unpriced` on the meter rather than billed
+   * at the Anthropic tier (docs/configuration.md, "Model pricing").
+   */
+  model_overrides: z.record(z.string().min(1), ModelOverrideSchema).default({}),
   /** Prompt-side redaction in the model gateway (docs/security.md, "Prompt redaction"). */
   privacy: z.object({ redact_prompts: z.boolean().default(false), patterns: z.array(z.string()).default([]) }).default({}),
   /** Trace-level rules over tool classes; appended to the shipped defaults, same id overrides. */

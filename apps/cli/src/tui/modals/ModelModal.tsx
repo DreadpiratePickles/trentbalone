@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
+import type { Provider } from "@trent/core/config/schema.js";
+import { DEFAULT_MODELS } from "@trent/core/setup/detect.js";
 import { P } from "../palette.js";
 
 interface ModelModalProps {
@@ -9,14 +11,26 @@ interface ModelModalProps {
   onClose: () => void;
 }
 
-const PROVIDERS = [
-  { provider: "openai", model: "gpt-5.6-terra", name: "OpenAI (GPT-5.6-terra)" },
-  { provider: "anthropic", model: "claude-3-7-sonnet", name: "Anthropic (Claude 3.7 Sonnet)" },
-  { provider: "google", model: "gemini-2.5-pro", name: "Google Gemini (2.5 Pro)" },
-  { provider: "deepseek", model: "deepseek-reasoner", name: "DeepSeek (R1 Reasoner)" },
-  { provider: "groq", model: "llama-3.3-70b", name: "Groq LPU (Llama 3.3 70B)" },
-  { provider: "ollama", model: "llama3:latest", name: "Ollama Local (llama3)" },
+/**
+ * What this modal may offer is not a free choice: every entry must be a provider `ProviderSchema`
+ * accepts AND one the gateway can route, and its model must match what the setup wizard would
+ * write (`setup/detect.ts` DEFAULT_MODELS) so the two surfaces cannot disagree. The audit found
+ * this list offering three providers that reached no model at all. `__tests__/model-modal.test.ts`
+ * fails if an entry drifts.
+ */
+export const MODEL_MODAL_PROVIDERS: ReadonlyArray<{ provider: Provider; model: string; name: string }> = [
+  { provider: "openai", model: DEFAULT_MODELS.openai, name: "OpenAI (GPT-5.6-terra)" },
+  { provider: "anthropic", model: DEFAULT_MODELS.anthropic, name: "Anthropic (Claude Sonnet 4.6)" },
+  { provider: "google", model: DEFAULT_MODELS.google, name: "Google Gemini (2.5 Pro)" },
+  { provider: "mistral", model: DEFAULT_MODELS.mistral, name: "Mistral (Large)" },
+  { provider: "openrouter", model: DEFAULT_MODELS.openrouter, name: "OpenRouter (auto)" },
+  { provider: "deepseek", model: DEFAULT_MODELS.deepseek, name: "DeepSeek (Chat)" },
+  { provider: "groq", model: DEFAULT_MODELS.groq, name: "Groq LPU (Llama 3.3 70B)" },
+  { provider: "ollama", model: DEFAULT_MODELS.ollama, name: "Ollama, local (llama3.2)" },
+  { provider: "lmstudio", model: DEFAULT_MODELS.lmstudio, name: "LM Studio, local" },
 ];
+
+const PROVIDERS = MODEL_MODAL_PROVIDERS;
 
 export const ModelModal: React.FC<ModelModalProps> = ({
   currentProvider,

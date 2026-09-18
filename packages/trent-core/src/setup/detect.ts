@@ -4,9 +4,10 @@ import type { ConfigManager } from "../config/index.js";
 import type { Provider } from "../config/schema.js";
 
 /**
- * Which environment variable holds each provider's key. `ollama` runs locally and needs none, so it
- * declares an empty list and is never "detected" — a machine with no keys at all must fail the quick
- * path with an actionable message rather than silently configuring a provider the user did not pick.
+ * Which environment variable holds each provider's key. `ollama` and `lmstudio` run locally and need
+ * none, so they declare an empty list and are never "detected" — a machine with no keys at all must
+ * fail the quick path with an actionable message rather than silently configuring a provider the
+ * user did not pick.
  */
 export const PROVIDER_ENV_VARS: Record<Provider, readonly string[]> = {
   openai: ["OPENAI_API_KEY"],
@@ -17,6 +18,7 @@ export const PROVIDER_ENV_VARS: Record<Provider, readonly string[]> = {
   deepseek: ["DEEPSEEK_API_KEY"],
   groq: ["GROQ_API_KEY"],
   ollama: [],
+  lmstudio: [],
 };
 
 /** The model written when the user does not choose one. */
@@ -29,6 +31,7 @@ export const DEFAULT_MODELS: Record<Provider, string> = {
   deepseek: "deepseek-chat",
   groq: "llama-3.3-70b-versatile",
   ollama: "llama3.2",
+  lmstudio: "local-model",
 };
 
 export type KeySource = "environment" | "profile env file";

@@ -43,7 +43,7 @@ import type { ModelGateway } from "../model-gateway/types.js";
 import { IN_MEMORY_DATABASE, applyStandaloneEnv, assertStandaloneEnv } from "../runtime/env.js";
 import { EventChannel } from "./event-channel.js";
 import { loadLibs, type Libs } from "./libs.js";
-import { applyModelEnv } from "./model-env.js";
+import { applyModelEnv, assertRoutableModel } from "./model-env.js";
 import { PortShaper, PortTally } from "./provider-ports.js";
 import { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots, type ReleaseSlot } from "./run-slots.js";
 import { closeRunScope, openRunScope } from "./run-hooks.js";
@@ -67,7 +67,7 @@ import {
 export type * from "./types.js";
 export { FALLBACK_PLANNER_APPROVAL_TRIGGERS, FALLBACK_PLAN_REASONING, FALLBACK_RUN_SUMMARY } from "./types.js";
 export { buildConsolidationPrompt, isFallbackSummary, WRAPPER_CONSOLIDATED_DETAIL } from "./provider-ports.js";
-export { applyModelEnv, modelEnvKeys } from "./model-env.js";
+export { applyModelEnv, assertRoutableModel, modelEnvKeys } from "./model-env.js";
 export { resolveToolName, normaliseSeatTurn } from "./tool-names.js";
 export { wireSeatTools, toolsetEnvironment, SEAT_ROLES } from "./seat-wiring.js";
 export { createOrchestratorDelegatePort, DELEGATE_MAX_CHILDREN, DELEGATE_MAX_DEPTH } from "./delegate-port.js";
@@ -188,8 +188,10 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
   // Must happen before any apps/web module is imported. Without TRENT_QUEUE_FALLBACK=disabled the
   // inline fallback races this drain loop and every job executes twice, silently.
   applyStandaloneEnv(deps.databaseUrl ?? IN_MEMORY_DATABASE);
-  // Same rule for the model resolver: the configured model has to be in the env before the libs load.
-  applyModelEnv(deps.model);
+  // Same rule for the model resolver: the configured model has to be in the env before the libs load,
+  // and its report is READ: a provider nothing can route fails here (exit code 3), it is not
+  // silently swapped for another one (harness audit D-7).
+  assertRoutableModel(applyModelEnv(deps.model), deps.model?.provider);
   assertStandaloneEnv();
 
   const defaultMaxJobs = deps.maxJobs ?? DEFAULT_MAX_JOBS;

@@ -61,6 +61,7 @@ export const DEFAULT_CONFIG: TrentConfig = {
   memory: { blocks: [...DEFAULT_MEMORY_BLOCKS] },
   mcp_servers: {},
   telemetry: { service_name: "trent" },
+  model_overrides: {},
   privacy: { redact_prompts: false, patterns: [] },
   policy: { rules: [] },
   personality: "default",
