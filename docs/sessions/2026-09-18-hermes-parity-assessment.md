@@ -162,3 +162,15 @@ Model routing: Fable reasons and decides; Opus agents do the reading, research a
   scoped apps/web exception for the shrink; eval suites from goldens only (not agent-drafted);
   slash module merge-then-delete; judge = different Gemini model on the same key; Gemini
   embeddings allowed; sweep cap = per_run_cap; release after Phases A and B. Plan header updated.
+- Wave 1: A2.1 landed (workspace context files), amended once: the first cut's config hunk had
+  swallowed the adjacent [A2.2] block (-U0 hunks merge adjacent insertions) and the isolate result
+  was masked by a pipe. Rule from here: isolate output goes to a file and a commit runs only after
+  `grep -q "ISOLATED rc=0"`; adjacent blocks are cut by their markers, not by hunk.
+- A0.6 landed (doctor egress-root hint, SIGINT on cron/heartbeat, configured block limits).
+- Wave 1 complete: 26e606d (A2.2 autonomy/hooks), 4f32807 (B1 apps/web scoped exception),
+  e7bfd4e (A1 context tiers/compaction/per-seat prelude), and B1 core. D0 still running.
+  Follow-ups found by agents: apps/web/lib/agent-routing-context.ts still biases the planner
+  against the four seats (second apps/web file; needs Bobby); improve/trace-writer.ts CORE_SEATS
+  third roster (D1); session hooks and workspace context not yet wired into headless/prelude
+  (wave 2 W2.0); cache_control and intra-step tool-history need apps/web seams (recorded in
+  e7bfd4e); improve/golden-capture.test.ts is load-flaky.
