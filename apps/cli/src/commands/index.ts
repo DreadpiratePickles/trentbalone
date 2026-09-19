@@ -40,6 +40,7 @@ import { auditSpec } from "./groups/audit.js";
 import { jobsSpec } from "./groups/jobs.js";
 import { hooksSpec } from "./groups/hooks.js";
 import { workspaceSpec } from "./groups/workspace.js";
+import { securitySpec } from "./groups/security.js";
 
 export { CLI_VERSION } from "./registry.js";
 export type { CommandContext, CliOverrides } from "./context.js";
@@ -64,6 +65,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   auditSpec,
   jobsSpec,
   hooksSpec,
+  securitySpec,
   a2aSpec,
   acpSpec,
   gatewaySpec,

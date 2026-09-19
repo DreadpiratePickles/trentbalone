@@ -451,6 +451,53 @@ scan: the workspace is untrusted until `trent workspace trust` records it in
 directory is read, so a symlink pointing out of the workspace is refused instead of followed. See
 [configuration.md](configuration.md), "Workspace context files".
 
+## Auditing a profile
+
+Everything above is spread over `config.yaml`, four records beside it and two directories, so in
+practice nobody reads all of it before trusting a profile. `trent security audit` does it in one
+read-only pass:
+
+```sh
+trent security audit                 # human report; exit 0 clean, exit 1 with findings
+trent security audit --json          # the same report, parseable
+trent security audit /path/to/repo   # check that directory's workspace trust instead of the cwd
+trent security audit --audit-export trent-audit-2026-09-18.ndjson
+```
+
+It writes nothing — no key is generated, no consent is recorded, no mode is changed — so it is safe
+to run unattended, and the exit code is what a CI job gates on.
+
+| Section | What it reads | What it can find |
+|---|---|---|
+| `autonomy` | `autonomy` | `autonomy-never`: the level auto-approves what the floors would have asked about |
+| `approvals` | `approvals.deny`, `governance/hardline.ts` | nothing; it reports the glob list, the rule count and a sha256 over the shipped rules' ids and reasons, so a changed blocklist is visible between two runs |
+| `hooks` | `hooks`, `<profile>/hooks-consent.json` | `hook-not-consented`: a hook is configured whose exact spec is not in the record, so it silently never runs |
+| `egress` | `egress`, `terminal.backend` | `egress-proxy-disabled`, `sandbox-backend-local` |
+| `workspace` | `<profile>/workspace-trust.json` for the given directory | `workspace-changed-since-trusted` |
+| `redaction` | `privacy.redact_prompts`, `privacy.patterns` | nothing; the detector names are listed so you can see what redaction would and would not catch |
+| `mcp` | `mcp_servers` | `mcp-server-flagged-tools`, `mcp-server-unscanned`. Result scrubbing is reported by running `scrubMcpResult` over a probe string, not by asserting it |
+| `plugins` | `<profile>/plugins/*/plugin.json` | `plugin-manifest-refused`, with the loader's own reason |
+| `audit-chain` | `<profile>/keys/audit.pub`, and `--audit-export` when given | `audit-export-unverified`, from the same `verifyAuditExport` that `trent audit verify` calls |
+| `file-permissions` | every file under the profile directory | `profile-file-too-permissive`: `.env`, `hooks-consent.json`, `workspace-trust.json`, `keys/`, `sessions/`, `egress/ca.key`, `egress/tokens.json` and the store must grant nothing to group or other |
+| `config-secrets` | `config.yaml` | `secret-in-config-yaml`: a credential-shaped value in a file written 0644 |
+
+Every finding carries a severity (`critical`, `high`, `medium`, `low`) and a fix line, and the
+report exits 1 if there is even one. Two things it deliberately does not do. It never prints a
+secret: the `config-secrets` section names the KEY and the line number and never the value, because
+a security report is exactly the file someone pastes into a chat window. And it asserts nothing —
+the hardline count comes from `HARDLINE_RULES`, "this level lifts no floor" is `autonomyVerdict`
+being asked with a hardline hit, a deny hit and a floor in turn, and the permission section stats
+the real files. A report that shipped its own answers would pass its tests forever and tell you
+nothing about your machine.
+
+Two detectors are left out of the `config-secrets` scan on purpose: the 40-character alphanumeric
+sweep, which matches every git SHA and content hash, and any value that is exactly a `${VAR}`
+reference, which is resolved at connect time and never stored. Both would cry wolf often enough to
+teach a reader to skip the section.
+
+`packages/trent-core/src/governance/security-audit.ts`, tested in `security-audit.test.ts` and
+`apps/cli/src/commands/__tests__/security.test.ts`.
+
 ## Reported, not fixed: defects in the wrapped application
 
 `apps/web/` is read-only in this repository. These are real and they are outside the CLI's scope.
