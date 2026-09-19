@@ -38,6 +38,8 @@ import {
   wireAlerts,
   wireCheckpoints,
   wirePromptRedaction,
+  wireRunSpend,
+  wireSpendLedger,
   wireTelemetry,
   type CheckpointsSlice,
   type GatewaySlice,
@@ -48,6 +50,7 @@ import {
   type ModelTiersSlice,
   type PrivacySlice,
   type RuntimeSlice,
+  type SpendSlice,
   type TelemetrySlice,
   type WorkspaceSlice,
 } from "./headless-wiring.js";
@@ -66,9 +69,11 @@ export {
   wireAlerts,
   wireCheckpoints,
   wirePromptRedaction,
+  wireRunSpend,
+  wireSpendLedger,
   wireTelemetry,
 } from "./headless-wiring.js";
-export type { HeadlessAlertDeps } from "./headless-wiring.js";
+export type { HeadlessAlertDeps, SpendLedgerSession } from "./headless-wiring.js";
 
 /** The company a local session runs against when config names none. Found again by slug on restart. */
 export const DEFAULT_COMPANY = { name: "Trent Local", slug: "trent-local" } as const;
@@ -113,6 +118,14 @@ export interface HeadlessRuntimeDeps {
    * sink. The hook's sink is not optional and is not replaceable: it is the failure channel.
    */
   readonly traceSink?: (event: OrcEvent) => void;
+  // [G3.1] the one daily spend ledger
+  /**
+   * Which surface built this graph — `repl`, `run`, `gateway`, `cron`, `heartbeat`, `a2a`, `acp`.
+   * It tags every run this runtime executes, and so every row the run writes to the profile's
+   * `spend.ndjson`, which is what makes `budget.daily_cap` one cap rather than one per surface.
+   * A runtime that names none tags its runs `unknown` — recorded, so the gap is visible.
+   */
+  readonly surface?: string;
 }
 
 export interface HeadlessRunOptions {
@@ -124,6 +137,13 @@ export interface HeadlessRunOptions {
    * transcript is rendered after the fleet-memory prelude, never before it.
    */
   readonly history?: readonly ConversationMessage[];
+  // [G3.1] the one daily spend ledger
+  /**
+   * The surface this ONE run is charged to, when it is not the runtime's own: cron and the
+   * heartbeat are handed the gateway's already-built runtime (`servers.ts`), so without this their
+   * spend would read as the gateway's. Defaults to the runtime's surface.
+   */
+  readonly surface?: string;
 }
 
 export interface HeadlessRuntime {
@@ -194,6 +214,10 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
   const notices: string[] = [];
   // [E1] Before the toolsets: `file_ops` ledgers a write only while a session is open.
   const checkpoints = wireCheckpoints(config as CheckpointsSlice, { workspace, profileDir });
+  // [G3.1] Before anything can spend: the profile's daily ledger, installed explicitly by this
+  // surface and given back by `cleanup()`. Every surface is on it by being built here at all.
+  const spend = wireSpendLedger(config as SpendSlice, { profileDir });
+  const chargeSpend = wireRunSpend(config.provider);
   // [D4] The goal store, the turn's verification evidence and the sandbox a quality gate runs in.
   const goals = wireGoals(config as GoalsSlice, { workspace, profileDir, backend: config.terminal.backend === "docker" ? "docker" : "local" });
 
@@ -300,6 +324,9 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       // composed with any sink the caller injected rather than replacing it.
       traceSink: (event) => {
         fleetMemory.traceSink(event);
+        // [G3.1] The same two frames the REPL's ticker and `trent run`'s reader meter, charged to
+        // the run's own meter; `closeRunScope` writes them to the day's ledger when the run ends.
+        chargeSpend(event);
         deps.traceSink?.(event);
       },
       verification: createGoalVerificationPort(),
@@ -338,12 +365,16 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
         // checkpoint, and a REPL turn is the run it starts. Opening a turn nothing has written
         // into yet is a no-op, so a surface that also marks its own boundary cannot skip a number.
         checkpoints?.beginTurn();
+        // [G3.1] The surface rides the run options because that is where `openRunScope` reads it,
+        // and the run's meter is opened there — before any step of it can be billed.
+        const surface = options.surface ?? deps.surface;
         return orchestrator.run({
           companyId,
           objective,
           trigger: options.trigger ?? "manual",
           signal: options.signal,
           ...(options.history === undefined ? {} : { history: options.history }),
+          ...(surface === undefined ? {} : { surface }),
         });
       },
       notices: () => [...notices, ...tools.hookNotices],
@@ -355,6 +386,8 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
           notices.push(...sessionHookNotices(await runSessionHooks("session_stop", { profileDir, hooks, cwd: workspace })));
         }
         alerts?.close();
+        // [G3.1] A charge after this belongs to no surface of this process, so none is recorded.
+        spend.close();
         // A held write decided after this belongs to no session's memory adapter, so none is found.
         closeHeldWriteSession(heldWrites);
         // [E1] A write after this belongs to no turn of this session, so it is ledgered into none.
@@ -366,8 +399,9 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       },
     };
   } catch (error) {
-    // The graph did not come up: the proxy, the sandboxes and the ledger session already running
+    // The graph did not come up: the proxy, the sandboxes and the ledger sessions already running
     // must not outlive it.
+    spend.close();
     if (checkpoints !== undefined) closeCheckpointSession(checkpoints);
     closeGoalSession(goals);
     await goals.cleanup();

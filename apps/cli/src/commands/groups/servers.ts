@@ -122,6 +122,9 @@ export const gatewaySpec: CommandSpec = {
         const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({
           configManager,
           config: config as unknown as ReplConfig,
+          // [G3.1] Every run this gateway serves is charged to the day's ledger as the gateway's;
+          // the cron and heartbeat ports built on this same runtime name themselves per run.
+          surface: "gateway",
           busHooks: [{ sink: (event) => link?.sink(event), flush: async () => undefined }],
           alerts: {
             manager: {

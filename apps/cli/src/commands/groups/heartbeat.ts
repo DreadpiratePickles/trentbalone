@@ -93,7 +93,8 @@ export function openHeartbeat(wiring: HeartbeatWiring): { loop: HeartbeatLoop; c
     sweep: sweepWiring(wiring),
     now: wiring.now,
     log: wiring.log,
-    run: (objective, options) => runtime.run(objective, options),
+    // [G3.1] The loop rides the gateway's runtime (`servers.ts`), so its runs name themselves.
+    run: (objective, options) => runtime.run(objective, { ...options, surface: "heartbeat" }),
     deliver: async (text) => {
       if (owner === undefined) throw new TrentError({ code: EXIT.CONFIG, operation: "heartbeat.deliver", message: "gateway.owner is not configured" });
       manager ??= wiring.buildManager(configManager, {});

@@ -9,7 +9,8 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-import { openSpendLedger } from "@trent/core/governance/index.js";
+import { installSpendLedger, openSpendLedger } from "@trent/core/governance/index.js";
+import { closeRunScope, openRunScope, recordRunSpend } from "@trent/core/orchestrator/run-hooks.js";
 import { EXIT } from "@trent/core/errors/index.js";
 import { runCli } from "../index.js";
 
@@ -37,9 +38,22 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  installSpendLedger(undefined);
   delete process.env.TRENT_HOME;
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+/**
+ * [G3.1] One real run on a surface, as the headless runtime drives it: the run's meter is opened
+ * with the surface the runtime named, the seats' billed steps are charged to it, and the run's end
+ * writes them to the day's ledger. Nothing is appended by hand here.
+ */
+function runOnSurface(surface: string, runId: string, charges: readonly { seat: string; model: string; cents: number }[]): void {
+  installSpendLedger(openSpendLedger({ profileDir: home, now: () => at }));
+  openRunScope([], runId, { companyId: "cmp_1", objective: `work for ${surface}`, surface });
+  for (const charge of charges) recordRunSpend(runId, { model: charge.model, provider: "anthropic", cents: charge.cents, tokens: 400, seat: charge.seat });
+  closeRunScope([], runId);
+}
 
 describe("trent budget status", () => {
   it("reports today's spend by surface against the caps", async () => {
@@ -90,6 +104,26 @@ describe("trent budget status", () => {
     const result = await runCli(["budget", "status", "--date", "yesterday", "--json"], { overrides: { now: () => at } });
     expect(result.exitCode).toBe(EXIT.CONFIG);
     expect(result.stdout).toContain("YYYY-MM-DD");
+  });
+
+  it("shows both surfaces after a profile has run through two of them", async () => {
+    // [G3.1] The point of the ledger: a founder who ran one thing in the REPL and let cron run
+    // another sees one day's total and both spenders, not two meters that each know only themselves.
+    runOnSurface("repl", "run_repl", [{ seat: "engineer", model: "claude-sonnet-4", cents: 60 }]);
+    runOnSurface("cron", "run_cron", [
+      { seat: "analyst", model: "claude-haiku-4", cents: 11 },
+      { seat: "analyst", model: "claude-haiku-4", cents: 4 },
+    ]);
+
+    const result = await runCli(["budget", "status", "--json"], { overrides: { now: () => at } });
+    expect(result.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as BudgetStatusJson;
+    expect(data.bySurface).toEqual([
+      { surface: "repl", cents: 60 },
+      { surface: "cron", cents: 15 },
+    ]);
+    expect(data.spentCents).toBe(75);
+    expect(data.remainingCents).toBe(925);
   });
 
   it("reports a profile that has never spent as zero rather than failing", async () => {

@@ -19,6 +19,9 @@ import type { CommandContext } from "../context.js";
 import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime } from "../../runtime/headless.js";
 
+/** Which protocol server opened it. It is the surface its runs are charged to (G3.1). */
+export type ProtocolSurface = "a2a" | "acp";
+
 export interface ProtocolRuntime {
   readonly runner: AgentRunner;
   /** Gives back the proxy and the sandboxes. Every exit path calls it. */
@@ -29,12 +32,15 @@ export interface ProtocolRuntime {
  * `overrides.gatewayRuntime` is the one headless-runtime seam a test replaces; it is reused here
  * rather than duplicated, so a protocol-server test needs no proxy, sandbox or model either.
  */
-export async function openProtocolRuntime(ctx: CommandContext): Promise<ProtocolRuntime> {
+export async function openProtocolRuntime(ctx: CommandContext, surface: ProtocolSurface): Promise<ProtocolRuntime> {
   const configManager = ctx.config();
   const config = configManager.loadConfig();
   const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({
     configManager,
     config: config as unknown as ReplConfig,
+    // [G3.1] The two protocol servers share this function and not a cap: each names itself, so a
+    // task delegated over A2A and a prompt from an editor over ACP are told apart on the ledger.
+    surface,
   });
   return {
     runner: {

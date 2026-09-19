@@ -152,7 +152,8 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
   const config = configManager.loadConfig() as unknown as ReplConfig;
   const now = ctx.overrides.now ?? (() => new Date());
   const startedAt = now().getTime();
-  const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config });
+  // [G3.1] `surface` names who spends: this run's cost is `trent run`'s on the day's one ledger.
+  const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config, surface: "run" });
 
   let released = false;
   const release = async (): Promise<void> => {

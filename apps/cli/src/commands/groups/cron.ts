@@ -100,7 +100,8 @@ async function openRunner(ctx: CommandContext): Promise<{ runner: CronRunner; ru
   let manager: GatewayManager | undefined;
   const runner = new CronRunner({
     profileDir: configManager.getProfileDir(),
-    run: (prompt, options) => runtime.run(prompt, options),
+    // [G3.1] A scheduled job's cost is cron's, even when it rides the gateway's runtime.
+    run: (prompt, options) => runtime.run(prompt, { ...options, surface: "cron" }),
     now: ctx.overrides.now,
     log: (line) => ctx.err(line),
     deliver: async (target, text, job) => {

@@ -246,6 +246,12 @@ export interface OrchestratorRunOptions {
   /** The turns before this one, oldest first. Bounded by the caller, not here. */
   readonly history?: readonly ConversationMessage[];
   readonly trigger?: OrchestrationTrigger;
+  /**
+   * [G3] Which surface asked for this run — `repl`, `run`, `gateway`, `cron`, `heartbeat`, `a2a`,
+   * `acp`. It is not routing: `openRunScope` tags the run's spend meter with it, so the day's
+   * ledger says who spent. A run that names none is metered as `unknown` rather than guessed at.
+   */
+  readonly surface?: string;
   readonly fullTeam?: boolean;
   /** Hard upper bound on drain iterations. Coding rule 9: every loop is bounded. */
   readonly maxJobs?: number;

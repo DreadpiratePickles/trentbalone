@@ -9,6 +9,9 @@
 
 import { randomBytes } from "node:crypto";
 import { openCheckpointSession, type CheckpointSession } from "@trent/core/checkpoints/index.js";
+import { currentSpendLedger, installSpendLedger, openSpendLedger, type SpendLedger } from "@trent/core/governance/index.js";
+import type { OrcEvent } from "@trent/core/orchestrator/index.js";
+import { recordRunSpend } from "@trent/core/orchestrator/run-hooks.js";
 import type { MemoryBlock } from "@trent/core/fleet-memory/index.js";
 import type { HooksConfig, SessionHookReport } from "@trent/core/hooks/index.js";
 import { loadWorkspaceContext } from "@trent/core/workspace-context/index.js";
@@ -82,6 +85,16 @@ export interface HooksSlice {
   hooks?: HooksConfig;
 }
 
+// [G3.1] the one daily spend ledger
+/**
+ * The day boundary the ledger's totals are read on. It is the heartbeat's timezone, because that
+ * is the one `trent budget status` prints and the one the sweep's headroom already measures the
+ * day with; two boundaries would mean two different "todays" against one `budget.daily_cap`.
+ */
+export interface SpendSlice {
+  heartbeat?: { active_hours?: { tz?: string } };
+}
+
 /** The `workspace` caps the instruction-file loader reads; `TrentConfig` satisfies it structurally. */
 export type WorkspaceSlice = Parameters<typeof loadWorkspaceContext>[0]["config"];
 
@@ -145,6 +158,67 @@ export function wireTelemetry(config: TelemetrySlice, onError?: (message: string
  * run`, the gateway, cron and the heartbeat ledger their seats' writes without wiring of their
  * own: `file_ops` looks the session up on the process, not on a context it is handed.
  */
+/** The installed ledger and the one call that gives it back. */
+export interface SpendLedgerSession {
+  readonly ledger: SpendLedger;
+  /** Uninstalls it, unless something installed a newer one meanwhile. Idempotent. */
+  close(): void;
+}
+
+// [G3.1] the one daily spend ledger
+/**
+ * Installs this profile's spend ledger for the life of the runtime.
+ *
+ * The ledger is deliberately NOT self-installing (`governance/spend-ledger.ts`): a library that
+ * opened one implicitly would write the founder's real profile from every test process. The
+ * profile directory is known here — in the graph the REPL, `trent run`, the gateway, cron, the
+ * heartbeat and the protocol servers are all built on — so this is the single place that installs
+ * it, and every one of those surfaces is on the same daily cap by being built at all.
+ *
+ * `close()` only uninstalls what it installed: two runtimes in one process (a test file, a REPL
+ * that opens a second graph) must not leave the second one's runs writing nowhere.
+ */
+export function wireSpendLedger(config: SpendSlice, input: { profileDir: string }): SpendLedgerSession {
+  const ledger = openSpendLedger({ profileDir: input.profileDir, tz: config.heartbeat?.active_hours?.tz ?? "UTC" });
+  installSpendLedger(ledger);
+  return {
+    ledger,
+    close: () => {
+      if (currentSpendLedger() === ledger) installSpendLedger(undefined);
+    },
+  };
+}
+
+/** Written when a billed step reached the runtime without the model that was billed. */
+const UNATTRIBUTED = "unattributed";
+
+// [G3.1] the one daily spend ledger
+/**
+ * The observer that turns a run's billed steps into charges against the run's own meter
+ * (`orchestrator/run-hooks.ts`), which writes them to the ledger, grouped, when the run ends.
+ *
+ * `step_end` and `consolidate_end` are the two frames that carry `costCents`, and they carry it as
+ * integer cents already; the REPL's ticker and `trent run`'s reader read the same two. The step
+ * snapshot names the seat and the model but not the provider, so the session's configured provider
+ * is recorded — that is what billed it. A frame with no integer cost is not a charge and is left
+ * alone rather than rounded, estimated or recorded as zero.
+ */
+export function wireRunSpend(provider: string): (event: OrcEvent) => void {
+  return (event) => {
+    if (event.kind !== "step_end" && event.kind !== "consolidate_end") return;
+    const cents = event.step?.costCents;
+    if (typeof cents !== "number" || !Number.isInteger(cents) || cents <= 0) return;
+    const seat = event.step?.agentRole;
+    recordRunSpend(event.runId, {
+      model: event.step?.model ?? UNATTRIBUTED,
+      provider,
+      cents,
+      tokens: Math.trunc(event.step?.tokens ?? 0),
+      ...(seat === undefined ? {} : { seat }),
+    });
+  };
+}
+
 export function wireCheckpoints(config: CheckpointsSlice, input: { workspace: string; profileDir: string }): CheckpointSession | undefined {
   const block = config.checkpoints;
   if (block?.enabled === false) return undefined;

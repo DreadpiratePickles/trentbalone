@@ -199,6 +199,8 @@ export class ClassicRepl {
     const runtime = await createHeadlessRuntime({
       configManager: this.#configManager,
       config,
+      // [G3.1] Everything this session spends goes on the day's ledger as the REPL's.
+      surface: "repl",
       workspace: this.#deps.workspace,
       createOrchestrator: this.#deps.createOrchestrator,
       buildAdapters: this.#deps.buildAdapters,

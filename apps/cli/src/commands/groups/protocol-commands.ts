@@ -30,7 +30,7 @@ export const a2aSpec: CommandSpec = {
         if (ctx.dryRun) return { data: { dryRun: true, command: "a2a serve", port } };
         // A delegated task is one real run on this runtime. Without it the endpoint can only
         // refuse (HTTP 503); it never answers on the runtime's behalf.
-        const { runner, release } = await openProtocolRuntime(ctx);
+        const { runner, release } = await openProtocolRuntime(ctx, "a2a");
         const token = ctx.config().get("TRENT_A2A_TOKEN");
         const server = new A2AServer({ port, runner, ...(typeof token === "string" && token !== "" ? { token } : {}) });
         try {
@@ -107,7 +107,7 @@ export const acpSpec: CommandSpec = {
 
     // A prompt from the editor is one real run on this runtime; with none attached the method
     // returns a JSON-RPC error rather than a string this process wrote.
-    const { runner, release } = await openProtocolRuntime(ctx);
+    const { runner, release } = await openProtocolRuntime(ctx, "acp");
     let released = false;
     const releaseOnce = async (): Promise<void> => {
       if (released) return;
