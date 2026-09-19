@@ -1,8 +1,12 @@
-import fs from "node:fs";
-import path from "node:path";
 import { ConfigManager } from "../config/ConfigManager.js";
 import { SecurityScan } from "./SecurityScan.js";
 import { SkillLoader, type SkillMetadata, type LoadedSkill } from "./SkillLoader.js";
+import {
+  DEFAULT_SKILL_CATEGORY,
+  MIGRATED_SKILL_TRUST,
+  removeSkillRecord,
+  writeSkillRecord,
+} from "./skill-store.js";
 
 export interface SkillCatalogItem {
   slug: string;
@@ -96,6 +100,11 @@ export class SkillsHub {
     return this.loader.listMetadata();
   }
 
+  /**
+   * Install into the one store, in the canonical directory form, so the `skills` toolset can read,
+   * view and edit what the CLI installed. The pre-install scan is unchanged and still cannot be
+   * forced: nothing is written when it fails.
+   */
   public install(slug: string, customInstructions?: string): LoadedSkill {
     const skillsDir = this.configManager.getSkillsDir();
     const item = BUILTIN_SKILLS_CATALOG.find((s) => s.slug === slug);
@@ -109,27 +118,37 @@ export class SkillsHub {
       );
     }
 
-    // 2. Save skill file
-    const skillPath = path.join(skillsDir, `${slug}.md`);
-    fs.writeFileSync(skillPath, content, "utf8");
+    // 2. Save the skill, metadata explicit, as a skill a person installed and the agent may edit.
+    const heading = headingOf(content);
+    writeSkillRecord(skillsDir, {
+      name: slug,
+      title: item?.name ?? heading ?? slug,
+      description: item?.description ?? descriptionOf(content) ?? "",
+      category: item?.category ?? DEFAULT_SKILL_CATEGORY,
+      trust: MIGRATED_SKILL_TRUST,
+      tags: item?.tags ?? [item?.category ?? DEFAULT_SKILL_CATEGORY],
+      instructions: content,
+    });
+    this.loader.invalidate(slug);
 
     return this.loader.loadFull(slug);
   }
 
   public remove(slug: string): boolean {
-    const skillsDir = this.configManager.getSkillsDir();
-    const mdPath = path.join(skillsDir, `${slug}.md`);
-    const jsonPath = path.join(skillsDir, `${slug}.json`);
-
-    let removed = false;
-    if (fs.existsSync(mdPath)) {
-      fs.unlinkSync(mdPath);
-      removed = true;
-    }
-    if (fs.existsSync(jsonPath)) {
-      fs.unlinkSync(jsonPath);
-      removed = true;
-    }
+    const removed = removeSkillRecord(this.configManager.getSkillsDir(), slug);
+    this.loader.invalidate(slug);
     return removed;
   }
+}
+
+/** The first `# ` heading of a hand-supplied body, when it has one. */
+function headingOf(content: string): string | undefined {
+  const line = content.split("\n").find((l) => l.startsWith("# "));
+  return line ? line.slice(2).trim() : undefined;
+}
+
+/** The first `> ` line of a hand-supplied body, when it has one. */
+function descriptionOf(content: string): string | undefined {
+  const line = content.split("\n").find((l) => l.startsWith("> "));
+  return line ? line.slice(2).trim() : undefined;
 }

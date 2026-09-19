@@ -113,16 +113,25 @@ describe("skills toolset", () => {
     expect(fs.existsSync(path.join(skillsDir, "notes"))).toBe(false);
   });
 
-  it("flat skills written by SkillsHub are listed with the builtin trust tier and cannot be modified", async () => {
+  it("a flat skill left by the CLI is migrated on first list, stays readable, and can then be edited", async () => {
     fs.mkdirSync(skillsDir, { recursive: true });
     fs.writeFileSync(path.join(skillsDir, "repo-audit.md"), "# Repository Audit\n> Deep codebase mapping\nBody");
     const list = await adapter().execute("skills_list", {});
-    expect(list.summary).toMatch(/repo-audit .*builtin/);
-    const rec = await manage([{ action: "delete", name: "repo-audit" }]);
-    expect(rec.status).toBe("blocked");
-    expect(fs.existsSync(path.join(skillsDir, "repo-audit.md"))).toBe(true);
+    expect(list.summary).toMatch(/repo-audit .*trusted/);
+    expect(fs.existsSync(path.join(skillsDir, "repo-audit.md"))).toBe(false);
+    expect(fs.existsSync(path.join(skillsDir, "repo-audit", "SKILL.md"))).toBe(true);
+
     const view = await adapter().execute('skill_view {"name":"repo-audit"}', {});
     expect(view.summary).toContain("Body");
+
+    const patched = await manage([{ action: "patch", name: "repo-audit", old_string: "Body", new_string: "Mapped body" }]);
+    expect(patched.status, patched.summary).toBe("completed");
+    const again = await adapter().execute('skill_view {"name":"repo-audit"}', {});
+    expect(again.summary).toContain("Mapped body");
+
+    const deleted = await manage([{ action: "delete", name: "repo-audit" }]);
+    expect(deleted.status).toBe("completed");
+    expect(fs.existsSync(path.join(skillsDir, "repo-audit"))).toBe(false);
   });
 
   it("exposes the three schemas as data", () => {

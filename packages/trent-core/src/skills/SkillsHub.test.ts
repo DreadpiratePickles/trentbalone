@@ -61,4 +61,34 @@ describe("SkillsHub & SecurityScan", () => {
     expect(removed).toBe(true);
     expect(hub.listInstalled()).toHaveLength(0);
   });
+
+  it("installs into the canonical directory form the skills toolset reads and writes", () => {
+    hub.install("repo-audit");
+    const file = path.join(configManager.getSkillsDir(), "engineering", "repo-audit", "SKILL.md");
+    expect(fs.existsSync(file)).toBe(true);
+    expect(fs.existsSync(path.join(configManager.getSkillsDir(), "repo-audit.md"))).toBe(false);
+    const text = fs.readFileSync(file, "utf8");
+    expect(text).toContain("trust: trusted");
+    expect(text).toContain("category: engineering");
+    expect(hub.getLoader().loadFull("repo-audit").instructions).toContain("Analyze package dependencies");
+    expect(hub.remove("repo-audit")).toBe(true);
+    expect(fs.existsSync(path.dirname(file))).toBe(false);
+  });
+
+  it("lists a skill the agent authored through the skills toolset, and migrates a legacy flat file", () => {
+    const skillsDir = configManager.getSkillsDir();
+    fs.mkdirSync(path.join(skillsDir, "growth", "outreach"), { recursive: true });
+    fs.writeFileSync(
+      path.join(skillsDir, "growth", "outreach", "SKILL.md"),
+      "---\nname: Outreach\ndescription: Cold outreach sequences.\ncategory: growth\ntrust: community\n---\nWrite three touches.\n",
+    );
+    fs.writeFileSync(path.join(skillsDir, "legacy-flat.md"), "# Legacy flat\n> Written by an older CLI.\n\nBody.\n");
+
+    const slugs = hub.listInstalled().map((s) => s.slug);
+    expect(slugs).toContain("outreach");
+    expect(slugs).toContain("legacy-flat");
+    expect(hub.getLoader().loadFull("outreach").instructions).toContain("Write three touches.");
+    expect(fs.existsSync(path.join(skillsDir, "legacy-flat.md"))).toBe(false);
+    expect(fs.existsSync(path.join(skillsDir, "legacy-flat", "SKILL.md"))).toBe(true);
+  });
 });

@@ -1,5 +1,11 @@
+/**
+ * The read API every other module uses to resolve a skill by slug. Its shape has not changed;
+ * what changed is underneath it — one store (`skill-store.ts`) serving both the canonical
+ * directory form and the flat form it migrates, so a skill the agent authored and a skill the CLI
+ * installed are the same skill here.
+ */
 import fs from "node:fs";
-import path from "node:path";
+import { findSkillRecord, listSkillRecords, type SkillRecord } from "./skill-store.js";
 
 export interface SkillMetadata {
   slug: string;
@@ -16,6 +22,19 @@ export interface LoadedSkill extends SkillMetadata {
   instructions: string;
 }
 
+function toMetadata(record: SkillRecord): SkillMetadata {
+  return {
+    slug: record.name,
+    name: record.title,
+    description: record.description,
+    version: record.version,
+    tags: record.tags,
+    slashCommand: `/${record.name}`,
+    author: record.author,
+    file: record.file,
+  };
+}
+
 export class SkillLoader {
   private skillsDir: string;
   private cache: Map<string, SkillMetadata> = new Map();
@@ -28,104 +47,34 @@ export class SkillLoader {
   }
 
   public listMetadata(): SkillMetadata[] {
-    if (!fs.existsSync(this.skillsDir)) return [];
-    const files = fs.readdirSync(this.skillsDir);
-    const result: SkillMetadata[] = [];
-
-    for (const file of files) {
-      if (file.endsWith(".md") || file.endsWith(".json")) {
-        const slug = file.replace(/\.(md|json)$/, "");
-        const meta = this.getMetadata(slug);
-        if (meta) {
-          result.push(meta);
-        }
-      }
-    }
-
+    const result = listSkillRecords(this.skillsDir).map(toMetadata);
+    for (const meta of result) this.cache.set(meta.slug, meta);
     return result;
   }
 
   public getMetadata(slug: string): SkillMetadata | null {
-    if (this.cache.has(slug)) {
-      return this.cache.get(slug)!;
-    }
+    const cached = this.cache.get(slug);
+    if (cached) return cached;
+    const record = findSkillRecord(this.skillsDir, slug);
+    if (record === null) return null;
+    const meta = toMetadata(record);
+    this.cache.set(slug, meta);
+    return meta;
+  }
 
-    const mdPath = path.join(this.skillsDir, `${slug}.md`);
-    const jsonPath = path.join(this.skillsDir, `${slug}.json`);
-
-    if (fs.existsSync(jsonPath)) {
-      try {
-        const raw = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
-        const meta: SkillMetadata = {
-          slug,
-          name: raw.name || slug,
-          description: raw.description || "",
-          version: raw.version || "1.0.0",
-          tags: raw.tags || [],
-          slashCommand: `/${slug}`,
-          author: raw.author || "trent",
-          file: jsonPath,
-        };
-        this.cache.set(slug, meta);
-        return meta;
-      } catch {
-        return null;
-      }
-    }
-
-    if (fs.existsSync(mdPath)) {
-      try {
-        const content = fs.readFileSync(mdPath, "utf8");
-        // Parse simple markdown header
-        const lines = content.split("\n");
-        let name = slug;
-        let description = "";
-
-        for (const line of lines) {
-          if (line.startsWith("# ")) {
-            name = line.replace("# ", "").trim();
-          } else if (line.startsWith("> ") && !description) {
-            description = line.replace("> ", "").trim();
-          }
-        }
-
-        const meta: SkillMetadata = {
-          slug,
-          name,
-          description: description || `Skill for ${name}`,
-          version: "1.0.0",
-          tags: ["general"],
-          slashCommand: `/${slug}`,
-          author: "community",
-          file: mdPath,
-        };
-        this.cache.set(slug, meta);
-        return meta;
-      } catch {
-        return null;
-      }
-    }
-
-    return null;
+  /** Forget what was read, so a write through another surface is seen by the next read. */
+  public invalidate(slug?: string): void {
+    if (slug === undefined) this.cache.clear();
+    else this.cache.delete(slug);
   }
 
   public loadFull(slug: string): LoadedSkill {
-    const meta = this.getMetadata(slug);
-    if (!meta) {
+    const record = findSkillRecord(this.skillsDir, slug);
+    if (record === null) {
       throw new Error(`Skill "${slug}" not found in ${this.skillsDir}`);
     }
-
-    let instructions = "";
-    if (meta.file.endsWith(".json")) {
-      const parsed = JSON.parse(fs.readFileSync(meta.file, "utf8"));
-      instructions = parsed.instructions || parsed.content || "";
-    } else {
-      instructions = fs.readFileSync(meta.file, "utf8");
-    }
-
-    return {
-      ...meta,
-      instructions,
-    };
+    const meta = toMetadata(record);
+    this.cache.set(slug, meta);
+    return { ...meta, instructions: record.instructions };
   }
 }

@@ -1,9 +1,9 @@
 /**
- * The `fleet` and `skills` groups. Both read the real catalogs and the real installed state.
+ * The `fleet` group. It reads the real catalog and the real installed state. The `skills` group
+ * moved to `./skills.ts`, where it shares one store with the `skills` toolset.
  */
 
 import { FleetManager } from "@trent/core/fleet/index.js";
-import { SkillsHub } from "@trent/core/skills/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -201,96 +201,3 @@ export const fleetSpec: CommandSpec = {
     ...fleetVersionSpecs,
   ],
 };
-
-export const skillsSpec: CommandSpec = {
-  name: "skills",
-  description: "Browse, search, install and remove skills",
-  subcommands: [
-    {
-      name: "browse",
-      description: "Browse the skills catalog",
-      run(ctx) {
-        const catalog = new SkillsHub(ctx.config()).browse();
-        return { data: { count: catalog.length, skills: catalog } };
-      },
-      render: renderSkillCatalog,
-    },
-    {
-      name: "search <term>",
-      description: "Search the skills catalog by keyword",
-      run(ctx, _opts, args) {
-        const term = String(args[0]);
-        const matches = new SkillsHub(ctx.config()).search(term);
-        return { data: { term, count: matches.length, skills: matches } };
-      },
-      render: renderSkillCatalog,
-    },
-    {
-      name: "install <slug>",
-      description: "Install a skill after its pre-install security scan",
-      run(ctx, _opts, args) {
-        const slug = String(args[0]);
-        if (ctx.dryRun) return { data: { dryRun: true, command: "skills install", slug } };
-        const loaded = new SkillsHub(ctx.config()).install(slug);
-        return {
-          data: {
-            slug: loaded.slug,
-            name: loaded.name,
-            slashCommand: loaded.slashCommand,
-            installed: true,
-          },
-        };
-      },
-      render(data, ctx) {
-        const d = data as { slug: string; slashCommand?: string; dryRun?: boolean };
-        if (d.dryRun === true) return [`  ${ctx.theme.meta("would install")} ${d.slug}`];
-        return [
-          `  ${ctx.theme.success("installed")} ${ctx.theme.value(d.slug)} ${ctx.theme.meta(String(d.slashCommand))}`,
-        ];
-      },
-    },
-    {
-      name: "remove <slug>",
-      description: "Remove an installed skill",
-      run(ctx, _opts, args) {
-        const slug = String(args[0]);
-        if (ctx.dryRun) return { data: { dryRun: true, command: "skills remove", slug } };
-        const removed = new SkillsHub(ctx.config()).remove(slug);
-        if (!removed) {
-          throw new TrentError({
-            code: EXIT.CONFIG,
-            operation: "skills.remove",
-            message: "skill is not installed in this profile",
-            target: slug,
-          });
-        }
-        return { data: { slug, removed } };
-      },
-      render(data, ctx) {
-        const d = data as { slug: string };
-        return [`  ${ctx.theme.success("removed")} ${ctx.theme.value(d.slug)}`];
-      },
-    },
-    {
-      name: "list",
-      description: "List the skills installed in this profile",
-      run(ctx) {
-        const installed = new SkillsHub(ctx.config()).listInstalled();
-        return { data: { count: installed.length, skills: installed } };
-      },
-      render: renderSkillCatalog,
-    },
-  ],
-};
-
-function renderSkillCatalog(
-  data: Record<string, unknown> | unknown[],
-  ctx: { theme: { emphasis: (s: string) => string; value: (s: string) => string; body: (s: string) => string } },
-): string[] {
-  const d = data as { count: number; skills: { slug: string; description: string }[] };
-  const lines = [ctx.theme.emphasis(`SKILLS (${d.count})`)];
-  for (const s of d.skills) {
-    lines.push(`  ${ctx.theme.value(s.slug.padEnd(26, " "))} ${ctx.theme.body(s.description)}`);
-  }
-  return lines;
-}

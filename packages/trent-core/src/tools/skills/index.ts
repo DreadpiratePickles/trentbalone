@@ -23,9 +23,11 @@ import {
   listSkills,
   parseFrontmatter,
   readBody,
+  removeSkillRecord,
   renderFrontmatter,
   resolveBundlePath,
   writeAtomic,
+  writeSkillRecord,
   type SkillEntry,
   type SkillTrust,
 } from "./store.js";
@@ -145,9 +147,14 @@ export function createSkillsAdapter(options: SkillsAdapterOptions): TrentToolAda
     const description = argString(op, "description") ?? "";
     const blocked = scanOrBlock(label, `${description}\n${content}`);
     if (blocked) return blocked;
-    // Hermes layout: <skills>/<category>/<name>/SKILL.md, or <skills>/<name>/SKILL.md uncategorised.
-    const file = path.join(skillsDir, ...(category ? [category] : []), name, "SKILL.md");
-    writeAtomic(file, renderFrontmatter({ name, description, category: category ?? "general", trust: createTrust }, content));
+    // The one store's canonical form: <skills>/<category>/<name>/SKILL.md, uncategorised at depth one.
+    const file = writeSkillRecord(skillsDir, {
+      name,
+      description,
+      trust: createTrust,
+      instructions: content,
+      ...(category === undefined ? {} : { category }),
+    });
     return { status: "completed", line: `${label}: created ${path.relative(skillsDir, file)} (${createTrust}).` };
   }
 
@@ -155,7 +162,12 @@ export function createSkillsAdapter(options: SkillsAdapterOptions): TrentToolAda
     const label = `patch ${entry.name}`;
     const guard = guardMutable(entry, label);
     if (guard) return guard;
-    if (entry.dir === null) return { status: "failed", line: `${label}: flat skills cannot be patched here.` };
+    if (entry.dir === null) {
+      return {
+        status: "failed",
+        line: `${label}: "${entry.name}" is a legacy flat file the store could not migrate; a skill name is lowercase letters, digits, - and _.`,
+      };
+    }
     const oldString = typeof op.old_string === "string" ? op.old_string : "";
     const newString = typeof op.new_string === "string" ? op.new_string : "";
     if (!oldString) return { status: "failed", line: `${label}: "old_string" is required.` };
@@ -173,8 +185,7 @@ export function createSkillsAdapter(options: SkillsAdapterOptions): TrentToolAda
     const label = `delete ${entry.name}`;
     const guard = guardMutable(entry, label);
     if (guard) return guard;
-    if (entry.dir === null) fs.unlinkSync(entry.file);
-    else fs.rmSync(entry.dir, { recursive: true, force: true });
+    removeSkillRecord(skillsDir, entry.name);
     return { status: "completed", line: `${label}: removed.` };
   }
 

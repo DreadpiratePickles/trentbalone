@@ -1,132 +1,61 @@
 /**
- * Skill storage for the `skills` toolset.
+ * The `skills` toolset's view of the one skill store (`../../skills/skill-store.ts`).
  *
- * Two layouts coexist. Flat `<skills>/<slug>.md|.json` files are what the committed SkillLoader
- * and SkillsHub read and write; they are exposed read-only here with the `builtin` tier when the
- * slug is in the hub catalog. Hermes's directory layout `<skills>/[<category>/]<name>/SKILL.md`
- * with `references/ scripts/ assets/` is what `skill_manage` creates. Every path a seat names is
- * confined by realpath to the skill's own bundle directories.
+ * There is a single layout on disk — `<skills>/[<category>/]<name>/SKILL.md` with its
+ * `references/ scripts/ assets/` bundle — and the flat `<slug>.md|.json` form an older CLI wrote
+ * is migrated into it on the first read, by the same code the CLI reads through. What remains
+ * here is the part that only the tool surface needs: bundle listing, and the realpath confinement
+ * that keeps every path a seat names inside that skill's own bundle directories.
  */
 import fs from "node:fs";
 import path from "node:path";
-import { BUILTIN_SKILLS_CATALOG } from "../../skills/SkillsHub.js";
-import { SkillLoader } from "../../skills/SkillLoader.js";
-import { NODE_IO, atomicWriteFileSync } from "../../config/atomic-fs.js";
+import {
+  BUNDLE_DIRS,
+  SKILL_FILE,
+  SKILL_NAME_PATTERN,
+  SKILL_TRUST_TIERS,
+  findSkillRecord,
+  isMutable,
+  listSkillRecords,
+  parseFrontmatter,
+  removeSkillRecord,
+  renderFrontmatter,
+  skillDirFor,
+  writeSkillFile,
+  writeSkillRecord,
+  type SkillRecord,
+  type SkillTrust,
+} from "../../skills/skill-store.js";
 
-export type SkillTrust = "builtin" | "official" | "trusted" | "community";
-export const SKILL_TRUST_TIERS: readonly SkillTrust[] = ["builtin", "official", "trusted", "community"];
-export const BUNDLE_DIRS = ["references", "scripts", "assets"] as const;
-export const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+export {
+  BUNDLE_DIRS,
+  SKILL_FILE,
+  SKILL_NAME_PATTERN,
+  SKILL_TRUST_TIERS,
+  isMutable,
+  parseFrontmatter,
+  removeSkillRecord,
+  renderFrontmatter,
+  skillDirFor,
+  writeSkillRecord,
+};
+export type { SkillTrust };
 
-export interface SkillEntry {
-  name: string;
-  description: string;
-  category: string;
-  trust: SkillTrust;
-  /** Directory holding SKILL.md, or null for a flat file. */
-  dir: string | null;
-  /** SKILL.md or the flat file. */
-  file: string;
-}
+/** One skill as the toolset sees it. The store's record, unchanged. */
+export type SkillEntry = SkillRecord;
 
-export function isBuiltinSlug(slug: string): boolean {
-  return BUILTIN_SKILLS_CATALOG.some((s) => s.slug === slug);
-}
-
-/** The agent may only change skills it (or a person) authored: trusted and community. */
-export function isMutable(trust: SkillTrust): boolean {
-  return trust === "trusted" || trust === "community";
-}
-
-interface Frontmatter {
-  fields: Record<string, string>;
-  body: string;
-}
-
-export function parseFrontmatter(text: string): Frontmatter {
-  const m = /^---\n([\s\S]*?)\n---\n?/.exec(text);
-  if (!m) return { fields: {}, body: text };
-  const fields: Record<string, string> = {};
-  for (const line of m[1]!.split("\n")) {
-    const idx = line.indexOf(":");
-    if (idx > 0) fields[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-  }
-  return { fields, body: text.slice(m[0].length) };
-}
-
-export function renderFrontmatter(fields: Record<string, string>, body: string): string {
-  const head = Object.entries(fields)
-    .map(([k, v]) => `${k}: ${v.replace(/\n/g, " ")}`)
-    .join("\n");
-  return `---\n${head}\n---\n${body}`;
-}
-
-function headingMeta(body: string, fallbackName: string): { name: string; description: string } {
-  let name = fallbackName;
-  let description = "";
-  for (const line of body.split("\n")) {
-    if (line.startsWith("# ") && name === fallbackName) name = line.slice(2).trim();
-    else if (line.startsWith("> ") && !description) description = line.slice(2).trim();
-  }
-  return { name, description };
-}
-
-function readDirSkill(dir: string, name: string, category: string): SkillEntry | null {
-  const file = path.join(dir, "SKILL.md");
-  if (!fs.existsSync(file)) return null;
-  const { fields, body } = parseFrontmatter(fs.readFileSync(file, "utf8"));
-  const meta = headingMeta(body, name);
-  const trust = SKILL_TRUST_TIERS.includes(fields.trust as SkillTrust) ? (fields.trust as SkillTrust) : "community";
-  return {
-    name,
-    description: fields.description || meta.description,
-    category: fields.category || category,
-    trust,
-    dir,
-    file,
-  };
-}
-
-/** Every skill in the store: directory skills at depth one and two, then flat files. */
+/** Every skill in the store, flat leftovers migrated on the way. */
 export function listSkills(skillsDir: string): SkillEntry[] {
-  const out = new Map<string, SkillEntry>();
-  if (!fs.existsSync(skillsDir)) return [];
-  for (const top of fs.readdirSync(skillsDir, { withFileTypes: true })) {
-    if (!top.isDirectory()) continue;
-    const topDir = path.join(skillsDir, top.name);
-    const direct = readDirSkill(topDir, top.name, "general");
-    if (direct) {
-      out.set(top.name, direct);
-      continue;
-    }
-    for (const sub of fs.readdirSync(topDir, { withFileTypes: true })) {
-      if (!sub.isDirectory()) continue;
-      const entry = readDirSkill(path.join(topDir, sub.name), sub.name, top.name);
-      if (entry && !out.has(sub.name)) out.set(sub.name, entry);
-    }
-  }
-  for (const meta of new SkillLoader(skillsDir).listMetadata()) {
-    if (out.has(meta.slug)) continue;
-    out.set(meta.slug, {
-      name: meta.slug,
-      description: meta.description,
-      category: meta.tags[0] ?? "general",
-      trust: isBuiltinSlug(meta.slug) ? "builtin" : "community",
-      dir: null,
-      file: meta.file,
-    });
-  }
-  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return listSkillRecords(skillsDir);
 }
 
 export function findSkill(skillsDir: string, name: string): SkillEntry | null {
-  return listSkills(skillsDir).find((s) => s.name === name) ?? null;
+  return findSkillRecord(skillsDir, name);
 }
 
 /** Body of SKILL.md without frontmatter, or the flat file's instructions. */
 export function readBody(entry: SkillEntry): string {
-  if (entry.dir === null) return new SkillLoader(path.dirname(entry.file)).loadFull(entry.name).instructions;
-  return parseFrontmatter(fs.readFileSync(entry.file, "utf8")).body;
+  return entry.instructions;
 }
 
 export function listBundle(entry: SkillEntry): string[] {
@@ -173,7 +102,7 @@ export function resolveBundlePath(
   return { ok: true, file: target };
 }
 
+/** Owner-only atomic write, the same one the store uses for SKILL.md. */
 export function writeAtomic(file: string, content: string): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  atomicWriteFileSync(NODE_IO, file, content, 0o644);
+  writeSkillFile(file, content);
 }
