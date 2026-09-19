@@ -1,0 +1,455 @@
+{
+  "defaults": {
+    "version": 3,
+    "profile": "default",
+    "provider": "google",
+    "model": "gemini-3.5-flash-lite",
+    "toolsets": [
+      "file_ops",
+      "terminal",
+      "web",
+      "code",
+      "delegation",
+      "cron",
+      "skills",
+      "plugins",
+      "human"
+    ],
+    "disabled_toolsets": [],
+    "budget": {
+      "daily_cap": 1000,
+      "currency": "USD",
+      "per_run_cap": 100,
+      "alert_thresholds": [
+        50,
+        80,
+        100
+      ]
+    },
+    "terminal": {
+      "backend": "docker",
+      "docker": {
+        "image": "trent-sandbox:1",
+        "network": "bridge"
+      },
+      "ssh": {
+        "port": 22
+      }
+    },
+    "egress": {
+      "enabled": true,
+      "proxy_port": 8089,
+      "auto_token": true,
+      "intercept_domains": [
+        "api.openai.com",
+        "api.anthropic.com",
+        "generativelanguage.googleapis.com"
+      ]
+    },
+    "gateway": {
+      "enabled": false,
+      "platforms": [],
+      "routes": {},
+      "double_text_policy": "enqueue",
+      "alerts": {
+        "approval_wait_minutes": 30
+      }
+    },
+    "repl": {
+      "double_text_policy": "enqueue",
+      "history_turns": 8,
+      "history_chars": 6000
+    },
+    "context": {
+      "ceiling_chars": 60000
+    },
+    "runtime": {
+      "max_concurrent_runs": 2
+    },
+    "heartbeat": {
+      "enabled": false,
+      "interval_minutes": 60,
+      "consolidate_memory": true,
+      "sweep": {
+        "enabled": false
+      },
+      "sweep_interval_hours": 24
+    },
+    "fleet": {
+      "installed_agents": [
+        "ceo",
+        "eng-ai-engineer",
+        "sup-support-responder"
+      ],
+      "active_agents": [
+        "ceo"
+      ],
+      "default_agent": "ceo"
+    },
+    "mcp_servers": {},
+    "telemetry": {
+      "service_name": "trent"
+    },
+    "model_overrides": {},
+    "privacy": {
+      "redact_prompts": false,
+      "patterns": []
+    },
+    "policy": {
+      "rules": []
+    },
+    "workspace": {
+      "max_file_chars": 12000,
+      "max_total_chars": 24000
+    },
+    "autonomy": "ask_dangerous",
+    "approvals": {
+      "deny": []
+    },
+    "hooks": {
+      "pre_tool_call": [],
+      "post_tool_call": [],
+      "session_start": [],
+      "session_stop": []
+    },
+    "memory": {
+      "blocks": [
+        {
+          "label": "memory",
+          "file": "MEMORY.md",
+          "description": "durable facts about the company and how it works",
+          "limit": 2200,
+          "read_only": false
+        },
+        {
+          "label": "user",
+          "file": "USER.md",
+          "description": "who the founder is and how they want to be worked with",
+          "limit": 1375,
+          "read_only": false
+        },
+        {
+          "label": "company",
+          "file": "COMPANY.md",
+          "description": "shared facts every seat reads; edited by the founder or the heartbeat",
+          "limit": 1500,
+          "read_only": true
+        }
+      ],
+      "embedder": {
+        "provider": "auto",
+        "batch_size": 32
+      },
+      "consolidation_may_edit": [],
+      "consolidation_max_removal_ratio": 0.3
+    },
+    "models": {},
+    "tools": {
+      "disclosure_threshold": 24
+    },
+    "brain": {
+      "enabled": true,
+      "versioning": "auto"
+    },
+    "checkpoints": {
+      "enabled": true,
+      "max_bytes_per_run": 52428800
+    },
+    "personality": "default",
+    "theme": "dark",
+    "improve": {
+      "holdout_ratio": 0.3,
+      "pass_k": 3,
+      "judge_min_tpr": 0.8,
+      "judge_min_tnr": 0.8,
+      "sweep_cap_cents": 100,
+      "frozen_paths": [],
+      "judge_model": "",
+      "min_goldens": 5
+    }
+  },
+  "full": {
+    "version": 3,
+    "profile": "split-fixture",
+    "provider": "anthropic",
+    "model": "claude-fixture-1",
+    "toolsets": [
+      "file_ops",
+      "terminal",
+      "web",
+      "browser",
+      "code",
+      "vision",
+      "memory",
+      "delegation",
+      "cron",
+      "skills",
+      "plugins",
+      "mcp",
+      "human"
+    ],
+    "disabled_toolsets": [
+      "browser",
+      "vision"
+    ],
+    "budget": {
+      "daily_cap": 2500,
+      "currency": "EUR",
+      "per_run_cap": 250,
+      "alert_thresholds": [
+        25,
+        60,
+        90
+      ]
+    },
+    "terminal": {
+      "backend": "local",
+      "docker": {
+        "image": "fixture/sandbox:1",
+        "network": "host"
+      },
+      "ssh": {
+        "host": "fixture.internal",
+        "port": 2222,
+        "user": "trent",
+        "key_path": "/keys/id_ed25519"
+      }
+    },
+    "egress": {
+      "enabled": false,
+      "proxy_port": 9090,
+      "auto_token": false,
+      "intercept_domains": [
+        "api.fixture.test"
+      ]
+    },
+    "gateway": {
+      "enabled": true,
+      "platforms": [
+        "slack",
+        "telegram"
+      ],
+      "routes": {
+        "slack": "ceo",
+        "telegram": "support-responder"
+      },
+      "double_text_policy": "interrupt",
+      "owner": {
+        "platform": "slack",
+        "channelId": "C0FIXTURE"
+      },
+      "alerts": {
+        "approval_wait_minutes": 15
+      }
+    },
+    "repl": {
+      "double_text_policy": "reject",
+      "history_turns": 12,
+      "history_chars": 9000
+    },
+    "context": {
+      "ceiling_chars": 90000,
+      "compact_after_chars": 18000
+    },
+    "runtime": {
+      "max_concurrent_runs": 4
+    },
+    "heartbeat": {
+      "enabled": true,
+      "interval_minutes": 30,
+      "active_hours": {
+        "start": "09:00",
+        "end": "17:00",
+        "tz": "Europe/Berlin"
+      },
+      "consolidate_memory": false,
+      "sweep": {
+        "enabled": true
+      },
+      "sweep_interval_hours": 12
+    },
+    "fleet": {
+      "installed_agents": [
+        "ceo",
+        "eng-ai-engineer",
+        "support-responder"
+      ],
+      "active_agents": [
+        "ceo",
+        "eng-ai-engineer"
+      ],
+      "default_agent": "eng-ai-engineer"
+    },
+    "mcp_servers": {
+      "local-tools": {
+        "auto_approve": [
+          "ping"
+        ],
+        "enabled": true,
+        "scanRan": true,
+        "transport": "stdio",
+        "command": "node",
+        "args": [
+          "server.js",
+          "--stdio"
+        ],
+        "env": {
+          "FIXTURE_TOKEN": "${FIXTURE_TOKEN}"
+        }
+      },
+      "remote-tools": {
+        "auto_approve": [],
+        "enabled": false,
+        "scanRan": false,
+        "flagged": [],
+        "transport": "http",
+        "url": "https://mcp.fixture.test/rpc",
+        "headers": {
+          "X-Fixture-Key": "${FIXTURE_KEY}"
+        }
+      }
+    },
+    "telemetry": {
+      "otlp_endpoint": "https://otlp.fixture.test/v1/traces",
+      "service_name": "trent-fixture"
+    },
+    "model_overrides": {
+      "claude-fixture-1": {
+        "context_window": 200000,
+        "input_cents_per_million": 300,
+        "output_cents_per_million": 1500
+      }
+    },
+    "privacy": {
+      "redact_prompts": true,
+      "patterns": [
+        "sk-[A-Za-z0-9]{8,}"
+      ]
+    },
+    "policy": {
+      "rules": [
+        {
+          "id": "fixture-deny",
+          "effect": "deny",
+          "when": "external_send",
+          "after": "secret_access",
+          "within": 7,
+          "reason": "fixture rule"
+        },
+        {
+          "id": "fixture-approve",
+          "effect": "require_approval",
+          "when": "write",
+          "also": "secret_access",
+          "within": 20,
+          "reason": "fixture approval rule"
+        }
+      ]
+    },
+    "workspace": {
+      "max_file_chars": 5000,
+      "max_total_chars": 9000
+    },
+    "autonomy": "ask_always",
+    "approvals": {
+      "deny": [
+        "rm -rf *",
+        "**/.env"
+      ]
+    },
+    "hooks": {
+      "pre_tool_call": [
+        {
+          "command": [
+            "/usr/bin/true",
+            "--pre"
+          ],
+          "timeout_ms": 1000,
+          "match": {
+            "tool": "file_write"
+          }
+        }
+      ],
+      "post_tool_call": [
+        {
+          "command": [
+            "/usr/bin/true",
+            "--post"
+          ]
+        }
+      ],
+      "session_start": [],
+      "session_stop": [
+        {
+          "command": [
+            "/usr/bin/true",
+            "--stop"
+          ],
+          "timeout_ms": 500
+        }
+      ]
+    },
+    "memory": {
+      "blocks": [
+        {
+          "label": "memory",
+          "file": "memory.md",
+          "description": "fixture agent memory",
+          "limit": 4000,
+          "read_only": false
+        },
+        {
+          "label": "company",
+          "file": "company.md",
+          "description": "fixture company facts",
+          "limit": 2000,
+          "read_only": true
+        }
+      ],
+      "embedder": {
+        "provider": "openai",
+        "model": "text-embedding-3-small",
+        "batch_size": 64
+      },
+      "consolidation_may_edit": [
+        "company"
+      ],
+      "consolidation_max_removal_ratio": 0.5
+    },
+    "models": {
+      "fast": "fixture-fast",
+      "executor": "fixture-executor",
+      "planner": "fixture-planner",
+      "judge": "fixture-judge"
+    },
+    "tools": {
+      "disclosure_threshold": 40
+    },
+    "brain": {
+      "enabled": false,
+      "versioning": "off"
+    },
+    "checkpoints": {
+      "enabled": false,
+      "max_bytes_per_run": 123456
+    },
+    "personality": "fixture-personality",
+    "theme": "light",
+    "improve": {
+      "holdout_ratio": 0.4,
+      "pass_k": 2,
+      "judge_min_tpr": 0.9,
+      "judge_min_tnr": 0.7,
+      "sweep_cap_cents": 500,
+      "frozen_paths": [
+        "docs/frozen.md"
+      ],
+      "judge_model": "fixture-judge-model",
+      "min_goldens": 7
+    },
+    "an_unknown_future_key": {
+      "kept": true,
+      "by": "passthrough"
+    }
+  }
+}
