@@ -174,3 +174,9 @@ Model routing: Fable reasons and decides; Opus agents do the reading, research a
   third roster (D1); session hooks and workspace context not yet wired into headless/prelude
   (wave 2 W2.0); cache_control and intra-step tool-history need apps/web seams (recorded in
   e7bfd4e); improve/golden-capture.test.ts is load-flaky.
+- Evidence: full suite on a clean HEAD worktree at 95d8981: tsc 0, core build 0, repo-scan 0,
+  vitest exit 0 (`scratchpad/iso-head-full.log`). The working-tree failures were D0's in-flight
+  RED files under improve/ only.
+- Wave 2 launched: W2.0 (workspace context + session hooks wiring, /context, slash merge/delete),
+  B2 (seats as capabilities), C3 (core embedder), with D0 still running.
+- Bobby extended the apps/web exception to `agent-routing-context.ts` (decision 10). B1.2 launched.

@@ -15,6 +15,8 @@ Approved by Bobby on 2026-09-18, question by question, against
 7. Embedder: may use the Gemini embedding endpoint on the existing key; lexical stays the fallback.
 8. Sweep cap: defaults to `budget.per_run_cap`, overridable as `improve.sweep_cap_cents`.
 9. Release: after Phases A and B land; the release checklist is prepared before then.
+10. (2026-09-18, later) The invariant 1 exception is extended to `apps/web/lib/agent-routing-context.ts`
+    so the planner stops routing finance, analyst, sales and escalation work to ceo or growth (task B1.2).
 
 Rules for every task: one Opus agent, a written brief (roadmap section 5), failing test first,
 files under 500 lines, no canned strings, apps/web read-only except B1, no subagents, no commits.
