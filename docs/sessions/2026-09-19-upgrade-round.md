@@ -80,3 +80,13 @@ Bobby's gate, then waves.
 - Discovery complete (4 files). Next: design doc with options -> Fable review -> Bobby's gate.
 - Wrote `02_plan/output/upgrade-round-design.md` (decisions A-E with options and recommendations,
   waves, seven gate questions). Sent for an independent Fable review before Bobby's gate.
+- Fable review landed -> `02_plan/output/upgrade-round-review.md`: REJECT as submitted. False
+  premises: "money/publishing/customer contact never auto-approved" (floors see only shell
+  commands, `never` lifts adapter approval, one approval covers a step, no idempotency tokens for
+  publish/book/charge); CLI has no OAuth/token store; A2A runner is whole-orchestration so no
+  per-seat MCP tools; packs never read at run time; B4 wrote into read-only apps/web; adapter
+  matrix wrong (no YouTube publish, TikTok SELF_ONLY, DMs throw). Design rewritten as v2 with a
+  gate-first section (class floor, per-call binding, idempotency tokens, provenance on inbound
+  text, external spend, `trent connect`, seven-place toolset registration, MCP bearer + needs_approval),
+  executors reordered B3-core > B2 > B1, MCP over toolsets + Claude renderer in wave 1, RAG cut,
+  nine gate questions.
