@@ -55,3 +55,6 @@ Every done-criterion holds locally on a clean checkout of HEAD except CI, which 
 start on this account ("recent account payments have failed or your spending limit needs to be
 increased"; every run since 35417850217 on 2026-09-19 03:11 UTC; last green 35417800846 on
 bdaab39). Bobby-only. Re-run after billing: `gh run rerun <id>` or any push.
+- Repo made public on Bobby's instruction after a full-history secret scan (all hits were test
+  fixtures, scanner patterns or vendored doc placeholders; gem.env never committed). CI re-run
+  35422933787 triggered.
