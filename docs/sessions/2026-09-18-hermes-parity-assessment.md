@@ -180,3 +180,51 @@ Model routing: Fable reasons and decides; Opus agents do the reading, research a
 - Wave 2 launched: W2.0 (workspace context + session hooks wiring, /context, slash merge/delete),
   B2 (seats as capabilities), C3 (core embedder), with D0 still running.
 - Bobby extended the apps/web exception to `agent-routing-context.ts` (decision 10). B1.2 launched.
+- B1.2 landed (apps/web routing context, second exception): web suite 2825 pass.
+- D0 landed (improvement gates: frozen surface, holdout, pass^k, auto-rollback, hash veto, TPR/TNR, sweep cap). Note: an in-flight agent has moved the [A2.1] workspace block in schema.ts; diff-hunk cutting is unsafe there, cut by marker plus explicit edits.
+- B2 landed (seat capabilities, budget abort, model tiers, fleet show). Follow-up B2.1: models config key + headless forwarding.
+- Wave 2: W2.0 landed; C3+C4 landed together (9f63c7a; interleaved memory config). Bobby's usage
+  limit interrupted four agents mid-task (A3, D1, E2, B2.2); their partial edits are in the tree.
+  Known red on HEAD: registry.test.ts (fleet show sample exits 3) and delegate.repl.test.ts (an
+  extra delegated analyst child) from the seat commits; B2.2 owns the fix. Resuming the four.
+- B2.2 landed: fleet show dry-run branch; delegate fixture fixed (route repair adds a support step now). HEAD expected green.
+- E2 landed (security audit, release checklist with 6 source disagreements).
+- B2.1 landed (models tiers key wired end to end).
+- A3 sent back: its bridge adapters break 8 REPL tests (tools.test, tools.repl.test, delegate.repl.test); it now owns those test files.
+- D1 landed (goldens as suites, --live, judge model, roster from fleet; dry-run on goldens commands).
+- A3 landed (disclosure bridges, todo, clarify, session_search; REPL tests assert both sides of the threshold).
+- C2 landed (brain repository, truth rule, migration, signposts, brain_read, trent brain). Follow-up: repl/fleet-memory.ts forwards brain.enabled.
+- E1 built (ledger, rollback, /checkpoints, /rollback); sent back to open the checkpoint session from headless and the REPL turn boundary.
+- D2 landed (heartbeat metered sweep, opt-in). Follow-up D2.1: export the goldens suite builder from commands/improve.ts so unattended sweeps gate.
+- E1 landed (agent-write ledger, checkpoints, /rollback, wired in headless). config/schema.ts nearing 500 lines: extract sub-schemas before more blocks land.
+- C1 done but HELD: its schema block would take config/schema.ts to 506 lines (R1 split in flight
+  on a separate worktree) and its recall.ts hunks are interleaved with C5's provenance hunks, so
+  C1 commits after R1 and together with C5 (same pattern as C3+C4). C1 finding that corrects the
+  plan: `apps/web/lib/db.ts` builds a Postgres client, so `DATABASE_URL=file:<profile>/trent.db`
+  (what headless sets under Bun) makes every app store call throw; app tiers are durable only with
+  Postgres, ephemeral otherwise (the doctor's app-memory line says which). The "Bun durable"
+  premise was wrong for the app tiers; the core SQLite store is what Bun makes durable.
+- D2.1 landed (shared sweep builder; unattended sweeps gate).
+- D3 done (curator: lifecycle aging, hash-chained mutation ledger, single undo, provenance policy, agent-skill scan gate, trent curator) and HELD with C1 for R1's schema split. Limit recorded: curator.scan_agent_skills is read by nothing until tools/index.ts wiring (C5 owns it now).
+- R1 landed (schema split into config/sections, 485 -> 141 lines). The shared working tree keeps the agents' monolithic schema.ts until their blocks are cut onto HEAD; sync it with git checkout when the last one lands.
+- R1 fix: e2d8a42 omitted config/sections (directory staged as one entry); added in the next commit from the verified isolation copy. CI on e2d8a42 alone is expected red.
+- D3 landed after R1. Rule: every commit that adds a config key regenerates schema-split.snapshot.json (scratchpad/regen-snapshot.mjs in the isolation worktree).
+- C1 follow-up done: repl/fleet-memory.ts passes embedderForProfile (hybrid recall live), forwards brain keys, mirrors episodic writes to app tiers, consolidation writes app facts. Held with C5 (recall.ts interleaved); snapshot to regenerate for app_sources + provenance.
+- C1+C5 landed (241ec38). E3 landed (A2A spec transport, stdio ACP). isolate.sh: a directory source now replaces the target instead of nesting into it.
+- F0 landed (release sources reconciled; Pages gated on a release). scripts/dev/ carries the isolation helpers for future sessions.
+- F0 landed minus the two workflow files: the session token lacks the GitHub `workflow` scope
+  (push rejected), so pages.yml/release.yml edits are held in
+  `05_release/output/pending-workflow-changes.patch` for Bobby to apply after
+  `gh auth refresh -h github.com -s workflow`. L1 landed: live proofs A and B passed on the key
+  (15c and 21c). Findings: previous-turn text also reaches the next run via recall/app memory
+  (the interrupted-fragment rule holds only on history); the app's unverified-tool-claim guard
+  fired once.
+
+## Queued: the shippable goal (Bobby, 2026-09-19)
+After D4 and D5 land and the wave is closed, run the /goal prompt Bobby supplied ("Take Trent to a
+shippable state for its first release ... prove it with passing checks on a clean checkout of
+HEAD"). Its done-criteria, constraints, verify, progress (docs/sessions/YYYY-MM-DD-shippable.md),
+stop rules and output are recorded verbatim in the chat transcript of this session and summarised
+in the memory note; the helpers it names live in scripts/dev/. Blockers already known for it:
+the GitHub workflow scope (pending-workflow-changes.patch), W3.1 wiring, the D2 spend ledger,
+the interrupted-fragment rule on recall and app memory.
