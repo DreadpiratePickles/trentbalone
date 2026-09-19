@@ -50,6 +50,8 @@ class FakeTraceStore implements ReplTraceStore {
  */
 interface Ports {
   agents: ReplFleetAgent[];
+  /** E1: the turns the agent-write ledger holds; `/checkpoints` and `/rollback` read these. */
+  turns: { turn: number; at: string; files: string[] }[];
   spentCents: number;
   skills: { slug: string; category: string; description: string; slashCommand: string }[];
   personality: string;
@@ -59,7 +61,7 @@ interface Ports {
 function makeContext(): { ctx: ReplContext; store: MemoryStore; config: TrentConfig; ports: Ports } {
   const store = new MemoryStore();
   const config: TrentConfig = structuredClone(DEFAULT_CONFIG);
-  const ports: Ports = { agents: [], spentCents: 0, skills: [], personality: "default", sessions: [] };
+  const ports: Ports = { agents: [], turns: [], spentCents: 0, skills: [], personality: "default", sessions: [] };
   const ctx: ReplContext = {
     theme: createTheme("none"),
     config,
@@ -114,6 +116,23 @@ function makeContext(): { ctx: ReplContext; store: MemoryStore; config: TrentCon
       },
     },
     sessions: { listSessions: () => ports.sessions },
+    // E1: `CheckpointSession` satisfies this port live; the real ledger is asserted against a
+    // real workspace in `checkpoints.test.ts`, so here it only has to be state that can change.
+    checkpoints: {
+      runId: "run_all",
+      listCheckpoints: () => ports.turns,
+      rollback: (input) => {
+        const undone = ports.turns.filter((turn) => turn.turn > input.to);
+        ports.turns = ports.turns.filter((turn) => turn.turn <= input.to);
+        return {
+          ok: true,
+          to: input.to,
+          forced: input.force === true,
+          restored: undone.flatMap((turn) => turn.files.map((file) => ({ path: file, hash: null }))),
+          refused: [],
+        };
+      },
+    },
   };
   return { ctx, store, config, ports };
 }
@@ -240,6 +259,7 @@ describe("every command, without exception", () => {
     ports.skills.push({ slug: "repo-audit", category: "engineering", description: "walks a repository", slashCommand: "/repo-audit" });
     ports.personality = "pirate";
     ports.sessions.push({ id: "ses_1", title: "rewrite onboarding", messages: [1, 2], total_cost_cents: 37 });
+    ports.turns.push({ turn: 1, at: "2026-09-18T09:30:00.000Z", files: ["src/a.ts"] });
 
     const unchanged: string[] = [];
     for (const name of commandNames()) {

@@ -5,7 +5,9 @@
  * limit=50, offset). Every operation is a shell command on the seat's sandbox; the path policy
  * runs on the host BEFORE the command is built, and the sandbox mount is the second wall.
  */
+import fs from "node:fs";
 import path from "node:path";
+import { activeCheckpointSession } from "../../checkpoints/index.js";
 import { intArg, parseAction, record, stringArg, type ToolSpec } from "../action.js";
 import { createSandbox, shellQuote, type Sandbox } from "../sandbox.js";
 import { SUMMARY_LIMIT, fitSummary } from "../spillover.js";
@@ -74,6 +76,25 @@ export function createFileOpsAdapter(ctx: ToolContext, sandbox: Sandbox = create
     if (res.exitCode !== 0) throw new Error(`cannot write ${resolved.display}: ${res.stderr.trim() || `exit ${res.exitCode}`}`);
   }
 
+  /**
+   * E1: ledgers the write BEFORE it lands, so the pre-image outlives the only copy of it.
+   *
+   * The bytes are read from the HOST path rather than through the sandbox: both backends address
+   * the same file (Docker bind-mounts the workspace at /workspace), a host read has no stdout
+   * budget to truncate it, and a truncated pre-image is worse than none — a rollback would restore
+   * it as if it were the file. With no checkpoint session open this is a no-op, which is what
+   * `checkpoints.enabled = false` means. A failure here fails the write: an unledgered write is
+   * exactly the write `/rollback` would later fail to undo.
+   */
+  async function ledgerWrite(resolved: ResolvedPath, tool: string, after: Buffer | undefined): Promise<void> {
+    const session = activeCheckpointSession();
+    if (session === undefined || !session.store.enabled || resolved.inSpillover) return;
+    const stat = fs.existsSync(resolved.hostPath) ? fs.statSync(resolved.hostPath) : undefined;
+    if (stat?.isDirectory() === true) return;
+    const before = stat === undefined ? undefined : fs.readFileSync(resolved.hostPath);
+    session.record({ tool, path: resolved.hostPath, before, after });
+  }
+
   async function readFile(action: string, args: Record<string, unknown>): Promise<ToolCallRecord> {
     const target = stringArg(args, "path");
     if (!target) return fail(action, 'read_file needs {"path": "..."}');
@@ -101,6 +122,7 @@ export function createFileOpsAdapter(ctx: ToolContext, sandbox: Sandbox = create
     const content = stringArg(args, "content");
     if (!target || content === undefined) return fail(action, 'write_file needs {"path": "...", "content": "..."}');
     const resolved = resolveWorkspacePath(ctx, sandbox, target, "write");
+    await ledgerWrite(resolved, "write_file", Buffer.from(content, "utf8"));
     await writeRaw(resolved, content);
     return record(FILE_OPS_NAME, action, "completed", `Wrote ${Buffer.byteLength(content, "utf8")} bytes to ${resolved.display}`);
   }
@@ -123,6 +145,7 @@ export function createFileOpsAdapter(ctx: ToolContext, sandbox: Sandbox = create
     }
     const after = applySpans(before, match.spans, newString);
     if (after === before) return fail(action, "patch: replacement produces no change");
+    await ledgerWrite(resolved, "patch", Buffer.from(after, "utf8"));
     await writeRaw(resolved, after);
     const diff = unifiedDiff(resolved.display, before, after);
     const note = `Applied ${match.spans.length} replacement(s) via ${match.strategy} match in ${resolved.display}.\n`;

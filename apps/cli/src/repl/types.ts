@@ -183,6 +183,38 @@ export interface ContextRunSeats {
   readonly seats: readonly string[];
 }
 
+// ── checkpoints slice (E1) ──────────────────────────────────────────────────
+
+/** One turn's checkpoint as `/checkpoints` lists it. `Checkpoint` from @trent/core satisfies it. */
+export interface ReplCheckpoint {
+  readonly turn: number;
+  readonly at: string;
+  /** Workspace-relative paths the turn wrote, first touch first. */
+  readonly files: readonly string[];
+}
+
+/** What a rollback did, or refused to do. `RollbackResult` from @trent/core satisfies it. */
+export interface ReplRollbackResult {
+  readonly ok: boolean;
+  readonly to: number;
+  readonly forced: boolean;
+  /** `hash` is null where the rollback deleted a file the agent had created. */
+  readonly restored: readonly { readonly path: string; readonly hash: string | null }[];
+  readonly refused: readonly { readonly path: string; readonly reason: string }[];
+}
+
+/**
+ * The session's agent-write ledger (`/checkpoints`, `/rollback`). `CheckpointSession` from
+ * `@trent/core/checkpoints` satisfies this structurally; when nothing supplies it the commands
+ * fall back to the process's open session, so a runtime that opens one needs no REPL wiring.
+ */
+export interface ReplCheckpointsPort {
+  readonly runId: string;
+  listCheckpoints(): readonly ReplCheckpoint[];
+  /** `to` is the turn whose writes are KEPT; everything after it is undone. */
+  rollback(input: { to: number; force?: boolean }): ReplRollbackResult;
+}
+
 // ── the shared context every slash command reads ────────────────────────────
 
 export interface ReplContext {
@@ -214,6 +246,8 @@ export interface ReplContext {
   personalities?: ReplPersonalityPort;
   /** The saved sessions (`/sessions`). */
   sessions?: ReplSessionsPort;
+  /** E1: the agent-write ledger this session records into (`/checkpoints`, `/rollback`). */
+  checkpoints?: ReplCheckpointsPort;
 }
 
 // ── the ports the commands merged out of `apps/cli/src/slash/` read ──────────

@@ -123,6 +123,14 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // degrades to plain files rather than failing, and the doctor line says which of the two is
   // running. See docs/brain.md.
   brain: { enabled: true, versioning: "auto" },
+  // [E1] checkpoints
+  // On by default: a rollback is only possible for writes that were ledgered while they happened,
+  // so a profile that turns this off is choosing that its agent writes cannot be undone. 50 MB of
+  // pre-images per run is the point past which a row keeps its hashes and drops the bytes; it must
+  // stay equal to `DEFAULT_MAX_BYTES_PER_RUN` in `checkpoints/types.ts`, which
+  // `checkpoints/config.test.ts` asserts. See docs/checkpoints.md.
+  checkpoints: { enabled: true, max_bytes_per_run: 50 * 1024 * 1024 },
+  // [/E1]
   personality: "default",
   theme: "dark",
   // [D0] improvement gates

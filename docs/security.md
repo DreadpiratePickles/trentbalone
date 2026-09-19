@@ -116,6 +116,7 @@ on the host with the host's environment. It is not a sandbox.
 | the sessions directory | restricted | `SESSION_DIR_MODE`, best effort |
 | `~/.trent/egress/ca.key` | 0600 | Written by the certificate authority |
 | `~/.trent/keys/audit.key` and `profiles/*/keys/audit.key` | 0600 in a 0700 directory | Generated on first use by `trent audit`; the export and `.sig` are 0600 too |
+| `profiles/*/checkpoints/*/ledger.jsonl` and its `blobs/` | 0600 in a 0700 directory | The agent-write ledger and its pre-images, written temp-then-rename with the mode re-asserted; a pre-image of a workspace file never leaves the profile (docs/checkpoints.md) |
 
 Session files were 0644 in a 0755 directory before this was hardened. Every write is now
 write-then-rename with the mode re-asserted after the rename, so an interrupted write cannot leave a

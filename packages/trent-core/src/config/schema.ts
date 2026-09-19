@@ -4,6 +4,7 @@ import { TelemetryConfigSchema } from "./telemetry-schema.js";
 import { PolicyRuleSchema } from "../governance/policy-rules.js";
 import { DEFAULT_MEMORY_BLOCKS, MEMORY_BLOCK_LABEL_PATTERN } from "../tools/memory/blocks.js";
 import { McpScanFindingSchema } from "../tools/mcp/scan.js";
+import { CheckpointsConfigSchema } from "../checkpoints/config-schema.js";
 // [A2.2] autonomy and hooks
 import { ApprovalsConfigSchema, AutonomyLevelSchema, DEFAULT_AUTONOMY } from "../governance/autonomy.js";
 import { HooksConfigSchema } from "../hooks/types.js";
@@ -405,6 +406,10 @@ export const TrentConfigSchema = z.object({
     enabled: z.boolean().default(true),
     versioning: z.enum(["auto", "off"]).default("auto"),
   }).default({}),
+  // [E1] checkpoints: the agent-write ledger behind `/checkpoints` and `/rollback`, defined beside
+  // the ledger that reads it (`checkpoints/config-schema.ts`, docs/checkpoints.md).
+  checkpoints: CheckpointsConfigSchema.default({}),
+  // [/E1]
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   // [D0] improvement gates

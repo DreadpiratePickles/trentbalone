@@ -10,8 +10,14 @@
  * Nothing terminal-specific lives here: no theme, no `writeLine`, no exit, no degraded banner.
  */
 
+import { randomBytes } from "node:crypto";
 import process from "node:process";
 import type { ConfigManager } from "@trent/core";
+import {
+  closeCheckpointSession,
+  openCheckpointSession,
+  type CheckpointSession,
+} from "@trent/core/checkpoints/index.js";
 import {
   createAppDelegatedChildRunner,
   createOrchestrator as createRealOrchestrator,
@@ -115,6 +121,13 @@ export interface HeadlessRuntime {
   readonly alerts: AlertHook | undefined;
   /** T4.1: the live agent version ids each run was pinned to at its `run_start`; absent without a durable store. */
   readonly versionPins: VersionPinHook | undefined;
+  // [E1] checkpoints
+  /**
+   * The agent-write ledger this session records into, absent when `checkpoints.enabled` is false.
+   * `file_ops` finds it through the process rather than through this handle; a surface reads it
+   * for `/checkpoints` and `/rollback`.
+   */
+  readonly checkpoints: CheckpointSession | undefined;
   /** One run against the session's company: the orchestrator's event stream. */
   run(objective: string, options?: HeadlessRunOptions): AsyncIterable<OrcEvent>;
   /**
@@ -188,6 +201,12 @@ interface RuntimeSlice {
   runtime?: { max_concurrent_runs?: number };
 }
 
+// [E1] checkpoints
+/** The `checkpoints` block the ledger reads; `TrentConfig` satisfies it structurally. */
+interface CheckpointsSlice {
+  checkpoints?: { enabled?: boolean; max_bytes_per_run?: number };
+}
+
 /** The `hooks` block the session hooks are read from; `TrentConfig` satisfies it structurally. */
 interface HooksSlice {
   hooks?: HooksConfig;
@@ -249,6 +268,24 @@ export function wireTelemetry(config: TelemetrySlice, onError?: (message: string
   return createOTelBusHook(exporter, onError === undefined ? {} : { onError });
 }
 
+// [E1] checkpoints
+/**
+ * Opens this session's agent-write ledger (docs/checkpoints.md), or nothing when the profile has
+ * turned checkpoints off. It is opened HERE, in the graph every surface is built on, so `trent
+ * run`, the gateway, cron and the heartbeat ledger their seats' writes without wiring of their
+ * own: `file_ops` looks the session up on the process, not on a context it is handed.
+ */
+export function wireCheckpoints(config: CheckpointsSlice, input: { workspace: string; profileDir: string }): CheckpointSession | undefined {
+  const block = config.checkpoints;
+  if (block?.enabled === false) return undefined;
+  return openCheckpointSession({
+    runId: `ses_${randomBytes(8).toString("hex")}`,
+    workspace: input.workspace,
+    profileDir: input.profileDir,
+    ...(block?.max_bytes_per_run === undefined ? {} : { maxBytesPerRun: block.max_bytes_per_run }),
+  });
+}
+
 export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<HeadlessRuntime> {
   const config = deps.config ?? (deps.configManager.loadConfig() as unknown as ReplConfig);
   const profileDir = deps.configManager.getProfileDir();
@@ -259,6 +296,8 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
   const workspaceBlock = renderWorkspaceContext(workspaceContext);
   // A2.2. One line per hook the session could not run; the tool hooks add theirs as calls are made.
   const notices: string[] = [];
+  // [E1] Before the toolsets: `file_ops` ledgers a write only while a session is open.
+  const checkpoints = wireCheckpoints(config as CheckpointsSlice, { workspace, profileDir });
 
   // `delegate_task` binds to the orchestrator's own delegated child step: the port is built
   // here so the same object is both the tool's port and the orchestrator's hook.
@@ -372,14 +411,20 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       telemetry,
       alerts,
       versionPins,
-      run: (objective, options = {}) =>
-        orchestrator.run({
+      checkpoints,
+      run: (objective, options = {}) => {
+        // [E1] One run is one turn: `trent run`, a cron tick and a heartbeat are each a single
+        // checkpoint, and a REPL turn is the run it starts. Opening a turn nothing has written
+        // into yet is a no-op, so a surface that also marks its own boundary cannot skip a number.
+        checkpoints?.beginTurn();
+        return orchestrator.run({
           companyId,
           objective,
           trigger: options.trigger ?? "manual",
           signal: options.signal,
           ...(options.history === undefined ? {} : { history: options.history }),
-        }),
+        });
+      },
       notices: () => [...notices, ...tools.hookNotices],
       cleanup: async () => {
         // The shutdown path, in order: the session's own hooks first (they may still want to read
@@ -389,11 +434,15 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
           notices.push(...sessionHookNotices(await runSessionHooks("session_stop", { profileDir, hooks, cwd: workspace })));
         }
         alerts?.close();
+        // [E1] A write after this belongs to no turn of this session, so it is ledgered into none.
+        if (checkpoints !== undefined) closeCheckpointSession(checkpoints);
         await tools.cleanup();
       },
     };
   } catch (error) {
-    // The graph did not come up: the proxy and the sandboxes already running must not outlive it.
+    // The graph did not come up: the proxy, the sandboxes and the ledger session already running
+    // must not outlive it.
+    if (checkpoints !== undefined) closeCheckpointSession(checkpoints);
     await tools.cleanup();
     throw error;
   }
