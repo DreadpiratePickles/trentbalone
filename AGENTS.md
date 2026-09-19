@@ -87,3 +87,16 @@ Money is **integer cents**, never floats. Tenant data access goes through `withR
    prelude is memoised with the first seat's scope (`fleet-memory/orchestrator-hook.ts:127`); a host
    that minted an egress root with a non-minimal serial before 8b369d6 keeps it in
    `~/.trent/egress/ca.crt` until the file is deleted.
+
+## Deferred work — registered, not hidden
+Nothing is currently deferred out of `packages/trent-core/src` or `apps/cli/src`.
+
+**Do not "clean up" the marker grep.** `grep -rn "TODO\|FIXME" packages/trent-core/src apps/cli/src |
+grep -v "\.test\.ts"` prints 24 lines, and all 24 are substring matches on the `todo` tool's own
+identifiers (`TODO_ADAPTER_NAME`, `TODO_SCOPES`, `TODO_STATUSES`, `TODO_TOOL_SCHEMAS`, `TODO_FILE_MODE`,
+`TODO_DIR_MODE`, `TODO_LOCAL_RUN`) in `tools/todo/store.ts`, `tools/todo/index.ts` and the re-export at
+`tools/index.ts:77`. There is not one deferred-work comment among them, and
+`git log -S"// TODO"`/`-S"FIXME"` over both trees is empty, so there never was one. Renaming those
+constants to make the count read 0 would mutilate a public API to satisfy a metric. The honest check is
+anchored to a comment:
+`grep -rnE '(//|/\*|\*)[[:space:]]*(TODO|FIXME)\b' packages/trent-core/src apps/cli/src` -> 0 matches.
