@@ -78,3 +78,5 @@ Bobby's gate, then waves.
   path DOES use wiki-embeddings.ts (hash vectors on a Gemini-only profile), so the wrapper drains
   a pipeline ranked by hash vectors today.
 - Discovery complete (4 files). Next: design doc with options -> Fable review -> Bobby's gate.
+- Wrote `02_plan/output/upgrade-round-design.md` (decisions A-E with options and recommendations,
+  waves, seven gate questions). Sent for an independent Fable review before Bobby's gate.
