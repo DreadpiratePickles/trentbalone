@@ -1,8 +1,9 @@
 import {
   AGENT_SLOTS,
+  SLOT_ENVIRONMENTS,
   buildSlotEnvironment,
 } from "@/lib/agent-catalog";
-import { buildOrchestratorSeatDossier } from "@/lib/seat-manifest";
+import { buildOrchestratorSeatDossier, getSeatManifest } from "@/lib/seat-manifest";
 import type { AgentRole } from "@/lib/types";
 
 export type SeatRouteRecommendation = {
@@ -11,63 +12,84 @@ export type SeatRouteRecommendation = {
   reason: string;
 };
 
+/** A tool the seat actually carries at runtime, so a recommendation can never name one it lacks. */
+function seatTool(role: AgentRole, preferred: string): string {
+  const tools = SLOT_ENVIRONMENTS[role].tools;
+  return tools.includes(preferred) ? preferred : tools[0];
+}
+
+/**
+ * UNSHELVED 2026-09-18: every seat routes to itself again. Until today finance,
+ * analyst and escalation objectives were handed to ceo and sales objectives to
+ * growth, and the reason text told the planner those seats were shelved — which
+ * `repairOrchestrationPlanRoutes` then turned into a growth step on a sales plan.
+ *
+ * The reason is the seat's own manifest remit rather than hand-written prose, so the
+ * routing hint and the seat dossier can never drift apart. `note` carries the one
+ * thing a manifest cannot know: that a third-party app named in the objective is not
+ * installed as a verified app, so the seat must work from evidence it really has.
+ */
+function routeTo(role: AgentRole, preferred: string, note?: string): SeatRouteRecommendation {
+  const manifest = getSeatManifest(role);
+  const remit = `${manifest.name} owns this work: ${manifest.whenToUse}`;
+  return { role, tool: seatTool(role, preferred), reason: note ? `${note}. ${remit}` : remit };
+}
+
 export function recommendSeatForObjective(objective: string): SeatRouteRecommendation {
   const text = objective.toLowerCase();
 
-  // SHRINK: Finance is a shelved seat — its oversight folds into the Operator (ceo).
   if (/\b(fincept|ghostfolio|portfolio|holdings|market risk|risk report|finance|billing|ledger|runway|spend|refund|budget|cfo)\b/.test(text)) {
     if (/\bfincept\b/.test(text)) {
-      return { role: "ceo", tool: "Stripe", reason: "Fincept Terminal is not installed as a verified sandbox app; the Operator handles finance oversight using real billing, usage, and Stripe evidence (a dedicated Finance seat is shelved)." };
+      return routeTo("finance", "Stripe", "Fincept Terminal is not installed as a verified sandbox app; work from real billing, usage and Stripe evidence");
     }
     if (/\bghostfolio|holdings|fire|portfolio\b/.test(text)) {
-      return { role: "ceo", tool: "Stripe", reason: "Ghostfolio is not installed as a verified sandbox app; the Operator handles portfolio/finance oversight using available real financial evidence (a dedicated Finance seat is shelved)." };
+      return routeTo("finance", "Stripe", "Ghostfolio is not installed as a verified sandbox app; work from the financial evidence the seat can actually read");
     }
-    return { role: "ceo", tool: "Stripe", reason: "Finance oversight (billing, usage, budget, ledger, market-risk) is handled by the Operator using real Stripe evidence; a dedicated Finance seat is shelved until a tenant workflow demands one." };
+    return routeTo("finance", "Stripe");
   }
 
   if (/\b(hyperframes|launch video|motion creative|video creative|render video)\b/.test(text)) {
-    return { role: "growth", tool: "documents:write", reason: "HyperFrames is not installed as a verified rendering app; Growth should draft the campaign creative brief and route build work to Workbench if needed." };
+    return routeTo("growth", "documents:write", "HyperFrames is not installed as a verified rendering app; draft the campaign creative brief and route build work to Workbench if needed");
   }
 
   if (/\b(open generative ai|image generate|video generate|lip[- ]?sync|cinema workflow|creative generation)\b/.test(text)) {
-    return { role: "growth", tool: "documents:write", reason: "Open Generative AI is not installed as a verified creative app; Growth should draft the creative brief and approval plan with available tools." };
+    return routeTo("growth", "documents:write", "Open Generative AI is not installed as a verified creative app; draft the creative brief and approval plan with available tools");
   }
 
+  // Customer-shaped escalations stay with Support; the escalation seat below owns the
+  // risk/approval class of decision, not the customer conversation.
   if (/\b(support|ticket|customer issue|customer reply|angry customer|escalate.*customer|customer escalation)\b/.test(text)) {
-    return { role: "support", tool: "support:inbound_email", reason: "Customer issue triage and reply drafting belongs to Support / Ops." };
+    return routeTo("support", "support:inbound_email");
   }
 
-  // SHRINK: Sales is a shelved seat — go-to-market folds into Growth.
   if (/\b(sales|prospect|lead|pipeline|crm|outreach|follow[- ]?up|qualification)\b/.test(text)) {
-    return { role: "growth", tool: "prospects:research", reason: "Prospecting, qualification, pipeline, and outbound drafts are handled by Growth as part of go-to-market; a dedicated Sales seat is shelved." };
+    return routeTo("sales", "prospects:research");
   }
 
   if (
     /\b(github|code|bug|test|tests|pr\b|pull request|deploy|repo|implementation|app[- ]?solo|workbench|software|notes app|web app|fix)\b/.test(text)
     || /\bbuild\b.{0,80}\b(app|application|site|dashboard|tool)\b/.test(text)
   ) {
-    return { role: "engineer", tool: "Workbench Sandbox", reason: "Code, repo, test, issue, PR, and deploy planning belongs to Engineer." };
+    return routeTo("engineer", "Workbench Sandbox");
   }
 
-  // SHRINK: Analyst is a shelved seat — web-evidence/research synthesis folds into the Operator (ceo).
   if (/\b(steel|camofox|browser|web research|competitor|competitors|screenshot|website|web evidence|public pages)\b/.test(text)) {
-    return { role: "ceo", tool: "Steel Browser", reason: "Web-evidence gathering, competitor research, and analysis synthesis are coordinated by the Operator; a dedicated Analyst seat is shelved." };
+    return routeTo("analyst", "Steel Browser");
   }
 
-  // SHRINK: Escalation is not a seat — risk/audit/approval is a feature of the approval flow, owned by the Operator.
   if (/\b(audit|critic|unsafe|destructive|approval|legal|privacy|policy|merge|delete|irreversible)\b/.test(text)) {
-    return { role: "ceo", tool: "audit:create", reason: "Risk, audit, policy, and irreversible-action review is owned by the Operator through the approval gate." };
+    return routeTo("escalation", "audit:create");
   }
 
   if (/\b(copy|content|design|landing page|email draft|visual|slides|presentation)\b/.test(text)) {
-    return { role: "content", tool: "documents:write", reason: "Design, copy, documents, and content drafts belong to Design / Content." };
+    return routeTo("content", "documents:write");
   }
 
   if (/\b(campaign|seo|ad|ads|growth|audience|funnel|activation|plg)\b/.test(text)) {
-    return { role: "growth", tool: "ads:draft", reason: "Campaigns, funnels, audiences, and PLG work belongs to Growth / Marketing." };
+    return routeTo("growth", "ads:draft");
   }
 
-  return { role: "ceo", tool: "tasks:create", reason: "Ambiguous or cross-functional work starts with CEO coordination." };
+  return routeTo("ceo", "tasks:create");
 }
 
 export function formatRouteRecommendation(label: string, recommendation: SeatRouteRecommendation) {

@@ -131,7 +131,7 @@ describe("buildOrchestrationPlanningPrompts", () => {
     expect(prompts.system).toContain("not installed as a verified sandbox app");
     expect(prompts.system).not.toContain("HyperFrames");
     expect(prompts.system).toContain("Steel Browser");
-    expect(prompts.system).toContain("Recommended route for this objective: ceo via Stripe");
+    expect(prompts.system).toContain("Recommended route for this objective: finance via Stripe");
   });
 
   it("instructs the planner to engage every specialist seat in full-team (autonomous) mode", () => {
