@@ -18,3 +18,4 @@ export * from "./checks/dependencies.js";
 export * from "./checks/workbench.js";
 export * from "./checks/self-improvement.js";
 export * from "./checks/telemetry.js";
+export * from "./checks/embedder.js";

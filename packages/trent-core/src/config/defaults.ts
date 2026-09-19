@@ -65,12 +65,16 @@ export const DEFAULT_CONFIG: TrentConfig = {
     active_agents: ["ceo"],
     default_agent: "ceo",
   },
-  memory: { blocks: [...DEFAULT_MEMORY_BLOCKS] },
   mcp_servers: {},
   telemetry: { service_name: "trent" },
   model_overrides: {},
   privacy: { redact_prompts: false, patterns: [] },
   policy: { rules: [] },
+  // [A2.1] workspace context
+  // Per-file and whole-set caps on the workspace's instruction files. Mirrors the schema's
+  // defaults; `workspace-context/types.ts` holds the same two numbers for callers that load
+  // without a config.
+  workspace: { max_file_chars: 12_000, max_total_chars: 24_000 },
   // [A2.2] autonomy and hooks
   // `ask_dangerous` is what Trent already did before the level existed: ask exactly where the
   // approval floors ask (file_ops writes, dangerous terminal findings, plugins and mcp without
@@ -79,6 +83,18 @@ export const DEFAULT_CONFIG: TrentConfig = {
   autonomy: DEFAULT_AUTONOMY,
   approvals: { deny: [] },
   hooks: { pre_tool_call: [], post_tool_call: [], session_start: [], session_stop: [] },
+  // [C4] memory gates
+  // No read-only block is editable by anything but the founder's own editor until its label is
+  // listed here, and no single consolidation may take more than 30 percent of a block's entries
+  // out (never fewer than one). Both numbers are the shipped rule, not a hint: the writers refuse.
+  // [C3] embedder
+  // `auto` = the first provider with a key, preferring the family `provider` already routes chat
+  // through: a profile with a Gemini or OpenAI key gets hybrid recall with no configuration, and a
+  // profile with neither keeps the lexical ranking it already had. 32 inputs per request sits
+  // inside both providers' batch limits. See docs/configuration.md, "Embedder".
+  memory: { blocks: [...DEFAULT_MEMORY_BLOCKS], consolidation_may_edit: [], consolidation_max_removal_ratio: 0.3, embedder: { provider: "auto", batch_size: 32 } },
+  personality: "default",
+  theme: "dark",
   // [D0] improvement gates
   // The loop's own gates (docs/improve.md). `sweep_cap_cents` is `budget.per_run_cap` above, in
   // integer cents: a sweep may not outspend one run by accident (plan decision 8), and
@@ -93,13 +109,6 @@ export const DEFAULT_CONFIG: TrentConfig = {
     sweep_cap_cents: DEFAULT_BUDGET_PER_RUN_CAP,
     frozen_paths: [],
   },
-  personality: "default",
-  // [A2.1] workspace context
-  // Per-file and whole-set caps on the workspace's instruction files. Mirrors the schema's
-  // defaults; `workspace-context/types.ts` holds the same two numbers for callers that load
-  // without a config.
-  workspace: { max_file_chars: 12_000, max_total_chars: 24_000 },
-  theme: "dark",
 };
 
 export const BLANK_SLATE_CONFIG: TrentConfig = {

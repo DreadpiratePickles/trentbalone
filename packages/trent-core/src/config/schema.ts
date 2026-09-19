@@ -61,14 +61,15 @@ export type Toolset = z.infer<typeof ToolsetSchema>;
 
 export const TerminalBackendSchema = z.enum(["docker", "local"]);
 export type TerminalBackendType = z.infer<typeof TerminalBackendSchema>;
-/** Integer cents. Named because `improve.sweep_cap_cents` defaults to it (plan decision 8). */
-export const DEFAULT_BUDGET_PER_RUN_CAP = 100;
 
 /**
  * Money is INTEGER CENTS everywhere, never floating-point dollars — this matches the
  * rule the rest of the platform already follows. `daily_cap: 1000` is USD 10.00.
  * `alert_thresholds` stays a list of PERCENTAGES, not money.
  */
+/** Integer cents. Named because `improve.sweep_cap_cents` defaults to it (plan decision 8). */
+export const DEFAULT_BUDGET_PER_RUN_CAP = 100;
+
 export const BudgetConfigSchema = z.object({
   daily_cap: z.number().int().positive().default(1000),
   currency: z.string().default("USD"),
@@ -139,7 +140,26 @@ export const MemoryBlockSchema = z.object({
   read_only: z.boolean().default(false),
 });
 export type MemoryBlockConfig = z.infer<typeof MemoryBlockSchema>;
-export const MemoryConfigSchema = z.object({ blocks: z.array(MemoryBlockSchema).default([...DEFAULT_MEMORY_BLOCKS]) });
+// [C3] embedder
+/**
+ * `memory.embedder`: what ranks fleet recall. Lexical TF-IDF always runs; with an embedder the
+ * score is the documented blend of it and the embedding cosine (`fleet-memory/hybrid.ts`).
+ * `auto` is the first provider with a key, preferring the one `provider` already routes chat
+ * through; `none` is lexical only and is what an operator with no key gets anyway. `model`
+ * overrides the route default, `batch_size` bounds one request. `trent doctor` names the live
+ * choice. See docs/configuration.md, "Embedder".
+ */
+export const EmbedderConfigSchema = z.object({
+  provider: z.enum(["auto", "gemini", "openai", "none"]).default("auto"),
+  model: z.string().min(1).optional(),
+  batch_size: z.number().int().positive().max(256).default(32),
+});
+export type EmbedderConfig = z.infer<typeof EmbedderConfigSchema>;
+export const MemoryConfigSchema = z.object({
+  blocks: z.array(MemoryBlockSchema).default([...DEFAULT_MEMORY_BLOCKS]),
+  embedder: EmbedderConfigSchema.default({}),
+});
+// [/C3]
 
 export const FleetConfigSchema = z.object({
   installed_agents: z.array(z.string()).default(["ceo", "eng-ai-engineer", "support-responder"]),
@@ -260,7 +280,6 @@ export const TrentConfigSchema = z.object({
   runtime: z.object({ max_concurrent_runs: z.number().int().positive().default(2) }).default({}),
   heartbeat: HeartbeatConfigSchema.default({}),
   fleet: FleetConfigSchema.default({}),
-  memory: MemoryConfigSchema.default({}),
   mcp_servers: McpServersConfigSchema.default({}),
   telemetry: TelemetryConfigSchema.default({}),
   /**
@@ -273,6 +292,20 @@ export const TrentConfigSchema = z.object({
   privacy: z.object({ redact_prompts: z.boolean().default(false), patterns: z.array(z.string()).default([]) }).default({}),
   /** Trace-level rules over tool classes; appended to the shipped defaults, same id overrides. */
   policy: z.object({ rules: z.array(PolicyRuleSchema).default([]) }).default({}),
+  // [A2.1] workspace context
+  /**
+   * Caps on the instruction files Trent reads from the workspace it is run in (`AGENTS.md`,
+   * `CLAUDE.md`, `.trent/*.md`). `max_file_chars` bounds one file, `max_total_chars` the set; a
+   * file over either is truncated with a marker line, never dropped silently. Trust is not
+   * configurable: it lives in `<profile>/workspace-trust.json` and is granted by
+   * `trent workspace trust`. See docs/configuration.md, "Workspace context files".
+   * The defaults must stay equal to `workspace-context/types.ts`, which is asserted by
+   * `workspace-context/workspace-context.test.ts`.
+   */
+  workspace: z.object({
+    max_file_chars: z.number().int().positive().default(12_000),
+    max_total_chars: z.number().int().positive().default(24_000),
+  }).default({}),
   // [A2.2] autonomy and hooks
   /**
    * How often a human is asked. `ask_dangerous` is today's behaviour and the default: ask exactly
@@ -289,6 +322,29 @@ export const TrentConfigSchema = z.object({
    * a shell string, and runs only after `trent hooks consent` records a hash of its exact spec.
    */
   hooks: HooksConfigSchema.default({}),
+  // [C4] memory gates
+  /**
+   * The memory blocks and the two gates over writing them (docs/configuration.md, "Memory blocks";
+   * `tools/memory/store.ts`, `checkMemoryWriteGate`).
+   *
+   * `consolidation_may_edit` lists the `read_only` block labels the SCHEDULED consolidation may
+   * edit. Empty by default, which is the shipped rule: a read-only block is refused on every write
+   * path, seat and consolidation alike. Listing a label lets the nightly draft propose changes to
+   * that block; a seat is still refused, and the founder still promotes the draft.
+   *
+   * `consolidation_max_removal_ratio` is the collapse guard. ACE measured a whole-block rewrite
+   * taking a context from 18,282 tokens at 66.7 percent to 122 tokens at 57.1 percent in one step,
+   * so at most this share of a block's entries may be removed or merged away in ONE consolidation
+   * (never fewer than one, so a three-entry block can still lose its duplicate). A proposal over
+   * the ratio is rejected whole and ledgered. It must stay equal to `DEFAULT_MAX_REMOVAL_RATIO`
+   * in `fleet-memory/memory-ops.ts`, which `tools/memory/memory.test.ts` asserts.
+   */
+  memory: MemoryConfigSchema.extend({
+    consolidation_may_edit: z.array(z.string().regex(MEMORY_BLOCK_LABEL_PATTERN)).default([]),
+    consolidation_max_removal_ratio: z.number().positive().max(1).default(0.3),
+  }).default({}),
+  personality: z.string().default("default"),
+  theme: z.enum(["dark", "light"]).default("dark"),
   // [D0] improvement gates
   /**
    * The gates the self-improvement loop is held to before any reflection is switched on
@@ -307,22 +363,6 @@ export const TrentConfigSchema = z.object({
     judge_min_tnr: z.number().min(0).max(1).default(0.8),
     sweep_cap_cents: z.number().int().positive().default(DEFAULT_BUDGET_PER_RUN_CAP),
     frozen_paths: z.array(z.string().min(1)).default([]),
-  }).default({}),
-  personality: z.string().default("default"),
-  theme: z.enum(["dark", "light"]).default("dark"),
-  // [A2.1] workspace context
-  /**
-   * Caps on the instruction files Trent reads from the workspace it is run in (`AGENTS.md`,
-   * `CLAUDE.md`, `.trent/*.md`). `max_file_chars` bounds one file, `max_total_chars` the set; a
-   * file over either is truncated with a marker line, never dropped silently. Trust is not
-   * configurable: it lives in `<profile>/workspace-trust.json` and is granted by
-   * `trent workspace trust`. See docs/configuration.md, "Workspace context files".
-   * The defaults must stay equal to `workspace-context/types.ts`, which is asserted by
-   * `workspace-context/workspace-context.test.ts`.
-   */
-  workspace: z.object({
-    max_file_chars: z.number().int().positive().default(12_000),
-    max_total_chars: z.number().int().positive().default(24_000),
   }).default({}),
 }).passthrough();
 

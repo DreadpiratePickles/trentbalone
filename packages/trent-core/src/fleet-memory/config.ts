@@ -30,9 +30,16 @@ export const DEFAULT_FLEET_MEMORY_CONFIG: FleetMemoryConfig = {
   searchSnippetChars: 300,
 };
 
-/** `TRENT_FLEET_RECALL_BUDGET_CHARS` overrides the recall budget; anything unparsable keeps the default. */
-export function resolveFleetMemoryConfig(env: NodeJS.ProcessEnv = process.env, overrides: Partial<FleetMemoryConfig> = {}): FleetMemoryConfig {
-  const fromEnv = Number.parseInt(env.TRENT_FLEET_RECALL_BUDGET_CHARS ?? "", 10);
-  const recallBudgetChars = Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : DEFAULT_FLEET_MEMORY_CONFIG.recallBudgetChars;
-  return { ...DEFAULT_FLEET_MEMORY_CONFIG, recallBudgetChars, ...overrides };
+/**
+ * [C4] The one place a caller merges overrides onto the shipped budgets.
+ *
+ * This used to read `TRENT_FLEET_RECALL_BUDGET_CHARS`, which the README advertised and nothing
+ * honoured: the only reader was this function and nothing called it, so the hook always used
+ * `DEFAULT_FLEET_MEMORY_CONFIG` (fleet audit 3.3, 3.7). An operator who set the variable changed
+ * nothing and was told nothing. The env read is deleted rather than wired up, because the only
+ * place that could honour it is `orchestrator-hook.ts`, and a budget that the prelude must prove
+ * offline and identically on every provider belongs in the config file, not in a shell.
+ */
+export function resolveFleetMemoryConfig(overrides: Partial<FleetMemoryConfig> = {}): FleetMemoryConfig {
+  return { ...DEFAULT_FLEET_MEMORY_CONFIG, ...overrides };
 }

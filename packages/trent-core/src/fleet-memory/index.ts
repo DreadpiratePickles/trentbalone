@@ -3,7 +3,27 @@
  */
 
 export { DEFAULT_FLEET_MEMORY_CONFIG, resolveFleetMemoryConfig, type FleetMemoryConfig } from "./config.js";
-export { lexicalEmbed, lexicalEmbedFn, scoreAgainst, fullTextScore, tokenize, type EmbedFn } from "./lexical.js";
+export { lexicalEmbed, lexicalEmbedFn, scoreAgainst, fullTextScore, tokenize, cosine, cosineSimilarity, type EmbedFn } from "./lexical.js";
+// [C3] hybrid recall: the lexical/vector blend, and the embedder behind the `EmbedFn` seam.
+export { HYBRID_LEXICAL_WEIGHT, HYBRID_VECTOR_FLOOR, HYBRID_VECTOR_WEIGHT, blendScores, vectorCredit } from "./hybrid.js";
+export {
+  DEFAULT_EMBED_BATCH_SIZE,
+  DEFAULT_EMBED_TIMEOUT_MS,
+  EMBEDDER_ROUTES,
+  MAX_EMBED_BATCH_SIZE,
+  MAX_EMBED_INPUT_CHARS,
+  createEmbedder,
+  embedderForProfile,
+  selectEmbedderProvider,
+  type Embedder,
+  type EmbedderConfigSource,
+  type EmbedderProfileSource,
+  type EmbedderProvider,
+  type EmbedderProviderSetting,
+  type EmbedderRoute,
+  type EmbedderSelection,
+  type EmbedderSettings,
+} from "./embedder.js";
 export {
   InMemoryFleetSource,
   freezeFleetSource,

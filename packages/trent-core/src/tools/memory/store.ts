@@ -58,6 +58,30 @@ export interface MemoryLimitSource {
   readonly blocks?: readonly MemoryBlock[];
 }
 
+/**
+ * [C4] Which layer is writing. Letta's rule, and the one this file enforces: an append is safe
+ * from anyone, a rewrite has exactly one owner.
+ *
+ * - `seat`: the `memory` tool in a run. Episodic appends only; `replace` and `remove` are refused.
+ * - `consolidation`: the scheduled consolidation draft and its human-promoted write
+ *   (`fleet-memory/consolidate.ts`, `fleet-memory/memory-draft.ts`). Every action, and — only for
+ *   the labels `memory.consolidation_may_edit` lists — a `read_only` block as well.
+ */
+export type MemoryWriter = "seat" | "consolidation";
+
+export interface MemoryWriteGate {
+  readonly writer: MemoryWriter;
+  /** `config.memory.consolidation_may_edit`: read-only labels the consolidation path may edit. */
+  readonly consolidationMayEdit?: readonly string[];
+  /** The configured blocks, when the target ref does not carry its own write rule. */
+  readonly blocks?: readonly MemoryBlock[];
+}
+
+/** The default for any caller that does not say: the most restricted layer. */
+export const SEAT_WRITE_GATE: MemoryWriteGate = { writer: "seat" };
+/** The consolidation path with no read-only block listed; `consolidationMayEdit` adds those. */
+export const CONSOLIDATION_WRITE_GATE: MemoryWriteGate = { writer: "consolidation" };
+
 /** The label a ref addresses: the legacy label itself, or the configured block's own. */
 function refLabel(target: MemoryFileRef): string | undefined {
   return typeof target === "string" ? target : (target as Partial<MemoryBlock>).label;
@@ -95,12 +119,60 @@ export function memoryPath(profileDir: string, target: MemoryFileRef): string {
   return path.join(profileDir, "memories", memoryFileName(target));
 }
 
+/** The write rule for one target: the ref's own when it carries it, else the configured block's. */
+export function memoryBlockIsReadOnly(target: MemoryFileRef, blocks?: readonly MemoryBlock[]): boolean {
+  const own = (target as Partial<MemoryBlock>).read_only;
+  if (typeof own === "boolean") return own;
+  const file = memoryFileName(target);
+  const label = refLabel(target);
+  const configured = (blocks ?? DEFAULT_MEMORY_BLOCKS).find((b) => b.file === file || (label !== undefined && b.label === label));
+  return configured?.read_only ?? false;
+}
+
+/**
+ * Refuses a write the layer rules forbid; null when the batch may proceed. Checked before the
+ * lock is taken, because a refusal reads nothing and changes nothing.
+ */
+export function checkMemoryWriteGate(
+  target: MemoryFileRef,
+  operations: readonly MemoryOperation[],
+  gate: MemoryWriteGate = SEAT_WRITE_GATE,
+): string | null {
+  const file = memoryFileName(target);
+  const label = refLabel(target) ?? file;
+  if (memoryBlockIsReadOnly(target, gate.blocks)) {
+    const listed = gate.writer === "consolidation" && (gate.consolidationMayEdit ?? []).includes(label);
+    if (!listed) {
+      return (
+        `${file} is read-only: the founder edits it by hand. ` +
+        `Only the scheduled consolidation may write it, and only while "${label}" is listed under memory.consolidation_may_edit.`
+      );
+    }
+  }
+  if (gate.writer === "seat") {
+    // Only the two rewrite actions are gated; an action this file does not know at all is a
+    // malformed call, and `applyOperations` is the one place that says so.
+    const rewrite = operations.find((op) => op.action === "replace" || op.action === "remove");
+    if (rewrite) {
+      return (
+        `a seat may only add entries to ${file}; "${rewrite.action}" changes an entry the block already carries. ` +
+        "Entries are replaced, merged and removed by the scheduled memory consolidation, which the founder promotes."
+      );
+    }
+  }
+  return null;
+}
+
+/** The entries a rendered block holds: split on the separator, trimmed, empties dropped. */
+export function parseEntries(raw: string): string[] {
+  if (!raw.trim()) return [];
+  return raw.split(ENTRY_SEPARATOR).map((e) => e.trim()).filter(Boolean);
+}
+
 export function readEntries(profileDir: string, target: MemoryFileRef): string[] {
   const file = memoryPath(profileDir, target);
   if (!fs.existsSync(file)) return [];
-  const raw = fs.readFileSync(file, "utf8");
-  if (!raw.trim()) return [];
-  return raw.split(ENTRY_SEPARATOR).map((e) => e.trim()).filter(Boolean);
+  return parseEntries(fs.readFileSync(file, "utf8"));
 }
 
 export function render(entries: string[]): string {
@@ -163,7 +235,7 @@ export function applyOperations(
     return refuse(
       `the result would be ${rendered.length} chars, over the ${cap}-char cap by ${rendered.length - cap}. ` +
         `The file is unchanged: ${current} chars used, ${cap - current} chars remaining. ` +
-        `Remove or shorten entries in the same batch to make room.`,
+        `Shorten the entry: removing and merging entries is the scheduled consolidation's job, not a seat's.`,
     );
   }
   return { ok: true, entries: next, rendered, remaining: cap - rendered.length };
@@ -232,9 +304,12 @@ export function commitOperations(
   profileDir: string,
   target: MemoryFileRef,
   operations: readonly MemoryOperation[],
-  limit: number | MemoryLimitSource = {}
+  limit: number | MemoryLimitSource = {},
+  gate: MemoryWriteGate = SEAT_WRITE_GATE
 ): ApplyResult {
   const cap = typeof limit === "number" ? limit : memoryLimit(target, limit.blocks);
+  const refused = checkMemoryWriteGate(target, operations, gate);
+  if (refused !== null) return refuseWith(profileDir, target, refused, cap);
   const file = memoryPath(profileDir, target);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const release = acquireLock(file);
@@ -243,6 +318,43 @@ export function commitOperations(
     if (!result.ok) return result;
     atomicWriteFileSync(NODE_IO, file, result.rendered, OWNER_ONLY);
     return result;
+  } finally {
+    release();
+  }
+}
+
+/** A refusal that never reached `applyOperations` still reports the block it was judged against. */
+function refuseWith(profileDir: string, target: MemoryFileRef, reason: string, cap: number): ApplyResult {
+  const entries = readEntries(profileDir, target);
+  return { ok: false, reason, entries, used: render(entries).length, limit: cap };
+}
+
+/**
+ * [C4] The one way a whole block is replaced, and the write path that closed the lock bypass in
+ * `fleet-memory/memory-draft.ts`. A block holding byte-identical duplicate entries cannot be
+ * addressed by `old_text` at all (the tool refuses an ambiguous match) — which is exactly the case
+ * consolidation exists to clean up — so the target bytes are written whole. Under the SAME lock as
+ * every other writer: a seat's append in the window is serialised before or after this write, never
+ * interleaved with it, and the rename is still atomic.
+ */
+export function commitReplaceAll(
+  profileDir: string,
+  target: MemoryFileRef,
+  rendered: string,
+  limit: number | MemoryLimitSource = {},
+  gate: MemoryWriteGate = SEAT_WRITE_GATE
+): ApplyResult {
+  const cap = typeof limit === "number" ? limit : memoryLimit(target, limit.blocks);
+  const refused = checkMemoryWriteGate(target, [{ action: "replace" }], gate);
+  if (refused !== null) return refuseWith(profileDir, target, refused, cap);
+  const file = memoryPath(profileDir, target);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const release = acquireLock(file);
+  try {
+    if (rendered.length > cap) return refuseWith(profileDir, target, `the result would be ${rendered.length} chars, over the ${cap}-char cap by ${rendered.length - cap}`, cap);
+    atomicWriteFileSync(NODE_IO, file, rendered, OWNER_ONLY);
+    const entries = parseEntries(rendered);
+    return { ok: true, entries, rendered, remaining: cap - rendered.length };
   } finally {
     release();
   }

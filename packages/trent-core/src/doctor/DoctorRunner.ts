@@ -32,6 +32,7 @@ import { checkDependencies } from "./checks/dependencies.js";
 import { checkWorkbench } from "./checks/workbench.js";
 import { checkSelfImprovement } from "./checks/self-improvement.js";
 import { checkTelemetry } from "./checks/telemetry.js";
+import { checkEmbedder } from "./checks/embedder.js";
 
 export interface DoctorRunnerOptions {
   checks?: DoctorCheck[];
@@ -68,6 +69,7 @@ export const DEFAULT_CHECKS: readonly DoctorCheck[] = [
   checkWorkbench,
   checkSelfImprovement,
   checkTelemetry,
+  checkEmbedder,
 ];
 
 /** 3 (config) when any check failed; 0 when everything passed or only warned. */

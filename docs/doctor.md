@@ -1,6 +1,6 @@
 # Doctor
 
-`trent doctor` runs 15 checks. Each one inspects something real: a file, a daemon, a socket, an
+`trent doctor` runs 16 checks. Each one inspects something real: a file, a daemon, a socket, an
 authenticated request. None of them return a hard-coded green.
 
 ```bash
@@ -58,7 +58,7 @@ That capture, and the JSON one further down, are verbatim from a run that predat
 check, so both report `total 14`. They are transcripts, not specifications; the table below is the
 current list.
 
-## The 15 checks
+## The 16 checks
 
 | # | Name | What it actually inspects | Auto-fixable |
 |---|---|---|:---:|
@@ -77,6 +77,7 @@ current list.
 | 13 | Sandbox & Workbench | Runs `docker info` and checks the sandbox image is present locally. A backend named in YAML is a claim; `docker info` exiting 0 is evidence | no |
 | 14 | Self-Improvement Loop | Creates the trace directory if absent, then writes and deletes a probe file to prove it is writable | yes |
 | 15 | OTel Trace Export | Posts an empty OTLP batch to `telemetry.otlp_endpoint` under the probe deadline and reports reachable or unreachable. With no endpoint it reports `not configured` as a skip: a skipped check is not a pass, and the line says so | no |
+| 16 | Recall Embedder | Resolves `memory.embedder` against the profile's keys, then embeds one character on the chosen endpoint with the cache off and a single attempt. `ok` names the provider, the model and the MEASURED dimension count; 401/403 fails; unreachable warns. With no key, or `provider: none`, it reports lexical TF-IDF ranking as a skip | no |
 
 Checks 6, 9 and 13 used to return hard-coded green from inside a try block that could not throw.
 Each now has a test that induces a real failure and asserts it is reported

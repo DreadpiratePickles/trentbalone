@@ -48,19 +48,23 @@ describe("memory toolset", () => {
     expect((await call(a, { target: "user", action: "add", content: "u".repeat(1375) })).status).toBe("completed");
   });
 
-  it("a batch that removes 500 and adds 400 succeeds atomically against the final state", async () => {
+  it("a batch that removes 500 and adds 400 succeeds atomically against the final state, for the block's one rewriter", async () => {
+    const { commitOperations, CONSOLIDATION_WRITE_GATE } = await import("./store.js");
     const a = createMemoryAdapter({ profileDir });
     await call(a, { target: "memory", action: "add", content: "x".repeat(1700) });
     await call(a, { target: "memory", action: "add", content: "y".repeat(495) });
     expect(fs.readFileSync(memoryFile(), "utf8").length).toBe(1700 + ENTRY_SEPARATOR.length + 495);
-    const rec = await call(a, {
-      target: "memory",
-      operations: [
+    const result = commitOperations(
+      profileDir,
+      "memory",
+      [
         { action: "add", content: "z".repeat(400) },
         { action: "remove", old_text: "yyyy" },
       ],
-    });
-    expect(rec.status, rec.summary).toBe("completed");
+      MEMORY_CAPS.memory,
+      CONSOLIDATION_WRITE_GATE,
+    );
+    expect(result.ok, result.ok ? "" : result.reason).toBe(true);
     const text = fs.readFileSync(memoryFile(), "utf8");
     expect(text).not.toContain("y");
     expect(text).toContain("z".repeat(400));
@@ -74,7 +78,7 @@ describe("memory toolset", () => {
     const rec = await call(a, {
       target: "memory",
       operations: [
-        { action: "remove", old_text: "xxxx" },
+        { action: "add", content: "w".repeat(50) },
         { action: "add", content: "w".repeat(2201) },
       ],
     });
@@ -82,14 +86,16 @@ describe("memory toolset", () => {
     expect(fs.readFileSync(memoryFile(), "utf8")).toBe(before);
   });
 
-  it("replace swaps exactly one matching entry and refuses ambiguity or a miss", async () => {
+  it("replace swaps exactly one matching entry and refuses ambiguity or a miss, on the consolidation path", async () => {
+    const { commitOperations, CONSOLIDATION_WRITE_GATE } = await import("./store.js");
     const a = createMemoryAdapter({ profileDir });
     await call(a, { target: "memory", action: "add", content: "Deploys on Fridays." });
     await call(a, { target: "memory", action: "add", content: "Deploys never on Mondays." });
-    expect((await call(a, { target: "memory", action: "replace", old_text: "Deploys", content: "x" })).status).toBe("failed");
-    expect((await call(a, { target: "memory", action: "replace", old_text: "Saturdays", content: "x" })).status).toBe("failed");
-    const ok = await call(a, { target: "memory", action: "replace", old_text: "Fridays", content: "Deploys on Thursdays." });
-    expect(ok.status).toBe("completed");
+    const swap = (old_text: string, content: string) =>
+      commitOperations(profileDir, "memory", [{ action: "replace", old_text, content }], MEMORY_CAPS.memory, CONSOLIDATION_WRITE_GATE);
+    expect(swap("Deploys", "x").ok).toBe(false);
+    expect(swap("Saturdays", "x").ok).toBe(false);
+    expect(swap("Fridays", "Deploys on Thursdays.").ok).toBe(true);
     expect(fs.readFileSync(memoryFile(), "utf8")).toBe(`Deploys on Thursdays.${ENTRY_SEPARATOR}Deploys never on Mondays.`);
   });
 
@@ -226,7 +232,7 @@ describe("named memory blocks (T4.3)", () => {
     const ok = await call(a, { block: "product", action: "add", content: "p".repeat(800) });
     expect(ok.status, ok.summary).toBe("completed");
     expect(fs.readFileSync(path.join(profileDir, "memories", "PRODUCT.md"), "utf8")).toBe("p".repeat(800));
-    const over = await call(a, { block: "product", action: "replace", old_text: "pppp", content: "p".repeat(801) });
+    const over = await call(a, { block: "product", action: "add", content: "p" });
     expect(over.status).toBe("failed");
     expect(over.summary).toMatch(/800/);
     expect(fs.readFileSync(path.join(profileDir, "memories", "PRODUCT.md"), "utf8")).toBe("p".repeat(800));
@@ -309,5 +315,83 @@ describe("named memory blocks (T4.3)", () => {
     expect(custom.memory.blocks).toEqual([{ label: "product", file: "PRODUCT.md", description: "the product", limit: 800, read_only: false }]);
     expect(() => TrentConfigSchema.parse({ memory: { blocks: [{ label: "Bad Label", file: "X.md", description: "x", limit: 1 }] } })).toThrow();
     expect(() => TrentConfigSchema.parse({ memory: { blocks: [{ label: "x1", file: "X.md", description: "x", limit: 0 }] } })).toThrow();
+  });
+});
+
+describe("[C4] write gates by layer", () => {
+  const companyFile = () => path.join(profileDir, "memories", "COMPANY.md");
+
+  it("a seat's append is ungated: the episodic layer takes writes from any seat", async () => {
+    const a = createMemoryAdapter({ profileDir });
+    expect((await call(a, { block: "memory", action: "add", content: "the API rate limit is 60/min" })).status).toBe("completed");
+    expect((await call(a, { block: "memory", operations: [{ action: "add", content: "invoices go out on the 1st" }] })).status).toBe("completed");
+    expect(fs.readFileSync(memoryFile(), "utf8").split(ENTRY_SEPARATOR)).toHaveLength(2);
+  });
+
+  it("a seat's replace or remove is refused: a rewrite has one owner, the consolidation draft", async () => {
+    const a = createMemoryAdapter({ profileDir });
+    await call(a, { block: "memory", action: "add", content: "the API rate limit is 60/min" });
+    const before = fs.readFileSync(memoryFile(), "utf8");
+    for (const args of [
+      { block: "memory", action: "replace", old_text: "rate limit", content: "the API rate limit is 100/min" },
+      { block: "memory", action: "remove", old_text: "rate limit" },
+      { block: "memory", operations: [{ action: "add", content: "fresh" }, { action: "remove", old_text: "rate limit" }] },
+    ]) {
+      const rec = await call(a, args);
+      expect(rec.status, JSON.stringify(args)).toBe("blocked");
+      expect(rec.summary).toMatch(/consolidat/i);
+    }
+    expect(fs.readFileSync(memoryFile(), "utf8")).toBe(before);
+    // The advertised schema no longer offers a seat an action it cannot take.
+    const action = MEMORY_TOOL_SCHEMAS[0]!.parameters.properties.action as { enum: string[] };
+    expect(action.enum).toEqual(["add"]);
+  });
+
+  it("the store refuses a seat rewrite even when the adapter is bypassed, and says what the block is now", async () => {
+    const { commitOperations } = await import("./store.js");
+    commitOperations(profileDir, "memory", [{ action: "add", content: "deploys are Thursday only" }]);
+    const refused = commitOperations(profileDir, "memory", [{ action: "remove", old_text: "Thursday" }]);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error("expected the rewrite to be refused");
+    expect(refused.entries).toEqual(["deploys are Thursday only"]);
+    expect(refused.limit).toBe(MEMORY_CAPS.memory);
+    expect(fs.readFileSync(memoryFile(), "utf8")).toBe("deploys are Thursday only");
+  });
+
+  it("a read_only block is refused on every path, including the consolidation writer, until it is listed", async () => {
+    const { commitOperations, CONSOLIDATION_WRITE_GATE, checkMemoryWriteGate } = await import("./store.js");
+    const company = DEFAULT_MEMORY_BLOCKS.find((b) => b.label === "company")!;
+    const add = [{ action: "add" as const, content: "We sell to mid-market fintech." }];
+
+    expect(checkMemoryWriteGate(company, add, { writer: "seat", blocks: DEFAULT_MEMORY_BLOCKS })).not.toBeNull();
+    const unlisted = commitOperations(profileDir, company, add, { blocks: DEFAULT_MEMORY_BLOCKS }, CONSOLIDATION_WRITE_GATE);
+    expect(unlisted.ok).toBe(false);
+    if (unlisted.ok) throw new Error("expected the read-only block to be refused");
+    expect(unlisted.reason).toMatch(/consolidation_may_edit/);
+    expect(fs.existsSync(companyFile())).toBe(false);
+
+    const listed = commitOperations(profileDir, company, add, { blocks: DEFAULT_MEMORY_BLOCKS }, { writer: "consolidation", consolidationMayEdit: ["company"] });
+    expect(listed.ok, listed.ok ? "" : listed.reason).toBe(true);
+    expect(fs.readFileSync(companyFile(), "utf8")).toBe("We sell to mid-market fintech.");
+  });
+
+  it("a listed read_only block is still refused to a seat: the listing names the scheduled consolidation only", async () => {
+    const { commitOperations } = await import("./store.js");
+    const company = DEFAULT_MEMORY_BLOCKS.find((b) => b.label === "company")!;
+    const refused = commitOperations(profileDir, company, [{ action: "add", content: "x" }], { blocks: DEFAULT_MEMORY_BLOCKS }, {
+      writer: "seat",
+      consolidationMayEdit: ["company"],
+    });
+    expect(refused.ok).toBe(false);
+    expect(fs.existsSync(companyFile())).toBe(false);
+  });
+
+  it("the config schema carries memory.consolidation_may_edit, empty by default, and validates the labels", () => {
+    const parsed = TrentConfigSchema.parse({});
+    expect(parsed.memory.consolidation_may_edit).toEqual([]);
+    const listed = TrentConfigSchema.parse({ memory: { consolidation_may_edit: ["company"] } });
+    expect(listed.memory.consolidation_may_edit).toEqual(["company"]);
+    expect(listed.memory.blocks.map((b) => b.label)).toEqual(["memory", "user", "company"]);
+    expect(() => TrentConfigSchema.parse({ memory: { consolidation_may_edit: ["Not A Label"] } })).toThrow();
   });
 });

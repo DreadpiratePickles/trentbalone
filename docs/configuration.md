@@ -104,7 +104,7 @@ heartbeat:
   #   start: "08:00"          # HH:MM on the wall clock of tz; the end is exclusive
   #   end: "20:00"            # a window that crosses midnight (22:00-06:00) wraps
   #   tz: Europe/Berlin       # IANA zone, default UTC
-  consolidate_memory: true    # once a day, inside quiet hours, draft a rewrite of every writable memory block
+  consolidate_memory: true    # once a day, inside quiet hours, draft itemised edits to every writable memory block
 
 fleet:
   installed_agents: [ceo, eng-ai-engineer, support-responder]
@@ -151,8 +151,80 @@ refuses a `read_only` block or a write that would leave the block over its limit
 (`product`, `PRODUCT.md`, 800) and it appears in the prelude and accepts writes up to 800
 characters. Labels and files must be distinct. The heartbeat's consolidation pass covers every
 configured block: `memory` and `user` always, each other writable block under its own `limit`, and
-a `read_only` block never — it is not even sent to the model. One draft carries the whole set, so
+a `read_only` block only while `consolidation_may_edit` names it — otherwise it is not even sent to
+the model. One draft carries the whole set, so
 `trent improve promote` moves every block at once and a rollback puts every block back.
+
+#### Write gates and delta-only consolidation
+
+Two keys sit beside `memory.blocks`, and both are enforced by the writers rather than advertised
+by them.
+
+| Key | Default | What it does |
+|---|---|---|
+| `memory.consolidation_may_edit` | `[]` | `read_only` block labels the SCHEDULED consolidation may propose over. Empty means a read-only block is refused on every write path, seat and consolidation alike. Listing a label lets the nightly draft touch that block; a seat is still refused, and the founder still promotes the draft. |
+| `memory.consolidation_max_removal_ratio` | `0.3` | The most of a block's entries one consolidation may remove or merge away, floored at one entry so a three-entry block can still lose its duplicate. A proposal over it is refused whole and written to the ledger as a `reject` row. |
+
+```yaml
+memory:
+  consolidation_may_edit: []          # e.g. ["company"] to let the nightly pass maintain COMPANY.md
+  consolidation_max_removal_ratio: 0.3
+```
+
+Who may write what is not configurable. A seat **adds** entries and does nothing else: the `memory`
+tool advertises `add` alone, and a `replace` or `remove` from a seat is `blocked` with the reason
+naming the consolidation. Rewrites have one owner — the nightly consolidation draft — and that
+draft reaches disk only through `trent improve promote`. This is also why a write past a block's
+limit answers with the block's current entries and the characters in use: the seat cannot make room
+by removing something, so it shortens what it was about to add, and the consolidation path reports
+a limit in exactly the same shape.
+
+The consolidation proposes **itemised operations** (`append`, `replace`, `remove`, `merge`) over
+entries the prompt addresses by id, never a rewritten block, so a fact the model fails to restate
+cannot be lost. See [the fleet-memory README](../packages/trent-core/src/fleet-memory/README.md),
+"Memory writes are deltas", and [heartbeat.md](heartbeat.md), "Memory consolidation".
+
+The recall budget stays config-only: `TRENT_FLEET_RECALL_BUDGET_CHARS` was documented for a while,
+never did anything, and has been removed rather than wired up.
+
+### Embedder
+
+`memory.embedder` decides what ranks fleet recall. Lexical TF-IDF over the candidate corpus always
+runs; when an embedder is configured, the score is a blend of it and the embedding cosine, so a
+paraphrase of the objective can outrank a candidate that merely shares four words with it.
+
+```yaml
+memory:
+  embedder:
+    provider: auto            # auto | gemini | openai | none
+    # model: gemini-embedding-001   # route default when omitted
+    batch_size: 32            # inputs per request, 1-256
+```
+
+| Key | Meaning |
+|---|---|
+| `provider` | `auto` (default) takes the first provider that has a key, preferring the family the top-level `provider` already routes chat through, then Gemini, then OpenAI. `gemini` posts to Google's OpenAI-compatible surface (`https://generativelanguage.googleapis.com/v1beta/openai/embeddings`), `openai` to `https://api.openai.com/v1/embeddings` — or, when `provider` is one of the four OpenAI-dialect aliases, to that alias's own base URL. A named provider with no key falls back to lexical rather than failing a run. `none` is lexical only. |
+| `model` | Overrides the route default (`gemini-embedding-001`, `text-embedding-3-small`). |
+| `batch_size` | Inputs per request. One recall corpus is split into batches of this size. |
+
+Keys are read from the profile `.env` first, then the process environment: `GEMINI_API_KEY`,
+`GOOGLE_API_KEY` or `GOOGLE_GENERATIVE_AI_API_KEY` for Gemini, `OPENAI_API_KEY` for OpenAI.
+`GEMINI_BASE_URL` and `OPENAI_BASE_URL` move the endpoint. Vectors are cached on disk under
+`<profile>/cache/embeddings/` (mode 0700), content-addressed by sha256 of the endpoint, the model
+and the text, so an unchanged run window re-embeds nothing; deleting that directory only costs one
+round of re-embedding. Requests are retried under the model gateway's bounded policy and carry a
+deadline, and a failed embedder degrades recall to lexical rather than failing the run.
+
+The blend is `0.4 * lexical + 0.6 * credit(cosine)`, where `credit` is zero at or below a per-model
+cosine floor (Gemini 0.60, OpenAI 0.30) and rescales the band above it onto 0..1. The floor is
+measured, not guessed: `gemini-embedding-001` scores an unrelated sentence 0.529 and a paraphrase
+0.754 against the same objective, so without it every candidate would collect vector credit and no
+run would ever recall nothing. The recall cut-off itself (`recallMinScore`, 0.12) is unchanged,
+which is why the two weights sum to 1: a blended score stays on the scale it was already judged on.
+
+`trent doctor` reports which of the two rankers is live, proven by one cheap embedding call — see
+[doctor.md](doctor.md), "Recall Embedder". The weights and the floor are argued in full in
+[the fleet-memory README](../packages/trent-core/src/fleet-memory/README.md), "Hybrid recall".
 
 ### Failure goldens
 

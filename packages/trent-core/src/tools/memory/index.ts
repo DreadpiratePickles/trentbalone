@@ -19,12 +19,26 @@ import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
 import { parseAction, record as toRecord, type ToolSpec } from "../action.js";
 import { renderToolInstructions, type ToolSchema } from "../web/schemas.js";
 import { DEFAULT_MEMORY_BLOCKS, assertDistinctBlocks, findBlock, type MemoryBlock } from "./blocks.js";
-import { ENTRY_SEPARATOR, commitOperations, memoryLimit, memoryPath, type ApplyResult, type MemoryOperation } from "./store.js";
+import { ENTRY_SEPARATOR, checkMemoryWriteGate, commitOperations, memoryLimit, memoryPath, type ApplyResult, type MemoryOperation } from "./store.js";
 
 export { DEFAULT_MEMORY_BLOCKS, MEMORY_BLOCK_LABEL_PATTERN, assertDistinctBlocks, findBlock } from "./blocks.js";
 export type { MemoryBlock } from "./blocks.js";
-export { MEMORY_CAPS, ENTRY_SEPARATOR, MEMORY_FILES, applyOperations, commitOperations, memoryLimit, readEntries } from "./store.js";
-export type { ApplyResult, MemoryFileRef, MemoryLimitSource, MemoryOperation, MemoryTarget } from "./store.js";
+export {
+  MEMORY_CAPS,
+  ENTRY_SEPARATOR,
+  MEMORY_FILES,
+  CONSOLIDATION_WRITE_GATE,
+  SEAT_WRITE_GATE,
+  applyOperations,
+  checkMemoryWriteGate,
+  commitOperations,
+  commitReplaceAll,
+  memoryBlockIsReadOnly,
+  memoryLimit,
+  parseEntries,
+  readEntries,
+} from "./store.js";
+export type { ApplyResult, MemoryFileRef, MemoryLimitSource, MemoryOperation, MemoryTarget, MemoryWriteGate, MemoryWriter } from "./store.js";
 
 export const MEMORY_ADAPTER_NAME = "memory";
 const DEFAULT_BLOCK_LABEL = "memory";
@@ -46,28 +60,27 @@ export function memoryToolSchemas(blocks: readonly MemoryBlock[]): ToolSchema[] 
     {
       name: "memory",
       description:
-        "Persist a durable note shared by every seat in the company. Blocks: " +
+        "Add a durable note shared by every seat in the company. Blocks: " +
         `${describeBlocks(blocks)}. \`block\` (alias \`target\`) names the block and defaults to "${DEFAULT_BLOCK_LABEL}". ` +
-        "Use a single action, or a batch of " +
-        "operations that is applied atomically; the cap is checked on the final state, so remove and " +
-        "add in one call to make room. Entries are short; the current contents are already in your prompt.",
+        "Adding is the only write a seat makes: entries are replaced, merged and removed by the nightly " +
+        "consolidation, which the founder promotes, so nothing you record is edited away mid-run. Use a single " +
+        "action, or a batch of adds applied atomically; the cap is checked on the final state. Entries are short; " +
+        "the current contents are already in your prompt.",
       parameters: {
         type: "object",
         properties: {
           target: { type: "string", enum: writable, description: `Block label to write; defaults to "${DEFAULT_BLOCK_LABEL}".` },
           block: { type: "string", enum: writable, description: "Same as target." },
-          action: { type: "string", enum: ["add", "replace", "remove"] },
-          content: { type: "string", description: "New entry text (add, replace)." },
-          old_text: { type: "string", description: "Unique substring of the entry to replace or remove." },
+          action: { type: "string", enum: ["add"] },
+          content: { type: "string", description: "New entry text." },
           operations: {
             type: "array",
-            description: "Batch form: [{action, content?, old_text?}] applied in order, all or nothing.",
+            description: "Batch form: [{action, content}] applied in order, all or nothing.",
             items: {
               type: "object",
               properties: {
-                action: { type: "string", enum: ["add", "replace", "remove"] },
+                action: { type: "string", enum: ["add"] },
                 content: { type: "string" },
-                old_text: { type: "string" },
               },
               required: ["action"],
             },
@@ -215,12 +228,18 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
       const ops = toOperations(args);
       if (typeof ops === "string") return record(action, "failed", `memory: ${ops}.`);
 
+      // [C4] The layer gate: a seat appends, and nothing else. A replace or a remove would edit an
+      // entry another seat wrote, which is the consolidation draft's job and the founder's call.
+      const gate = { writer: "seat" as const, blocks };
+      const gated = checkMemoryWriteGate(block, ops, gate);
+      if (gated !== null) return record(action, "blocked", `memory(${label}) refused: ${gated}`);
+
       // The writer resolves the limit from the CONFIGURED blocks, so an override of a default
       // block's limit is enforced by the write and not only shown in the prelude.
       const cap = memoryLimit(block, blocks);
       let result: ReturnType<typeof commitOperations>;
       try {
-        result = commitOperations(options.profileDir, block, ops, { blocks });
+        result = commitOperations(options.profileDir, block, ops, { blocks }, gate);
       } catch (err) {
         return record(action, "failed", `memory(${label}) write failed: ${(err as Error).message}`);
       }

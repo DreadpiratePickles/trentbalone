@@ -55,6 +55,18 @@ never runs it twice in one day. The pass covers every block `memory.blocks` conf
 its own limit, and leaves `read_only` blocks alone. Consolidation only drafts; promotion stays a
 human step (`trent improve promote`).
 
+The pass proposes **itemised deltas, never a rewritten block**. Each block goes to the model with
+every entry addressed by an id, and the answer may only be `append`, `replace`, `remove` or
+`merge` over those ids; code applies them, so an entry the model never mentions survives by
+construction. A proposal is all-or-nothing, and one that would take out more than
+`memory.consolidation_max_removal_ratio` of a block's entries (default 0.3, never fewer than one
+entry) is refused whole and written to the ledger as a `reject` row — so a night where the model
+tried to empty a block is visible in `trent improve history` rather than silently retried. The
+draft carries both the operations and the text they produced, which is what keeps a promotion and
+its rollback byte-exact. A `read_only` block joins the pass only while
+`memory.consolidation_may_edit` names its label, and even then a seat still cannot write it and a
+human still promotes the draft.
+
 ## Delivery
 
 A reply goes through the gateway manager's `send` to `gateway.owner` with the subject

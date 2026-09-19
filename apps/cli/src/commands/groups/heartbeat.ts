@@ -65,8 +65,18 @@ export function openHeartbeat(wiring: HeartbeatWiring): { loop: HeartbeatLoop; c
       configManager.loadSecrets();
       const [{ createModelGateway }, { consolidateMemory }] = await Promise.all([import("@trent/core/model-gateway/index.js"), import("@trent/core/fleet-memory/index.js")]);
       const gateway = await createModelGateway({ preferredProvider: config.provider as ModelProvider, models: { executor: config.model } });
-      // Every configured block, not only MEMORY.md and USER.md; a read_only block is left alone.
-      return consolidateMemory({ profileDir: configManager.getProfileDir(), companyId: runtime.companyId, gateway, store: improveOf(runtime.store) ?? fallbackImproveStore(), blocks: config.memory.blocks });
+      // [C4] Every configured block, not only MEMORY.md and USER.md. A read_only block is left
+      // alone unless `memory.consolidation_may_edit` names it, and no one pass may take out more
+      // than `memory.consolidation_max_removal_ratio` of a block's entries.
+      return consolidateMemory({
+        profileDir: configManager.getProfileDir(),
+        companyId: runtime.companyId,
+        gateway,
+        store: improveOf(runtime.store) ?? fallbackImproveStore(),
+        blocks: config.memory.blocks,
+        mayEdit: config.memory.consolidation_may_edit,
+        maxRemovalRatio: config.memory.consolidation_max_removal_ratio,
+      });
     },
   });
   return {

@@ -2,9 +2,10 @@
  * The bytes a `kind: "memory"` draft carries and the one way they reach disk.
  *
  * A memory draft's `content` (and every ledger `before`/`after` for it) is this JSON payload:
- * both blocks as canonical rendered entries, the entries the rewrite dropped, and the profile the
- * files live in — so a ledger row is enough to restore the files on `rollback`, the same way a
- * skill's prior bytes are enough to restore the row. Writes go through the memory tool's
+ * every block as canonical rendered entries, the itemised operations that produced them ([C4]),
+ * the entries they dropped, and the profile the files live in — so a ledger row is enough to
+ * restore the files on `rollback`, the same way a skill's prior bytes are enough to restore the
+ * row, and enough to review HOW the block changed. Writes go through the memory tool's
  * `commitOperations`: lock, re-read, remove every entry the file holds, add the target bytes'
  * entries, cap-check on the merged result, write-then-rename 0600. The result is the target
  * bytes exactly; a seat committing inside the lock window is merged by the tool or fails the
@@ -13,16 +14,20 @@
 import { z } from "zod";
 
 import {
+  CONSOLIDATION_WRITE_GATE,
   ENTRY_SEPARATOR,
   MEMORY_CAPS,
   applyOperations,
+  checkMemoryWriteGate,
   commitOperations,
+  commitReplaceAll,
   readEntries,
   render,
-  writeEntries,
   type MemoryOperation,
   type MemoryTarget,
+  type MemoryWriteGate,
 } from "../tools/memory/store.js";
+import { MemoryOpSchema, type MemoryOp } from "./memory-ops.js";
 
 export const MEMORY_DRAFT_KIND = "memory" as const;
 /** Company memory belongs to no seat; the fleet is the learning key, as `__org__` is for skills. */
@@ -53,10 +58,22 @@ export interface MemoryBytes {
   readonly blocks?: readonly MemoryBlockBytes[];
 }
 
+/** [C4] The itemised change to one block, kept beside the text it produced. */
+export interface MemoryBlockOps {
+  readonly label: string;
+  readonly ops: readonly MemoryOp[];
+}
+
 export interface MemoryDraftPayload extends MemoryBytes {
   readonly profileDir: string;
-  /** Entries the rewrite removed (merged into another or no longer true), for the founder to see. */
+  /** Entries the consolidation removed or merged away, for the founder to see. */
   readonly dropped: readonly string[];
+  /**
+   * [C4] The operations the proposal is made of, in block order. The resulting text above is what
+   * promotion writes and what a rollback restores — byte-exact either way — and this is the
+   * reviewable account of how it got there. Absent when nothing was proposed (a `before` payload).
+   */
+  readonly ops?: readonly MemoryBlockOps[];
 }
 
 const BlockSchema = z.object({
@@ -66,22 +83,27 @@ const BlockSchema = z.object({
   text: z.string(),
 });
 
+const BlockOpsSchema = z.object({ label: z.string().min(1), ops: z.array(MemoryOpSchema) });
+
 const PayloadSchema = z.object({
   profileDir: z.string().min(1),
   memory: z.string(),
   user: z.string(),
   dropped: z.array(z.string()),
   blocks: z.array(BlockSchema).optional(),
+  ops: z.array(BlockOpsSchema).optional(),
 });
 
 export function encodeMemoryDraft(payload: MemoryDraftPayload): string {
   const blocks = payload.blocks ?? [];
+  const ops = payload.ops ?? [];
   return JSON.stringify({
     profileDir: payload.profileDir,
     memory: payload.memory,
     user: payload.user,
     dropped: [...payload.dropped],
     ...(blocks.length === 0 ? {} : { blocks: blocks.map((b) => ({ label: b.label, file: b.file, limit: b.limit, text: b.text })) }),
+    ...(ops.length === 0 ? {} : { ops: ops.map((b) => ({ label: b.label, ops: [...b.ops] })) }),
   });
 }
 
@@ -137,10 +159,24 @@ function labelOf(ref: BlockRef): string {
   return typeof ref === "string" ? ref : ref.label;
 }
 
+/**
+ * [C4] Writing a whole block is the consolidation layer's job, so every call here carries the
+ * consolidation gate. `consolidationMayEdit` is what lets a `read_only` block be written at all,
+ * and by default it is nothing.
+ */
+function gateFor(mayEdit: readonly string[] = []): MemoryWriteGate {
+  return mayEdit.length === 0 ? CONSOLIDATION_WRITE_GATE : { writer: "consolidation", consolidationMayEdit: [...mayEdit] };
+}
+
 /** Would replacing the block succeed against the file as it is now? A reason when not. */
-export function checkReplaceBlock(profileDir: string, target: BlockRef, rendered: string): string | null {
+export function checkReplaceBlock(profileDir: string, target: BlockRef, rendered: string, mayEdit: readonly string[] = []): string | null {
+  const gated = checkMemoryWriteGate(target, [{ action: "replace" }], gateFor(mayEdit));
+  if (gated !== null) return gated;
   const current = readEntries(profileDir, target);
-  if (new Set(current).size !== current.length) return null;
+  if (new Set(current).size !== current.length) {
+    const size = render(canonicalEntries(rendered)).length;
+    return size > capOf(target) ? `the result would be ${size} chars, over the ${capOf(target)}-char cap by ${size - capOf(target)}` : null;
+  }
   const result = applyOperations(current, replaceAllOperations(current, canonicalEntries(rendered)), capOf(target));
   return result.ok ? null : result.reason;
 }
@@ -148,20 +184,20 @@ export function checkReplaceBlock(profileDir: string, target: BlockRef, rendered
 /**
  * Replace one block under the memory tool's lock. A file holding byte-identical duplicate entries
  * cannot be addressed by `old_text` at all (the tool refuses an ambiguous match), so that one case
- * — the case consolidation exists to clean up — takes the tool's atomic write directly.
+ * — the case consolidation exists to clean up — is written whole. It used to be written with no
+ * lock at all, which meant a seat's append could vanish between this function's read and its
+ * rename; `commitReplaceAll` takes the SAME lock every other writer takes (fleet audit 3.3).
  */
-export function replaceBlock(profileDir: string, target: BlockRef, rendered: string): void {
+export function replaceBlock(profileDir: string, target: BlockRef, rendered: string, mayEdit: readonly string[] = []): void {
   const next = canonicalEntries(rendered);
   const current = readEntries(profileDir, target);
   const cap = capOf(target);
   const label = labelOf(target);
-  if (new Set(current).size !== current.length) {
-    const size = render(next).length;
-    if (size > cap) throw new Error(`memory(${label}): ${size} chars is over the ${cap}-char cap`);
-    writeEntries(profileDir, target, render(next));
-    return;
-  }
-  const result = commitOperations(profileDir, target, replaceAllOperations(current, next), cap);
+  const gate = gateFor(mayEdit);
+  const result =
+    new Set(current).size !== current.length
+      ? commitReplaceAll(profileDir, target, render(next), cap, gate)
+      : commitOperations(profileDir, target, replaceAllOperations(current, next), cap, gate);
   if (!result.ok) throw new Error(`memory(${label}) refused: ${result.reason}`);
 }
 
@@ -186,21 +222,25 @@ function priorText(previous: MemoryBytes, label: string): string {
  */
 export function applyMemoryBytes(profileDir: string, bytes: MemoryBytes): void {
   const plan = writePlan(bytes);
+  // [C4] The draft's own block list is the permission: a read-only block reaches a draft only
+  // because it was listed under `memory.consolidation_may_edit` when the turn was made, and a
+  // human promoted what came out. Nothing else may put one here.
+  const mayEdit = (bytes.blocks ?? []).map((block) => block.label);
   for (const step of plan) {
-    const reason = checkReplaceBlock(profileDir, step.ref, step.text);
+    const reason = checkReplaceBlock(profileDir, step.ref, step.text, mayEdit);
     if (reason !== null) throw new Error(`memory(${step.label}) refused: ${reason}`);
   }
   const previous = readMemoryBytes(profileDir, bytes.blocks ?? []);
   const written: typeof plan = [];
   try {
     for (const step of plan) {
-      replaceBlock(profileDir, step.ref, step.text);
+      replaceBlock(profileDir, step.ref, step.text, mayEdit);
       written.push(step);
     }
   } catch (error) {
     for (const step of written.reverse()) {
       try {
-        replaceBlock(profileDir, step.ref, priorText(previous, step.label));
+        replaceBlock(profileDir, step.ref, priorText(previous, step.label), mayEdit);
       } catch {
         // The original failure is the one worth raising; a failed revert must not mask it.
       }
