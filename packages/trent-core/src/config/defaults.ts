@@ -65,6 +65,11 @@ export const DEFAULT_CONFIG: TrentConfig = {
   privacy: { redact_prompts: false, patterns: [] },
   policy: { rules: [] },
   personality: "default",
+  // [A2.1] workspace context
+  // Per-file and whole-set caps on the workspace's instruction files. Mirrors the schema's
+  // defaults; `workspace-context/types.ts` holds the same two numbers for callers that load
+  // without a config.
+  workspace: { max_file_chars: 12_000, max_total_chars: 24_000 },
   theme: "dark",
 };
 

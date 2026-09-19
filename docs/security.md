@@ -279,6 +279,18 @@ unknown class fails config validation. Tested in `policy-rules.test.ts` and `pol
 
 Every skill is scanned before it loads. See [skills.md](skills.md).
 
+## Workspace instruction files
+
+A repository's `AGENTS.md`, `CLAUDE.md` and `.trent/*.md` are text Trent did not write, so they pass
+the same prompt-injection scanner a stored cron prompt passes
+(`packages/trent-core/src/tools/cron/prompt-scan.ts`) before any of them reaches a prompt: a flagged
+file is refused by name and by scan category, never by quoting what it matched, while the other
+files still load, and `trent workspace status` lists the refusal. Two rules stand in front of the
+scan: the workspace is untrusted until `trent workspace trust` records it in
+`<profile>/workspace-trust.json` (mode 0600), and nothing outside the git root or the working
+directory is read, so a symlink pointing out of the workspace is refused instead of followed. See
+[configuration.md](configuration.md), "Workspace context files".
+
 ## Reported, not fixed: defects in the wrapped application
 
 `apps/web/` is read-only in this repository. These are real and they are outside the CLI's scope.

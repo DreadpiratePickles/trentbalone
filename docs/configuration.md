@@ -232,6 +232,48 @@ policy:
       reason: deploys are run by hand
 ```
 
+### Workspace context files
+
+Trent reads the instruction files of the directory it is run in, the way Claude Code and Codex read
+`AGENTS.md` (`packages/trent-core/src/workspace-context/`). The candidates, in the order the prelude
+renders them:
+
+1. `AGENTS.md` at the git root (the nearest ancestor holding `.git`; the working directory itself
+   when there is none),
+2. `CLAUDE.md` at the git root,
+3. `.trent/*.md` at the git root, sorted by file name,
+4. the same three sets in the working directory, when that is not the git root.
+
+Nothing outside the git root or the working directory is read, and a candidate whose symlink
+resolves outside them is refused rather than followed.
+
+```yaml
+workspace:
+  max_file_chars: 12000       # one file; a file over it is truncated, never dropped silently
+  max_total_chars: 24000      # every loaded file together
+```
+
+A file over either cap keeps its first `n` characters and carries one extra line naming the file,
+its real length and the cap that cut it, so a truncation is something you are told about. The
+marker is Trent's own line and is not charged to the cap. A file that arrives after the total cap
+is spent is reported as a refusal, not omitted.
+
+**A workspace is untrusted until you say otherwise**, so cloning a repository is never enough to put
+text in Trent's prompt. An untrusted workspace loads nothing and returns one line naming the command
+that would trust it. Trust is recorded in `<profile>/workspace-trust.json` (mode 0600), keyed by the
+realpath of the root:
+
+```
+trent workspace status [path]     # root, trust, files found, refusals, characters
+trent workspace trust [path]      # prints the file list, asks, then records; --yes skips the question
+trent workspace untrust [path]    # forget it again
+```
+
+Editing a trusted file does not revoke trust — that would make every edit a prompt — but each load
+records the content hash, and `trent workspace status` says `changed since trusted` when the set no
+longer matches what was approved. Every file is scanned for prompt injection before it loads; see
+[security.md](security.md), "Workspace instruction files".
+
 ### Double texting
 
 `gateway.double_text_policy` and `repl.double_text_policy` each take `enqueue` (hold the message
