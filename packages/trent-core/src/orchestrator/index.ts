@@ -47,6 +47,7 @@ import { applyModelEnv, assertRoutableModel } from "./model-env.js";
 import { PortShaper, PortTally } from "./provider-ports.js";
 import { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots, type ReleaseSlot } from "./run-slots.js";
 import { closeRunScope, createContextNoticeBus, openRunScope } from "./run-hooks.js";
+import { applyConsolidation, finishRunVerification, type RunVerificationPort } from "./run-verification.js";
 import { SeatTally, applyStepFailures, shapeEvent, type SeatModelFn } from "./seat-guard.js";
 import { guardedSeatModel } from "./seat-guard-budget.js";
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
@@ -75,6 +76,7 @@ export { createOrchestratorDelegatePort, DELEGATE_MAX_CHILDREN, DELEGATE_MAX_DEP
 export type { OrchestratorDelegatePort, DelegatedChildRunner, DelegatedChildSpec, DelegatedChildOutcome } from "./delegate-port.js";
 export { createAppDelegatedChildRunner } from "./delegate-child.js";
 export { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots } from "./run-slots.js";
+export { createGoalVerificationPort, finishRunVerification, type RunVerificationPort } from "./run-verification.js";
 
 /**
  * Default drain bound. A 12-step plan (the planner's Zod maximum) costs one plan job, up to 12
@@ -120,6 +122,8 @@ export type OrchestratorDepsWithImprove = OrchestratorDeps & {
    * (`detail: "queued: N ahead ..."`). A run parked on an approval keeps its slot (`./run-slots.ts`).
    */
   readonly maxConcurrentRuns?: number;
+  /** [D4] The run-end hook: goal gates before the judge, and `verify_on_stop` (`run-verification.ts`). */
+  readonly verification?: RunVerificationPort;
 };
 
 // --- The drain loop -----------------------------------------------------------------------------
@@ -307,16 +311,6 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
     return { summary, completedAt };
   }
 
-  /** Writes the wrapper's consolidated brief where the snapshot and the store read it. */
-  async function applyConsolidation(libs: Libs, runId: string, summary: string): Promise<void> {
-    const live = libs.orchestrator.getOrchestrationRun(runId);
-    if (live) {
-      live.summary = summary;
-      libs.cache.cacheOrchestrationRun(live);
-    }
-    await libs.store.updateOrchestratorRun(runId, { summary }).catch(() => undefined);
-  }
-
   function run(options: OrchestratorRunOptions): OrchestratorRunHandle {
     const channel = new EventChannel();
     const maxJobs = options.maxJobs ?? defaultMaxJobs;
@@ -429,6 +423,8 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
           await applyConsolidation(libs, id, portShaper.consolidated);
         }
         await applyFailureOverride(libs, id, tally);
+        // [D4] Gates before judgment, then verify_on_stop; a refusal rides the bus as a step_note.
+        await finishRunVerification(deps.verification, { runId: id, objective: options.objective, deliver });
         // The loop's writes are part of the run: a caller that sweeps right after must see them.
         await deps.improve?.flush();
         const snapshot = await snapshotOf(libs, id);

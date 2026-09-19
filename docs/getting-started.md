@@ -188,6 +188,10 @@ npm run cli -- run "..." --json                        # the final result object
 npm run cli -- run "..." --max-cost-cents 200          # stop the run once it passes $2.00
 ```
 
+A run that belongs to a goal ends by running that goal's shell quality gates, and a turn that edited
+code cannot give a final answer without fresh test or build evidence — `trent goal create "<objective>"
+--gate "typecheck=npx tsc --noEmit"` and `goals.verify_on_stop`, both in [docs/goals.md](goals.md).
+
 `trent run` builds the same headless runtime the REPL, the gateway and `trent cron` build, runs one
 objective on it, and exits. It is not interactive: a step that needs an approval cannot be answered
 here, so the run parks, the approval is persisted, and the command prints the id and exits 7. Decide

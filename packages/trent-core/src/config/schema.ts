@@ -41,6 +41,7 @@ import { TrentSecretsSchema } from "./sections/secrets.js";
 import { EgressConfigSchema, TerminalBackendSchema, TerminalConfigSchema } from "./sections/terminal.js";
 import { ToolDisclosureConfigSchema, ToolsetSchema } from "./sections/tools.js";
 import { WorkspaceConfigSchema } from "./sections/workspace.js";
+import { GoalsConfigSchema } from "../goals/config-schema.js";
 
 /** Every name this module exported before the sections moved out; importers are unaffected. */
 export {
@@ -184,6 +185,8 @@ export const TrentConfigSchema = z.object({
     })
     .strict()
     .default({}),
+  // [D4] goals: gates before the judge, and verify_on_stop (`goals/config-schema.ts`, docs/goals.md).
+  goals: GoalsConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   improve: ImproveConfigSchema.default({}),

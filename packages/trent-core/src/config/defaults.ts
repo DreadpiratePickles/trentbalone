@@ -154,6 +154,20 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // exists for a profile that trusts its own sources, and reopens the memory-poisoning path
   // deliberately. See docs/security.md, "Prompt injection".
   provenance: { untrusted_writes: "hold", untrusted_skills: "deny" },
+  // [D4] goals
+  // `verify_on_stop` is on by default, because the failure it prevents — a turn that edited code
+  // and then declared itself done — is the cheapest and most repeated failure a coding harness has.
+  // `auto_continue` is off by default: a red gate that silently starts another metered run is a
+  // bill nobody authorised, and `trent goal continue <id>` is the explicit path. The command list
+  // must stay equal to `DEFAULT_VERIFY_COMMANDS` in `goals/types.ts`, which
+  // `goals/config.test.ts` asserts. See docs/goals.md.
+  goals: {
+    verify_on_stop: true,
+    verify_commands: ["npm test", "npm run typecheck", "npx vitest", "npx tsc", "pytest", "go test", "cargo test"],
+    auto_continue: false,
+    max_continuations: 3,
+  },
+  // [/D4]
   personality: "default",
   theme: "dark",
   // [D0] improvement gates

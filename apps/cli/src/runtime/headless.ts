@@ -18,8 +18,10 @@ import {
   openCheckpointSession,
   type CheckpointSession,
 } from "@trent/core/checkpoints/index.js";
+import { closeGoalSession, watchVerification, type GoalSession } from "@trent/core/goals/index.js";
 import {
   createAppDelegatedChildRunner,
+  createGoalVerificationPort,
   createOrchestrator as createRealOrchestrator,
   createOrchestratorDelegatePort,
   type ConversationMessage,
@@ -44,6 +46,7 @@ import { renderWorkspaceContext } from "../repl/workspace.js";
 import { wireImproveLoop } from "../repl/improve-loop.js";
 import { wireTools, type ToolWiring, type ToolWiringDeps } from "../repl/tools.js";
 import type { ReplConfig, ReplStore } from "../repl/types.js";
+import { wireGoals, type GoalsSlice } from "./goals.js";
 
 /** The company a local session runs against when config names none. Found again by slug on restart. */
 export const DEFAULT_COMPANY = { name: "Trent Local", slug: "trent-local" } as const;
@@ -128,6 +131,12 @@ export interface HeadlessRuntime {
    * for `/checkpoints` and `/rollback`.
    */
   readonly checkpoints: CheckpointSession | undefined;
+  // [D4] goals
+  /**
+   * The goal store, the turn's verification evidence and the sandbox a quality gate runs in.
+   * `/goal` and `trent goal` find the same object on the process (`activeGoalSession()`).
+   */
+  readonly goals: GoalSession;
   /** One run against the session's company: the orchestrator's event stream. */
   run(objective: string, options?: HeadlessRunOptions): AsyncIterable<OrcEvent>;
   /**
@@ -298,6 +307,8 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
   const notices: string[] = [];
   // [E1] Before the toolsets: `file_ops` ledgers a write only while a session is open.
   const checkpoints = wireCheckpoints(config as CheckpointsSlice, { workspace, profileDir });
+  // [D4] The goal store, the turn's verification evidence and the sandbox a quality gate runs in.
+  const goals = wireGoals(config as GoalsSlice, { workspace, profileDir, backend: config.terminal.backend === "docker" ? "docker" : "local" });
 
   // `delegate_task` binds to the orchestrator's own delegated child step: the port is built
   // here so the same object is both the tool's port and the orchestrator's hook.
@@ -316,6 +327,12 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     probeDocker: deps.probeDocker,
     delegate,
   });
+  // [D4] The seats' shell and code calls are offered to the turn's evidence ledger on the way
+  // through, which is the only way `verify_on_stop` can know a test ran: a `ToolCallRecord` carries
+  // a status and a summary, and the orchestrator never sees the command at all. The watched
+  // adapters replace the originals IN PLACE, so the session, the orchestrator and `/tools` are all
+  // still looking at one set of adapters rather than two that can drift.
+  tools.adapters.splice(0, tools.adapters.length, ...watchVerification(tools.adapters, goals.evidence));
 
   try {
     const databaseUrl = `file:${profileDir}/trent.db`;
@@ -383,6 +400,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       tools: tools.adapters,
       fleetMemory,
       delegate,
+      verification: createGoalVerificationPort(),
       ...improve,
       improve: busHook,
     });
@@ -412,6 +430,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       alerts,
       versionPins,
       checkpoints,
+      goals,
       run: (objective, options = {}) => {
         // [E1] One run is one turn: `trent run`, a cron tick and a heartbeat are each a single
         // checkpoint, and a REPL turn is the run it starts. Opening a turn nothing has written
@@ -436,6 +455,9 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
         alerts?.close();
         // [E1] A write after this belongs to no turn of this session, so it is ledgered into none.
         if (checkpoints !== undefined) closeCheckpointSession(checkpoints);
+        // [D4] A gate after this belongs to no goal of this session, and its sandbox goes with it.
+        closeGoalSession(goals);
+        await goals.cleanup();
         await tools.cleanup();
       },
     };
@@ -443,6 +465,8 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     // The graph did not come up: the proxy, the sandboxes and the ledger session already running
     // must not outlive it.
     if (checkpoints !== undefined) closeCheckpointSession(checkpoints);
+    closeGoalSession(goals);
+    await goals.cleanup();
     await tools.cleanup();
     throw error;
   }

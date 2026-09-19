@@ -173,6 +173,20 @@
       "untrusted_writes": "hold",
       "untrusted_skills": "deny"
     },
+    "goals": {
+      "verify_on_stop": true,
+      "verify_commands": [
+        "npm test",
+        "npm run typecheck",
+        "npx vitest",
+        "npx tsc",
+        "pytest",
+        "go test",
+        "cargo test"
+      ],
+      "auto_continue": false,
+      "max_continuations": 3
+    },
     "personality": "default",
     "theme": "dark",
     "improve": {
@@ -468,6 +482,20 @@
     "provenance": {
       "untrusted_writes": "hold",
       "untrusted_skills": "deny"
+    },
+    "goals": {
+      "verify_on_stop": true,
+      "verify_commands": [
+        "npm test",
+        "npm run typecheck",
+        "npx vitest",
+        "npx tsc",
+        "pytest",
+        "go test",
+        "cargo test"
+      ],
+      "auto_continue": false,
+      "max_continuations": 3
     },
     "personality": "fixture-personality",
     "theme": "light",

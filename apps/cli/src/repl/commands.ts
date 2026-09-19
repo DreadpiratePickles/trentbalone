@@ -8,6 +8,7 @@
  */
 
 import { activeCheckpointSession } from "@trent/core/checkpoints/index.js";
+import { GOAL_COMMANDS } from "./goal-commands.js";
 import { GLYPHS, fadingRule, type Theme } from "../ui/index.js";
 import { formatCents } from "./budget.js";
 import { contextReport, contextReportLines } from "./context-report.js";
@@ -480,6 +481,8 @@ export const REPL_COMMANDS: Record<string, ReplCommand> = {
       return lines.join("\n");
     },
   },
+  // [D4] `/goal` and `/goals` (./goal-commands.ts, docs/goals.md).
+  ...GOAL_COMMANDS,
 };
 
 export function commandNames(): string[] {
