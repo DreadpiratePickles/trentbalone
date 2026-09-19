@@ -37,14 +37,22 @@ export async function listSharedSkills(store: ImproveStorePort, companyId: strin
   return out;
 }
 
-/** One line per skill; the body is fetched on demand with `fleet_skill_view`. */
-export function renderSharedSkillsIndex(skills: readonly SharedSkill[]): string {
+export const SHARED_SKILLS_HEADING = '## Shared skills (fleet_skill_view {"skill": "<task type>"} for the body)';
+
+/**
+ * One line per skill; the body is fetched on demand with `fleet_skill_view`.
+ *
+ * `heading` exists because the index is rendered TWICE into one prompt: the org tier is the same
+ * bytes for every seat and rides the stable tier, while a seat's own skills are seat-scoped and
+ * ride the context tier. Two identical headings in one prompt would read as a duplication bug.
+ */
+export function renderSharedSkillsIndex(skills: readonly SharedSkill[], heading: string = SHARED_SKILLS_HEADING): string {
   if (skills.length === 0) return "";
   const lines = skills.map((s) => {
     const title = firstHeading(s.content);
     return `- ${s.taskType} [${s.tier}]${title ? `: ${title}` : ""}`;
   });
-  return `## Shared skills (fleet_skill_view {"skill": "<task type>"} for the body)\n${lines.join("\n")}`;
+  return `${heading}\n${lines.join("\n")}`;
 }
 
 /** Resolve `skill` as a task type or an id among the skills this seat may see. */

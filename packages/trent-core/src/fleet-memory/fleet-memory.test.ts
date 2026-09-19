@@ -223,7 +223,14 @@ describe("the orchestrator hook: one prelude per run, shared by every seat (requ
     expect((await memory.execute('memory {"target":"memory","action":"add","content":"parent fact 2"}', { companyId: COMPANY })).status).toBe("completed");
   });
 
-  it("the prelude is frozen per run: the same text for every seat call in the run", async () => {
+  /**
+   * This test used to assert that the WHOLE prelude was one frozen string, which is how the
+   * first seat's recall and the first seat's skills reached every later seat of the run
+   * (`orchestrator-hook.ts` memoised on the first call, audit finding 9 in AGENTS.md). The freeze
+   * survives where it belongs — the STABLE tier and the run's view of the company — and the
+   * seat-scoped tier is now per seat (`per-seat-prelude.test.ts`).
+   */
+  it("freezes the stable tier and the run's view of the company, not the seat-scoped tier", async () => {
     const source = seededSource();
     const hook = createFleetMemoryHook({ source, memory: createMemoryAdapter({ profileDir }) });
     const seen: string[] = [];
@@ -235,10 +242,21 @@ describe("the orchestrator hook: one prelude per run, shared by every seat (requ
     await seat({ companyId: COMPANY, subtask: { id: "a", seat: "growth", objective: "reduce churn in self-serve cohorts" } });
     source.addRun(run("run_late", "churn cohorts again", [{ role: "analyst", title: "Late churn note", output: "LATE churn cohorts finding" }]));
     await seat({ companyId: COMPANY, subtask: { id: "b", seat: "content", objective: "reduce churn in self-serve cohorts" } });
-    expect(seen[0]).toBe(seen[1]);
-    expect(seen[0]).toContain("second user");
-    expect(seen[0]).not.toContain("LATE");
+
+    // The stable tier is one string for the run, and it is what both seats were handed.
+    const stable = hook.stablePreludeFor("r1");
+    expect(stable).toBeTypeOf("string");
+    expect(seen[0]).toContain(stable as string);
+    expect(seen[1]).toContain(stable as string);
+    // Each seat has its own assembled injection, measured separately.
+    expect(hook.contextFor("r1", "growth")?.chars).toBe((seen[0] ?? "").length);
+    expect(hook.contextFor("r1", "content")?.chars).toBe((seen[1] ?? "").length);
     expect(hook.preludeFor("r1")).toBe(seen[0]);
+    expect(hook.preludeFor("r1", "content")).toBe(seen[1]);
+    // The company view is frozen for the run: the second seat cannot see a run added mid-run.
+    expect(seen[0]).toContain("second user");
+    expect(seen[1]).toContain("second user");
+    expect(seen[1]).not.toContain("LATE");
   });
 
   it("exposes the memory and fleet_search adapters for seat wiring", () => {

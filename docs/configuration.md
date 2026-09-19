@@ -375,6 +375,72 @@ ten-cent cap, which the setup wizard rebuild found and fixed.
 
 Percentages are the exception. `alert_thresholds` is a list of percentages of `daily_cap`.
 
+## Context management
+
+Two keys bound what a seat is told, and one decides when a session forgets.
+
+```yaml
+context:
+  ceiling_chars: 60000       # the whole wrapper injection for one seat call
+  # compact_after_chars: 12000  # optional; defaults to repl.history_chars * 2
+repl:
+  history_chars: 6000        # what the next run may be told about the turns before it
+  history_turns: 8
+```
+
+### The three tiers
+
+Everything the wrapper injects into a seat prompt is assembled in three tiers, in this order
+(`packages/trent-core/src/fleet-memory/tiers.ts`):
+
+| Tier | Contents | Rebuilt |
+|---|---|---|
+| `stable` | the named memory blocks, the `workspace-context` block, the org-tier shared skills index | once per run, and byte-identical across runs of the same profile |
+| `context` | this seat's own live skills, the cross-agent recall for this objective | once per (run, seat) |
+| `volatile` | the session transcript, the active personality's tone stance | whenever the surface changes it |
+
+The stable tier is the part a provider could cache, so nothing that depends on the objective, the
+seat or the turn may live in it. Before 2026-09-18 the whole prelude was memoised with the *first*
+seat's scope, which handed every later seat of a run the first seat's recall and the first seat's
+skills; the freeze now sits on the stable tier and on the run's view of the company, and each seat
+gets its own `context` tier.
+
+The personality reaches the `volatile` tier and nowhere else. It is never part of the system prompt
+and never part of the seat prompt the improvement loop protects
+(`packages/trent-core/src/improve/protected-prompt.ts`). `personality: "default"` is a personality
+like any other and does inject its tone stance.
+
+### The ceiling
+
+`context.ceiling_chars` is measured against the assembled injection on every seat call. Over it, the
+`context` and `volatile` blocks are dropped oldest-first — recall before the transcript, the
+transcript before the one-line tone stance — and the `stable` tier is never trimmed: silently
+deleting the company's memory is worse than a long prompt you can see. A stable tier that is on its
+own over the ceiling is kept and reported.
+
+At 80 percent of the ceiling the run emits one `step_note` naming the measured size, the estimated
+token count and what was trimmed. Once per run, not once per seat call.
+
+Characters, not tokens: a ceiling has to be checkable offline and identically on every provider. The
+token figure is the gateway's own 4-chars-per-token estimate, and a provider-reported count always
+wins over it.
+
+### Compaction
+
+When a session's stored transcript passes `context.compact_after_chars` (by default twice
+`repl.history_chars`), the next persisted answer triggers one compaction:
+
+1. the turns about to be dropped are offered to the shared memory through the same `memory` adapter
+   the `memory` tool writes with, so block limits and `read_only` blocks are enforced by the one
+   writer that already enforces them. With no model gateway available, nothing is written;
+2. those turns are summarised into one message. If that call is unavailable **nothing is dropped** —
+   forgetting turns with nothing in their place is the failure this exists to remove;
+3. one compaction event is written into the session: a `system` message whose
+   `metadata.compaction` carries the forgotten message ids, the summary and the sizes before and
+   after. One event per compaction, so a session can say what it no longer remembers.
+
+The most recent turns are kept verbatim, and a tool call is never separated from its result.
+
 ## Providers
 
 Nine names are accepted. Five are routed by the wrapped application itself; the other four are

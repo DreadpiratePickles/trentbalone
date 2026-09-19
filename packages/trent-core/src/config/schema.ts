@@ -234,7 +234,26 @@ export const TrentConfigSchema = z.object({
   terminal: TerminalConfigSchema.default({}),
   egress: EgressConfigSchema.default({}),
   gateway: GatewayConfigSchema.default({}),
-  repl: z.object({ double_text_policy: z.enum(["enqueue", "interrupt", "reject"]).default("enqueue") }).default({}),
+  // [A1] context management
+  // `history_turns` / `history_chars` were read by `apps/cli/src/repl/conversation.ts` and never
+  // declared here, so zod stripped both on every load and the profile's setting did nothing.
+  // `history_chars` is the ONE name for "what the next run may be told"; compaction is keyed off it.
+  repl: z.object({
+    double_text_policy: z.enum(["enqueue", "interrupt", "reject"]).default("enqueue"),
+    history_turns: z.number().int().positive().default(8),
+    history_chars: z.number().int().positive().default(6000),
+  }).default({}),
+  /**
+   * `ceiling_chars` bounds everything the wrapper injects into a seat prompt (the three tiers of
+   * `fleet-memory/tiers.ts`); over it, the context and volatile tiers are trimmed oldest-first and
+   * the stable tier never is. `compact_after_chars` is where a stored transcript is compacted;
+   * omitted, it is `repl.history_chars * 2`. Characters, not tokens: a ceiling must be checkable
+   * offline and identically on every provider (docs/configuration.md, "Context management").
+   */
+  context: z.object({
+    ceiling_chars: z.number().int().positive().default(60_000),
+    compact_after_chars: z.number().int().positive().optional(),
+  }).default({}),
   /** `max_concurrent_runs`: runs driven at once per profile; a run past the cap waits FIFO (docs/jobs.md). */
   runtime: z.object({ max_concurrent_runs: z.number().int().positive().default(2) }).default({}),
   heartbeat: HeartbeatConfigSchema.default({}),

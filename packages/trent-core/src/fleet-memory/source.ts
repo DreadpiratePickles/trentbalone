@@ -80,3 +80,42 @@ export class InMemoryFleetSource implements FleetMemorySource {
     return this.#playbook.get(companyId) ?? [];
   }
 }
+
+/**
+ * A read-through cache over one source, for the life of ONE run.
+ *
+ * The prelude used to be memoised whole, which froze the run's view of the company by accident:
+ * the first seat's recall was handed to every later seat. Now each seat gets its own recall, so
+ * the freeze has to be explicit and has to sit on the DATA — otherwise a seat that runs a minute
+ * later silently recalls runs the first seat could not see, and two seats of one run reason over
+ * two different companies. Keyed by company id; the improve store is passed straight through
+ * because its skill rows are already scoped per seat and read-only here.
+ */
+export function freezeFleetSource(source: FleetMemorySource): FleetMemorySource {
+  const runs = new Map<string, Promise<readonly FleetRun[]>>();
+  const playbook = new Map<string, Promise<readonly FleetPlaybookEntry[]>>();
+  const frozen: FleetMemorySource = {
+    listRuns(companyId) {
+      let cached = runs.get(companyId);
+      if (!cached) {
+        cached = source.listRuns(companyId);
+        runs.set(companyId, cached);
+      }
+      return cached;
+    },
+    ...(source.improve === undefined ? {} : { improve: source.improve }),
+  };
+  if (source.listPlaybook === undefined) return frozen;
+  const listPlaybook = source.listPlaybook.bind(source);
+  return {
+    ...frozen,
+    listPlaybook(companyId) {
+      let cached = playbook.get(companyId);
+      if (!cached) {
+        cached = listPlaybook(companyId);
+        playbook.set(companyId, cached);
+      }
+      return cached;
+    },
+  };
+}

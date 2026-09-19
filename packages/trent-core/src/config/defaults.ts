@@ -52,7 +52,12 @@ export const DEFAULT_CONFIG: TrentConfig = {
     double_text_policy: "enqueue",
     alerts: { approval_wait_minutes: 30 },
   },
-  repl: { double_text_policy: "enqueue" },
+  // [A1] context management
+  // `history_chars` is what the next run may be told; `context.ceiling_chars` bounds the whole
+  // wrapper injection (memory blocks, skills index, recall, transcript, personality suffix).
+  // 60000 chars is ~15000 estimated tokens at the gateway's 4-chars-per-token rate.
+  repl: { double_text_policy: "enqueue", history_turns: 8, history_chars: 6000 },
+  context: { ceiling_chars: 60_000 },
   runtime: { max_concurrent_runs: 2 },
   heartbeat: { enabled: false, interval_minutes: 60, consolidate_memory: true },
   fleet: {

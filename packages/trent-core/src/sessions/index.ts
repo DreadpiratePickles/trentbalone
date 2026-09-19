@@ -14,3 +14,24 @@ export type {
 } from "./schema.js";
 export * from "./SessionStore.js";
 export * from "./SessionManager.js";
+export {
+  COMPACTION_CONTENT_PREFIX,
+  COMPACTION_SUMMARY_ROLE,
+  DEFAULT_FLUSH_BLOCK,
+  MIN_KEPT_MESSAGES,
+  compactSession,
+  createMemoryFlush,
+  isCompactionEvent,
+  planCompaction,
+  shouldCompact,
+  transcriptChars,
+  type CompactionInput,
+  type CompactionLimits,
+  type CompactionOutcome,
+  type CompactionPlan,
+  type CompactionRecord,
+  type FlushGateway,
+  type MemoryFlushOptions,
+  type MemoryFlushReport,
+  type MemoryWritePort,
+} from "./compaction.js";

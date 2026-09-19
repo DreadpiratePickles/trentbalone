@@ -11,7 +11,7 @@
  * Nothing here logs a prompt body or a memory entry.
  */
 
-import { createAppFleetSource, createFleetMemoryHook, type FleetMemoryHook, type MemoryBlock } from "@trent/core/fleet-memory/index.js";
+import { createAppFleetSource, createFleetMemoryHook, type ContextNotice, type FleetMemoryHook, type MemoryBlock } from "@trent/core/fleet-memory/index.js";
 import type { ImproveStorePort } from "@trent/core/store/index.js";
 import type { ReplToolListing } from "./types.js";
 
@@ -25,6 +25,23 @@ export interface FleetMemoryWiringDeps {
   readonly store?: unknown;
   /** Config `memory.blocks`; the three shipped blocks (memory, user, company) when omitted. */
   readonly blocks?: readonly MemoryBlock[];
+  /**
+   * `context.ceiling_chars`: the ceiling on the whole assembled injection. Over it the context and
+   * volatile tiers are trimmed oldest-first and the stable tier never is.
+   */
+  readonly ceilingChars?: number;
+  /**
+   * The active personality's `systemPromptSuffix` (`compact.ts` `personalitySuffix`). It lands in
+   * the VOLATILE tier and nowhere else: never the system prompt, never the protected seat prompt.
+   */
+  readonly personalitySuffix?: string;
+  /**
+   * A2.1's rendered workspace context (`AGENTS.md`, `CLAUDE.md`, `.trent/*.md`), already scanned
+   * and trusted by its own module. This wiring opens no file.
+   */
+  readonly workspaceContext?: string;
+  /** Receives `context_pressure` once per run; the orchestrator also bridges it onto the run bus. */
+  readonly onNotice?: (notice: ContextNotice) => void;
 }
 
 /** `store.improve()` when the store has one; the REPL's store type is structural and may not. */
@@ -36,7 +53,15 @@ function improveOf(store: unknown): ImproveStorePort | undefined {
 export function wireFleetMemory(deps: FleetMemoryWiringDeps): FleetMemoryHook {
   const improve = improveOf(deps.store);
   const source = createAppFleetSource(improve === undefined ? {} : { improve });
-  return createFleetMemoryHook({ source, profileDir: deps.profileDir, blocks: deps.blocks });
+  return createFleetMemoryHook({
+    source,
+    profileDir: deps.profileDir,
+    ...(deps.blocks === undefined ? {} : { blocks: deps.blocks }),
+    ...(deps.ceilingChars === undefined ? {} : { ceilingChars: deps.ceilingChars }),
+    ...(deps.personalitySuffix === undefined ? {} : { personalitySuffix: deps.personalitySuffix }),
+    ...(deps.workspaceContext === undefined ? {} : { workspaceContext: deps.workspaceContext }),
+    ...(deps.onNotice === undefined ? {} : { onNotice: deps.onNotice }),
+  });
 }
 
 /** The hook's adapters as `/tools` and `/status` list them, after the toolsets. */

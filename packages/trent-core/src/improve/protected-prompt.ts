@@ -1,6 +1,15 @@
 /**
  * Item 6 of the loop — the protected-prompt rule, adopted from Hermes (SOUL.md is protected even
- * under yolo; personality never touches the system prompt).
+ * under yolo; personality never touches the PROTECTED seat prompt).
+ *
+ * The personality clause was previously written as "personality never touches the system prompt",
+ * and the audit (A.8) found the consequence: `config.personality` reached no prompt at all, so the
+ * setting, the `trent personality` command and six built-in personalities did nothing. The rule is
+ * about PROVENANCE, not absence. `getActivePersonality().systemPromptSuffix` is appended to the
+ * VOLATILE tier of the wrapper's own injection (`fleet-memory/orchestrator-hook.ts`,
+ * `fleet-memory/tiers.ts`) — never to the system prompt, never to the stable tier a provider would
+ * cache, and never to the seat prompt this file protects. Nothing a seat can write, propose or
+ * promote can move it there; `protected-prompt.test.ts` asserts both halves.
  *
  * No agent may write its own seat prompt. The only path to a changed seat prompt is:
  *   GEPA proposal -> executing gate passes -> `stagePromptProposal` (quarantine) ->

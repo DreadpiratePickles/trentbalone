@@ -40,6 +40,18 @@ export interface SessionMessageMetadata {
   status?: "completed" | "interrupted";
   tool_calls?: Array<{ name: string; args: unknown; result: unknown }>;
   files?: string[];
+  /**
+   * Present on exactly one message per compaction (`./compaction.ts`): the ids this session
+   * forgot, the summary that replaced them and the sizes before and after. A reader that wants to
+   * know what a session no longer remembers reads this and nothing else.
+   */
+  compaction?: {
+    at: string;
+    forgotten: readonly string[];
+    summary: string;
+    chars_before: number;
+    chars_after: number;
+  };
 }
 
 export interface SessionMessage {

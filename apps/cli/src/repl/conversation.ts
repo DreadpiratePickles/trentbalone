@@ -15,13 +15,15 @@
  */
 
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
+import { isCompactionEvent, type SessionMessage } from "@trent/core/sessions/index.js";
 import { truncate } from "../ui/index.js";
 import { formatCents } from "./budget.js";
 import type { ReplConfig } from "./types.js";
 
 /** One prior message of this session, as the run receives it. */
 export interface HistoryMessage {
-  readonly role: "user" | "assistant";
+  /** `system` is a compaction summary standing in for turns the transcript no longer holds. */
+  readonly role: "user" | "assistant" | "system";
   readonly content: string;
 }
 
@@ -58,6 +60,24 @@ export function trimHistory(messages: readonly HistoryMessage[], limits: History
     from += 1;
   }
   return kept.slice(from);
+}
+
+/**
+ * What a resumed session threads into the next run.
+ *
+ * Three rules, each for a reason the transcript cannot express on its own:
+ *   - an INTERRUPTED answer stays in the session file but is never re-threaded: a fragment the
+ *     user stopped was not this turn's reply, and presenting it as one is worse than silence;
+ *   - a COMPACTION event IS threaded, as the `system` turn it is. It is the only thing standing in
+ *     for the turns it replaced, so dropping it here would be the silent forgetting that
+ *     compaction exists to remove;
+ *   - every other `system` or `tool` message is dropped: it is not a turn anybody took.
+ */
+export function historySeed(messages: readonly SessionMessage[]): HistoryMessage[] {
+  return messages
+    .filter((message) => message.role === "user" || message.role === "assistant" || isCompactionEvent(message))
+    .filter((message) => message.metadata?.status !== "interrupted")
+    .map((message) => ({ role: message.role as HistoryMessage["role"], content: message.content }));
 }
 
 /** What the run reported about the turn. Every field is measured; nothing is defaulted. */

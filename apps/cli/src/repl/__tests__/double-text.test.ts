@@ -14,7 +14,7 @@ import { makeHarness, DEFAULT_EVENTS } from "./harness.js";
 
 const withPolicy = (policy: "enqueue" | "interrupt" | "reject"): TrentConfig => ({
   ...DEFAULT_CONFIG,
-  repl: { double_text_policy: policy },
+  repl: { ...DEFAULT_CONFIG.repl, double_text_policy: policy },
 });
 
 describe("double texting in the REPL", () => {

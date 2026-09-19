@@ -8,7 +8,7 @@
  * the same four fields twice.
  */
 
-import type { ConversationMessage } from "./types.js";
+import type { ConversationMessage, OrcEvent } from "./types.js";
 
 export interface RunScopeInput {
   readonly runId: string;
@@ -51,4 +51,52 @@ export function openRunScope(
 export function closeRunScope(hooks: readonly (RunScopedHook | undefined)[], runId: string | undefined): void {
   if (runId === undefined) return;
   for (const hook of hooks) hook?.runFinished(runId);
+}
+
+/** A hook that reports something the run's reader should see. `FleetMemoryHook` satisfies it. */
+export interface ContextNoticeSource {
+  setNoticeSink(sink: (notice: { readonly runId: string; readonly detail: string }) => void): void;
+}
+
+/**
+ * Carries the fleet-memory hook's context-pressure notices onto the run bus.
+ *
+ * The bus has no `context_pressure` kind and cannot grow one: its 20 kinds mirror
+ * `apps/web/lib/orchestrator-events.ts`, which is read-only. `step_note` is the kind the pipeline
+ * already uses for a remark about a step in flight, and a pressure warning is exactly that.
+ *
+ * `deliverFor` resolves the run's own `deliver` at notice time, because one hook serves every
+ * concurrent run: a notice for a run that has already closed its channel resolves to `undefined`
+ * and is dropped rather than delivered to whoever happens to be streaming.
+ */
+export function bridgeContextNotices(
+  source: ContextNoticeSource | undefined,
+  deliverFor: (runId: string) => ((event: OrcEvent) => void) | undefined,
+  now: () => string = () => new Date().toISOString(),
+): void {
+  if (!source) return;
+  source.setNoticeSink((notice) => {
+    deliverFor(notice.runId)?.({ kind: "step_note", runId: notice.runId, at: now(), detail: notice.detail });
+  });
+}
+
+/**
+ * The bridge plus the live runs' deliverers. It is a `RunScopedHook` so `index.ts` closes it on the
+ * same line it closes the others; only `open` is extra, because that is where the run's `deliver`
+ * first exists.
+ */
+export interface ContextNoticeBus extends RunScopedHook {
+  /** This run is streaming: notices naming it go to `deliver`. */
+  open(runId: string, deliver: (event: OrcEvent) => void): void;
+}
+
+export function createContextNoticeBus(source: ContextNoticeSource | undefined): ContextNoticeBus {
+  const deliverers = new Map<string, (event: OrcEvent) => void>();
+  bridgeContextNotices(source, (runId) => deliverers.get(runId));
+  return {
+    open: (runId, deliver) => void deliverers.set(runId, deliver),
+    // A run cannot register before it has an id, so `runStarted` has nothing to do here.
+    runStarted: () => undefined,
+    runFinished: (runId) => void deliverers.delete(runId),
+  };
 }

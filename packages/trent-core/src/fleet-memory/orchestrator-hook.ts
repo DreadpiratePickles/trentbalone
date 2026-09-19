@@ -1,28 +1,59 @@
 /**
  * The one object the orchestrator wrapper takes (`createOrchestrator({ fleetMemory })`): it owns
- * the shared `memory` adapter and the `fleet_search` adapter, wraps the seat executor so EVERY
- * seat's prompt carries the same frozen prelude for the run, and tracks which step is calling a
- * tool so a delegated child's memory write is refused while its read is served.
+ * the shared `memory` adapter and the `fleet_search` adapter, wraps the seat executor so every
+ * seat's prompt carries the run's context injection, and tracks which step is calling a tool so a
+ * delegated child's memory write is refused while its read is served.
  *
- * Prelude, per run, computed at the first seat call and then byte-identical for the rest of the
- * run (Hermes `memory_tool_store.py:347-350`: a stable prefix caches; a moving one does not):
- *   1. every named memory block (MEMORY.md / USER.md / COMPANY.md by default, config
- *      `memory.blocks`), the company's shared memory (frozen snapshot);
- *   2. the shared skills index (org tier + this seat's own — the one per-seat part, so it is
- *      rendered for the seat that calls first and stays; the body is a tool call away);
- *   3. the cross-agent recall block, bounded by `recallBudgetChars`.
+ * The injection is assembled in THREE TIERS (`tiers.ts`), in this order:
+ *
+ *   STABLE, built once per run and byte-identical across runs of the same profile —
+ *     1. every named memory block (MEMORY.md / USER.md / COMPANY.md by default, config
+ *        `memory.blocks`), the company's shared memory (frozen snapshot);
+ *     2. the `workspace-context` seam (A2.1 hands the rendered text in; nothing here reads a file);
+ *     3. the ORG-tier shared skills index — the same rows for every seat.
+ *   CONTEXT, built once per (run, seat) —
+ *     4. this seat's OWN live skills;
+ *     5. the cross-agent recall for this objective and this seat, bounded by `recallBudgetChars`.
+ *   VOLATILE, rebuilt whenever the surface changes it —
+ *     6. the session transcript;
+ *     7. the active personality's `systemPromptSuffix`. It reaches a prompt HERE and only here:
+ *        never the system prompt, never the protected seat prompt (`improve/protected-prompt.ts`).
+ *
+ * Why the split. Until 2026-09-18 the whole prelude was memoised with the FIRST seat's scope, so
+ * every later seat of a run was handed the first seat's recall and the first seat's skills. The
+ * freeze was right about caching and wrong about scope: what must be byte-stable is the tier a
+ * provider could cache (Hermes `memory_tool_store.py:347-350`), not the tier that answers "what
+ * does THIS seat need". The run's view of the company is still frozen — `freezeFleetSource` caches
+ * the reads for the life of the run — so a seat that calls later does not recall runs the seat
+ * that called first could not see.
+ *
+ * The whole injection is measured against `context.ceiling_chars`. Over the ceiling, the context
+ * and volatile tiers are trimmed oldest-first and the stable tier is never touched; at 80 percent
+ * one `context_pressure` notice is emitted per run, not per seat call.
+ *
  * It is appended to `dynamicPrompt`, the seat prompt field the pipeline already reserves for
- * per-step context (`model-gateway.ts` `buildSeatUserPrompt`), after the pipeline's own text.
+ * per-step context (`apps/web/lib/model-gateway.ts` `buildSeatUserPrompt`), after the pipeline's
+ * own text.
  */
 
 import { createMemoryAdapter, type MemoryAdapter, type MemoryBlock } from "../tools/memory/index.js";
+import { ORG_TIER_AGENT } from "../improve/org-tier.js";
 import type { TrentToolAdapter } from "../tools/types.js";
 import { DEFAULT_FLEET_MEMORY_CONFIG, type FleetMemoryConfig } from "./config.js";
 import type { EmbedFn } from "./lexical.js";
 import { recallForObjective } from "./recall.js";
 import { createFleetSearchAdapter } from "./search.js";
 import { listSharedSkills, renderSharedSkillsIndex } from "./shared-skills.js";
-import { isDelegatedObjective, type FleetMemorySource } from "./source.js";
+import { freezeFleetSource, isDelegatedObjective, type FleetMemorySource } from "./source.js";
+import {
+  CONTEXT_BLOCKS,
+  DEFAULT_CONTEXT_CEILING_CHARS,
+  PRESSURE_WARNING_RATIO,
+  assembleContext,
+  estimateTokens,
+  type AssembledContext,
+  type ContextBlock,
+} from "./tiers.js";
 
 /**
  * The slice of the pipeline's `SeatModelExecutionInput` the hook reads and extends. `objective`
@@ -36,8 +67,24 @@ export interface FleetSeatInput {
 
 /** One earlier turn of the surface's conversation, as the run carries it. */
 export interface ConversationTurn {
-  readonly role: "user" | "assistant";
+  /** `system` is a compaction summary standing in for turns the transcript no longer holds. */
+  readonly role: "user" | "assistant" | "system";
   readonly content: string;
+}
+
+/** What a surface is told when the injection crosses the warning ratio. Measured, never a guess. */
+export interface ContextNotice {
+  readonly kind: "context_pressure";
+  readonly runId: string;
+  readonly seat: string;
+  readonly chars: number;
+  readonly estimatedTokens: number;
+  readonly ceilingChars: number;
+  readonly ratio: number;
+  /** Names of the blocks the ceiling dropped for this seat, oldest first. */
+  readonly dropped: readonly string[];
+  /** One line naming the figures, for a log, a REPL warning or a `step_note` on the run bus. */
+  readonly detail: string;
 }
 
 export interface RunStartedInput {
@@ -45,8 +92,8 @@ export interface RunStartedInput {
   readonly companyId: string;
   readonly objective: string;
   /**
-   * The session's earlier turns, oldest first. Rendered LAST, after the frozen prelude: the
-   * prelude is the cacheable prefix, and a transcript in front of it moves that prefix every turn.
+   * The session's earlier turns, oldest first. Rendered in the VOLATILE tier, after the stable and
+   * context tiers: a transcript in front of them moves the cacheable prefix every turn.
    */
   readonly history?: readonly ConversationTurn[];
 }
@@ -55,14 +102,20 @@ export interface FleetMemoryHook {
   /** `memory` and `fleet_search`, to be wired into every seat like any toolset. */
   readonly adapters: readonly TrentToolAdapter[];
   readonly memory: MemoryAdapter;
-  /** Wraps the seat executor: prelude in, caller context tracked. Generic so the guard's types are untouched. */
+  /** Wraps the seat executor: injection in, caller context tracked. Generic so the guard's types are untouched. */
   wrapSeatModel<I extends FleetSeatInput, R>(fn: (input: I) => Promise<R>): (input: I) => Promise<R>;
-  /** Declares the run the next seat calls belong to; the prelude is built lazily on the first call. */
+  /** Declares the run the next seat calls belong to; the tiers are built lazily on the first call. */
   runStarted(input: RunStartedInput): void;
   /** Ends the run's freeze: memory re-reads on the next run, and the recall is recomputed. */
   runFinished(runId: string): void;
-  /** The frozen prelude of a run, once a seat has called; for surfaces and tests. */
-  preludeFor(runId: string): string | undefined;
+  /** The assembled injection a seat of this run received; the first seat's when `seat` is omitted. */
+  preludeFor(runId: string, seat?: string): string | undefined;
+  /** Just the STABLE tier of a run: the bytes that must not move between seats or between runs. */
+  stablePreludeFor(runId: string): string | undefined;
+  /** The measured assembly for one seat: tier sizes, token estimate, what the ceiling dropped. */
+  contextFor(runId: string, seat: string): AssembledContext | undefined;
+  /** Installs (or replaces) the sink that receives `context_pressure`; the orchestrator bridges it to the bus. */
+  setNoticeSink(sink: (notice: ContextNotice) => void): void;
 }
 
 export interface FleetMemoryHookOptions {
@@ -74,6 +127,24 @@ export interface FleetMemoryHookOptions {
   readonly blocks?: readonly MemoryBlock[];
   readonly config?: FleetMemoryConfig;
   readonly embed?: EmbedFn;
+  /** `context.ceiling_chars`: the ceiling on the whole assembled injection. */
+  readonly ceilingChars?: number;
+  /**
+   * The active personality's `systemPromptSuffix`. Volatile tier, last block, and the ONLY path by
+   * which a personality reaches a model. Absent or blank means no personality block at all.
+   */
+  readonly personalitySuffix?: string;
+  /**
+   * The A2.1 seam: workspace context files (`AGENTS.md`, `CLAUDE.md`, `.trent/*.md`) already
+   * scanned, trusted and rendered by their own module. Nothing here opens a file.
+   */
+  readonly workspaceContext?: string;
+  readonly onNotice?: (notice: ContextNotice) => void;
+}
+
+interface SeatContext {
+  readonly blocks: readonly ContextBlock[];
+  readonly assembled: AssembledContext;
 }
 
 interface ActiveRun {
@@ -81,7 +152,12 @@ interface ActiveRun {
   readonly companyId: string;
   readonly objective: string;
   readonly history?: readonly ConversationTurn[];
-  prelude?: Promise<string>;
+  /** The run's frozen view of the company: every seat of this run reads the same rows. */
+  readonly source: FleetMemorySource;
+  stable?: Promise<readonly ContextBlock[]>;
+  readonly seats: Map<string, Promise<SeatContext>>;
+  /** One notice per run, whichever seat crosses the ratio first. */
+  warned: boolean;
 }
 
 /** The session transcript block. Plain roles, oldest first; the new objective is not repeated here. */
@@ -91,9 +167,28 @@ export function renderConversation(history: readonly ConversationTurn[]): string
   return `## Conversation so far (this session, oldest first; the objective above is the newest line)\n${lines.join("\n\n")}`;
 }
 
+function block(tier: ContextBlock["tier"], name: string, text: string): ContextBlock {
+  return { tier, name, text };
+}
+
+function pressureDetail(runId: string, seat: string, assembled: AssembledContext): string {
+  const percent = Math.round(assembled.pressure * 100);
+  const trimmed = assembled.dropped.length === 0 ? "nothing trimmed" : `trimmed: ${assembled.dropped.join(", ")}`;
+  return (
+    `context pressure on run ${runId}, seat ${seat}: the wrapper's injection is ${assembled.chars} chars ` +
+    `(~${assembled.estimatedTokens} tokens, estimated) against a ${assembled.ceilingChars}-char ceiling, ` +
+    `${percent} percent; ${trimmed}`
+  );
+}
+
 export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMemoryHook {
   const config = options.config ?? DEFAULT_FLEET_MEMORY_CONFIG;
+  const ceilingChars =
+    typeof options.ceilingChars === "number" && Number.isFinite(options.ceilingChars) && options.ceilingChars > 0
+      ? Math.trunc(options.ceilingChars)
+      : DEFAULT_CONTEXT_CEILING_CHARS;
   let caller: { seat: string; delegated: boolean } = { seat: "", delegated: false };
+  let notify: ((notice: ContextNotice) => void) | undefined = options.onNotice;
   const memory =
     options.memory ??
     (() => {
@@ -105,28 +200,80 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
 
   /** Runs in flight, by id; the wrapper drains one job at a time but keeps the map general. */
   const runs = new Map<string, ActiveRun>();
-  const frozen = new Map<string, string>();
+  const assembled = new Map<string, SeatContext>();
+  const stableText = new Map<string, string>();
+  const firstSeat = new Map<string, string>();
   let current: ActiveRun | undefined;
 
-  async function buildPrelude(run: ActiveRun, seat: string): Promise<string> {
-    const parts: string[] = [`## Company memory (shared by every seat; writes land next run)\n${memory.frozenSnapshot()}`];
-    if (options.source.improve) {
-      const index = renderSharedSkillsIndex(await listSharedSkills(options.source.improve, run.companyId, seat));
-      if (index) parts.push(index);
+  /** Tier 1. No seat, no objective, no turn: the same bytes for every seat and every run. */
+  async function buildStable(run: ActiveRun): Promise<readonly ContextBlock[]> {
+    const blocks: ContextBlock[] = [
+      block("stable", CONTEXT_BLOCKS.companyMemory, `## Company memory (shared by every seat; writes land next run)\n${memory.frozenSnapshot()}`),
+    ];
+    if (options.workspaceContext !== undefined && options.workspaceContext.trim() !== "") {
+      blocks.push(block("stable", CONTEXT_BLOCKS.workspace, options.workspaceContext));
     }
-    const recall = await recallForObjective(options.source, {
+    if (run.source.improve) {
+      const org = await listSharedSkills(run.source.improve, run.companyId, ORG_TIER_AGENT);
+      const index = renderSharedSkillsIndex(org, '## Shared skills, org tier (fleet_skill_view {"skill": "<task type>"} for the body)');
+      if (index) blocks.push(block("stable", CONTEXT_BLOCKS.orgSkills, index));
+    }
+    return blocks;
+  }
+
+  /** Tier 2. This objective, this seat. */
+  async function buildSeatBlocks(run: ActiveRun, seat: string): Promise<ContextBlock[]> {
+    const blocks: ContextBlock[] = [];
+    if (run.source.improve) {
+      const own = (await listSharedSkills(run.source.improve, run.companyId, seat)).filter((s) => s.tier === "own");
+      const index = renderSharedSkillsIndex(own, `## Shared skills, ${seat} only (fleet_skill_view {"skill": "<task type>"} for the body)`);
+      if (index) blocks.push(block("context", CONTEXT_BLOCKS.seatSkills, index));
+    }
+    const recall = await recallForObjective(run.source, {
       companyId: run.companyId,
       seat,
       objective: run.objective,
       excludeRunId: run.runId,
       config,
-      embed: options.embed,
+      ...(options.embed === undefined ? {} : { embed: options.embed }),
     });
-    if (recall.block) parts.push(recall.block);
-    // Last, always: everything above is the same bytes for every seat of this run.
+    if (recall.block) blocks.push(block("context", CONTEXT_BLOCKS.recall, recall.block));
+    return blocks;
+  }
+
+  /** Tier 3. Oldest trimmable last: the transcript goes before the one-line personality suffix. */
+  function buildVolatile(run: ActiveRun): ContextBlock[] {
+    const blocks: ContextBlock[] = [];
     const conversation = renderConversation(run.history ?? []);
-    if (conversation) parts.push(conversation);
-    return parts.join("\n\n");
+    if (conversation) blocks.push(block("volatile", CONTEXT_BLOCKS.conversation, conversation));
+    const suffix = options.personalitySuffix?.trim();
+    if (suffix) blocks.push(block("volatile", CONTEXT_BLOCKS.personality, suffix));
+    return blocks;
+  }
+
+  async function buildFor(run: ActiveRun, seat: string): Promise<SeatContext> {
+    run.stable ??= buildStable(run);
+    const stable = await run.stable;
+    stableText.set(run.runId, stable.map((b) => b.text).join("\n\n"));
+    const blocks = [...stable, ...(await buildSeatBlocks(run, seat)), ...buildVolatile(run)];
+    const context = assembleContext(blocks, { ceilingChars });
+    assembled.set(`${run.runId} ${seat}`, { blocks, assembled: context });
+    if (!firstSeat.has(run.runId)) firstSeat.set(run.runId, seat);
+    if (!run.warned && context.pressure >= PRESSURE_WARNING_RATIO) {
+      run.warned = true;
+      notify?.({
+        kind: "context_pressure",
+        runId: run.runId,
+        seat,
+        chars: context.chars,
+        estimatedTokens: estimateTokens(context.chars),
+        ceilingChars: context.ceilingChars,
+        ratio: context.pressure,
+        dropped: context.dropped,
+        detail: pressureDetail(run.runId, seat, context),
+      });
+    }
+    return { blocks, assembled: context };
   }
 
   function runFor(input: FleetSeatInput): ActiveRun | undefined {
@@ -146,12 +293,14 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
         caller = { seat: input.subtask.seat, delegated: isDelegatedObjective(input.subtask.objective ?? "") };
         const run = runFor(input);
         if (!run) return fn(input);
-        run.prelude ??= buildPrelude(run, input.subtask.seat).then((text) => {
-          frozen.set(run.runId, text);
-          return text;
-        });
-        const prelude = await run.prelude;
-        const dynamicPrompt = [input.dynamicPrompt, prelude].filter((s): s is string => !!s && s.trim() !== "").join("\n\n");
+        const seat = input.subtask.seat;
+        let pending = run.seats.get(seat);
+        if (!pending) {
+          pending = buildFor(run, seat);
+          run.seats.set(seat, pending);
+        }
+        const context = await pending;
+        const dynamicPrompt = [input.dynamicPrompt, context.assembled.text].filter((s): s is string => !!s && s.trim() !== "").join("\n\n");
         return fn({ ...input, dynamicPrompt });
       };
     },
@@ -161,6 +310,9 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
         companyId: input.companyId,
         objective: input.objective,
         ...(input.history === undefined ? {} : { history: input.history }),
+        source: freezeFleetSource(options.source),
+        seats: new Map(),
+        warned: false,
       };
       runs.set(input.runId, run);
       current = run;
@@ -171,6 +323,15 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
       // Writes made during this run become visible to the next one.
       memory.thaw();
     },
-    preludeFor: (runId) => frozen.get(runId),
+    preludeFor(runId, seat) {
+      const wanted = seat ?? firstSeat.get(runId);
+      if (wanted === undefined) return undefined;
+      return assembled.get(`${runId} ${wanted}`)?.assembled.text;
+    },
+    stablePreludeFor: (runId) => stableText.get(runId),
+    contextFor: (runId, seat) => assembled.get(`${runId} ${seat}`)?.assembled,
+    setNoticeSink(sink) {
+      notify = sink;
+    },
   };
 }

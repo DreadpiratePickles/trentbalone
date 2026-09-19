@@ -9,11 +9,13 @@
 import process from "node:process";
 import { ConfigManager, SessionManager } from "@trent/core";
 import type { createOrchestrator as createRealOrchestrator } from "@trent/core/orchestrator/index.js";
+import { createModelGateway } from "@trent/core/model-gateway/index.js";
 import { InMemoryTraceStore } from "@trent/core/traces/index.js";
 import { autoTheme, canUseRawMode, terminalWidth, type Theme } from "../ui/index.js";
 import { playBoot, type BootStdin } from "../ui/boot.js";
 import { ReplEngine, bindApprovalAnswers, type ReplRunner } from "./engine.js";
-import { Conversation, historyLimits, recapLines, sessionSink, type HistoryMessage } from "./conversation.js";
+import { Conversation, historyLimits, historySeed, recapLines, sessionSink } from "./conversation.js";
+import { contextLimits, createSessionCompactor } from "./compact.js";
 import { isDegraded } from "./degraded.js";
 import { ESCAPE_TIMEOUT_MS, withKittyProtocol } from "./keys.js";
 import { withRawMode } from "./interrupt.js";
@@ -21,6 +23,16 @@ import { toolsStatusLine, type ToolWiringDeps } from "./tools.js";
 import { fleetMemoryToolListing } from "./fleet-memory.js";
 import { createHeadlessRuntime } from "../runtime/headless.js";
 import type { ReplConfig } from "./types.js";
+
+/**
+ * The two callbacks the conversation needs but the runtime owns. `#openConversation` runs before
+ * the object graph exists (a resumed session's recap belongs on screen whether or not the store
+ * comes up), so the session id and the after-turn compaction are filled in afterwards.
+ */
+interface TurnHooks {
+  sessionId?: () => string | undefined;
+  afterAssistant?: () => void;
+}
 
 export { ReplEngine, bindApprovalAnswers } from "./engine.js";
 export { TranscriptRenderer, renderTranscript, identityForRole } from "./render.js";
@@ -117,7 +129,7 @@ export class ClassicRepl {
    * one, a new one on the first turn otherwise. The session file is the durable copy; the
    * `Conversation` is what the next run is told, bounded by `historyLimits`.
    */
-  #openConversation(config: ReplConfig, write: (line: string) => void, width: number, theme: Theme): {
+  #openConversation(config: ReplConfig, write: (line: string) => void, width: number, theme: Theme, turns: TurnHooks): {
     conversation: Conversation;
     openingCents: number;
   } {
@@ -125,20 +137,23 @@ export class ClassicRepl {
     if (resumed !== null) for (const line of recapLines(resumed, width)) write(theme.meta(line));
     const agent = config.fleet.default_agent;
     let sessionId = resumed?.id;
-    // An interrupted answer is in the transcript but is not re-threaded: it was never a reply.
-    const seed: HistoryMessage[] = (resumed?.messages ?? [])
-      .filter((message) => message.role === "user" || message.role === "assistant")
-      .filter((message) => message.metadata?.status !== "interrupted")
-      .map((message) => ({ role: message.role as HistoryMessage["role"], content: message.content }));
+    const seed = historySeed(resumed?.messages ?? []);
+    const resolveSessionId = (): string => (sessionId ??= this.#sessions.startSession(agent, config.model, config.provider).id);
+    turns.sessionId = () => sessionId;
+    const sink = sessionSink(this.#sessions, resolveSessionId, agent);
     return {
       conversation: new Conversation({
         ...historyLimits(config),
         seed,
-        sink: sessionSink(
-          this.#sessions,
-          () => (sessionId ??= this.#sessions.startSession(agent, config.model, config.provider).id),
-          agent,
-        ),
+        // Compaction runs after the turn is durable, never before: the transcript on disk is the
+        // thing being compacted, and a crash mid-turn must leave the whole turn, not half of one.
+        sink: {
+          user: sink.user,
+          assistant: (content, metadata) => {
+            sink.assistant(content, metadata);
+            turns.afterAssistant?.();
+          },
+        },
       }),
       openingCents: resumed?.total_cost_cents ?? 0,
     };
@@ -168,7 +183,10 @@ export class ClassicRepl {
 
     // The conversation before the object graph: a resumed session's recap belongs on screen
     // whether or not the store, the proxy or the sandboxes come up.
-    const { conversation, openingCents } = this.#openConversation(config, writeLine, width, theme);
+    // The compactor is installed once the runtime exists (it needs the shared memory adapter), so
+    // the conversation is handed a holder it calls after every persisted answer.
+    const turns: TurnHooks = {};
+    const { conversation, openingCents } = this.#openConversation(config, writeLine, width, theme, turns);
 
     // The session's object graph — store, tools, fleet memory, the improve loop, the orchestrator
     // and the company — is the same one the gateway and the schedulers run on; only the terminal
@@ -185,6 +203,28 @@ export class ClassicRepl {
     });
     const { tools, store, durable, fleetMemory, orchestrator, companyId } = runtime;
     writeLine(toolsStatusLine(tools, theme));
+
+    // Session compaction (docs/configuration.md, "Context management"): once the stored transcript
+    // passes `context.compact_after_chars` the turns about to be dropped are offered to the shared
+    // memory, summarised into one message, and one compaction event records what was forgotten.
+    // The gateway is built on demand, so a session that never crosses the threshold never makes one.
+    const compactor = createSessionCompactor({
+      sessions: this.#sessions,
+      companyId,
+      limits: contextLimits(config),
+      memory: fleetMemory.memory,
+      gateway: async () => createModelGateway(),
+    });
+    turns.afterAssistant = () => {
+      const id = turns.sessionId?.();
+      if (id === undefined) return;
+      void compactor(id).then((outcome) => {
+        if (outcome.status !== "compacted") return;
+        const record = outcome.event.metadata?.compaction;
+        const reclaimed = record === undefined ? 0 : record.chars_before - record.chars_after;
+        writeLine(theme.meta(`Compacted this session: ${outcome.forgotten.length} message(s) summarised, ${reclaimed} chars reclaimed.`));
+      }, () => undefined);
+    };
 
     let exiting: Promise<void> | undefined;
     const exit = (code: number): void => {

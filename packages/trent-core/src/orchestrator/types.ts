@@ -231,7 +231,12 @@ export interface OrchestratorDeps {
  * the transcript after its frozen prelude so the cacheable prefix stays byte-stable.
  */
 export interface ConversationMessage {
-  readonly role: "user" | "assistant";
+  /**
+   * `system` carries exactly one thing: a session's compaction summary, which stands in for turns
+   * the transcript no longer holds (`sessions/compaction.ts`). Nothing else may take that role —
+   * a surface must not be able to put words in the system's mouth by calling them a turn.
+   */
+  readonly role: "user" | "assistant" | "system";
   readonly content: string;
 }
 

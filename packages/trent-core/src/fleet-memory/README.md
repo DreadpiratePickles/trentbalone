@@ -83,9 +83,23 @@ createOrchestrator({ fleetMemory, tools, ... });
 ```
 
 The hook contributes the `memory` and `fleet_search` adapters to seat wiring, wraps the seat
-executor so the run's prelude rides in `dynamicPrompt` (after the pipeline's own "Previous step
+executor so the run's injection rides in `dynamicPrompt` (after the pipeline's own "Previous step
 outputs"), and is told `runStarted` / `runFinished` by the wrapper. The REPL builds the hook in
 `apps/cli/src/repl/fleet-memory.ts` (`wireFleetMemory`) and passes it to `createOrchestrator`.
+
+## Three tiers, and what "frozen" means now
+
+`tiers.ts` assembles the injection as STABLE (memory blocks, the `workspace-context` seam, the
+org-tier skills index), then CONTEXT (this seat's own skills, this objective's recall), then
+VOLATILE (the transcript, the active personality's tone stance). The STABLE tier is byte-identical
+across runs of the same profile, so a provider could cache it; the CONTEXT tier is per (run, seat).
+Until 2026-09-18 the whole prelude was memoised with the FIRST seat's scope, which gave every later
+seat of a run the first seat's recall and skills. The run's *view of the company* is still frozen
+(`freezeFleetSource`), so a seat that calls later cannot recall runs the first seat could not see.
+
+The whole injection is measured against `context.ceiling_chars` (docs/configuration.md, "Context
+management"): over it the context and volatile blocks are dropped oldest-first and the stable tier
+never is, and at 80 percent one `context_pressure` notice is emitted per run.
 
 ## Rules kept
 

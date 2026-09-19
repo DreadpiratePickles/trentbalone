@@ -31,6 +31,7 @@ import { OTelExporter, composeBusHooks, createOTelBusHook, type OTelBusHook } fr
 import type { ImproveRunDeps } from "../commands/improve.js";
 import { EphemeralStore } from "../repl/ephemeral-store.js";
 import { wireFleetMemory } from "../repl/fleet-memory.js";
+import { contextLimits, personalitySuffix } from "../repl/compact.js";
 import { wireImproveLoop } from "../repl/improve-loop.js";
 import { wireTools, type ToolWiring, type ToolWiringDeps } from "../repl/tools.js";
 import type { ReplConfig, ReplStore } from "../repl/types.js";
@@ -230,7 +231,17 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
 
     // The company memory every seat shares: MEMORY.md / USER.md under the profile, recall over
     // this company's runs, and the shared skills index when the store carries the improve tables.
-    const fleetMemory = wireFleetMemory({ profileDir, store, blocks: (config as MemorySlice).memory?.blocks });
+    // `context.ceiling_chars` bounds the whole injection; the active personality's suffix rides
+    // the volatile tier of it and reaches a model nowhere else (`improve/protected-prompt.ts`).
+    const limits = contextLimits(config as unknown as Parameters<typeof contextLimits>[0]);
+    const suffix = personalitySuffix(deps.configManager);
+    const fleetMemory = wireFleetMemory({
+      profileDir,
+      store,
+      blocks: (config as MemorySlice).memory?.blocks,
+      ceilingChars: limits.ceilingChars,
+      ...(suffix === undefined ? {} : { personalitySuffix: suffix }),
+    });
     // The self-improvement loop: traces from every run, and promoted skills back into every seat.
     const improve = wireImproveLoop({ store, config });
     // OTel export, when config names a collector: composed onto the same bus hook the improve

@@ -46,7 +46,7 @@ import { loadLibs, type Libs } from "./libs.js";
 import { applyModelEnv, assertRoutableModel } from "./model-env.js";
 import { PortShaper, PortTally } from "./provider-ports.js";
 import { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots, type ReleaseSlot } from "./run-slots.js";
-import { closeRunScope, openRunScope } from "./run-hooks.js";
+import { closeRunScope, createContextNoticeBus, openRunScope } from "./run-hooks.js";
 import { SeatTally, guardSeatModel, shapeEvent, type SeatModelFn } from "./seat-guard.js";
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
 import { runWithToolCallContext } from "../governance/tool-call-context.js";
@@ -196,6 +196,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
 
   const defaultMaxJobs = deps.maxJobs ?? DEFAULT_MAX_JOBS;
   const slots = new RunSlots(deps.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS);
+  const notices = createContextNoticeBus(deps.fleetMemory); // `context_pressure` -> the naming run's bus
 
   /** Parked runs waiting for approve()/reject()/cancel(), by run id. */
   const resumers = new Map<string, Set<() => void>>();
@@ -364,6 +365,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
           fullTeam: options.fullTeam ?? false,
         });
         runId = launched.id;
+        notices.open(launched.id, deliver);
         // The per-run hooks (`run-hooks.ts`): the fleet-memory prelude is built on the first seat
         // call, and the conversation rides along so the hook renders it AFTER that frozen prelude.
         openRunScope([deps.fleetMemory, deps.delegate], launched.id, options);
@@ -439,7 +441,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
         releaseSlot?.();
         libs.overrides.clearRuntimeEvalOverrides();
         // This run's memory writes become visible to the next run.
-        closeRunScope([deps.fleetMemory, deps.delegate], runId);
+        closeRunScope([deps.fleetMemory, deps.delegate, notices], runId);
       }
     })();
     // The handle exposes this through result(); nothing is unhandled if the caller only iterates.
