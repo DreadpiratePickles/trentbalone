@@ -11,3 +11,28 @@ Bobby's gate, then waves.
 - Discovery launched (4 Opus agents, no subagents): RA catalog+manifest audit for the three agents;
   RB portability formats of the four target harnesses; RC harness-upgrade audit (LangGraph, RAG)
   against our orchestrator; RD market needs and the real tool/API landscape for the three agents.
+
+## State at 2026-09-19 (written before a possible usage-limit cut)
+- Shippable goal: complete. HEAD 29b80d2 pushed; CI green (run 35423798575 on 8dc9cd9); repo is
+  public (history scanned, fixtures only); working tree clean but notes/.
+- Upgrade round: discovery only so far, no code changed. Four Opus agents running in the
+  background; each writes ONE file under 01_discovery/output/ and commits nothing:
+  - RA -> upgrade-agents-audit-2026-09-19.md (what the catalog/manifests/skills/tools already
+    give the assistant, social-media and creator agents; gaps; seat vs specialist vs pack)
+  - RB -> portable-agents-research-2026-09-19.md (Claude Code / Codex / Hermes / Grok agent
+    formats; matrix; three package designs; recommendation)
+  - RC -> harness-upgrade-audit-2026-09-19.md (our harness strengths/weaknesses; LangGraph
+    options i/ii/iii under rulebook principle 11; RAG ingestion+retrieval+eval design; ranked items)
+  - RD -> market-agents-research-2026-09-19.md (jobs to be done, platform APIs and review
+    requirements, week-one tool sets, prices, risks)
+- If this session is cut: the agents' outputs land in those files (or not, if they were cut too:
+  re-run the four briefs, recorded in the chat transcript, one agent per file). Next steps after
+  discovery: write `02_plan/output/upgrade-round-design.md` with 2-3 options per major decision
+  (agent packaging, portability design, LangGraph adopt/borrow/leave, RAG scope), get an
+  independent Fable review, then ask Bobby the decisions one at a time, then waves of <=6 Opus
+  agents with disjoint files, committed via scripts/dev/isolate.sh.
+- Bobby's constraints for this round: surgical and mindful; a major upgrade; agents must work in
+  today's climate (real integrations, approval gates on money, publishing, customer contact);
+  agents must be droppable into other harnesses, not only ours.
+- Model note: the session switched to Opus 5 at this point (Bobby's /model); reasoning-heavy
+  synthesis and the design review should still go to a Fable agent per the standing rule.
