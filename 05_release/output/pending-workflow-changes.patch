@@ -1,0 +1,101 @@
+diff --git a/.github/workflows/pages.yml b/.github/workflows/pages.yml
+index 6dc6997..a4f0f5c 100644
+--- a/.github/workflows/pages.yml
++++ b/.github/workflows/pages.yml
+@@ -5,6 +5,11 @@
+ # pipes into their shell, so the deploy step only ever copies files that already passed
+ # `scripts/installer/render.sh --check` and `scripts/install.test.sh` in CI.
+ #
++# The site is only allowed to exist once a release does. `install.sh` pins no version: it resolves
++# `releases/latest` at run time, so serving it before the first release advertises a command that
++# 404s. The `gate` job below decides (`scripts/ci/pages-release-gate.mjs`, tested by
++# `scripts/ci/pages-release-gate.test.mjs`) and `build`/`deploy` are skipped when it refuses.
++#
+ # Prerequisites that this workflow cannot create (see 05_release/output/release-runbook.md):
+ #   - GitHub Pages enabled on the repository with source "GitHub Actions"
+ #   - Pages on a PRIVATE repository needs GitHub Pro/Team/Enterprise; otherwise make the repo public
+@@ -24,6 +29,12 @@ on:
+   release:
+     types: [published]
+   workflow_dispatch:
++    inputs:
++      allow_without_release:
++        description: "Deploy even though no release is published yet (domain or certificate setup only; the served installer cannot install until a release exists)"
++        required: false
++        default: false
++        type: boolean
+ 
+ permissions:
+   contents: read
+@@ -34,8 +45,39 @@ concurrency:
+   cancel-in-progress: true
+ 
+ jobs:
++  gate:
++    name: a published release must exist first
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    outputs:
++      serve: ${{ steps.gate.outputs.serve }}
++      reason: ${{ steps.gate.outputs.reason }}
++    steps:
++      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
++
++      - name: Does releases/latest resolve to anything the served installer could install?
++        id: gate
++        env:
++          GH_TOKEN: ${{ github.token }}
++          TRENT_PAGES_ALLOW_WITHOUT_RELEASE: ${{ inputs.allow_without_release }}
++        run: |
++          set -euo pipefail
++          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
++          node scripts/ci/pages-release-gate.mjs "$RUNNER_TEMP/releases.json"
++
++      - name: Say why nothing was deployed
++        if: steps.gate.outputs.serve != 'true'
++        env:
++          REASON: ${{ steps.gate.outputs.reason }}
++        run: |
++          set -euo pipefail
++          echo "::notice::Pages deploy skipped: $REASON"
++          printf '### Pages deploy skipped\n\n%s\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
++
+   build:
+     name: assemble the site
++    needs: gate
++    if: needs.gate.outputs.serve == 'true'
+     runs-on: ubuntu-latest
+     timeout-minutes: 10
+     steps:
+@@ -80,7 +122,8 @@ jobs:
+ 
+   deploy:
+     name: deploy to GitHub Pages
+-    needs: build
++    needs: [gate, build]
++    if: needs.gate.outputs.serve == 'true'
+     runs-on: ubuntu-latest
+     timeout-minutes: 10
+     permissions:
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index c912388..f30a711 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -173,10 +173,14 @@ jobs:
+           umask 077
+           printf '%s\n' "$TRENT_MINISIGN_KEY" > "$RUNNER_TEMP/minisign.stored.key"
+           printf '%s\n' "$TRENT_ECDSA_KEY" > "$RUNNER_TEMP/ecdsa-p256.key.pem"
+-          # gen-keys.mjs stores the key in clear but labels it "Sc"; real minisign would prompt for a
+-          # password and fail. Rewrite it to minisign's own unencrypted (-W) layout first.
++          # Back-compat shim, not a fix-up of today's key: gen-keys.mjs has written minisign's own
++          # unencrypted layout (kdf_alg "\0\0") since e65d88a, and the shim passes such a key
++          # through byte for byte. A secret captured from a key generated BEFORE that commit is
++          # labelled "Sc", which minisign 0.12 treats as encrypted; the shim rewrites those two
++          # bytes and refuses a key that is genuinely password-protected. Both behaviours are
++          # asserted by scripts/ci/minisign-key-format.test.mjs.
+           node scripts/release/minisign-plain-key.mjs "$RUNNER_TEMP/minisign.stored.key" "$RUNNER_TEMP/minisign.key"
+-          # Exactly the commands in scripts/installer/keys/README.md.
++          # Exactly the commands in scripts/installer/keys/README.md, over dist/release/SHA256SUMS.
+           minisign -S -s "$RUNNER_TEMP/minisign.key" -m dist/release/SHA256SUMS -x dist/release/SHA256SUMS.minisig
+           openssl dgst -sha256 -sign "$RUNNER_TEMP/ecdsa-p256.key.pem" -out dist/release/SHA256SUMS.sig dist/release/SHA256SUMS
+ 

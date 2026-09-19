@@ -26,21 +26,30 @@ the old public key will refuse the new release, which is the intended failure.
 
 ## What the release job runs
 
-After `scripts/build-cli.sh` has produced `dist/SHA256SUMS`:
+`.github/workflows/release.yml` is the single source for this; the commands below are copied from
+it. The file signed is **`dist/release/SHA256SUMS`**, which is not built here: `binary.yml` emits it
+from the four binaries *after each one has been executed on its native OS*, the `sign` job
+downloads them and recomputes the sums, and refuses if they differ. `scripts/build-cli.sh` produces
+a `dist/SHA256SUMS` for the **local** dry run only; nothing in the release path reads it.
 
 ```
-minisign -S -s "$RUNNER_TEMP/minisign.key" -m dist/SHA256SUMS -x dist/SHA256SUMS.minisig
-openssl dgst -sha256 -sign "$RUNNER_TEMP/ecdsa-p256.key.pem" -out dist/SHA256SUMS.sig dist/SHA256SUMS
+minisign -S -s "$RUNNER_TEMP/minisign.key" -m dist/release/SHA256SUMS -x dist/release/SHA256SUMS.minisig
+openssl dgst -sha256 -sign "$RUNNER_TEMP/ecdsa-p256.key.pem" -out dist/release/SHA256SUMS.sig dist/release/SHA256SUMS
 ```
 
 Upload to the GitHub Release, next to the binaries: `SHA256SUMS`, `SHA256SUMS.minisig`,
-`SHA256SUMS.sig`. `node sign-sums.mjs dist/SHA256SUMS` produces byte-compatible output with both
-commands and is what the tests use; the real tools are preferred in CI. `minisign` reads
-`minisign.key` as generated here: kdf_alg `\0\0`, the same bytes `minisign -G -W` writes. (An
-earlier revision wrote kdf_alg `Sc` with opslimit 0; real minisign keys off kdf_alg alone and
-prompted for a password. `scripts/release/minisign-plain-key.mjs` converts such a key in place;
-the release job still runs it defensively.) To add a password run `minisign -R -s minisign.key`
-on a trusted machine and remove the conversion step.
+`SHA256SUMS.sig`. `node sign-sums.mjs <sums-file>` produces byte-compatible output with both
+commands and is what `scripts/install.test.sh` uses; the real tools are preferred in CI.
+
+`minisign` reads `minisign.key` as generated here without prompting: kdf_alg `\0\0`, the same bytes
+`minisign -G -W` writes. An earlier revision (before `e65d88a`) wrote kdf_alg `Sc` with opslimit 0,
+which minisign 0.12 treats as encrypted and prompts for a password. `release.yml` therefore still
+runs `scripts/release/minisign-plain-key.mjs` on the CI secret, because that secret may have been
+captured from such a key; for a key generated today it is a byte-exact pass-through, and it refuses
+a key that is genuinely password-protected. All of that is asserted by
+`node --test scripts/ci/minisign-key-format.test.mjs` (5 cases, including a real `minisign -S` with
+stdin closed). To add a password, run `minisign -R -s minisign.key` on a trusted machine — and then
+the shim must be removed, because it will refuse the key by design.
 
 ## Formats (for the TypeScript verifier)
 

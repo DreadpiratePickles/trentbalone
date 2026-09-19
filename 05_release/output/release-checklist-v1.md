@@ -3,7 +3,9 @@
 The ordered steps that turn `feature/trent-fleet-v2` into
 `curl -fsSL https://agent.let-trent.uk/install.sh | bash`. Written 2026-09-18 for task E2 against
 `.github/workflows/{release,binary,pages,ci}.yml`, `scripts/installer/`, `scripts/release/`,
-`scripts/installer/keys/README.md` and `05_release/output/release-runbook.md`.
+`scripts/installer/keys/README.md` and `05_release/output/release-runbook.md`. Reconciled on
+2026-09-18 (task F0): the six places those sources used to disagree are settled, and "One source per
+question" at the end names the one file that answers each.
 
 **Nothing in this file has been run.** Plan decision 9: the release is cut after Phases A and B
 land; the checklist is prepared before then. Every step that leaves this machine is a user gate
@@ -189,8 +191,10 @@ does not launch never reaches the sign job — compile success is not evidence.
 ### 15. `Release / sign SHA256SUMS` — AUTOMATED (needs step 7)
 
 Recomputes the sums and refuses if they differ from the ones `binary.yml` verified; writes both
-private keys into `$RUNNER_TEMP` under `umask 077` for the duration of one step; converts the stored
-minisign key to minisign's unencrypted layout (`scripts/release/minisign-plain-key.mjs`); signs:
+private keys into `$RUNNER_TEMP` under `umask 077` for the duration of one step; runs
+`scripts/release/minisign-plain-key.mjs` over the minisign secret — a byte-exact pass-through for a
+key generated since `e65d88a`, a two-byte `kdf_alg` rewrite for one captured before it, and a
+refusal for a genuinely password-protected key; signs:
 
 ```
 minisign -S -s "$RUNNER_TEMP/minisign.key" -m dist/release/SHA256SUMS -x dist/release/SHA256SUMS.minisig
@@ -226,7 +230,15 @@ Expected, exactly nine: `trent-darwin-arm64`, `trent-darwin-x64`, `trent-linux-x
 
 ### 18. `Pages` runs on `release: published` — AUTOMATED
 
-Re-checks the render, runs `sh scripts/install.sh --manifest` as the installer's own self-check,
+Its `gate` job runs first (`scripts/ci/pages-release-gate.mjs`): it lists the repository's releases
+and deploys only if a published, non-draft, **non-prerelease** release exists, because
+`install.sh` resolves `releases/latest` at run time. Step 16 has just created one, so the gate
+opens. Before step 16 — a merge to `main` that touches `scripts/install.sh`, for instance — `build`
+and `deploy` are skipped (grey) and the job summary says why; that is the workflow refusing to
+advertise an install that would 404, not a failure. To publish the site early for the domain or the
+certificate (steps 5-6), dispatch `Pages` with `allow_without_release: true`.
+
+It then re-checks the render, runs `sh scripts/install.sh --manifest` as the installer's own self-check,
 refuses a landing page with a colour outside obsidian/bone/pulse or any 4-byte UTF-8 sequence,
 assembles `_site` with `install.sh`, `install.ps1`, `index.html`, `CNAME` and `.nojekyll`, and
 deploys. The deploy job then polls `https://agent.let-trent.uk/install.sh` for two minutes and
@@ -279,8 +291,9 @@ irm https://agent.let-trent.uk/install.ps1 | iex
 trent --version
 ```
 
-Evidence: install completes and `trent --version` prints `1.0.0`. The runbook records the PowerShell
-installer as **never executed**; this is its first real run, so budget time for it to fail.
+Evidence: install completes and `trent --version` prints `1.0.0`. The runbook's "Not verified" table
+records the PowerShell installer as **never executed**; this is its first real run, so budget time
+for it to fail.
 
 ### 23. Tamper check — BOBBY RUNS
 
@@ -297,7 +310,9 @@ trent desktop install --json
 
 Expected evidence in v1: it reports **no matching desktop asset** for this platform, because the
 `desktop` job in `release.yml` is gated on the repository variable `TRENT_RELEASE_DESKTOP`, which
-does not exist. Record that as the v1 state rather than treating it as a regression. Enabling it
+does not exist. Record that as the v1 state rather than treating it as a regression;
+`05_release/CONTEXT.md` step 5 and `05_release/output/release-runbook.md` ("Desktop bundles") say
+the same thing, and the runbook is the source for enabling it. Enabling it
 later means a matrix on `macos-latest` / `macos-13` / `windows-latest` / `ubuntu-latest`, asset
 names exactly `desktopBundleName()` (`packages/trent-core/src/updater/desktop.ts`), those bundles
 included in the SAME `SHA256SUMS` **before** signing, and a launch check per OS.
@@ -318,7 +333,10 @@ What this does and does not do:
   installers keep working and resolve to it. With no previous release, `install.sh` fails at the
   version resolution step and installs nothing, which is the correct failure.
 - The **Pages site keeps serving** `install.sh` and `install.ps1`. They are not versioned and do not
-  need to be removed; they resolve `releases/latest` at run time.
+  need to be removed; they resolve `releases/latest` at run time. The Pages gate governs new
+  deploys only: deleting the last release does not retract an already-deployed site, it only stops
+  the next push to `main` from redeploying one. With no release left, the served installer fails at
+  `resolve-version` and installs nothing, which is the correct failure.
 - Nothing needs to be un-signed. The signatures cover `SHA256SUMS`, which is gone with the release.
 - The DNS record and the Pages configuration are untouched. Remove the DNS record only if the whole
   product is being withdrawn (`05_release/CONTEXT.md`, "Failure Behavior").
@@ -343,49 +361,18 @@ the four `release.yml` jobs and the `Pages` deploy.
 
 ---
 
-## Where the sources disagree
+## One source per question
 
-Recorded rather than silently reconciled. None of these blocks a release; all of them would waste an
-hour during one.
+The six places where these files used to contradict each other were resolved on 2026-09-18 (task
+F0) rather than left to be discovered mid-release. Read the source named here and nothing else; if
+a step in this checklist and that source ever disagree again, the source wins and this file is the
+bug.
 
-1. **Where `SHA256SUMS` comes from, and where it lives.**
-   `scripts/installer/keys/README.md` ("What the release job runs") says the signing commands run
-   "after `scripts/build-cli.sh` has produced `dist/SHA256SUMS`" and signs `dist/SHA256SUMS`.
-   `release.yml:180-181` signs `dist/release/SHA256SUMS`, and the file is produced by `binary.yml`'s
-   `SHA256SUMS` job from the four uploaded artifacts — after each has been executed on its own OS —
-   not by `scripts/build-cli.sh`. The commands are otherwise byte-identical. **The workflow is
-   right**; the README describes the local dry run.
-
-2. **Whether real `minisign` can read the stored key.**
-   The same README says minisign "reads `minisign.key` as generated here", then its own parenthetical
-   says an earlier revision wrote `kdf_alg` `Sc` and that `scripts/release/minisign-plain-key.mjs`
-   converts such a key. The runbook's finding is that the key `gen-keys.mjs` writes today still
-   carries that label, so minisign 0.12 prompts `Password:` and produces no signature. `release.yml`
-   runs the shim unconditionally. **The parenthetical and the runbook are right**; the headline
-   sentence is stale. Fix `gen-keys.mjs` to emit `\0\0` and drop the shim — owned outside this stage.
-
-3. **Whether the installer pins a checksum.**
-   `05_release/CONTEXT.md` step 3 says "Serve `install.sh` and `install.ps1` from
-   `agent.let-trent.uk`; **pin the checksum in the script**". The installer that was built does not
-   pin one: it fetches `SHA256SUMS` for the resolved version and requires a valid signature over it
-   from a public key embedded in the script, then checks the artefact against that file
-   (`install.sh.in:405-413`). **The built behaviour is stronger** — a pinned checksum could not
-   survive `releases/latest` moving — and the stage contract is out of date.
-
-4. **Whether a desktop bundle ships in v1.**
-   `05_release/CONTEXT.md` process step 5 and its Verify list both require the desktop bundle to be
-   built and to launch. `release.yml`'s `desktop` job is disabled behind a repository variable that
-   does not exist, deliberately, rather than publishing an unverified bundle. **The workflow is
-   right for v1**; the stage contract describes a later release. Step 24 records the consequence.
-
-5. **Pages can publish the installer before any release exists.**
-   `pages.yml` triggers on a push to `main` touching `scripts/install.sh`, as well as on
-   `release: published`. The runbook only mentions the second. A merge to `main` therefore starts
-   serving an installer that resolves `releases/latest` to a 404 until step 16 completes. This
-   checklist orders step 18 after step 16 for that reason; there is no code change needed, only the
-   order.
-
-6. **The runbook's own "not verified" list is still open.**
-   The workflows have never run on GitHub; the PowerShell installer has never been executed; and
-   `apt-get install minisign` on `ubuntu-latest` is assumed available from universe. Steps 15 and 22
-   are where each of those is found out.
+| Question | Single source | Settled as |
+|---|---|---|
+| Which `SHA256SUMS` is signed, and who produces it | `.github/workflows/release.yml` (sign job) | `dist/release/SHA256SUMS`, emitted by `binary.yml` only after each binary ran on its own OS, recomputed and compared before signing. `scripts/build-cli.sh`'s `dist/SHA256SUMS` is the local dry run only; `scripts/installer/keys/README.md` now says so |
+| Whether real `minisign` can read the stored key | `scripts/installer/keys/README.md` + `node --test scripts/ci/minisign-key-format.test.mjs` | Yes, since `e65d88a`: `gen-keys.mjs` writes `kdf_alg "\0\0"`. `minisign-plain-key.mjs` stays as a pass-through for a secret captured from a pre-`e65d88a` key |
+| Whether the installer pins a checksum | `scripts/installer/THREAT-MODEL.md`, "What the installer deliberately does not do" | It does not, by design: embedded public keys + a signature over the fetched `SHA256SUMS`. `05_release/CONTEXT.md` step 3 was corrected to match |
+| Whether a desktop bundle ships in v1 | `05_release/output/release-runbook.md`, "Desktop bundles" | No. The `desktop` job is gated on the repository variable `TRENT_RELEASE_DESKTOP`, which does not exist. `CONTEXT.md` step 5 now says "deferred past v1"; step 24 above is the expected consequence |
+| When Pages may serve `install.sh` | `.github/workflows/pages.yml` gate + `scripts/ci/pages-release-gate.mjs` | Only once a published, non-draft, non-prerelease release exists. A push to `main` before that skips `build` and `deploy` and prints why. Dispatch with `allow_without_release: true` for domain or certificate setup |
+| What has never been run | `05_release/output/release-runbook.md`, "Not verified — and exactly where each one is found out" | One table there, naming the step in this file where each is found out. Not duplicated here |

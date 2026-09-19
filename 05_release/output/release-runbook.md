@@ -10,7 +10,7 @@ or released yet.
 | Piece | Path | Trigger | Does |
 |---|---|---|---|
 | Release | `.github/workflows/release.yml` | tag `v*` push, or dispatch with `version` | preflight (tag == `CLI_VERSION` == `apps/cli/package.json`, rendered installers fresh, public keys present, no private key tracked) -> `binary.yml` via `workflow_call` (4 targets built, each RUN natively, `SHA256SUMS`) -> sign (recompute and compare sums; `minisign -S` + `openssl dgst -sign` with the secrets, keys in `$RUNNER_TEMP` under `umask 077` for one step, shredded, asserted gone) -> verify both signatures against the COMMITTED public keys -> publish (re-verify, `render.sh --check`, refuse an existing release, `gh release create v<version>` with binaries, `SHA256SUMS{,.minisig,.sig}`, `install.sh`, `install.ps1`; notes from the annotated tag) |
-| Pages | `.github/workflows/pages.yml` | push to `main` touching the installers or the page, `release: published`, dispatch | copies `scripts/install.sh`, `scripts/install.ps1`, `scripts/release/pages/index.html`, writes `CNAME` = `agent.let-trent.uk`, deploys with `configure-pages`/`upload-pages-artifact`/`deploy-pages` (SHA-pinned) |
+| Pages | `.github/workflows/pages.yml` | push to `main` touching the installers or the page, `release: published`, dispatch | `gate` first (`scripts/ci/pages-release-gate.mjs`): unless a published, non-draft, non-prerelease release exists, `build` and `deploy` are **skipped** with the reason in the job summary, because `install.sh` resolves `releases/latest` at run time and would 404. Then copies `scripts/install.sh`, `scripts/install.ps1`, `scripts/release/pages/index.html`, writes `CNAME` = `agent.let-trent.uk`, deploys with `configure-pages`/`upload-pages-artifact`/`deploy-pages` (SHA-pinned). To publish the site early for domain or certificate setup, dispatch it with `allow_without_release: true` |
 | Preflight | `scripts/release/preflight.sh` | by hand, before tagging | clean tree, version match, tag free, keys, rendered installers, `gh auth status`, `gh secret list`, no existing release, CI green on HEAD. Tested by `scripts/release/preflight.test.sh` (15 cases, stub `gh`) |
 | Version check | `scripts/release/check-version.sh` | release.yml + preflight | single source of the "tag must equal `CLI_VERSION`" rule |
 | Key shim | `scripts/release/minisign-plain-key.mjs` | release.yml sign step | see "Finding: the stored minisign key" below |
@@ -65,17 +65,26 @@ Permissions: every job is `contents: read` except `publish` (`contents: write`) 
 4. **Working tree.** `scripts/release/preflight.sh` on this machine today: 7 pass, 2 fail (dirty
    tree from other in-flight agents; HEAD not pushed). Both are expected to clear on `main`.
 
-## Finding: the stored minisign key prompts real `minisign` for a password
+## Closed finding: the minisign key format (fixed in `e65d88a`)
 
-`scripts/installer/keys/README.md` says `minisign` reads `minisign.key` "as generated". It does
-not: `gen-keys.mjs` labels the key `Sc` (scrypt) with opslimit 0 while storing the bytes in clear;
-minisign 0.12 decides on the label alone, prompted `Password:` and produced no signature
-(verified locally, `minisign -S ... < /dev/null`). minisign's own unencrypted layout differs only in
-`kdf_alg = "\0\0"`, which the key checksum does not cover. `scripts/release/minisign-plain-key.mjs`
-rewrites those two bytes inside `$RUNNER_TEMP` after checking the checksum, and refuses a truly
-encrypted key. With that shim the exact README commands sign and `minisign -V` verifies against the
-committed `minisign.pub`. The `TRENT_MINISIGN_KEY` secret does not need to change. Longer term:
-fix `gen-keys.mjs` to emit `\0\0` (owned outside this stage), then drop the shim.
+Before `e65d88a`, `gen-keys.mjs` labelled the secret key `Sc` (scrypt) with opslimit 0 while storing
+the bytes in clear. minisign 0.12 decides on that label alone, so it prompted `Password:` and
+produced no signature. That is fixed: `gen-keys.mjs` now writes `kdf_alg = "\0\0"`, minisign's own
+unencrypted layout, and the key on the developer machine was rewritten to match (its key id still
+matches the committed `minisign.pub`). The keys README headline is correct as written.
+
+`scripts/release/minisign-plain-key.mjs` stays, and `release.yml` still runs it, for one reason: the
+`TRENT_MINISIGN_KEY` secret may have been captured from a pre-`e65d88a` key. For a key generated
+today it is a **byte-exact pass-through**, and it refuses a genuinely password-protected key rather
+than mangling it. Evidence, on demand and offline:
+
+```sh
+node --test scripts/ci/minisign-key-format.test.mjs   # 5 cases, exit 0
+```
+
+including a real `minisign -S` with stdin closed against a scratch key, which is the direct test of
+"does not prompt". Drop the shim only when the secret is known to have been re-set from a current
+key; adding a password to the key (`minisign -R -s`) also requires removing it.
 
 ## Cutting a release
 
@@ -91,7 +100,9 @@ gh release view v1.0.0 --json assets --jq '.assets[].name'
 
 Expected assets: `trent-darwin-arm64`, `trent-darwin-x64`, `trent-linux-x64`,
 `trent-windows-x64.exe`, `SHA256SUMS`, `SHA256SUMS.minisig`, `SHA256SUMS.sig`, `install.sh`,
-`install.ps1`. Then `pages.yml` runs on `release: published`; the deploy job polls
+`install.ps1`. Then `pages.yml` runs on `release: published` — its gate now passes because a
+published, non-prerelease release exists (a **prerelease** does not open the gate, since
+`releases/latest` skips prereleases and the served installer could not resolve one); the deploy job polls
 `https://agent.let-trent.uk/install.sh` for two minutes and warns (does not fail) if it is not yet
 answering. Verify from a machine with no clone:
 
@@ -132,5 +143,25 @@ plus a launch check per OS. Then set the variable.
 | Page tokens | hex colours in `index.html` | only `#0A0A0F #6EE7B7 #F1ECE2` |
 | Action SHAs | `gh api repos/actions/<x>/git/ref/tags/<tag>` | configure-pages v6.0.0, upload-pages-artifact v5.0.0, deploy-pages v5.0.1 resolved and pinned |
 
-Not verified: the workflows have not run on GitHub (nothing pushed); Windows PowerShell installer
-not executed; `apt-get install minisign` on `ubuntu-latest` assumed available from universe.
+Added 2026-09-18 (task F0):
+
+| Check | Command | Result |
+|---|---|---|
+| Pages gate decision table + `pages.yml` is wired to it | `node --test scripts/ci/pages-release-gate.test.mjs` | 10 passed, exit 0 |
+| minisign key format, shim pass-through, real `minisign -S` with stdin closed | `node --test scripts/ci/minisign-key-format.test.mjs` | 5 passed, exit 0 |
+| All five workflows parse | `node -e` with the `yaml` package over `.github/workflows/*.yml` | exit 0 |
+
+## Not verified — and exactly where each one is found out
+
+This table is the single source for "what has never run". The checklist points here instead of
+keeping its own copy.
+
+| Claim | Why it is still unproven | Found out at |
+|---|---|---|
+| The workflows run on GitHub at all | nothing has been pushed; the last runs on `feature/trent-fleet-v2` were cancelled or queued | checklist steps 12-16, the first tagged run |
+| `apt-get install minisign` works on `ubuntu-latest` | assumed available from universe, not pinned to a version; a failure here blocks signing and nothing is uploaded | checklist step 15 |
+| `install.ps1` installs on Windows | never executed: no `pwsh` on the dev machine, and the CNG verification path is hand-decoded DER (`scripts/installer/THREAT-MODEL.md`, residual risk 4) | checklist step 22 — budget time for it to fail |
+| Pages serves `agent.let-trent.uk` | Pages is not enabled on the repository and the proxied-CNAME certificate question is open | checklist steps 5, 6, 18, 19 |
+| A desktop bundle exists | the `desktop` job is deliberately gated off; `trent desktop install` reporting nothing is the expected v1 state, not a regression | checklist step 24 |
+
+Everything else in the two tables above has been run locally with the exit code recorded.

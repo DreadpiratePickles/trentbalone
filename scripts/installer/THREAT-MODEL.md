@@ -29,6 +29,15 @@ depends on fetching a key.
 
 ## What the installer deliberately does not do
 
+- **Pin a checksum or a version in the script text.** The script is one file served from a Pages
+  site that is not re-deployed per release, so a literal digest would go stale the moment
+  `releases/latest` moved, and "stale" would be indistinguishable from "tampered". Instead it
+  resolves the version, fetches that release's `SHA256SUMS`, requires a valid signature over it
+  from a public key **embedded in the script**, and only then checks the artefact's SHA-256
+  against that file (`install.sh.in`, `stage_resolve_version`). The trust anchor is the embedded
+  key, not a literal digest; that is strictly stronger, because a pinned digest cannot survive a
+  new release and an unpinned unsigned download cannot survive a hostile CDN. This paragraph is
+  the single source for the question, and `05_release/CONTEXT.md` follows it.
 - Fetch a key, a script, or a "bootstrap" from anywhere: no nested `curl | sh`, no `eval`.
 - Run `sudo` or write to `/usr/local`, `/etc`, or system profiles.
 - Delete anything: a directory it must replace is moved to `<dir>.broken-<utc-timestamp>`.
@@ -44,6 +53,9 @@ depends on fetching a key.
    the script text. Pinning the public keys inside the script makes a *release* compromise
    survivable; it does not make a *script* compromise survivable. Publishing the script's own
    SHA-256 on a second channel (the README) lets careful users check it, and is recommended.
+   Related availability rule, not a security one: `pages.yml` refuses to deploy until a published
+   release exists (`scripts/ci/pages-release-gate.mjs`), so the domain never advertises an
+   installer whose `releases/latest` lookup 404s.
 3. **`trent setup` and `trent doctor` run the freshly installed binary.** By then it has been
    verified; but anything the binary does with the user's environment is the binary's threat
    model, not the installer's.
