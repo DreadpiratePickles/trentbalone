@@ -57,11 +57,21 @@ describe("seat wiring", () => {
 
     const engineer = await libs.store.getAgentPlugAssignment(companyId, "engineer");
     expect(engineer?.environment.tools).toEqual(expect.arrayContaining(["file_ops", "read_file", "write_file", "patch", "search_files", "terminal", "process_manage"]));
-    expect(engineer?.environment.tools).toEqual(expect.arrayContaining(["GitHub", "workbench:session"]));
+    expect(engineer?.environment.tools).toContain("workbench:session");
+    // B2: `GitHub` is a manifest capability with no executor here, so the seat is not told it has one.
+    expect(engineer?.environment.tools).not.toContain("GitHub");
     expect(engineer?.environment.approvalRequiredFor).toEqual(expect.arrayContaining(["file_ops.write", "terminal.dangerous"]));
+    // B2: the seats are different capabilities. Finance's manifest names no sandbox, so the seat
+    // receives neither the shell nor the file adapter, and never sees their approval floors.
+    const finance = await libs.store.getAgentPlugAssignment(companyId, "finance");
+    expect(finance?.environment.tools).not.toContain("terminal");
+    expect(finance?.environment.tools).not.toContain("file_ops");
+    expect(finance?.environment.approvalRequiredFor).not.toContain("terminal.dangerous");
     for (const role of SEAT_ROLES) {
       const assignment = await libs.store.getAgentPlugAssignment(companyId, role);
-      expect(assignment?.environment.tools, role).toContain("file_ops");
+      const { seatCapability } = await import("../fleet/seat-capabilities.js");
+      const expected = seatCapability(role).toolsets.includes("file_ops");
+      expect(assignment?.environment.tools.includes("file_ops"), role).toBe(expected);
     }
 
     // Exactly what `executeStepWithRuntime` does (`orchestrator-runtime.ts:1379-1382`): the top-3

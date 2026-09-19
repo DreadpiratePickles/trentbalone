@@ -47,7 +47,8 @@ import { applyModelEnv, assertRoutableModel } from "./model-env.js";
 import { PortShaper, PortTally } from "./provider-ports.js";
 import { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots, type ReleaseSlot } from "./run-slots.js";
 import { closeRunScope, createContextNoticeBus, openRunScope } from "./run-hooks.js";
-import { SeatTally, guardSeatModel, shapeEvent, type SeatModelFn } from "./seat-guard.js";
+import { SeatTally, applyStepFailures, shapeEvent, type SeatModelFn } from "./seat-guard.js";
+import { guardedSeatModel } from "./seat-guard-budget.js";
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
 import { runWithToolCallContext } from "../governance/tool-call-context.js";
 import type { FleetMemoryHook } from "../fleet-memory/orchestrator-hook.js";
@@ -67,9 +68,9 @@ import {
 export type * from "./types.js";
 export { FALLBACK_PLANNER_APPROVAL_TRIGGERS, FALLBACK_PLAN_REASONING, FALLBACK_RUN_SUMMARY } from "./types.js";
 export { buildConsolidationPrompt, isFallbackSummary, WRAPPER_CONSOLIDATED_DETAIL } from "./provider-ports.js";
-export { applyModelEnv, assertRoutableModel, modelEnvKeys } from "./model-env.js";
+export { applyModelEnv, assertRoutableModel, modelEnvKeys, resolveSeatModel, seatTierVar } from "./model-env.js";
 export { resolveToolName, normaliseSeatTurn } from "./tool-names.js";
-export { wireSeatTools, toolsetEnvironment, SEAT_ROLES } from "./seat-wiring.js";
+export { wireSeatTools, seatEnvironment, toolsetEnvironment, SEAT_ROLES } from "./seat-wiring.js";
 export { createOrchestratorDelegatePort, DELEGATE_MAX_CHILDREN, DELEGATE_MAX_DEPTH } from "./delegate-port.js";
 export type { OrchestratorDelegatePort, DelegatedChildRunner, DelegatedChildSpec, DelegatedChildOutcome } from "./delegate-port.js";
 export { createAppDelegatedChildRunner } from "./delegate-child.js";
@@ -244,14 +245,15 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
 
   const seatInstructions = toolInstructions(allTools);
 
-  function installPorts(libs: Libs, gateway: ModelGateway, tally: SeatTally, ports: PortTally): void {
+  function installPorts(libs: Libs, gateway: ModelGateway, tally: SeatTally, ports: PortTally, emit: (event: OrcEvent) => void): void {
     const underlying = (deps.executeSeatModelFn as SeatModelFn | undefined) ?? libs.gateway.executeSeatModel;
     const chat = deps.executeSeatModelFn ? undefined : deps.createChatCompletion;
+    const seat = guardedSeatModel({ underlying, chat, tally, instructions: seatInstructions, emit }); // B2: provider guard inside, spend cap outside
     libs.overrides.setRuntimeEvalOverrides({
       orchestration: {
         // Default, not test-only: the planner and the critic reach the configured provider.
         createCompletion: deps.createCompletion ?? createCompletionPort(gateway, { onCall: (call) => ports.record(call) }),
-        executeSeatModelFn: human.wrapSeatModel(withDelegateCaller(withFleetPrelude(guardSeatModel(underlying, chat, tally, seatInstructions)))),
+        executeSeatModelFn: human.wrapSeatModel(withDelegateCaller(withFleetPrelude(seat))),
       },
     });
   }
@@ -269,23 +271,21 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
    */
   async function applyFailureOverride(libs: Libs, runId: string, tally: SeatTally): Promise<void> {
     const runFailure = tally.runFailure();
-    if (runFailure === undefined) return;
-    const summary = `Run failed: every model call failed: ${runFailure}`;
+    // B2: a step the wrapper ended itself (a seat past its cap) is failed here too, whatever the run did.
+    if (runFailure === undefined && tally.abortedSteps().length === 0) return;
+    const summary = runFailure === undefined ? undefined : `Run failed: every model call failed: ${runFailure}`;
     const completedAt = new Date().toISOString();
     const live = libs.orchestrator.getOrchestrationRun(runId);
     if (live) {
-      live.status = "failed";
-      live.summary = summary;
-      live.completedAt = live.completedAt ?? completedAt;
-      for (const step of live.steps) {
-        const stepFailure = tally.stepFailure(step.id);
-        if (stepFailure === undefined) continue;
-        step.status = "failed";
-        step.output = `Model call failed: ${stepFailure}`;
+      if (summary !== undefined) {
+        live.status = "failed";
+        live.summary = summary;
+        live.completedAt = live.completedAt ?? completedAt;
       }
+      applyStepFailures(live.steps, tally);
       libs.cache.cacheOrchestrationRun(live);
     }
-    await libs.store.updateOrchestratorRun(runId, { status: "failed", summary, completedAt }).catch(() => undefined);
+    if (summary !== undefined) await libs.store.updateOrchestratorRun(runId, { status: "failed", summary, completedAt }).catch(() => undefined);
   }
 
   /**
@@ -354,7 +354,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       const libs = await loadLibs();
       const gateway = await loadGateway();
       assertStandaloneEnv();
-      installPorts(libs, gateway, tally, ports);
+      installPorts(libs, gateway, tally, ports, (event) => deliver({ ...event, runId: runId ?? event.runId }));
       // The seats' tools exist before the plan is made: registry, router catalog, seat environments.
       await wireSeatTools(libs, options.companyId, allTools);
       try {

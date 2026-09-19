@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { applyModelEnv, modelEnvKeys } from "./model-env.js";
+import { applyModelEnv, modelEnvKeys, resolveSeatModel, seatTierVar } from "./model-env.js";
 
 const KEYS = [
   "MODEL_PREFERRED_PROVIDER",
@@ -116,6 +116,40 @@ describe("applyModelEnv", () => {
     });
   });
 
+  it("B2: writes the configured tiers into the tier variables instead of one model into all three", () => {
+    const report = applyModelEnv({
+      provider: "google",
+      model: "gemini-3.5-flash-lite",
+      models: { fast: "gemini-3.5-flash-lite", executor: "gemini-3.5-pro", planner: "gemini-3.5-ultra" },
+    });
+    expect(process.env.GOOGLE_MODEL_FAST).toBe("gemini-3.5-flash-lite");
+    expect(process.env.GOOGLE_MODEL_DEFAULT).toBe("gemini-3.5-pro");
+    expect(process.env.GOOGLE_MODEL_STRONG).toBe("gemini-3.5-ultra");
+    expect(report.written).toEqual(expect.arrayContaining(["GOOGLE_MODEL_FAST", "GOOGLE_MODEL_DEFAULT", "GOOGLE_MODEL_STRONG"]));
+  });
+
+  it("B2: a tier nothing configures falls back to the executor model, and then to the one model", () => {
+    applyModelEnv({ provider: "anthropic", model: "claude-sonnet-4-6", models: { executor: "claude-sonnet-4-7" } });
+    expect(process.env.ANTHROPIC_MODEL_FAST).toBe("claude-sonnet-4-7");
+    expect(process.env.ANTHROPIC_MODEL_DEFAULT).toBe("claude-sonnet-4-7");
+    expect(process.env.ANTHROPIC_MODEL_STRONG).toBe("claude-sonnet-4-7");
+  });
+
+  it("B2: the A0.3 alias still resolves to openai plus a base URL, and carries its tiers", () => {
+    process.env.DEEPSEEK_API_KEY = "test-key";
+    const report = applyModelEnv({
+      provider: "deepseek",
+      model: "deepseek-chat",
+      models: { executor: "deepseek-chat", planner: "deepseek-reasoner" },
+    });
+    expect(report.unsupportedProvider).toBe(false);
+    expect(report.unroutableProvider).toBeUndefined();
+    expect(process.env.MODEL_PREFERRED_PROVIDER).toBe("openai");
+    expect(process.env.OPENAI_BASE_URL).toContain("deepseek");
+    expect(process.env.OPENAI_MODEL_DEFAULT).toBe("deepseek-chat");
+    expect(process.env.OPENAI_MODEL_STRONG).toBe("deepseek-reasoner");
+  });
+
   it("is a no-op without a config", () => {
     expect(applyModelEnv(undefined)).toEqual({ written: [], kept: [], unsupportedProvider: false });
   });
@@ -158,5 +192,36 @@ describe("createOrchestrator reads unsupportedProvider — the silent-route defe
   it("builds normally for an alias the gateway can route", async () => {
     const { createOrchestrator } = await import("./index.js");
     expect(() => createOrchestrator({ model: { provider: "ollama", model: "llama3.2" } })).not.toThrow();
+  });
+});
+
+describe("resolveSeatModel — a seat's manifest tier picks its model (B2)", () => {
+  const twoTiers = { provider: "google", model: "gemini-3.5-pro", models: { executor: "gemini-3.5-pro", planner: "gemini-3.5-ultra" } };
+  const oneTier = { provider: "google", model: "gemini-3.5-pro", models: { executor: "gemini-3.5-pro" } };
+
+  it("names the variable the app's resolver reads for that seat's tier", () => {
+    // engineer is the sonnet tier -> DEFAULT; ceo is the opus tier -> STRONG.
+    expect(seatTierVar("engineer", "google")).toBe("GOOGLE_MODEL_DEFAULT");
+    expect(seatTierVar("ceo", "google")).toBe("GOOGLE_MODEL_STRONG");
+    expect(seatTierVar("support", "anthropic")).toBe("ANTHROPIC_MODEL_FAST");
+  });
+
+  it("with two configured tiers, engineer and ceo resolve different models", () => {
+    applyModelEnv(twoTiers);
+    expect(resolveSeatModel("engineer", twoTiers)).toBe("gemini-3.5-pro");
+    expect(resolveSeatModel("ceo", twoTiers)).toBe("gemini-3.5-ultra");
+    expect(resolveSeatModel("engineer", twoTiers)).not.toBe(resolveSeatModel("ceo", twoTiers));
+  });
+
+  it("with one configured tier, both resolve the same model", () => {
+    applyModelEnv(oneTier);
+    expect(resolveSeatModel("engineer", oneTier)).toBe("gemini-3.5-pro");
+    expect(resolveSeatModel("ceo", oneTier)).toBe(resolveSeatModel("engineer", oneTier));
+  });
+
+  it("an operator's explicit tier variable still wins over the config file", () => {
+    process.env.GOOGLE_MODEL_STRONG = "gemini-operator-choice";
+    applyModelEnv(twoTiers);
+    expect(resolveSeatModel("ceo", twoTiers)).toBe("gemini-operator-choice");
   });
 });

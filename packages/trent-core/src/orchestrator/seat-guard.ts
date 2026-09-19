@@ -41,6 +41,13 @@ interface StepTally {
   calls: number;
   failed: number;
   lastError?: string;
+  /**
+   * B2: the step was ended by the wrapper itself rather than by the provider — today only the
+   * per-seat spend cap (`./seat-guard-budget.ts`). It fails the step whatever the calls returned,
+   * and it is deliberately NOT counted as a failed call, so one overspending seat never turns into
+   * "every model call failed" for the whole run.
+   */
+  abort?: string;
 }
 
 /** What the guard port observed for one run, keyed by step id. */
@@ -57,11 +64,25 @@ export class SeatTally {
     this.#steps.set(stepId, entry);
   }
 
-  /** The provider message when every call this step made failed; undefined otherwise. */
+  /** Ends this step as failed with `message`, whatever its model calls returned. */
+  abort(stepId: string, message: string): void {
+    const entry = this.#steps.get(stepId) ?? { calls: 0, failed: 0 };
+    entry.abort ??= message;
+    this.#steps.set(stepId, entry);
+  }
+
+  /** The ids of the steps the wrapper ended itself, in the order they were aborted. */
+  abortedSteps(): string[] {
+    return [...this.#steps.entries()].filter(([, entry]) => entry.abort !== undefined).map(([id]) => id);
+  }
+
+  /** The message when this step was aborted, or when every call it made failed; undefined otherwise. */
   stepFailure(stepId: string | undefined): string | undefined {
     if (stepId === undefined) return undefined;
     const entry = this.#steps.get(stepId);
-    if (!entry || entry.calls === 0 || entry.failed < entry.calls) return undefined;
+    if (!entry) return undefined;
+    if (entry.abort !== undefined) return entry.abort;
+    if (entry.calls === 0 || entry.failed < entry.calls) return undefined;
     return entry.lastError ?? "model execution failed";
   }
 
@@ -117,8 +138,25 @@ function withToolInstructions(input: SeatModelInput, instructions: ReadonlyMap<s
 
 // --- Event shaping --------------------------------------------------------------------------------
 
-function failedStep(step: Partial<OrchestrationStepSnapshot> | undefined, message: string): Partial<OrchestrationStepSnapshot> {
-  return { ...step, status: "failed", output: `Model call failed: ${message}` };
+export function stepFailureText(stepId: string | undefined, tally: SeatTally): string | undefined {
+  const message = tally.stepFailure(stepId);
+  if (message === undefined) return undefined;
+  // A step the wrapper ended itself did reach a model; saying "model call failed" would be a lie.
+  return tally.abortedSteps().includes(stepId ?? "") ? `Step failed: ${message}` : `Model call failed: ${message}`;
+}
+
+function failedStep(step: Partial<OrchestrationStepSnapshot> | undefined, text: string): Partial<OrchestrationStepSnapshot> {
+  return { ...step, status: "failed", output: text };
+}
+
+/** Marks every step the guard ended — provider failure or wrapper abort — failed, in place. */
+export function applyStepFailures(steps: { id: string; status: string; output?: string }[], tally: SeatTally): void {
+  for (const step of steps) {
+    const text = stepFailureText(step.id, tally);
+    if (text === undefined) continue;
+    step.status = "failed";
+    step.output = text;
+  }
 }
 
 function fallbackGateDetail(step: Partial<OrchestrationStepSnapshot> | undefined): string {
@@ -142,13 +180,14 @@ function isPlanGate(step: Partial<OrchestrationStepSnapshot> | undefined): boole
  */
 export function shapeEvent(event: OrcEvent, tally: SeatTally, fallbackPlan: boolean): OrcEvent | undefined {
   const stepFailure = tally.stepFailure(event.step?.id);
+  const failureText = stepFailureText(event.step?.id, tally);
   switch (event.kind) {
     case "step_output":
-      return stepFailure === undefined ? event : { ...event, step: failedStep(event.step, stepFailure), detail: `Model call failed: ${stepFailure}` };
+      return failureText === undefined ? event : { ...event, step: failedStep(event.step, failureText), detail: failureText };
     case "step_critic":
       return stepFailure === undefined ? event : undefined;
     case "step_end":
-      return stepFailure === undefined ? event : { ...event, step: failedStep(event.step, stepFailure), detail: stepFailure };
+      return failureText === undefined ? event : { ...event, step: failedStep(event.step, failureText), detail: stepFailure };
     case "step_awaiting_approval":
     case "run_awaiting_approval":
       return fallbackPlan && isPlanGate(event.step) ? { ...event, detail: fallbackGateDetail(event.step) } : event;

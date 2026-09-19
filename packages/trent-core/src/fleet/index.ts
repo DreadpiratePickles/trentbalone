@@ -1,3 +1,4 @@
+export * from "./seat-capabilities.js";
 export * from "./SkillProvisioner.js";
 export * from "./FleetUsage.js";
 export * from "./FleetPacks.js";

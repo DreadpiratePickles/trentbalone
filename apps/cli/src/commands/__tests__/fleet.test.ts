@@ -10,7 +10,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { EXIT } from "@trent/core/errors/index.js";
-import { CORE_ROLE_IDS } from "@trent/core/fleet/index.js";
+import { CORE_ROLE_IDS, seatCapability } from "@trent/core/fleet/index.js";
 import { InMemoryImproveStore } from "@trent/core/improve/index.js";
 import { runCli } from "../index.js";
 import { setImproveStoreForTests } from "../improve.js";
@@ -77,6 +77,68 @@ describe("trent fleet list", () => {
     expect(result.exitCode).toBe(EXIT.OK);
     expect(result.stdout).toContain("sales");
     expect(result.stdout).not.toContain("browser");
+  });
+});
+
+describe("trent fleet show", () => {
+  interface ShowData {
+    seat: string;
+    name: string;
+    toolsets: string[];
+    unavailable: Array<{ capability: string; reason: string }>;
+    denied: string[];
+    approvalGates: string[];
+    budgetCents: number;
+    modelTier: string;
+    model: string;
+    evalSuiteId: string;
+  }
+
+  async function show(seat: string): Promise<ShowData> {
+    const result = await runCli(["fleet", "show", seat, "--json"]);
+    expect(result.exitCode).toBe(EXIT.OK);
+    return JSON.parse(result.stdout) as ShowData;
+  }
+
+  it("prints what makes each seat a seat: toolsets, unavailable capabilities, floor overrides, cents, tier and suite", async () => {
+    const engineer = await show("engineer");
+    expect(engineer.seat).toBe("engineer");
+    expect(engineer.toolsets).toContain("terminal");
+    expect(engineer.budgetCents).toBe(seatCapability("engineer").budgetCents);
+    expect(Number.isInteger(engineer.budgetCents)).toBe(true);
+    expect(engineer.modelTier).toBe(seatCapability("engineer").modelTier);
+    expect(engineer.evalSuiteId).toBe("engineer");
+    expect(engineer.unavailable.map((entry) => entry.capability)).toContain("GitHub");
+    expect(engineer.model.length).toBeGreaterThan(0);
+
+    const finance = await show("finance");
+    expect(finance.toolsets).not.toContain("terminal");
+    expect(finance.denied).toContain("terminal");
+    expect(finance.budgetCents).not.toBe(engineer.budgetCents);
+    expect(finance.approvalGates).toContain("payout");
+  });
+
+  it("every seat in the roster has a budget, a tier and an eval suite id", async () => {
+    for (const seat of CORE_ROLE_IDS) {
+      const data = await show(seat);
+      expect(data.evalSuiteId, seat).toBe(seat);
+      expect(data.budgetCents, seat).toBeGreaterThan(0);
+      expect(["haiku", "sonnet", "opus"], seat).toContain(data.modelTier);
+    }
+  });
+
+  it("renders the seat for a human too, in cents", async () => {
+    const result = await runCli(["fleet", "show", "finance"]);
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(result.stdout).toContain("finance");
+    expect(result.stdout).toContain(String(seatCapability("finance").budgetCents));
+    expect(result.stdout).toContain("unavailable");
+  });
+
+  it("refuses a seat the application does not define", async () => {
+    const result = await runCli(["fleet", "show", "browser", "--json"]);
+    expect(result.exitCode).toBe(EXIT.CONFIG);
+    expect(`${result.stdout}${result.stderr}`).toContain("browser");
   });
 });
 

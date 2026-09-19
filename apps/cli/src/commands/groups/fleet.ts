@@ -3,7 +3,8 @@
  * moved to `./skills.ts`, where it shares one store with the `skills` toolset.
  */
 
-import { FleetManager } from "@trent/core/fleet/index.js";
+import { FleetManager, seatCapability } from "@trent/core/fleet/index.js";
+import { resolveSeatModel } from "@trent/core/orchestrator/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -60,6 +61,56 @@ export const fleetSpec: CommandSpec = {
         if (d.agents.length > 25) {
           lines.push(ctx.theme.meta(`  ... ${d.agents.length - 25} more. Use --json for all.`));
         }
+        return lines;
+      },
+    },
+    {
+      name: "show <seat>",
+      description: "Show what makes one seat a seat: toolsets, unavailable capabilities, floor overrides, budget, model tier and eval suite",
+      run(ctx, _opts, args) {
+        const seat = String(args[0] ?? "").trim();
+        const capability = seatCapability(seat);
+        const config = ctx.config().loadConfig() as unknown as {
+          provider: string;
+          model: string;
+          models?: { fast?: string; executor?: string; planner?: string };
+        };
+        return {
+          data: {
+            seat: capability.seat,
+            name: capability.name,
+            toolsets: [...capability.toolsets],
+            denied: [...capability.denied],
+            unavailable: capability.unavailable.map((entry) => ({ capability: entry.capability, reason: entry.reason })),
+            approvalGates: [...capability.approvalGates],
+            budgetCents: capability.budgetCents,
+            modelTier: capability.modelTier,
+            model: resolveSeatModel(seat, { provider: config.provider, model: config.model, ...(config.models ? { models: config.models } : {}) }),
+            evalSuiteId: capability.evalSuiteId,
+          },
+        };
+      },
+      render(data, ctx) {
+        const d = data as {
+          seat: string;
+          name: string;
+          toolsets: string[];
+          denied: string[];
+          unavailable: { capability: string; reason: string }[];
+          approvalGates: string[];
+          budgetCents: number;
+          modelTier: string;
+          model: string;
+          evalSuiteId: string;
+        };
+        const lines = [ctx.theme.emphasis(`SEAT ${d.seat.toUpperCase()} — ${d.name}`)];
+        lines.push(`  ${ctx.theme.meta("toolsets")}     ${ctx.theme.value(d.toolsets.join(", "))}`);
+        lines.push(`  ${ctx.theme.meta("denied")}       ${d.denied.length ? ctx.theme.body(d.denied.join(", ")) : ctx.theme.meta("none")}`);
+        lines.push(`  ${ctx.theme.meta("unavailable")}  ${d.unavailable.length ? ctx.theme.body(d.unavailable.map((entry) => entry.capability).join(", ")) : ctx.theme.meta("none")}`);
+        lines.push(`  ${ctx.theme.meta("gates")}        ${ctx.theme.body(d.approvalGates.join(", "))}`);
+        lines.push(`  ${ctx.theme.meta("budget")}       ${ctx.theme.value(`${d.budgetCents} cents per run`)}`);
+        lines.push(`  ${ctx.theme.meta("model")}        ${ctx.theme.value(d.model)} ${ctx.theme.meta(`(${d.modelTier} tier)`)}`);
+        lines.push(`  ${ctx.theme.meta("eval suite")}   ${ctx.theme.value(d.evalSuiteId)}`);
         return lines;
       },
     },

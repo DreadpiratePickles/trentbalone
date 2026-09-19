@@ -29,6 +29,7 @@ import { createTerminalAdapter } from "./terminal/index.js";
 import { createWebToolsAdapter } from "./web/index.js";
 import { createBrowserAdapter } from "./browser/index.js";
 import { askVision, createVisionAdapter, type VisionGateway } from "./vision/index.js";
+import { seatCapability } from "../fleet/seat-capabilities.js";
 import type { ToolContext, TrentToolAdapter } from "./types.js";
 
 export type { ToolAdapter, ToolCallRecord, ToolContext, TrentToolAdapter } from "./types.js";
@@ -246,4 +247,39 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
 /** `buildTrentTools(...).adapters`: the shape the orchestrator and the older callers take. */
 export function buildTrentToolAdapters(config: ToolBuildConfig, deps: ToolBuildDeps): TrentToolAdapter[] {
   return buildTrentTools(config, deps).adapters;
+}
+
+/**
+ * B2, per-seat adapter selection. An adapter's name IS its toolset, with two spellings the config
+ * enum does not share: `code_execution` is the `code` toolset, and the fleet-memory hook registers
+ * `memory` and `fleet_search` for `memory`.
+ */
+export const TOOLSET_BY_ADAPTER: Readonly<Record<string, Toolset>> = {
+  file_ops: "file_ops",
+  terminal: "terminal",
+  web: "web",
+  browser: "browser",
+  code_execution: "code",
+  delegation: "delegation",
+  cron: "cron",
+  skills: "skills",
+  plugins: "plugins",
+  vision: "vision",
+  mcp: "mcp",
+  human: "human",
+  memory: "memory",
+  fleet_search: "memory",
+};
+
+/**
+ * The subset of a built adapter list one seat may use: its manifest capabilities decide which
+ * toolsets it gets (`fleet/seat-capabilities.ts`). Order is preserved. An adapter no toolset claims
+ * was registered by a caller on purpose and is kept for every seat rather than silently dropped.
+ */
+export function adaptersForSeat(adapters: readonly TrentToolAdapter[], seat: string): TrentToolAdapter[] {
+  const allowed = new Set<string>(seatCapability(seat).toolsets);
+  return adapters.filter((adapter) => {
+    const toolset = TOOLSET_BY_ADAPTER[adapter.name];
+    return toolset === undefined || allowed.has(toolset);
+  });
 }

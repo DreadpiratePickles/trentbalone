@@ -10,6 +10,8 @@
  *      `tools` intact;
  *   3. the adapters' usage text is collected for the seat guard to inject into the prompt.
  */
+import { adaptersForSeat } from "../tools/index.js";
+import { seatCapability } from "../fleet/seat-capabilities.js";
 import type { TrentToolAdapter } from "../tools/types.js";
 import type { Libs, SeatEnvironment } from "./libs.js";
 
@@ -34,20 +36,46 @@ export function toolsetEnvironment(base: SeatEnvironment, adapters: readonly Tre
   return { tools, approvalRequiredFor: unique([...base.approvalRequiredFor, ...gates]) };
 }
 
+/**
+ * B2: what ONE seat's environment must carry. Three differences from {@link toolsetEnvironment}:
+ * only the adapters this seat's manifest entitles it to (`fleet/seat-capabilities.ts`); the
+ * manifest capabilities the CLI cannot execute are REMOVED, so a seat never advertises a tool that
+ * would answer "credentials are not configured"; and the approval gates are the seat's own plus
+ * the floors of the adapters it actually received. The floors are additive only — a seat may be
+ * stricter than the floor (finance receives no `terminal`, so it never sees `terminal.dangerous`),
+ * never looser.
+ */
+export function seatEnvironment(
+  seat: string,
+  base: SeatEnvironment,
+  adapters: readonly TrentToolAdapter[],
+): Pick<SeatEnvironment, "tools" | "approvalRequiredFor"> {
+  const capability = seatCapability(seat);
+  const unavailable = new Set(capability.unavailable.map((entry) => entry.capability));
+  const available = base.tools.filter((tool) => !unavailable.has(tool));
+  return toolsetEnvironment({ ...base, tools: available }, adaptersForSeat(adapters, seat));
+}
+
 export function toolInstructions(adapters: readonly TrentToolAdapter[]): ReadonlyMap<string, string> {
   return new Map(adapters.map((adapter) => [adapter.name, adapter.instructions]));
 }
 
-/** Registers the adapters (idempotent by name) and upserts every slot role's environment for the company. */
+/**
+ * Registers the adapters (idempotent by name) and upserts every slot role's environment for the
+ * company — each with ITS OWN adapter subset, not the one list every seat used to receive.
+ */
 export async function wireSeatTools(libs: Libs, companyId: string, adapters: readonly TrentToolAdapter[]): Promise<void> {
   if (adapters.length === 0) return;
   libs.tools.registerExternalAdapters([...adapters]);
   for (const role of SEAT_ROLES) {
     const existing = await libs.store.getAgentPlugAssignment(companyId, role);
-    const base = existing?.environment ?? libs.catalog.buildSlotEnvironment(companyId, role);
-    const wanted = toolsetEnvironment(base, adapters);
+    // The template, never a previous upsert: a seat's advertised set must SHRINK when a capability
+    // becomes unavailable, and an environment read back from the store cannot shrink itself.
+    const base = libs.catalog.buildSlotEnvironment(companyId, role);
+    const wanted = seatEnvironment(role, base, adapters);
     const unchanged =
       existing !== null && existing !== undefined &&
+      existing.environment.tools.length === wanted.tools.length &&
       wanted.tools.every((tool) => existing.environment.tools.includes(tool)) &&
       wanted.approvalRequiredFor.every((gate) => existing.environment.approvalRequiredFor.includes(gate));
     if (unchanged) continue;
