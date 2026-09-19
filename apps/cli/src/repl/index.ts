@@ -7,7 +7,7 @@
  */
 
 import process from "node:process";
-import { ConfigManager, SessionManager } from "@trent/core";
+import { ConfigManager, FleetManager, PersonalityManager, SessionManager, SkillsHub } from "@trent/core";
 import type { createOrchestrator as createRealOrchestrator } from "@trent/core/orchestrator/index.js";
 import { createModelGateway } from "@trent/core/model-gateway/index.js";
 import { InMemoryTraceStore } from "@trent/core/traces/index.js";
@@ -21,6 +21,7 @@ import { ESCAPE_TIMEOUT_MS, withKittyProtocol } from "./keys.js";
 import { withRawMode } from "./interrupt.js";
 import { toolsStatusLine, type ToolWiringDeps } from "./tools.js";
 import { fleetMemoryToolListing } from "./fleet-memory.js";
+import { workspaceNotices } from "./workspace.js";
 import { createHeadlessRuntime } from "../runtime/headless.js";
 import type { ReplConfig } from "./types.js";
 
@@ -53,6 +54,9 @@ export { KeyDecoder, NEWLINE_HINT } from "./keys.js";
 export { wireTools, toolsStatusLine, startEgressProxy, probeDockerCli, FLOOR_IMAGE } from "./tools.js";
 export { wireFleetMemory, fleetMemoryToolListing } from "./fleet-memory.js";
 export type { FleetMemoryWiringDeps } from "./fleet-memory.js";
+export { renderWorkspaceContext, workspaceNotices } from "./workspace.js";
+export { ContextTracker, contextReport, contextReportLines, contextStatusLine, NO_CONTEXT_LINE } from "./context-report.js";
+export type { ContextReport, ContextSeatReport } from "./context-report.js";
 export type { ToolWiring, ToolWiringDeps, EgressHandle, StartEgressInput, DockerProbe } from "./tools.js";
 export type { ReplContext, ReplStore, ReplToolListing, ReplSandbox, ReplEgressStatus } from "./types.js";
 
@@ -204,6 +208,12 @@ export class ClassicRepl {
     const { tools, store, durable, fleetMemory, orchestrator, companyId } = runtime;
     writeLine(toolsStatusLine(tools, theme));
 
+    // A2.1. The workspace's instruction files are already in the stable tier if they were loaded;
+    // what belongs on screen is what was NOT: an untrusted root, and every refused file by name.
+    for (const [index, line] of workspaceNotices(runtime.workspace).entries()) {
+      writeLine(index === 0 && !runtime.workspace.trusted ? theme.needsApproval(line) : theme.meta(line));
+    }
+
     // Session compaction (docs/configuration.md, "Context management"): once the stored transcript
     // passes `context.compact_after_chars` the turns about to be dropped are offered to the shared
     // memory, summarised into one message, and one compaction event records what was forgotten.
@@ -215,11 +225,15 @@ export class ClassicRepl {
       memory: fleetMemory.memory,
       gateway: async () => createModelGateway(),
     });
+    // `/context` reports how often this session's transcript has been compacted; the compactor is
+    // the only thing that can say, so it counts as it goes.
+    let compactions = 0;
     turns.afterAssistant = () => {
       const id = turns.sessionId?.();
       if (id === undefined) return;
       void compactor(id).then((outcome) => {
         if (outcome.status !== "compacted") return;
+        compactions += 1;
         const record = outcome.event.metadata?.compaction;
         const reclaimed = record === undefined ? 0 : record.chars_before - record.chars_after;
         writeLine(theme.meta(`Compacted this session: ${outcome.forgotten.length} message(s) summarised, ${reclaimed} chars reclaimed.`));
@@ -254,6 +268,17 @@ export class ClassicRepl {
         sandbox: tools.sandbox,
         egress: tools.egress,
         onApprovalAnswer: bindApprovalAnswers(orchestrator),
+        // `/context` measures the assembly the hook performed; it estimates nothing of its own.
+        contextInspector: fleetMemory,
+        compactions: () => compactions,
+        // A2.2: a hook that did not run, said once, after the turn during which it was skipped.
+        notices: () => runtime.notices(),
+        ports: {
+          fleet: new FleetManager(this.#configManager),
+          skills: new SkillsHub(this.#configManager),
+          personalities: new PersonalityManager(this.#configManager),
+          sessions: this.#sessions,
+        },
       });
 
       if (!durable) {

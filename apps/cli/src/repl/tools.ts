@@ -33,6 +33,7 @@ import {
   type ToolBuildConfig,
   type ToolBuildDeps,
   type TrentToolAdapter,
+  type TrentToolBuild,
 } from "@trent/core/tools/index.js";
 import type { Theme } from "../ui/index.js";
 import type { ReplEgressStatus, ReplSandbox } from "./types.js";
@@ -115,6 +116,12 @@ export interface ToolWiring {
   readonly toolsets: string[];
   /** Enabled in config, not registered, and why. */
   readonly skipped: SkippedToolset[];
+  /**
+   * A2.2: one line per configured hook that did not run, from `buildTrentTools`. A hook is skipped
+   * when a tool CALL is made, which is always after this wiring returned, so this is read after a
+   * turn rather than at start-up — and the field stays live for exactly that reason.
+   */
+  readonly hookNotices: readonly string[];
   readonly sandbox: ReplSandbox;
   readonly egress: ReplEgressStatus;
   cleanup(): Promise<void>;
@@ -235,22 +242,27 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
         }
       : {}),
   };
-  let adapters: TrentToolAdapter[];
-  let skipped: SkippedToolset[];
+  let build: TrentToolBuild;
   try {
-    if (deps.buildTools) ({ adapters, skipped } = deps.buildTools(deps.config, buildDeps));
-    else if (deps.buildAdapters) ({ adapters, skipped } = { adapters: deps.buildAdapters(deps.config, buildDeps), skipped: [] });
-    else ({ adapters, skipped } = buildTrentTools(deps.config, buildDeps));
+    if (deps.buildTools) build = deps.buildTools(deps.config, buildDeps);
+    // The legacy adapters-only seam reports nothing skipped and runs no hooks of its own.
+    else if (deps.buildAdapters) build = { adapters: deps.buildAdapters(deps.config, buildDeps), skipped: [], hookNotices: [] };
+    else build = buildTrentTools(deps.config, buildDeps);
   } catch (error) {
     await handle?.stop();
     throw error;
   }
+  const { adapters, skipped } = build;
 
   let cleaned = false;
   return {
     adapters,
     toolsets,
     skipped,
+    // A getter, not a copy: `buildTrentTools` fills this as calls are made, not as it returns.
+    get hookNotices(): readonly string[] {
+      return build.hookNotices;
+    },
     sandbox,
     egress,
     cleanup: async () => {

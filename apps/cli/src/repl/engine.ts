@@ -6,10 +6,10 @@
 
 import { terminalWidth, type Theme } from "../ui/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
-import { BUSY_STATUS_LINE, STOP_COMMAND, type DoubleTextPolicy } from "@trent/core/gateway/index.js";
+import { BUSY_STATUS_LINE, STOP_COMMAND } from "@trent/core/gateway/index.js";
 import { TranscriptRenderer, identityForRole } from "./render.js";
 import { BudgetLedger } from "./budget.js";
-import { Conversation, historyLimits, TurnOutcome, type HistoryMessage } from "./conversation.js";
+import { Conversation, doubleTextPolicy, historyLimits, TurnOutcome, type HistoryMessage } from "./conversation.js";
 import { ApprovalGate, renderApprovalCard, type GateAnswer } from "./approvals.js";
 import { questionFromEvent, renderQuestion } from "@trent/core/tools/human/index.js";
 import { GLYPHS } from "../ui/index.js";
@@ -19,19 +19,14 @@ import { renderDegradedBanner } from "./degraded.js";
 import { rememberRun } from "./memory.js";
 import { KeyDecoder, NEWLINE_HINT, type KeyEvent } from "./keys.js";
 import { ABORT_REASON, InterruptController } from "./interrupt.js";
-import type { ReplConfig, ReplContext, ReplEgressStatus, ReplSandbox, ReplStore, ReplToolListing, ReplTraceStore } from "./types.js";
+import { ContextTracker } from "./context-report.js";
+import { buildReplContext, unseenNotices, type ReplSessionPorts } from "./session-view.js";
+import type { ContextInspector, ReplConfig, ReplContext, ReplEgressStatus, ReplSandbox, ReplStore, ReplToolListing, ReplTraceStore } from "./types.js";
 
 /** The prompt prefix. The mark is a mint dot; read the product name as `trent·`. */
 export const PROMPT = "● ";
 
 export { BUSY_STATUS_LINE };
-
-/** `repl.double_text_policy`, read off the config slice; anything unrecognised is `enqueue`. */
-function doubleTextPolicy(config: ReplConfig): DoubleTextPolicy {
-  const repl = config.repl;
-  const value = typeof repl === "object" && repl !== null ? (repl as { double_text_policy?: unknown }).double_text_policy : undefined;
-  return value === "interrupt" || value === "reject" ? value : "enqueue";
-}
 
 /** A turn submitted while another was running, held until that one settles. */
 interface QueuedTurn {
@@ -69,6 +64,18 @@ export interface ReplEngineDeps {
   tools?: readonly ReplToolListing[];
   sandbox?: ReplSandbox;
   egress?: ReplEgressStatus;
+  /** A1.2: the wrapper's measurement of what it injected, for `/context`. */
+  contextInspector?: ContextInspector;
+  /** How many times this session's stored transcript has been compacted, asked after every turn. */
+  compactions?: () => number;
+  /**
+   * Lines the session owes the user once: a hook that did not run, a session hook that failed
+   * (A2.2). Asked after every turn — a tool hook is skipped during a call, not at start-up — and
+   * each distinct line is printed the first time it appears and never again.
+   */
+  notices?: () => readonly string[];
+  /** The live managers the commands merged out of the slash module read (`session-view.ts`). */
+  ports?: ReplSessionPorts;
   /**
    * Told when the human answers, so the orchestrator can release the step. `runId` is the run the
    * gate belongs to — taken from the event itself, never from a side list (live proof, F5).
@@ -78,8 +85,6 @@ export interface ReplEngineDeps {
 
 export { bindApprovalAnswers } from "./approvals.js";
 export type { ApprovalTarget, GateAnswer } from "./approvals.js";
-
-const EMPTY_TRACES: ReplTraceStore = { query: async () => [], byRun: async () => [] };
 
 export class ReplEngine {
   readonly #deps: ReplEngineDeps;
@@ -104,6 +109,10 @@ export class ReplEngine {
   /** Steps already gated this turn: the bus emits step_ AND run_awaiting_approval for one gate. */
   #gated = new Set<string>();
   #selected = 0;
+  /** Which (run, seat) pairs this session assembled a prompt for, so `/context` can ask about them. */
+  readonly #context = new ContextTracker();
+  /** Notices already on screen. A notice source repeats itself; the user should not have to. */
+  readonly #shown = new Set<string>();
 
   constructor(deps: ReplEngineDeps) {
     this.#deps = deps;
@@ -142,20 +151,19 @@ export class ReplEngine {
     return this.#answer !== undefined;
   }
   get context(): ReplContext {
-    return {
-      theme: this.#deps.theme,
-      config: this.#deps.config,
-      store: this.#deps.store,
-      companyId: this.#deps.companyId,
-      traces: this.#deps.traces ?? EMPTY_TRACES,
+    return buildReplContext(this.#deps, {
       budget: this.budget,
       approvals: this.approvals,
-      degraded: this.#deps.degraded ?? false,
-      runIds: [...this.#runIds],
-      tools: this.#deps.tools,
-      sandbox: this.#deps.sandbox,
-      egress: this.#deps.egress,
-    };
+      runIds: this.#runIds,
+      contextRuns: this.#context.runs(),
+    });
+  }
+
+  /** Prints every notice the session owes that is not already on screen. */
+  #drainNotices(): void {
+    for (const line of unseenNotices(this.#deps.notices?.() ?? [], this.#shown)) {
+      this.#emit(this.#renderer.push(this.#deps.theme.needsApproval(line)));
+    }
   }
 
   #width(): number {
@@ -188,6 +196,8 @@ export class ReplEngine {
         ),
       );
     }
+    // A session hook that was skipped at start-up is owed to the user before the first prompt.
+    this.#drainNotices();
     this.#emit(this.#deps.theme.meta(NEWLINE_HINT));
     this.prompt();
   }
@@ -406,12 +416,15 @@ export class ReplEngine {
         interrupted ? { ...outcome.metadata(), status: "interrupted" } : outcome.metadata(),
       );
       if (interrupted) this.#emit(this.#renderer.push(this.#deps.theme.meta("Interrupted. The run was stopped.")));
+      // A hook is skipped during a CALL, so the notices are read after the turn, not before it.
+      this.#drainNotices();
       this.prompt();
       this.#drainQueued();
     }
   }
 
   async #afterEvent(event: OrcEvent, signal: AbortSignal): Promise<void> {
+    this.#context.observe(event);
     if (event.kind === "run_start" && !this.#runIds.includes(event.runId)) {
       this.#runIds.push(event.runId);
       await rememberRun(this.#deps.store, this.#deps.companyId, event.runId);

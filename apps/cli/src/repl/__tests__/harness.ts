@@ -202,6 +202,10 @@ export interface HarnessOptions {
   conversation?: Conversation;
   /** Cents already spent when this session opened, as a resumed session reports them. */
   openingCents?: number;
+  /** Lines the session must show once (skipped hooks, a failed session hook); drained per turn. */
+  notices?: () => readonly string[];
+  /** The measured injection `/context` reports on. */
+  contextInspector?: ReplEngineDeps["contextInspector"];
 }
 
 function ev(kind: OrcEvent["kind"], extra: Partial<OrcEvent> = {}): OrcEvent {
@@ -253,6 +257,8 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
     ...(options.onApprovalAnswer ? { onApprovalAnswer: options.onApprovalAnswer } : {}),
     ...(options.conversation ? { conversation: options.conversation } : {}),
     ...(options.openingCents === undefined ? {} : { openingCents: options.openingCents }),
+    ...(options.notices === undefined ? {} : { notices: options.notices }),
+    ...(options.contextInspector === undefined ? {} : { contextInspector: options.contextInspector }),
     runner: ({ objective, signal, history }) =>
       (async function* () {
         objectives.push(objective);

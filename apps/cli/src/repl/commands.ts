@@ -9,6 +9,7 @@
 
 import { GLYPHS, fadingRule, type Theme } from "../ui/index.js";
 import { formatCents } from "./budget.js";
+import { contextReport, contextReportLines } from "./context-report.js";
 import { listRememberedRuns, searchRuns } from "./memory.js";
 import { DEGRADED_MARK } from "./degraded.js";
 import type { McpServerConfig, ReplContext } from "./types.js";
@@ -234,6 +235,126 @@ export const REPL_COMMANDS: Record<string, ReplCommand> = {
       if (workbenchJobs.length === 0) {
         lines.push(empty(ctx.theme, "No sandbox job has run in this workspace yet."));
       }
+      return lines.join("\n");
+    },
+  },
+
+  context: {
+    name: "context",
+    description: "What the wrapper injected into the last seat call: tier sizes, the ceiling and what it dropped",
+    async run(_args, ctx) {
+      const report = contextReport({ inspector: ctx.contextInspector, runs: ctx.contextRuns, compactions: ctx.compactions });
+      const lines = [heading("context", ctx.theme)];
+      for (const line of contextReportLines(report)) {
+        lines.push(line.startsWith("  ") ? `  ${ctx.theme.meta(line.slice(2, 12))}${ctx.theme.body(line.slice(12))}` : `  ${ctx.theme.body(line)}`);
+      }
+      return lines.join("\n");
+    },
+  },
+
+  fleet: {
+    name: "fleet",
+    description: "The seats and specialists this profile has installed, and what they cost today",
+    async run(_args, ctx) {
+      const lines = [heading("fleet", ctx.theme)];
+      if (ctx.fleet === undefined) {
+        lines.push(empty(ctx.theme, "This session has no fleet view; run `trent fleet list` instead."));
+        return lines.join("\n");
+      }
+      const status = ctx.fleet.getStatus();
+      lines.push(bullet(ctx.theme, "Active", `${status.activeCount} of ${status.installedCount} installed, ${status.totalCatalog} in the catalog`));
+      lines.push(bullet(ctx.theme, "Today", `${formatCents(status.dailyBudgetSpentCents)} of ${formatCents(status.dailyBudgetCapCents)}`));
+      const active = status.agents.filter((agent) => agent.active);
+      if (active.length === 0) {
+        lines.push(empty(ctx.theme, "No agent is active. `trent fleet install <id>` installs one."));
+        return lines.join("\n");
+      }
+      for (const agent of active) {
+        lines.push(
+          `  ${ctx.theme.success(GLYPHS.running)} ${ctx.theme.emphasis(agent.id.padEnd(22))}${ctx.theme.meta(agent.status.padEnd(10))}${ctx.theme.body(agent.modelPolicy)}`,
+        );
+      }
+      return lines.join("\n");
+    },
+  },
+
+  skills: {
+    name: "skills",
+    description: "Skills installed for this profile, and the hub catalog",
+    args: "[browse | search <term>]",
+    async run(args, ctx) {
+      const lines = [heading("skills", ctx.theme)];
+      if (ctx.skills === undefined) {
+        lines.push(empty(ctx.theme, "This session has no skills view; run `trent skills list` instead."));
+        return lines.join("\n");
+      }
+      const [sub, ...rest] = args;
+      if (sub === "browse" || sub === "search") {
+        const term = rest.join(" ");
+        const rows = sub === "browse" ? ctx.skills.browse() : ctx.skills.search(term);
+        lines.push(bullet(ctx.theme, "Catalog", `${rows.length} skill(s)${term === "" ? "" : ` matching ${term}`}`));
+        for (const row of rows) lines.push(`  ${ctx.theme.emphasis(row.slug.padEnd(24))}${ctx.theme.body(row.description)}`);
+        if (rows.length === 0) lines.push(empty(ctx.theme, "Nothing in the catalog matches that."));
+        return lines.join("\n");
+      }
+      const installed = ctx.skills.listInstalled();
+      lines.push(bullet(ctx.theme, "Installed", `${installed.length}`));
+      for (const skill of installed) {
+        lines.push(`  ${ctx.theme.emphasis(skill.slug.padEnd(20))}${ctx.theme.meta(skill.slashCommand.padEnd(20))}${ctx.theme.body(skill.description)}`);
+      }
+      if (installed.length === 0) lines.push(empty(ctx.theme, "No skill is installed. /skills browse lists the hub."));
+      return lines.join("\n");
+    },
+  },
+
+  personality: {
+    name: "personality",
+    description: "The tone stance appended to every seat prompt, and the others this profile can use",
+    args: "[<name>]",
+    async run(args, ctx) {
+      const lines = [heading("personality", ctx.theme)];
+      if (ctx.personalities === undefined) {
+        lines.push(empty(ctx.theme, "This session has no personality view; run `trent config set personality <name>` instead."));
+        return lines.join("\n");
+      }
+      const wanted = args[0];
+      if (wanted !== undefined && wanted !== "list") {
+        const switched = ctx.personalities.setPersonality(wanted);
+        lines.push(bullet(ctx.theme, "Set", switched.name));
+        // The suffix is read once, when the session's fleet-memory hook is built, so saying it
+        // applies now would be a lie: it applies to the next session.
+        lines.push(empty(ctx.theme, "The next session's seat prompts carry it; this one keeps the stance it opened with."));
+        return lines.join("\n");
+      }
+      const active = ctx.personalities.getActivePersonality();
+      for (const personality of ctx.personalities.list()) {
+        const here = personality.name === active.name;
+        const dot = here ? ctx.theme.success(GLYPHS.running) : ctx.theme.meta(GLYPHS.idle);
+        lines.push(`  ${dot} ${ctx.theme.emphasis(personality.name.padEnd(14))}${ctx.theme.body(personality.description)}`);
+      }
+      return lines.join("\n");
+    },
+  },
+
+  sessions: {
+    name: "sessions",
+    description: "Saved conversations for this profile, newest first",
+    async run(_args, ctx) {
+      const lines = [heading("sessions", ctx.theme)];
+      if (ctx.sessions === undefined) {
+        lines.push(empty(ctx.theme, "This session has no session store; run `trent sessions list` instead."));
+        return lines.join("\n");
+      }
+      const saved = ctx.sessions.listSessions();
+      lines.push(bullet(ctx.theme, "Saved", `${saved.length}`));
+      for (const session of saved.slice(0, 10)) {
+        lines.push(
+          `  ${ctx.theme.meta(session.id.padEnd(22))}${ctx.theme.emphasis(session.title)} ${ctx.theme.body(
+            `${session.messages.length} message(s), ${formatCents(session.total_cost_cents)}`,
+          )}`,
+        );
+      }
+      if (saved.length === 0) lines.push(empty(ctx.theme, "Nothing saved yet. Every turn you take is written to one."));
       return lines.join("\n");
     },
   },

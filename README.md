@@ -61,7 +61,9 @@ trent fleet install <id>    # install a specialist with its tools, skills and mo
 trent improve status        # traces, quarantined drafts, last sweep
 trent cron start            # tick the schedule; trent heartbeat start for the periodic check
 trent jobs failed           # failed job runs, newest first; trent jobs retry <id> re-runs one
-trent --help                # every command, 50 lines
+trent workspace trust       # let this project's AGENTS.md, CLAUDE.md and .trent/*.md reach the prompt
+trent hooks list            # hooks configured for this profile; trent hooks consent allows one to run
+trent --help                # 27 commands, 93 with their subcommands
 ```
 
 Add a model key with `trent config set GEMINI_API_KEY <key>` (or `ANTHROPIC_API_KEY`,

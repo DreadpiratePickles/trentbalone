@@ -22,6 +22,8 @@ import {
   type Orchestrator,
 } from "@trent/core/orchestrator/index.js";
 import type { FleetMemoryHook, MemoryBlock } from "@trent/core/fleet-memory/index.js";
+import { runSessionHooks, type HooksConfig, type SessionHookReport } from "@trent/core/hooks/index.js";
+import { loadWorkspaceContext, type WorkspaceContext } from "@trent/core/workspace-context/index.js";
 import { createVersionPinHook, type VersionPinHook } from "@trent/core/fleet/index.js";
 import { createAlertHook, type AlertBudgetPort, type AlertHook, type AlertHookDeps } from "@trent/core/gateway/index.js";
 import type { BusHook } from "@trent/core/improve/index.js";
@@ -32,6 +34,7 @@ import type { ImproveRunDeps } from "../commands/improve.js";
 import { EphemeralStore } from "../repl/ephemeral-store.js";
 import { wireFleetMemory } from "../repl/fleet-memory.js";
 import { contextLimits, personalitySuffix } from "../repl/compact.js";
+import { renderWorkspaceContext } from "../repl/workspace.js";
 import { wireImproveLoop } from "../repl/improve-loop.js";
 import { wireTools, type ToolWiring, type ToolWiringDeps } from "../repl/tools.js";
 import type { ReplConfig, ReplStore } from "../repl/types.js";
@@ -96,6 +99,11 @@ export interface HeadlessRunOptions {
 export interface HeadlessRuntime {
   readonly orchestrator: Orchestrator;
   readonly companyId: string;
+  /**
+   * A2.1: the workspace this session was launched in, as the trust record and the scanner left it.
+   * Its blocks are already in the stable tier; a surface reads this to say what was NOT loaded.
+   */
+  readonly workspace: WorkspaceContext;
   readonly store: ReplStore;
   readonly durable: boolean;
   readonly tools: ToolWiring;
@@ -109,6 +117,12 @@ export interface HeadlessRuntime {
   readonly versionPins: VersionPinHook | undefined;
   /** One run against the session's company: the orchestrator's event stream. */
   run(objective: string, options?: HeadlessRunOptions): AsyncIterable<OrcEvent>;
+  /**
+   * Lines the surface must show once: a configured hook that did not run (unconsented, or its spec
+   * changed since consent) and a session hook that ran and failed. Read after a turn as well as at
+   * start-up, because a tool hook is skipped when a CALL is made, not when the graph is built.
+   */
+  notices(): readonly string[];
   /** Releases the proxy and the sandboxes. Idempotent, so every exit path may call it. */
   cleanup(): Promise<void>;
 }
@@ -162,7 +176,27 @@ interface RuntimeSlice {
   runtime?: { max_concurrent_runs?: number };
 }
 
+/** The `hooks` block the session hooks are read from; `TrentConfig` satisfies it structurally. */
+interface HooksSlice {
+  hooks?: HooksConfig;
+}
+
+/** The `workspace` caps the instruction-file loader reads; `TrentConfig` satisfies it structurally. */
+type WorkspaceSlice = Parameters<typeof loadWorkspaceContext>[0]["config"];
+
 const DEFAULT_APPROVAL_WAIT_MINUTES = 30;
+
+/**
+ * A session hook that did not run, or ran and failed, as one line the user can act on. A skipped
+ * hook names the command it would have run and the command that would allow it; a failed one
+ * carries the tail of its own stderr, because a hook that fails silently is a hook nobody fixes.
+ */
+export function sessionHookNotices(report: SessionHookReport): string[] {
+  return [
+    ...report.skipped.map((line) => `The ${report.kind} hook ${line}. Run "trent hooks consent" to allow it.`),
+    ...report.failures.map((line) => `The ${report.kind} hook failed: ${line}`),
+  ];
+}
 
 /**
  * Prompt redaction (T3.2) for this config. The orchestrator builds the model gateway with no
@@ -206,6 +240,13 @@ export function wireTelemetry(config: TelemetrySlice, onError?: (message: string
 export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<HeadlessRuntime> {
   const config = deps.config ?? (deps.configManager.loadConfig() as unknown as ReplConfig);
   const profileDir = deps.configManager.getProfileDir();
+  const workspace = deps.workspace ?? process.cwd();
+  // A2.1. Trust is checked, the files are scanned and the caps are applied inside this call; an
+  // untrusted workspace yields no blocks and one instruction line. Nothing here opens a file.
+  const workspaceContext = loadWorkspaceContext({ cwd: workspace, profileDir, config: config as WorkspaceSlice });
+  const workspaceBlock = renderWorkspaceContext(workspaceContext);
+  // A2.2. One line per hook the session could not run; the tool hooks add theirs as calls are made.
+  const notices: string[] = [];
 
   // `delegate_task` binds to the orchestrator's own delegated child step: the port is built
   // here so the same object is both the tool's port and the orchestrator's hook.
@@ -216,7 +257,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
   // `cleanup()` on every exit path: stdin end, a throw, and Ctrl+C.
   const tools: ToolWiring = await wireTools({
     config: config as unknown as ToolWiringDeps["config"],
-    workspace: deps.workspace ?? process.cwd(),
+    workspace,
     profileDir,
     configManager: deps.configManager,
     buildAdapters: deps.buildAdapters,
@@ -241,6 +282,8 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       blocks: (config as MemorySlice).memory?.blocks,
       ceilingChars: limits.ceilingChars,
       ...(suffix === undefined ? {} : { personalitySuffix: suffix }),
+      // The A2.1 seam: already scanned, already trusted, rendered once for the STABLE tier.
+      ...(workspaceBlock === undefined ? {} : { workspaceContext: workspaceBlock }),
     });
     // The self-improvement loop: traces from every run, and promoted skills back into every seat.
     const improve = wireImproveLoop({ store, config });
@@ -290,9 +333,18 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     const configuredId = (config as { company?: { id?: string } }).company?.id;
     const companyId = configuredId !== undefined ? String(configuredId) : await orchestrator.ensureCompany(DEFAULT_COMPANY);
 
+    // A2.2. The session is open: this is the moment `hooks/runner.ts` documents as `session_start`.
+    // `runSessionHooks` resolves rather than throws, so a hook can neither stop a session opening
+    // nor take it down; what it can do is say, once, that it did not run.
+    const hooks = (config as HooksSlice).hooks;
+    if (hooks !== undefined) notices.push(...sessionHookNotices(await runSessionHooks("session_start", { profileDir, hooks, cwd: workspace })));
+    // `cleanup()` is called on every exit path, and more than once; the stop hooks run on the first.
+    let stopped = false;
+
     return {
       orchestrator,
       companyId,
+      workspace: workspaceContext,
       store,
       durable,
       tools,
@@ -309,7 +361,14 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
           signal: options.signal,
           ...(options.history === undefined ? {} : { history: options.history }),
         }),
+      notices: () => [...notices, ...tools.hookNotices],
       cleanup: async () => {
+        // The shutdown path, in order: the session's own hooks first (they may still want to read
+        // what the session wrote), then the alert sender, then the proxy and the sandboxes.
+        if (hooks !== undefined && !stopped) {
+          stopped = true;
+          notices.push(...sessionHookNotices(await runSessionHooks("session_stop", { profileDir, hooks, cwd: workspace })));
+        }
         alerts?.close();
         await tools.cleanup();
       },

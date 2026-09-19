@@ -14,7 +14,11 @@ import {
   type Provider,
 } from "@trent/core";
 import { createOrchestrator, type Orchestrator } from "@trent/core/orchestrator/index.js";
+import { isCompactionEvent } from "@trent/core/sessions/index.js";
 import { handleOrcEvent, type OrchestratorApprovalDetails } from "./events.js";
+import { ContextPane } from "./ContextPane.js";
+import { ContextTracker, contextReport, type ContextReport } from "../repl/context-report.js";
+import type { ContextInspector } from "../repl/types.js";
 import { CLI_VERSION } from "../commands/registry.js";
 import { Sidebar } from "./Sidebar.js";
 import { Chat } from "./Chat.js";
@@ -39,6 +43,11 @@ export interface AppProps {
   approvalBridge?: ApprovalBridge;
   /** The event source for every turn. Defaults to the real in-process orchestrator. */
   orchestrator?: Orchestrator;
+  /**
+   * A1.2: the fleet-memory hook that assembled this run's prompts, for the context pane. Absent,
+   * the pane says nothing has been measured rather than showing figures nobody produced.
+   */
+  contextInspector?: ContextInspector;
 }
 
 const DEFAULT_COMPANY_ID = "trent-local";
@@ -120,6 +129,18 @@ export const App: React.FC<AppProps> = (props) => {
   });
 
   const [activities, setActivities] = useState<TuiActivityItem[]>([]);
+  // Which (run, seat) pairs this session assembled a prompt for; learned from the stream itself.
+  const [tracker] = useState(() => new ContextTracker());
+  const [context, setContext] = useState<ContextReport>(() => contextReport({}));
+  const refreshContext = (): void =>
+    setContext(
+      contextReport({
+        inspector: props.contextInspector,
+        runs: tracker.runs(),
+        // The compactor writes one event into the transcript per compaction; that is the count.
+        compactions: session.messages.filter(isCompactionEvent).length,
+      }),
+    );
 
   const pushActivity = (item: Omit<TuiActivityItem, "id" | "timestamp">): void => {
     const at = new Date().toISOString();
@@ -131,6 +152,7 @@ export const App: React.FC<AppProps> = (props) => {
     setBusy(true);
     try {
       for await (const event of orchestrator.run({ companyId, objective, trigger: "manual" })) {
+        tracker.observe(event);
         handleOrcEvent(event, {
           recordCost: budget.record,
           appendAgentMessage,
@@ -145,6 +167,8 @@ export const App: React.FC<AppProps> = (props) => {
       const message = error instanceof Error ? error.message : String(error);
       appendAgentMessage("orchestrator", `Run failed: ${message}`);
     } finally {
+      // The pane is measured after the turn, when the hook has assembled everything this run used.
+      refreshContext();
       setBusy(false);
     }
   };
@@ -173,6 +197,10 @@ export const App: React.FC<AppProps> = (props) => {
     }
     if (trimmed === "/help") {
       setActiveModal("help");
+      return;
+    }
+    if (trimmed === "/context") {
+      refreshContext();
       return;
     }
     if (trimmed === "/exit" || trimmed === "/quit") {
@@ -239,7 +267,7 @@ export const App: React.FC<AppProps> = (props) => {
         </Box>
         <Box>
           <Text dimColor color={P.dim}>
-            Commands: /model /fleet /tools /doctor /help
+            Commands: /model /fleet /tools /doctor /context /help
           </Text>
         </Box>
       </Box>
@@ -322,6 +350,8 @@ export const App: React.FC<AppProps> = (props) => {
           />
         </Box>
       )}
+
+      {activeModal === "none" && <ContextPane report={context} />}
     </Box>
   );
 };

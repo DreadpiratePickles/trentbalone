@@ -4,13 +4,17 @@
  * would touch a daemon, a proxy or a model is injected here; what is under test is the wiring.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ConfigManager } from "@trent/core";
 import type { OrcEvent, Orchestrator, OrchestratorDepsWithImprove } from "@trent/core/orchestrator/index.js";
 import type { TrentToolAdapter } from "@trent/core/tools/index.js";
+import { hookSpecHash, writeConsent, type HookSpec } from "@trent/core/hooks/index.js";
+import { trustWorkspace } from "@trent/core/workspace-context/index.js";
+import { CONTEXT_BLOCKS } from "@trent/core/fleet-memory/index.js";
 import { MemoryStore } from "../repl/__tests__/harness.js";
 import type { ReplStore } from "../repl/types.js";
 import type { EgressHandle } from "../repl/tools.js";
@@ -385,5 +389,125 @@ describe("createHeadlessRuntime version pins (T4.1)", () => {
     const runtime = await createHeadlessRuntime(f.deps);
     runtimes.push(runtime);
     expect(runtime.versionPins).toBeUndefined();
+  });
+});
+
+// ── A2.1 workspace context, A2.2 session hooks ──────────────────────────────
+
+/** A fact no other part of the prelude can produce, so finding it proves the file was read. */
+const WORKSPACE_FACT = "The partner API allows sixty requests a minute.";
+
+/** A workspace with one instruction file. Outside any git repository, so the root is the directory. */
+function workspaceWith(text: string): string {
+  const dir = mkdtempSync(path.join(home, "ws-"));
+  writeFileSync(path.join(dir, "AGENTS.md"), `# House rules\n\n${text}\n`);
+  return dir;
+}
+
+/** One seat call through the hook the runtime built: what the stable tier held, and which blocks survived. */
+async function preludeOf(runtime: HeadlessRuntime): Promise<{ stable: string; blocks: string[] }> {
+  const hook = runtime.fleetMemory;
+  hook.runStarted({ runId: "run_ws", companyId: COMPANY_ID, objective: "read the house rules" });
+  const seat = hook.wrapSeatModel(async (input: { subtask: { id: string; seat: string; objective: string } }) => input);
+  await seat({ subtask: { id: "s1", seat: "engineer", objective: "read the house rules" } });
+  return {
+    stable: hook.stablePreludeFor("run_ws") ?? "",
+    blocks: (hook.contextFor("run_ws", "engineer")?.kept ?? []).map((block) => block.name),
+  };
+}
+
+describe("createHeadlessRuntime and the workspace's instruction files", () => {
+  it("an untrusted workspace contributes no block, and the runtime carries the line that would trust it", async () => {
+    const f = fakes();
+    const runtime = await createHeadlessRuntime({ ...f.deps, workspace: workspaceWith(WORKSPACE_FACT) });
+    runtimes.push(runtime);
+
+    expect(runtime.workspace.trusted).toBe(false);
+    expect(runtime.workspace.instruction).toContain("trent workspace trust");
+    const { stable, blocks } = await preludeOf(runtime);
+    expect(stable).not.toContain(WORKSPACE_FACT);
+    expect(blocks).not.toContain(CONTEXT_BLOCKS.workspace);
+  });
+
+  it("a trusted workspace's AGENTS.md text lands in the STABLE tier of the assembled prelude", async () => {
+    const f = fakes();
+    const workspace = workspaceWith(WORKSPACE_FACT);
+    trustWorkspace({ cwd: workspace, profileDir: f.deps.configManager.getProfileDir() });
+    const runtime = await createHeadlessRuntime({ ...f.deps, workspace });
+    runtimes.push(runtime);
+
+    expect(runtime.workspace.trusted).toBe(true);
+    const { stable, blocks } = await preludeOf(runtime);
+    expect(stable).toContain(WORKSPACE_FACT);
+    expect(stable).toContain("AGENTS.md");
+    expect(blocks).toContain(CONTEXT_BLOCKS.workspace);
+  });
+});
+
+/** Appends the JSON document it was given on stdin to the file named in argv. */
+const RECORD_FIXTURE = `let d = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (c) => { d += c; });
+process.stdin.on("end", () => { require("node:fs").appendFileSync(process.argv[2], d); process.exit(0); });
+`;
+
+interface SessionHookFixture {
+  readonly start: HookSpec;
+  readonly stop: HookSpec;
+  readonly startFile: string;
+  readonly stopFile: string;
+}
+
+function sessionHooks(): SessionHookFixture {
+  const dir = mkdtempSync(path.join(home, "hooks-"));
+  const script = path.join(dir, "record.cjs");
+  writeFileSync(script, RECORD_FIXTURE);
+  const startFile = path.join(dir, "start.json");
+  const stopFile = path.join(dir, "stop.json");
+  return {
+    start: { command: [process.execPath, script, startFile] },
+    stop: { command: [process.execPath, script, stopFile] },
+    startFile,
+    stopFile,
+  };
+}
+
+function withSessionHooks(fixture: SessionHookFixture): (manager: ConfigManager) => void {
+  return (manager) => {
+    const config = manager.loadConfig();
+    config.hooks = { pre_tool_call: [], post_tool_call: [], session_start: [fixture.start], session_stop: [fixture.stop] };
+    manager.saveConfig(config);
+  };
+}
+
+describe("createHeadlessRuntime and the session hooks", () => {
+  it("runs a consented session_start hook when the session opens, and session_stop on cleanup", async () => {
+    const fixture = sessionHooks();
+    const f = fakes(withSessionHooks(fixture));
+    writeConsent(f.deps.configManager.getProfileDir(), [
+      hookSpecHash("session_start", fixture.start),
+      hookSpecHash("session_stop", fixture.stop),
+    ]);
+
+    const runtime = await createHeadlessRuntime(f.deps);
+    expect(existsSync(fixture.startFile)).toBe(true);
+    expect(JSON.parse(readFileSync(fixture.startFile, "utf8")).hook).toBe("session_start");
+    // The session is open: nothing has told the stop hook otherwise.
+    expect(existsSync(fixture.stopFile)).toBe(false);
+
+    await runtime.cleanup();
+    expect(JSON.parse(readFileSync(fixture.stopFile, "utf8")).hook).toBe("session_stop");
+  });
+
+  it("an unconsented session hook never runs, and the runtime reports it once", async () => {
+    const fixture = sessionHooks();
+    const f = fakes(withSessionHooks(fixture));
+    const runtime = await createHeadlessRuntime(f.deps);
+    runtimes.push(runtime);
+
+    expect(existsSync(fixture.startFile)).toBe(false);
+    const notices = runtime.notices();
+    expect(notices.filter((line) => line.includes("session_start"))).toHaveLength(1);
+    expect(notices.join("\n")).toContain("trent hooks consent");
   });
 });

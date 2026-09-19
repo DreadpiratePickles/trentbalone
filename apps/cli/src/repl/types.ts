@@ -151,6 +151,38 @@ export interface ReplEgressStatus {
   readonly error?: string;
 }
 
+// ── context slice (A1.2) ────────────────────────────────────────────────────
+
+/**
+ * What the wrapper measured for one seat call: the three tier sizes, the estimate, the ceiling and
+ * what the ceiling removed. Declared structurally for the same reason the store slice is —
+ * `AssembledContext` from `@trent/core/fleet-memory` satisfies it, and `/context` needs nothing else.
+ */
+export interface ContextMeasurement {
+  readonly stableChars: number;
+  readonly contextChars: number;
+  readonly volatileChars: number;
+  readonly chars: number;
+  readonly estimatedTokens: number;
+  readonly ceilingChars: number;
+  /** Assembled chars over the ceiling BEFORE trimming; 1.0 is exactly at the ceiling. */
+  readonly pressure: number;
+  /** Names of the blocks the ceiling dropped, oldest first. */
+  readonly dropped: readonly string[];
+  readonly overCeiling: boolean;
+}
+
+/** The fleet-memory hook, as `/context` reads it. */
+export interface ContextInspector {
+  contextFor(runId: string, seat: string): ContextMeasurement | undefined;
+}
+
+/** One run this session started and the seats that ran in it, both oldest first. */
+export interface ContextRunSeats {
+  readonly runId: string;
+  readonly seats: readonly string[];
+}
+
 // ── the shared context every slash command reads ────────────────────────────
 
 export interface ReplContext {
@@ -168,4 +200,67 @@ export interface ReplContext {
   tools?: readonly ReplToolListing[];
   sandbox?: ReplSandbox;
   egress?: ReplEgressStatus;
+  /** A1.2: the wrapper's own measurement of what it injected, for `/context`. */
+  contextInspector?: ContextInspector;
+  /** The runs this session has started and the seats each of them used, oldest first. */
+  contextRuns?: readonly ContextRunSeats[];
+  /** How many times this session's stored transcript has been compacted. */
+  compactions?: number;
+  /** The fleet, as `trent fleet list` reads it (`/fleet`). */
+  fleet?: ReplFleetPort;
+  /** The skills store (`/skills`). */
+  skills?: ReplSkillsPort;
+  /** The personalities and the active one (`/personality`). */
+  personalities?: ReplPersonalityPort;
+  /** The saved sessions (`/sessions`). */
+  sessions?: ReplSessionsPort;
+}
+
+// ── the ports the commands merged out of `apps/cli/src/slash/` read ──────────
+
+/** One agent as `/fleet` lists it. `FleetAgentSummary` satisfies this structurally. */
+export interface ReplFleetAgent {
+  readonly id: string;
+  readonly name: string;
+  readonly category: string;
+  readonly status: string;
+  readonly modelPolicy: string;
+  readonly installed: boolean;
+  readonly active: boolean;
+}
+
+/** `FleetManager` satisfies this structurally; money stays in integer cents. */
+export interface ReplFleetPort {
+  getStatus(): {
+    readonly totalCatalog: number;
+    readonly installedCount: number;
+    readonly activeCount: number;
+    readonly dailyBudgetSpentCents: number;
+    readonly dailyBudgetCapCents: number;
+    readonly agents: readonly ReplFleetAgent[];
+  };
+}
+
+/** `SkillsHub` satisfies this structurally. `/skills` reads; installing is `trent skills install`. */
+export interface ReplSkillsPort {
+  browse(): readonly { readonly slug: string; readonly category: string; readonly description: string }[];
+  search(term: string): readonly { readonly slug: string; readonly description: string }[];
+  listInstalled(): readonly { readonly slug: string; readonly slashCommand: string; readonly description: string }[];
+}
+
+/** `PersonalityManager` satisfies this structurally. */
+export interface ReplPersonalityPort {
+  list(): readonly { readonly name: string; readonly description: string }[];
+  getActivePersonality(): { readonly name: string };
+  setPersonality(name: string): { readonly name: string };
+}
+
+/** `SessionManager` satisfies this structurally. Cents, never the derived dollars view. */
+export interface ReplSessionsPort {
+  listSessions(): readonly {
+    readonly id: string;
+    readonly title: string;
+    readonly messages: readonly unknown[];
+    readonly total_cost_cents: number;
+  }[];
 }

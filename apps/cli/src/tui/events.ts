@@ -62,6 +62,12 @@ export function handleOrcEvent(event: OrcEvent, sinks: EventSinks): void {
     case "step_blocked":
       sinks.pushActivity({ agent: role, action: `${step?.title ?? "step"} blocked` });
       return;
+    case "step_note":
+      // A remark about a run in flight. The wrapper's context-pressure warning (A1.2) rides this
+      // kind — the bus has no `context_pressure` and cannot grow one (`orchestrator/run-hooks.ts`)
+      // — and the hook emits it once per run, so this shows it once per run too.
+      if (event.detail !== undefined && event.detail !== "") sinks.pushActivity({ agent: role, action: event.detail });
+      return;
     case "step_awaiting_approval":
     case "run_awaiting_approval": {
       if (step?.id === undefined) return;

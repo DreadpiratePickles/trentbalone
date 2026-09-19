@@ -179,3 +179,44 @@ describe("handleOrcEvent", () => {
     ]);
   });
 });
+
+describe("the context-pressure notice on the TUI", () => {
+  let tempDir: string;
+  let activities: Array<Omit<TuiActivityItem, "id" | "timestamp">>;
+  let sinks: EventSinks;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-tui-pressure-"));
+    const configManager = new ConfigManager({ baseDir: tempDir });
+    const sessions = new SessionManager(configManager);
+    const session = sessions.startSession("ceo", "m", "p");
+    activities = [];
+    sinks = {
+      sessionAgent: session.agent,
+      recordCost: () => [],
+      appendAgentMessage: () => undefined,
+      pushActivity: (item) => activities.push(item),
+      openApproval: () => undefined,
+    };
+  });
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("shows the wrapper's pressure notice, which rides the bus as a step_note, once", () => {
+    // The fleet-memory hook emits one notice per run; the orchestrator bridges it to `step_note`
+    // (`orchestrator/run-hooks.ts`). Before this, the TUI dropped the kind on the floor.
+    const detail =
+      "context pressure on run run-1, seat engineer: the wrapper's injection is 49000 chars " +
+      "(~12250 tokens, estimated) against a 60000-char ceiling, 82 percent; trimmed: fleet-recall";
+    handleOrcEvent(event("step_note", { detail }), sinks);
+    const shown = activities.filter((item) => item.action.includes("context pressure"));
+    expect(shown).toHaveLength(1);
+    expect(shown[0]?.action).toContain("82 percent");
+  });
+
+  it("ignores a note with nothing in it", () => {
+    handleOrcEvent(event("step_note", {}), sinks);
+    expect(activities).toHaveLength(0);
+  });
+});

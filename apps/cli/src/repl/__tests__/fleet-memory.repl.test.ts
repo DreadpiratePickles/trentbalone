@@ -149,6 +149,9 @@ describe("ClassicRepl wires fleet memory into the orchestrator", () => {
     // The toolsets themselves are untouched: fleet memory rides in its own dependency.
     expect((received[0]?.tools ?? []).map((tool) => tool.name)).toEqual(expect.arrayContaining(["file_ops", "terminal"]));
     expect(s.out.join("")).toContain("fleet_search");
+    // A2.1: this profile has never trusted the repository, so the banner says so in one line and
+    // the workspace's own AGENTS.md reached no prompt.
+    expect(s.out.join("")).toContain("trent workspace trust");
   }, 30_000);
 
   it("the first turn's seat prompt carries the shared Company memory prelude", async () => {

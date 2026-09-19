@@ -14,11 +14,22 @@
  * transcript after its frozen prelude so the cacheable prefix stays byte-stable.
  */
 
+import type { DoubleTextPolicy } from "@trent/core/gateway/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { isCompactionEvent, type SessionMessage } from "@trent/core/sessions/index.js";
 import { truncate } from "../ui/index.js";
 import { formatCents } from "./budget.js";
 import type { ReplConfig } from "./types.js";
+
+/**
+ * `repl.double_text_policy`, read off the config slice: what happens to a line typed while a turn
+ * is already running. Anything unrecognised is `enqueue`, the shipped default.
+ */
+export function doubleTextPolicy(config: ReplConfig): DoubleTextPolicy {
+  const repl = config.repl;
+  const value = typeof repl === "object" && repl !== null ? (repl as { double_text_policy?: unknown }).double_text_policy : undefined;
+  return value === "interrupt" || value === "reject" ? value : "enqueue";
+}
 
 /** One prior message of this session, as the run receives it. */
 export interface HistoryMessage {

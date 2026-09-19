@@ -170,6 +170,14 @@ the budget ticker. Nothing is written until your first turn, so opening and clos
 no empty session behind. A turn you interrupt is recorded as interrupted and is not offered to the
 next run as if it had been an answer.
 
+`/context` reports what the wrapper actually injected into the last seat call: the size of each of
+the three tiers (stable, context, volatile), the character total with a token estimate, the
+`context.ceiling_chars` it was measured against, the named blocks the ceiling dropped, and how many
+times this session's transcript has been compacted. The figures come from the assembly itself, not
+from a second count, so they match the prompt the seat was given. The TUI shows the same report in
+its context pane, and both surfaces print one pressure notice per run once the injection passes 80
+percent of the ceiling. `/help` lists every command the REPL takes.
+
 ### One shot, for scripts, pipes and CI
 
 ```bash
