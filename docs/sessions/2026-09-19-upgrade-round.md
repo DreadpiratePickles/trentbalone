@@ -45,3 +45,11 @@ Bobby's gate, then waves.
   read the nested `metadata:` map. Recommendation: (ii) `trent mcp serve` first (reuse the A2A
   runner), then (iii) a `trent-agent/2` package (Agent Plugins 1.0.0 dir + `extensions["ai.trent.agent"]`,
   skills/, mcp.json, brain/) with per-harness renderers producing (i).
+- RD landed -> `01_discovery/output/market-agents-research-2026-09-19.md`. Week-one tool sets:
+  assistant = Twilio SMS/voice (10DLC registration, no app review), Google Calendar, Stripe
+  invoices/payment links/quotes, Square bookings+invoices; social = drafting + Bluesky direct +
+  Buffer API ($5/channel) or Ayrshare as the publisher, Meta App Review submitted in parallel;
+  creator = fully local pipeline (faster-whisper/whisper.cpp, PySceneDetect, MediaPipe, ffmpeg)
+  at $0/clip, hosted transcription fallback, Gemini/FLUX thumbnails ~$0.05/image, YouTube private
+  uploads until the audit. Demand evidence supports approval gates (89% of creators always
+  review AI output). Fresha closed; Vagaro/Boulevard gated; X API $200/mo Basic.
