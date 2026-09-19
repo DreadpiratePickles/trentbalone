@@ -26,6 +26,7 @@ import { checkMcp } from "./checks/mcp.js";
 import { checkConnectivity } from "./checks/connectivity.js";
 import { checkDatabase } from "./checks/database.js";
 import { checkCron } from "./checks/cron.js";
+import { checkEgressRoot } from "./checks/egress-ca.js";
 import { checkDisk } from "./checks/disk.js";
 import { checkDependencies } from "./checks/dependencies.js";
 import { checkWorkbench } from "./checks/workbench.js";
@@ -44,6 +45,11 @@ export interface DoctorRunnerOptions {
   healthUrl?: string;
   fetchImpl?: FetchLike;
   execImpl?: ExecLike;
+  /**
+   * Where `--fix` states a destructive action BEFORE performing it. Defaults to stderr, so a
+   * deletion is never silent even when nothing passes a sink.
+   */
+  announce?: (line: string) => void;
 }
 
 export const DEFAULT_CHECKS: readonly DoctorCheck[] = [
@@ -56,6 +62,7 @@ export const DEFAULT_CHECKS: readonly DoctorCheck[] = [
   checkConnectivity,
   checkDatabase,
   checkCron,
+  checkEgressRoot,
   checkDisk,
   checkDependencies,
   checkWorkbench,

@@ -27,7 +27,8 @@ on every write; a finding refuses the job and names its category, never the matc
 `trent cron start` is the scheduler. It builds the same headless runtime the REPL and the gateway
 run on (`apps/cli/src/runtime/headless.ts`), takes `<profile>/cron/runner.lock` with its pid, and
 ticks every 30 seconds (`packages/trent-core/src/cron/CronRunner.ts`). It holds the process until
-Ctrl+C or SIGTERM; both release the lock, the gateway manager and the runtime. A second `start`
+Ctrl+C or SIGTERM; the command claims all three of SIGINT, SIGTERM and SIGHUP, releases the lock,
+the gateway manager and the runtime, and only then exits 130. A second `start`
 on the same profile exits 3 with "already running"; a lock left by a process that died is taken over.
 
 `--once` ticks one time and exits, for an external scheduler (launchd, systemd timers, system cron)

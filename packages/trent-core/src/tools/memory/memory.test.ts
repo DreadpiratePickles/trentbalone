@@ -243,6 +243,64 @@ describe("named memory blocks (T4.3)", () => {
     expect((await call(a, { target: "user", action: "add", content: "alias" })).status).toBe("completed");
   });
 
+  it("a configured limit on a DEFAULT block is what the writer enforces, not the shipped cap", async () => {
+    const { commitOperations } = await import("./store.js");
+    const blocks = DEFAULT_MEMORY_BLOCKS.map((b) => (b.label === "memory" ? { ...b, limit: 3000 } : b));
+
+    const ok = commitOperations(profileDir, "memory", [{ action: "add", content: "z".repeat(2900) }], { blocks });
+    expect(ok.ok, ok.ok ? "" : ok.reason).toBe(true);
+    // 2900 is well past the shipped 2200 cap; the remaining budget proves which number was used.
+    expect(ok.ok && ok.remaining).toBe(100);
+
+    const over = commitOperations(profileDir, "memory", [{ action: "add", content: "z".repeat(200) }], { blocks });
+    expect(over.ok).toBe(false);
+    expect(over.ok ? "" : over.reason).toContain("3000");
+  });
+
+  it("with no configured block list the writer falls back to the shipped cap", async () => {
+    const { commitOperations, MEMORY_CAPS, memoryLimit } = await import("./store.js");
+    expect(memoryLimit("memory")).toBe(MEMORY_CAPS.memory);
+    expect(memoryLimit("user")).toBe(MEMORY_CAPS.user);
+
+    const ok = commitOperations(profileDir, "memory", [{ action: "add", content: "z".repeat(2100) }]);
+    expect(ok.ok && ok.remaining).toBe(MEMORY_CAPS.memory - 2100);
+    const over = commitOperations(profileDir, "memory", [{ action: "add", content: "z".repeat(200) }]);
+    expect(over.ok).toBe(false);
+    expect(over.ok ? "" : over.reason).toContain(String(MEMORY_CAPS.memory));
+  });
+
+  it("an over-limit refusal carries the current entries and the usage, so the seat can consolidate in the same turn", async () => {
+    const { commitOperations, MEMORY_CAPS } = await import("./store.js");
+    commitOperations(profileDir, "memory", [{ action: "add", content: "deploys are Thursday only" }]);
+    commitOperations(profileDir, "memory", [{ action: "add", content: "x".repeat(2160) }]);
+
+    const refused = commitOperations(profileDir, "memory", [{ action: "add", content: "one more fact" }]);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error("expected the write to be refused");
+    expect(refused.entries).toEqual(["deploys are Thursday only", "x".repeat(2160)]);
+    expect(refused.used).toBe(25 + ENTRY_SEPARATOR.length + 2160);
+    expect(refused.limit).toBe(MEMORY_CAPS.memory);
+
+    // The tool result carries the same material, so the model sees what to drop without re-reading.
+    const a = createMemoryAdapter({ profileDir });
+    const rec = await call(a, { block: "memory", action: "add", content: "one more fact" });
+    expect(rec.status).toBe("failed");
+    expect(rec.summary).toContain("deploys are Thursday only");
+    expect(rec.summary).toContain(String(MEMORY_CAPS.memory));
+  });
+
+  it("the adapter enforces a configured override of the default block's limit", async () => {
+    const blocks = DEFAULT_MEMORY_BLOCKS.map((b) => (b.label === "memory" ? { ...b, limit: 3000 } : b));
+    const a = createMemoryAdapter({ profileDir, blocks });
+    const ok = await call(a, { block: "memory", action: "add", content: "z".repeat(2900) });
+    expect(ok.status, ok.summary).toBe("completed");
+    expect(ok.summary).toContain("3000");
+    const over = await call(a, { block: "memory", action: "add", content: "z".repeat(200) });
+    expect(over.status).toBe("failed");
+    expect(over.summary).toContain("3000");
+    expect(fs.readFileSync(memoryFile(), "utf8")).toBe("z".repeat(2900));
+  });
+
   it("the config schema defaults memory.blocks to the three blocks and validates a custom one", () => {
     const parsed = TrentConfigSchema.parse({});
     expect(parsed.memory.blocks.map((b) => b.label)).toEqual(["memory", "user", "company"]);

@@ -74,8 +74,9 @@ for a failed run, `deliveryError` and `text` when a reply could not be sent, and
 when memory consolidation ran. Decisions are `quiet`, `no_reply`, `reply` and `failed`.
 
 `start` takes `<profile>/heartbeat/runner.lock` with its pid and refuses (exit 3, "already
-running") while another live process holds it; a lock left by a dead pid is taken over. Ctrl+C,
-SIGTERM and SIGHUP release the lock, the manager and the runtime. `--once` ticks one time and
+running") while another live process holds it; a lock left by a dead pid is taken over. The command
+claims Ctrl+C as well as SIGTERM and SIGHUP: each releases the lock, the manager and the runtime,
+and the process exits 130 only once that release has settled. `--once` ticks one time and
 exits, for launchd, systemd timers or system cron.
 
 `status` reports `enabled`, `intervalMinutes`, `activeHours`, `quietNow`, `running`, the last row

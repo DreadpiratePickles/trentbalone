@@ -18,6 +18,7 @@ import type { CommandContext } from "../context.js";
 import type { ReplConfig } from "../../repl/types.js";
 import { fallbackImproveStore } from "../improve.js";
 import { createHeadlessRuntime, type HeadlessRuntime } from "../../runtime/headless.js";
+import { releaseOnSignal, type SignalTarget } from "../../signals.js";
 
 export const HEARTBEAT_SUBJECT = "Trent heartbeat";
 
@@ -87,16 +88,15 @@ function requireEnabled(config: TrentConfig): void {
   }
 }
 
-/** The same exit discipline as `trent cron start`: SIGTERM/SIGHUP release the lock, the manager and the runtime. */
-function releaseOnExit(close: () => Promise<void>, stopSync: () => void): void {
-  let releasing: Promise<void> | undefined;
-  for (const signal of ["SIGTERM", "SIGHUP"] as const) {
-    process.once(signal, () => {
-      releasing ??= close().catch(() => undefined);
-      void releasing.finally(() => process.exit(EXIT.INTERRUPT));
-    });
-  }
-  process.once("exit", stopSync);
+/**
+ * The same exit discipline as `trent cron start`: Ctrl+C, SIGTERM and SIGHUP all release the lock,
+ * the manager and the runtime before the process goes. The claim is what makes Ctrl+C behave like
+ * the other two — without it the binary's global handler exits on top of the release
+ * (`../../signals.ts`). The `exit` hook stays as the last resort that still drops the pid lock.
+ */
+function releaseOnExit(close: () => Promise<void>, stopSync: () => void, signals?: SignalTarget): void {
+  releaseOnSignal(close, signals);
+  (signals ?? process).once("exit", stopSync);
 }
 
 function runLine(row: HeartbeatRunRow, ctx: CommandContext): string {
@@ -152,7 +152,7 @@ export const heartbeatSpec: CommandSpec = {
           await shutdown();
           throw error;
         }
-        releaseOnExit(shutdown, () => loop.stop());
+        releaseOnExit(shutdown, () => loop.stop(), ctx.overrides.signals);
         return { data: { started: true, pid: process.pid, intervalMinutes: config.heartbeat.interval_minutes, owner: ownerLabel(config) }, keepAlive: true };
       },
       render(data, ctx) {

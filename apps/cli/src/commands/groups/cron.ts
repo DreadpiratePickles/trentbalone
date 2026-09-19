@@ -25,6 +25,7 @@ import type { CommandSpec } from "../registry.js";
 import type { CommandContext } from "../context.js";
 import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime, type HeadlessRuntime } from "../../runtime/headless.js";
+import { releaseOnSignal, type SignalTarget } from "../../signals.js";
 
 function fail(operation: string, message: string, target?: string): never {
   throw new TrentError({ code: EXIT.CONFIG, operation, message, ...(target === undefined ? {} : { target }) });
@@ -123,19 +124,15 @@ async function openRunner(ctx: CommandContext): Promise<{ runner: CronRunner; ru
 }
 
 /**
- * A keep-alive runner releases the lock, the manager and the runtime on SIGTERM/SIGHUP and on
- * `process.exit` (Ctrl+C is answered by the binary, which exits at once; the `exit` hook still
- * removes the lock). Signal handlers are installed once per process.
+ * A keep-alive runner releases the lock, the manager and the runtime on Ctrl+C as well as on
+ * SIGTERM/SIGHUP. The claim is what makes the difference: the binary's global SIGINT handler
+ * exits the moment the signal lands, which pre-empts the release that the other two signals get,
+ * so `cron start` takes the interrupt for itself exactly as `gateway start` does
+ * (`../../signals.ts`). The `exit` hook stays as the last resort that still drops the pid lock.
  */
-function releaseOnExit(close: () => Promise<void>, stopSync: () => void): void {
-  let releasing: Promise<void> | undefined;
-  for (const signal of ["SIGTERM", "SIGHUP"] as const) {
-    process.once(signal, () => {
-      releasing ??= close().catch(() => undefined);
-      void releasing.finally(() => process.exit(EXIT.INTERRUPT));
-    });
-  }
-  process.once("exit", stopSync);
+function releaseOnExit(close: () => Promise<void>, stopSync: () => void, signals?: SignalTarget): void {
+  releaseOnSignal(close, signals);
+  (signals ?? process).once("exit", stopSync);
 }
 
 function runLine(row: CronRunRow, ctx: CommandContext): string {
@@ -305,7 +302,7 @@ export const cronSpec: CommandSpec = {
           await close();
           throw error;
         }
-        releaseOnExit(close, () => runner.stop());
+        releaseOnExit(close, () => runner.stop(), ctx.overrides.signals);
         return { data: { started: true, pid: process.pid, intervalMs: DEFAULT_TICK_MS, jobs }, keepAlive: true };
       },
       render(data, ctx) {

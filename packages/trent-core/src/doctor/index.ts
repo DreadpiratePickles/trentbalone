@@ -12,6 +12,7 @@ export * from "./checks/mcp.js";
 export * from "./checks/connectivity.js";
 export * from "./checks/database.js";
 export * from "./checks/cron.js";
+export * from "./checks/egress-ca.js";
 export * from "./checks/disk.js";
 export * from "./checks/dependencies.js";
 export * from "./checks/workbench.js";

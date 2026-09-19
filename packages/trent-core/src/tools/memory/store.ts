@@ -42,7 +42,49 @@ export interface MemoryOperation {
 
 export type ApplyResult =
   | { ok: true; entries: string[]; rendered: string; remaining: number }
-  | { ok: false; reason: string };
+  /**
+   * A refusal carries the state the batch was judged against: the entries as they are on disk
+   * right now, the characters they use and the limit they were measured against. A seat that is
+   * over the limit can therefore consolidate in the SAME turn — remove and add in one batch —
+   * instead of guessing from a prelude snapshot that was frozen before this write.
+   */
+  | { ok: false; reason: string; entries?: string[]; used?: number; limit?: number };
+
+/**
+ * Where a write learns its limit. A caller with the configured block list (`config.memory.blocks`)
+ * passes it and the limit is resolved from it; a caller with a number passes the number.
+ */
+export interface MemoryLimitSource {
+  readonly blocks?: readonly MemoryBlock[];
+}
+
+/** The label a ref addresses: the legacy label itself, or the configured block's own. */
+function refLabel(target: MemoryFileRef): string | undefined {
+  return typeof target === "string" ? target : (target as Partial<MemoryBlock>).label;
+}
+
+/**
+ * The character limit for one block: the CONFIGURED block with that label or file wins, and the
+ * shipped cap is the fallback. Without this the legacy labels `"memory"` and `"user"` always
+ * resolved to `MEMORY_CAPS`, so raising `memory.blocks[].limit` in config changed the prelude and
+ * the consolidation prompt but not the write that actually refuses.
+ */
+export function memoryLimit(
+  target: MemoryFileRef,
+  blocks: readonly MemoryBlock[] = DEFAULT_MEMORY_BLOCKS,
+): number {
+  const file = memoryFileName(target);
+  const label = refLabel(target);
+  const configured = blocks.find((b) => b.file === file || (label !== undefined && b.label === label));
+  if (configured) return configured.limit;
+
+  const own = (target as Partial<MemoryBlock>).limit;
+  if (typeof own === "number") return own;
+
+  const shipped = DEFAULT_MEMORY_BLOCKS.find((b) => b.file === file || (label !== undefined && b.label === label));
+  if (shipped) return shipped.limit;
+  throw new Error(`no memory block declares a limit for ${file}`);
+}
 
 /** The file name a target resolves to: the block's own, or the default block for a legacy label. */
 export function memoryFileName(target: MemoryFileRef): string {
@@ -78,45 +120,51 @@ export function applyOperations(
   operations: readonly MemoryOperation[],
   cap: number
 ): ApplyResult {
+  /** Every refusal reports the state it judged, not only the sentence explaining itself. */
+  const refuse = (reason: string): ApplyResult => ({
+    ok: false,
+    reason,
+    entries: [...entries],
+    used: render([...entries]).length,
+    limit: cap,
+  });
   const next = [...entries];
   for (const [i, op] of operations.entries()) {
     const label = `operation ${i + 1} (${op.action})`;
     const content = typeof op.content === "string" ? op.content.trim() : "";
     const oldText = typeof op.old_text === "string" ? op.old_text.trim() : "";
     if (content.includes(ENTRY_SEPARATOR.trim())) {
-      return { ok: false, reason: `${label}: content may not contain the entry separator "${ENTRY_SEPARATOR.trim()}"` };
+      return refuse(`${label}: content may not contain the entry separator "${ENTRY_SEPARATOR.trim()}"`);
     }
     switch (op.action) {
       case "add": {
-        if (!content) return { ok: false, reason: `${label}: "content" is required` };
+        if (!content) return refuse(`${label}: "content" is required`);
         next.push(content);
         break;
       }
       case "replace":
       case "remove": {
-        if (!oldText) return { ok: false, reason: `${label}: "old_text" is required` };
-        if (op.action === "replace" && !content) return { ok: false, reason: `${label}: "content" is required` };
+        if (!oldText) return refuse(`${label}: "old_text" is required`);
+        if (op.action === "replace" && !content) return refuse(`${label}: "content" is required`);
         const idx = locate(next, oldText);
-        if (idx === -1) return { ok: false, reason: `${label}: no entry contains "${oldText}"` };
-        if (idx === -2) return { ok: false, reason: `${label}: "${oldText}" matches more than one entry; be more specific` };
+        if (idx === -1) return refuse(`${label}: no entry contains "${oldText}"`);
+        if (idx === -2) return refuse(`${label}: "${oldText}" matches more than one entry; be more specific`);
         if (op.action === "replace") next[idx] = content;
         else next.splice(idx, 1);
         break;
       }
       default:
-        return { ok: false, reason: `${label}: unknown action; use add, replace or remove` };
+        return refuse(`${label}: unknown action; use add, replace or remove`);
     }
   }
   const rendered = render(next);
   if (rendered.length > cap) {
     const current = render([...entries]).length;
-    return {
-      ok: false,
-      reason:
-        `the result would be ${rendered.length} chars, over the ${cap}-char cap by ${rendered.length - cap}. ` +
+    return refuse(
+      `the result would be ${rendered.length} chars, over the ${cap}-char cap by ${rendered.length - cap}. ` +
         `The file is unchanged: ${current} chars used, ${cap - current} chars remaining. ` +
         `Remove or shorten entries in the same batch to make room.`,
-    };
+    );
   }
   return { ok: true, entries: next, rendered, remaining: cap - rendered.length };
 }
@@ -175,13 +223,18 @@ function acquireLock(file: string): () => void {
  * unlock. A caller that planned its batch against a stale view still gets its entries merged in;
  * an `old_text` that no longer matches (a peer removed it) fails the batch, which is the honest
  * answer. The cap is checked on the merged result.
+ *
+ * `limit` is either the number the caller already resolved, or the configured block list to
+ * resolve it from — pass `{ blocks: config.memory.blocks }` and an override of a DEFAULT block's
+ * limit is what this write enforces. With neither, the shipped cap applies.
  */
 export function commitOperations(
   profileDir: string,
   target: MemoryFileRef,
   operations: readonly MemoryOperation[],
-  cap: number
+  limit: number | MemoryLimitSource = {}
 ): ApplyResult {
+  const cap = typeof limit === "number" ? limit : memoryLimit(target, limit.blocks);
   const file = memoryPath(profileDir, target);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const release = acquireLock(file);

@@ -45,19 +45,57 @@ function configure(extra: Record<string, unknown> = {}, owner = true): void {
   });
 }
 
+/**
+ * A stand-in for `process`, as `gateway start` already uses: it records the order of what happened,
+ * so a test can say the shutdown finished BEFORE the exit, which is the whole point of owning Ctrl+C.
+ */
+function fakeSignals(order: string[]) {
+  const listeners = new Map<string, Array<() => void>>();
+  return {
+    once(event: string, listener: () => void): unknown {
+      listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+      return undefined;
+    },
+    exit(code: number): void {
+      order.push(`exit:${String(code)}`);
+    },
+    handled(event: string): boolean {
+      return (listeners.get(event) ?? []).length > 0;
+    },
+    async raise(event: string): Promise<void> {
+      for (const listener of listeners.get(event) ?? []) listener();
+      // Give the release its turns; stop as soon as the process would have gone, or after 100.
+      for (let i = 0; i < 100 && !order.some((entry) => entry.startsWith("exit:")); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+    },
+  };
+}
+
 interface Fakes {
   overrides: CliOverrides;
   runs: Array<{ objective: string; trigger: string }>;
   sent: Array<{ platform: string; message: OutboundMessage }>;
   managers: GatewayManager[];
   cleanup: ReturnType<typeof vi.fn>;
+  /** What happened, in order: the release steps, then the exit. */
+  order: string[];
+  /** The `process` the command's signal handling runs against; the worker's own is left alone. */
+  signals: ReturnType<typeof fakeSignals>;
 }
 
 function fakes(reply = NO_REPLY, at = "2026-09-15T09:00:00.000Z"): Fakes {
   const runs: Fakes["runs"] = [];
   const sent: Fakes["sent"] = [];
   const managers: GatewayManager[] = [];
-  const cleanup = vi.fn(async () => undefined);
+  const order: string[] = [];
+  const signals = fakeSignals(order);
+  const cleanup = vi.fn(async () => {
+    // A real cleanup awaits the proxy and the sandboxes; the await is what a synchronous exit pre-empts.
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    order.push("cleanup");
+    return undefined;
+  });
   const runtime = {
     companyId: "cmp_local",
     store: {},
@@ -75,9 +113,12 @@ function fakes(reply = NO_REPLY, at = "2026-09-15T09:00:00.000Z"): Fakes {
     sent,
     managers,
     cleanup,
+    order,
+    signals,
     overrides: {
-      // `gateway start` claims Ctrl+C through this seam; a stub keeps the worker's own signals alone.
-      signals: { once: () => undefined, exit: () => undefined },
+      // `gateway start`, `heartbeat start` and `cron start` all claim Ctrl+C through this seam;
+      // the recorder keeps the worker's own signals alone.
+      signals,
       now: () => new Date(at),
       gatewayRuntime: async () => runtime,
       gatewayManager: (configManager, options) => {
@@ -161,6 +202,29 @@ describe("trent heartbeat", () => {
       const second = await runCli(["heartbeat", "start", "--json"], { overrides: f.overrides });
       expect(second.exitCode).toBe(EXIT.CONFIG);
       expect(second.stdout).toContain("already running");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Ctrl+C is owned by the command: the shutdown releases the lock before exit 130", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      configure();
+      const f = fakes();
+      const result = await runCli(["heartbeat", "start", "--json"], { overrides: f.overrides });
+      expect(result.exitCode).toBe(EXIT.OK);
+      expect(result.keepAlive).toBe(true);
+      // SIGTERM and SIGHUP already released; Ctrl+C used to reach the binary's global handler,
+      // which exits synchronously on top of the release.
+      for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) expect(f.signals.handled(signal)).toBe(true);
+      expect(fs.existsSync(heartbeatLockPath(home))).toBe(true);
+
+      await f.signals.raise("SIGINT");
+      expect(fs.existsSync(heartbeatLockPath(home))).toBe(false);
+      expect(f.cleanup).toHaveBeenCalledTimes(1);
+      // The release ran to completion first; only then did the process go.
+      expect(f.order).toEqual(["cleanup", `exit:${String(EXIT.INTERRUPT)}`]);
     } finally {
       vi.useRealTimers();
     }

@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { ConfigManager } from "../config/ConfigManager.js";
 import { DoctorRunner, type DoctorRunnerOptions } from "./DoctorRunner.js";
 import { sqlitePathFor } from "./checks/database.js";
+import { egressRootFixHint, egressRootParseError, egressRootPath } from "./checks/egress-ca.js";
 import type { DoctorReport } from "./types.js";
 
 /**
@@ -14,6 +15,11 @@ import type { DoctorReport } from "./types.js";
  * its mode changed but is never read or rewritten. Every fix is also idempotent — it reports
  * `changed: false` and writes nothing when the desired state already holds — because `--fix` is
  * expected to be safe to run in a loop, and a fix that churns the disk cannot be verified.
+ *
+ * One fix does unlink a file: the egress root that OpenSSL refuses. It is not user data — the proxy
+ * mints a replacement on the next interception, and while the bad one is on disk every interception
+ * fails — but it is still a deletion, so it is announced through `options.announce` (stderr by
+ * default) BEFORE the unlink, naming the file and the sandbox rebuild it forces.
  */
 
 export const SECRETS_FILE_MODE = 0o600;
@@ -45,6 +51,7 @@ export class FixRunner {
       this.quarantineCorruptSessions(),
       this.restrictSecretsFileMode(),
       this.enableWal(),
+      this.removeUnreadableEgressRoot(),
     ];
 
     const newReport = await new DoctorRunner(this.configManager, this.options).runAll();
@@ -178,5 +185,29 @@ export class FixRunner {
         db.close();
       }
     });
+  }
+
+  /** Says what it is about to delete, then deletes it. A root that parses is never touched. */
+  private removeUnreadableEgressRoot(): FixAction {
+    return this.attempt("Egress", "remove_unreadable_egress_root", () => {
+      const caPath = egressRootPath(this.configManager);
+      if (!fs.existsSync(caPath)) return { changed: false, message: "No egress root on this host." };
+      const parseError = egressRootParseError(caPath);
+      if (parseError === null) return { changed: false, message: `The egress root at ${caPath} parses; leaving it in place.` };
+
+      this.announce(
+        `doctor --fix: deleting ${caPath}, which OpenSSL refuses (${parseError}). ${egressRootFixHint(caPath)}`,
+      );
+      fs.rmSync(caPath);
+      return {
+        changed: true,
+        message: `Deleted the unreadable egress root ${caPath}; the proxy mints a new one on the next interception, and any sandbox that trusted the old root needs \`trent sandbox build\`.`,
+      };
+    });
+  }
+
+  private announce(line: string): void {
+    if (this.options.announce) this.options.announce(line);
+    else process.stderr.write(`${line}\n`);
   }
 }

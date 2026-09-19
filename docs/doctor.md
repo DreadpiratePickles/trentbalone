@@ -1,6 +1,6 @@
 # Doctor
 
-`trent doctor` runs 14 checks. Each one inspects something real: a file, a daemon, a socket, an
+`trent doctor` runs 15 checks. Each one inspects something real: a file, a daemon, a socket, an
 authenticated request. None of them return a hard-coded green.
 
 ```bash
@@ -54,7 +54,11 @@ TRENT DOCTOR
 
 Glyphs carry the status when colour is off: `✓` ok, `◆` warn, `✗` fail, `·` skip.
 
-## The 14 checks
+That capture, and the JSON one further down, are verbatim from a run that predates the egress root
+check, so both report `total 14`. They are transcripts, not specifications; the table below is the
+current list.
+
+## The 15 checks
 
 | # | Name | What it actually inspects | Auto-fixable |
 |---|---|---|:---:|
@@ -67,13 +71,14 @@ Glyphs carry the status when colour is off: `✓` ok, `◆` warn, `✗` fail, `�
 | 7 | Network & Cloud Connectivity | DNS lookup of the provider API hosts, with a 3-second race | no |
 | 8 | Database & State Store | Standalone: opens the SQLite file and queries SQLite itself. Connected: asks the health endpoint, and distinguishes a real database from the in-memory fallback that answers "ok" while storing nothing | yes |
 | 9 | Autonomous Scheduler | Reads `<profile>/cron/jobs.json` (the file the `cronjob_manage` tool and `trent cron` share) and `<profile>/cron/runner.lock`. Warns when no job is scheduled, when an enabled job's `next_run_at` is more than 6 hours in the past, and when jobs are enabled but no live process holds the runner lock (a lock left by a dead pid counts as none); passes only with on-time jobs and a live runner | no |
-| 10 | Disk & Logs | Sums the byte size and file count of the logs directory | no |
-| 11 | System Binaries | Resolves `git`, `node`, `npm` as required and `docker` as optional, recording the version of each | no |
-| 12 | Sandbox & Workbench | Runs `docker info` and checks the sandbox image is present locally. A backend named in YAML is a claim; `docker info` exiting 0 is evidence | no |
-| 13 | Self-Improvement Loop | Creates the trace directory if absent, then writes and deletes a probe file to prove it is writable | yes |
-| 14 | OTel Trace Export | Posts an empty OTLP batch to `telemetry.otlp_endpoint` under the probe deadline and reports reachable or unreachable. With no endpoint it reports `not configured` as a skip: a skipped check is not a pass, and the line says so | no |
+| 10 | Egress Interception Root | Parses `<profile>/egress/ca.crt` with `node:crypto`. A root minted before 8b369d6 can carry a non-minimal DER serial that OpenSSL refuses with `illegal padding`, which surfaces as an unexplained TLS failure on every interception and never names the file. No root at all passes: the proxy mints one on first use | yes |
+| 11 | Disk & Logs | Sums the byte size and file count of the logs directory | no |
+| 12 | System Binaries | Resolves `git`, `node`, `npm` as required and `docker` as optional, recording the version of each | no |
+| 13 | Sandbox & Workbench | Runs `docker info` and checks the sandbox image is present locally. A backend named in YAML is a claim; `docker info` exiting 0 is evidence | no |
+| 14 | Self-Improvement Loop | Creates the trace directory if absent, then writes and deletes a probe file to prove it is writable | yes |
+| 15 | OTel Trace Export | Posts an empty OTLP batch to `telemetry.otlp_endpoint` under the probe deadline and reports reachable or unreachable. With no endpoint it reports `not configured` as a skip: a skipped check is not a pass, and the line says so | no |
 
-Checks 6, 9 and 12 used to return hard-coded green from inside a try block that could not throw.
+Checks 6, 9 and 13 used to return hard-coded green from inside a try block that could not throw.
 Each now has a test that induces a real failure and asserts it is reported
 (`packages/trent-core/src/doctor/checks/inspection.test.ts`).
 
@@ -152,7 +157,7 @@ length, not a prefix.
 
 ## `--fix`
 
-Six actions, in order. Every one is idempotent: it reports `changed: false` and writes nothing when
+Seven actions, in order. Every one is idempotent: it reports `changed: false` and writes nothing when
 the desired state already holds, because `--fix` has to be safe to run in a loop and a fix that
 churns the disk cannot be verified. After the actions run, the full check suite runs again and the
 new report is returned alongside them.
@@ -165,10 +170,13 @@ new report is returned alongside them.
 | Sessions | `quarantine_corrupt_sessions` | Moves an unparseable session file into `.quarantine/` with a note saying why |
 | Credentials | `restrict_secrets_file_mode` | Chmods the secrets file to 0600 |
 | Database | `enable_wal` | Turns on SQLite write-ahead logging on the store |
+| Egress | `remove_unreadable_egress_root` | Deletes `<profile>/egress/ca.crt` when OpenSSL refuses it, after printing the file, the parse error and the `trent sandbox build` a trusting sandbox now needs |
 
 Two rules bound all of them. A fix never touches a credential's value: `restrict_secrets_file_mode`
 changes the mode and never reads or rewrites the file. A fix never deletes user data: a corrupt
-session is quarantined, not removed.
+session is quarantined, not removed. `remove_unreadable_egress_root` is the one unlink, and it is
+not user data — the proxy mints a replacement, and while the refused root is on disk every
+interception fails. It still announces the path on stderr before it deletes anything.
 
 ```bash
 npm run cli -- doctor --fix --json

@@ -19,12 +19,12 @@ import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
 import { parseAction, record as toRecord, type ToolSpec } from "../action.js";
 import { renderToolInstructions, type ToolSchema } from "../web/schemas.js";
 import { DEFAULT_MEMORY_BLOCKS, assertDistinctBlocks, findBlock, type MemoryBlock } from "./blocks.js";
-import { ENTRY_SEPARATOR, commitOperations, memoryPath, type MemoryOperation } from "./store.js";
+import { ENTRY_SEPARATOR, commitOperations, memoryLimit, memoryPath, type ApplyResult, type MemoryOperation } from "./store.js";
 
 export { DEFAULT_MEMORY_BLOCKS, MEMORY_BLOCK_LABEL_PATTERN, assertDistinctBlocks, findBlock } from "./blocks.js";
 export type { MemoryBlock } from "./blocks.js";
-export { MEMORY_CAPS, ENTRY_SEPARATOR, MEMORY_FILES, applyOperations, commitOperations, readEntries } from "./store.js";
-export type { MemoryFileRef, MemoryOperation, MemoryTarget } from "./store.js";
+export { MEMORY_CAPS, ENTRY_SEPARATOR, MEMORY_FILES, applyOperations, commitOperations, memoryLimit, readEntries } from "./store.js";
+export type { ApplyResult, MemoryFileRef, MemoryLimitSource, MemoryOperation, MemoryTarget } from "./store.js";
 
 export const MEMORY_ADAPTER_NAME = "memory";
 const DEFAULT_BLOCK_LABEL = "memory";
@@ -141,6 +141,18 @@ function toOperations(args: Record<string, unknown>): MemoryOperation[] | string
   ];
 }
 
+/**
+ * The block as it stands on disk right now, appended to a refusal. Without it a seat that hits the
+ * limit has only its frozen prelude to work from, which cannot show what another seat just wrote.
+ */
+function renderRefusalState(result: Extract<ApplyResult, { ok: false }>): string {
+  if (result.entries === undefined || result.limit === undefined) return "";
+  const header = `\nCurrently stored (${result.entries.length} entries, ${String(result.used)} of ${String(result.limit)} chars):`;
+  return result.entries.length === 0
+    ? `${header} the block is empty.`
+    : `${header}\n${result.entries.map((entry, i) => `${i + 1}. ${entry}`).join("\n")}`;
+}
+
 /** One prelude section per block: file, label, description, limit, bytes used and the write rule. */
 function renderBlock(profileDir: string, block: MemoryBlock): string {
   const file = memoryPath(profileDir, block);
@@ -203,14 +215,20 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
       const ops = toOperations(args);
       if (typeof ops === "string") return record(action, "failed", `memory: ${ops}.`);
 
-      const cap = block.limit;
+      // The writer resolves the limit from the CONFIGURED blocks, so an override of a default
+      // block's limit is enforced by the write and not only shown in the prelude.
+      const cap = memoryLimit(block, blocks);
       let result: ReturnType<typeof commitOperations>;
       try {
-        result = commitOperations(options.profileDir, block, ops, cap);
+        result = commitOperations(options.profileDir, block, ops, { blocks });
       } catch (err) {
         return record(action, "failed", `memory(${label}) write failed: ${(err as Error).message}`);
       }
-      if (!result.ok) return record(action, "failed", `memory(${label}) refused: ${result.reason}`);
+      if (!result.ok) {
+        // The entries and the usage travel with the refusal so the seat can consolidate in this
+        // same turn — its prelude snapshot was frozen before this write and may already be stale.
+        return record(action, "failed", `memory(${label}) refused: ${result.reason}${renderRefusalState(result)}`);
+      }
       return record(
         action,
         "completed",
