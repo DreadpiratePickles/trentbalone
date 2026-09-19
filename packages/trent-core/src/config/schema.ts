@@ -371,6 +371,23 @@ export const TrentConfigSchema = z.object({
    * one extra round trip the first time a tool is needed.
    */
   tools: z.object({ disclosure_threshold: z.number().int().positive().default(24) }).default({}),
+  // [C2] brain
+  /**
+   * The brain repository, `<profile>/brain/` (docs/brain.md). Its files are the truth for
+   * identity, standing decisions and episodic notes; the memory blocks migrate into
+   * `brain/system/` on first use, and every index over it is disposable.
+   *
+   * `enabled` false means no `brain/` directory is ever created and no brain block reaches a
+   * prompt; the memory blocks stay where they are. `versioning` `auto` uses git when it is on
+   * PATH, so every write is a commit naming the seat that made it and the run it belonged to;
+   * `off` never shells out and the brain is plain files, which `trent doctor` reports as a line,
+   * not a failure. Versioning is for audit and rollback, never for merging concurrent writers —
+   * that is the memory lock's job.
+   */
+  brain: z.object({
+    enabled: z.boolean().default(true),
+    versioning: z.enum(["auto", "off"]).default("auto"),
+  }).default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   // [D0] improvement gates

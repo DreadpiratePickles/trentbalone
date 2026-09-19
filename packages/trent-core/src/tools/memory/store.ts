@@ -115,7 +115,29 @@ export function memoryFileName(target: MemoryFileRef): string {
   return typeof target === "string" ? MEMORY_FILES[target] : target.file;
 }
 
+/**
+ * [C2] The name one block takes inside `<profile>/brain/system/`. Derived from the block's FILE
+ * rather than its label, because a consolidation draft carries only the file name: `MEMORY.md`
+ * becomes `memory.md` and both a labelled ref and a file-only ref resolve to the same path.
+ */
+export function brainSystemFileName(file: string): string {
+  return `${path.basename(file).replace(/\.md$/i, "").toLowerCase()}.md`;
+}
+
+/** Where a block lives once it has migrated. Nothing here asserts that it has. */
+export function brainSystemPath(profileDir: string, target: MemoryFileRef): string {
+  return path.join(profileDir, "brain", "system", brainSystemFileName(memoryFileName(target)));
+}
+
+/**
+ * Where this block's bytes are, which is the migration's whole contract: once
+ * `brain/system/<block>.md` exists it IS the block, and every reader and every writer in this
+ * file follows it there. Before the migration — and for a profile that never runs one — the
+ * legacy `<profile>/memories/<FILE>` is unchanged.
+ */
 export function memoryPath(profileDir: string, target: MemoryFileRef): string {
+  const migrated = brainSystemPath(profileDir, target);
+  if (fs.existsSync(migrated)) return migrated;
   return path.join(profileDir, "memories", memoryFileName(target));
 }
 
@@ -287,6 +309,23 @@ function acquireLock(file: string): () => void {
       if (Date.now() > deadline) throw new Error(`memory file is locked by another writer: ${path.basename(file)}`);
       Atomics.wait(sleeper, 0, 0, LOCK_POLL_MS);
     }
+  }
+}
+
+/**
+ * [C2] The same lock, for a file the brain owns. The brain's writes are memory writes — they land
+ * in `<profile>/brain/`, which is where the blocks migrate to — so they must serialise against a
+ * seat's `memory` append rather than race it. `fn` runs with the lock held and must stay
+ * synchronous: an await inside the critical section would let another step of this process
+ * interleave, which is exactly what the lock exists to stop.
+ */
+export function withMemoryFileLock<T>(file: string, fn: () => T): T {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const release = acquireLock(file);
+  try {
+    return fn();
+  } finally {
+    release();
   }
 }
 

@@ -104,6 +104,12 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // it. It must stay equal to `DEFAULT_DISCLOSURE_THRESHOLD` in `tools/tool_search/index.ts`,
   // which `tools/tool_search/disclosure.test.ts` asserts.
   tools: { disclosure_threshold: 24 },
+  // [C2] brain
+  // On by default: `<profile>/brain/` is created on the first run, the memory blocks migrate into
+  // `brain/system/` once, and git versions every write when git is installed. `versioning: auto`
+  // degrades to plain files rather than failing, and the doctor line says which of the two is
+  // running. See docs/brain.md.
+  brain: { enabled: true, versioning: "auto" },
   personality: "default",
   theme: "dark",
   // [D0] improvement gates

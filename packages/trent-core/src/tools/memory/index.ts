@@ -37,6 +37,12 @@ export {
   memoryLimit,
   parseEntries,
   readEntries,
+  // [C2] the brain: where a block's bytes actually live, and the lock the brain shares with them.
+  brainSystemFileName,
+  brainSystemPath,
+  memoryFileName,
+  memoryPath,
+  withMemoryFileLock,
 } from "./store.js";
 export type { ApplyResult, MemoryFileRef, MemoryLimitSource, MemoryOperation, MemoryTarget, MemoryWriteGate, MemoryWriter } from "./store.js";
 

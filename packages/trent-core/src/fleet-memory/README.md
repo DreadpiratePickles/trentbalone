@@ -204,3 +204,65 @@ honour it is `orchestrator-hook.ts`, and a budget the prelude must prove offline
 on every provider belongs in the config file. `resolveFleetMemoryConfig(overrides)` remains as the
 one place overrides merge onto the shipped budgets. Proof: `memory-ops.test.ts`,
 `memory-draft.test.ts`, `config.test.ts`, `consolidate.test.ts`, `../tools/memory/memory.test.ts`.
+
+## The brain repository, and the truth rule ([C2], `brain.ts`)
+
+The memory blocks were one set of files with one cap each and no history. The brain is the layer
+underneath them: `<profile>/brain/`, a git repository when git is installed, and the blocks now
+live inside it. Three independent systems landed on the same shape and the research section 4
+records why — Manus calls the filesystem "the ultimate context", Letta rebuilt its memory as a git
+context repository after deprecating its own block model (B7), and OpenClaw makes Markdown
+authoritative with the database demoted to an index (B8). The taxonomy split across files rather
+than one blob is B9.
+
+**The truth rule, one sentence per layer.** `brain/` files are the truth for identity, standing
+decisions and episodic notes. `Document` rows (`validFrom`, `validTo`, `supersedesId`) are the
+truth for facts with validity windows. SQLite FTS5, the embedding cache and
+`<profile>/cache/brain-index/` are indexes and never authoritative: delete any of them and one
+rebuild is the whole cost. Two stores, not three — the blocks migrate in rather than becoming a
+third. And the brain is **advisory**: `AGENTS.md`, the workspace context files and `config.yaml`
+are normative, which is the gate against the failure mode where an agent-writable, always-loaded
+store becomes a control surface.
+
+| Path | Holds | Reaches a prompt as |
+|---|---|---|
+| `system/identity.md`, `decisions.md`, `facts.md`, plus the migrated blocks | what every seat must have | the STABLE `brain` block, in full, under the per-block limits |
+| `memory/YYYY-MM-DD.md` | episodic notes, append-only per UTC day | a path in the tree; the body only through `brain_read` or brain recall |
+| `decisions/<date>-<slug>.md` | one standing decision each, ADR-like, dated | the same |
+| `seats/<seat>/notes.md` | that seat's private notes | the same, and only for that seat |
+| `skills-index.md` | generated from the promoted skills | a path in the tree |
+
+**Writes.** One module, `brain.ts`. Write-then-rename at 0600 under the SAME `mkdir` lock the
+blocks use (`withMemoryFileLock`), so a brain write and a seat's `memory` append serialise instead
+of racing. Notes and seat notes are appends. The only whole-file rewrite is `applyOps`, which takes
+the four delta operations from `memory-ops.ts` and validates the list before applying any of it —
+the C4 rule, now covering the brain. Every write commits with a message naming the writer (a seat
+id, or `human`) and the run id. git is invoked with an ARGUMENT ARRAY, never a shell string, and
+identity and signing are supplied per invocation so a machine with no global git identity still
+commits. Without git the brain is plain files that still work, and `trent doctor` says versioning
+is off rather than failing.
+
+**Migration.** `brain-migrate.ts` moves every configured block byte-identically into
+`brain/system/<file>.md` and leaves a pointer at the old path so an old reader is told where the
+content went. `memoryPath()` follows a migrated block to the brain, so the `memory` tool, the
+consolidation draft, promotion and rollback all keep working unchanged. It is idempotent on one
+fact on disk, and it refuses a block whose file would shadow `identity.md`, `decisions.md` or
+`facts.md`.
+
+**Prompt.** `brain-prompt.ts` renders the stable block: `system/` content (minus the files the
+company-memory block already carries, so nothing is paid for twice) and the file tree as paths
+only, bounded. The bodies of `memory/`, `decisions/` and `seats/` are never in the prefix; a seat
+fetches one with `brain_read {"path": "..."}` (`tools/memory/brain-read.ts`), which is read-only
+and refuses any path that leaves the brain after resolution AND after the real path is taken, so a
+symlink planted in the brain cannot serve `config.yaml`.
+
+**Recall.** `brain-index.ts` ranks `memory/`, `decisions/` and this seat's own notes against the
+objective through the SAME seam as cross-agent recall — `scoreAgainst` with the optional embedder,
+so it is lexical alone without a key and the calibrated hybrid blend with one. The on-disk index
+under `<profile>/cache/brain-index/` is keyed on the brain's version: the git head when versioning
+is on (every write commits, so the head moves whenever the content does), a digest of the indexed
+files' sizes and modification times when it is off. Nothing here touches `store/**`.
+
+Proof: `brain.test.ts`, `brain-migrate.test.ts`, `brain-prompt.test.ts`, `brain-index.test.ts`,
+`../tools/memory/brain-read.test.ts`, `../doctor/checks/brain.test.ts`,
+`apps/cli/src/commands/__tests__/brain.test.ts`. Full documentation: `docs/brain.md`.

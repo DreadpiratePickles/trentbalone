@@ -19,3 +19,4 @@ export * from "./checks/workbench.js";
 export * from "./checks/self-improvement.js";
 export * from "./checks/telemetry.js";
 export * from "./checks/embedder.js";
+export * from "./checks/brain.js";

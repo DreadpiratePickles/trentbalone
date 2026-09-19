@@ -49,12 +49,24 @@ export interface ContextBlock {
  */
 export const WORKSPACE_CONTEXT_BLOCK = "workspace-context";
 
+/**
+ * [C2] The brain's two blocks. `brain` is STABLE: `<profile>/brain/system/` in full plus the file
+ * tree as signposts, which is the same bytes for every seat and every run of an unchanged profile.
+ * `brain-recall` is CONTEXT: the standing decisions and episodic notes this objective and this
+ * seat match, which is by definition objective-dependent and must never sit in the cacheable
+ * prefix.
+ */
+export const BRAIN_BLOCK = "brain";
+export const BRAIN_RECALL_BLOCK = "brain-recall";
+
 /** Block names the hook renders, so tests, the trim report and `/context` agree on one spelling. */
 export const CONTEXT_BLOCKS = {
   companyMemory: "company-memory",
+  brain: BRAIN_BLOCK,
   workspace: WORKSPACE_CONTEXT_BLOCK,
   orgSkills: "shared-skills-org",
   seatSkills: "shared-skills-seat",
+  brainRecall: BRAIN_RECALL_BLOCK,
   recall: "fleet-recall",
   conversation: "conversation",
   personality: "personality",

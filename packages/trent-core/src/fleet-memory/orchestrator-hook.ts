@@ -37,8 +37,13 @@
  */
 
 import { createMemoryAdapter, type MemoryAdapter, type MemoryBlock } from "../tools/memory/index.js";
+import { createBrainReadAdapter } from "../tools/memory/brain-read.js";
 import { ORG_TIER_AGENT } from "../improve/org-tier.js";
 import type { TrentToolAdapter } from "../tools/types.js";
+import { createBrain, type Brain } from "./brain.js";
+import { brainSystemFileFor, migrateBlocksToBrain } from "./brain-migrate.js";
+import { recallFromBrain } from "./brain-index.js";
+import { renderBrainBlock } from "./brain-prompt.js";
 import { DEFAULT_FLEET_MEMORY_CONFIG, type FleetMemoryConfig } from "./config.js";
 import type { EmbedFn } from "./lexical.js";
 import { recallForObjective } from "./recall.js";
@@ -139,6 +144,13 @@ export interface FleetMemoryHookOptions {
    * scanned, trusted and rendered by their own module. Nothing here opens a file.
    */
   readonly workspaceContext?: string;
+  /**
+   * [C2] The brain (`brain.ts`). Omitted it is built from `profileDir`, which is `brain.enabled`
+   * defaulting to true; `false` turns it off entirely and no `brain/` directory is ever created.
+   * A hook constructed with a `memory` adapter and no `profileDir` has no brain, because there is
+   * no profile to put one in.
+   */
+  readonly brain?: Brain | false;
   readonly onNotice?: (notice: ContextNotice) => void;
 }
 
@@ -198,6 +210,36 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
   memory.bindCallerContext(() => ({ delegated: caller.delegated }));
   const search = createFleetSearchAdapter({ source: options.source, config, seat: () => caller.seat || undefined });
 
+  // [C2] The brain. Constructing it opens nothing: `ensure()` runs on the first stable tier of the
+  // first run, so a profile that never runs anything never gets a `brain/` directory.
+  const brain: Brain | undefined =
+    options.brain === false
+      ? undefined
+      : (options.brain ?? (options.profileDir === undefined ? undefined : createBrain({ profileDir: options.profileDir })));
+  const brainRead = brain === undefined ? undefined : createBrainReadAdapter({ profileDir: brain.profileDir });
+  /** True once the brain has been prepared for this process; migration is idempotent regardless. */
+  let brainReady = false;
+
+  /**
+   * Create the layout, run the one-time block migration, and render the block. The brain is
+   * ADVISORY: anything that throws here — a read-only profile, a wedged lock, a git that vanished
+   * mid-run — degrades to no brain block rather than failing the run.
+   */
+  function brainBlock(): ContextBlock | undefined {
+    if (brain === undefined) return undefined;
+    try {
+      if (!brainReady) {
+        brain.ensure();
+        migrateBlocksToBrain({ profileDir: brain.profileDir, brain, blocks: memory.blocks });
+        brainReady = true;
+      }
+      const text = renderBrainBlock({ brain, excludeSystemFiles: memory.blocks.map((b) => brainSystemFileFor(b)) });
+      return text === "" ? undefined : block("stable", CONTEXT_BLOCKS.brain, text);
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Runs in flight, by id; the wrapper drains one job at a time but keeps the map general. */
   const runs = new Map<string, ActiveRun>();
   const assembled = new Map<string, SeatContext>();
@@ -207,9 +249,14 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
 
   /** Tier 1. No seat, no objective, no turn: the same bytes for every seat and every run. */
   async function buildStable(run: ActiveRun): Promise<readonly ContextBlock[]> {
+    // The brain goes first because the migration is what decides where the memory blocks' bytes
+    // are: `memoryPath()` follows a migrated block into `brain/system/`, and the frozen snapshot
+    // below must read whichever file is now the block.
+    const brainTier = brainBlock();
     const blocks: ContextBlock[] = [
       block("stable", CONTEXT_BLOCKS.companyMemory, `## Company memory (shared by every seat; writes land next run)\n${memory.frozenSnapshot()}`),
     ];
+    if (brainTier) blocks.push(brainTier);
     if (options.workspaceContext !== undefined && options.workspaceContext.trim() !== "") {
       blocks.push(block("stable", CONTEXT_BLOCKS.workspace, options.workspaceContext));
     }
@@ -228,6 +275,23 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
       const own = (await listSharedSkills(run.source.improve, run.companyId, seat)).filter((s) => s.tier === "own");
       const index = renderSharedSkillsIndex(own, `## Shared skills, ${seat} only (fleet_skill_view {"skill": "<task type>"} for the body)`);
       if (index) blocks.push(block("context", CONTEXT_BLOCKS.seatSkills, index));
+    }
+    // [C2] What this seat's brain holds about this objective: standing decisions, episodic notes
+    // and this seat's own notes. Advisory and never fatal, like the block above it.
+    if (brain !== undefined) {
+      try {
+        const fromBrain = await recallFromBrain({
+          profileDir: brain.profileDir,
+          brain,
+          seat,
+          objective: run.objective,
+          config,
+          ...(options.embed === undefined ? {} : { embed: options.embed }),
+        });
+        if (fromBrain.block) blocks.push(block("context", CONTEXT_BLOCKS.brainRecall, fromBrain.block));
+      } catch {
+        // Recall is an index, not a truth: an unreadable one costs relevance, never a run.
+      }
     }
     const recall = await recallForObjective(run.source, {
       companyId: run.companyId,
@@ -286,7 +350,7 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
   }
 
   return {
-    adapters: [memory, search],
+    adapters: brainRead === undefined ? [memory, search] : [memory, search, brainRead],
     memory,
     wrapSeatModel(fn) {
       return async (input) => {

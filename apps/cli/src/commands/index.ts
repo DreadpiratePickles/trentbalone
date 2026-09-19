@@ -40,6 +40,7 @@ import { auditSpec } from "./groups/audit.js";
 import { jobsSpec } from "./groups/jobs.js";
 import { hooksSpec } from "./groups/hooks.js";
 import { workspaceSpec } from "./groups/workspace.js";
+import { brainSpec } from "./groups/brain.js";
 import { securitySpec } from "./groups/security.js";
 
 export { CLI_VERSION } from "./registry.js";
@@ -57,6 +58,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   toolsSpec,
   sandboxSpec,
   sessionsSpec,
+  brainSpec,
   configSpec,
   workspaceSpec,
   mcpSpec,
