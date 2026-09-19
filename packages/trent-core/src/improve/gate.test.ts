@@ -318,10 +318,10 @@ describe("second-draw reliability (I.12)", () => {
     expect(verdict.redraw?.unstable).toEqual([]);
   });
 
-  it("measureBaseline reports per-fixture pass/fail so flips can be computed", async () => {
+  it("measureBaseline reports per-fixture pass/fail AND score, so flips and the partition can be computed", async () => {
     const actuals = async (input: { prompt: string }) => ({ text: input.prompt === "one" ? "BAD" : "GOOD", costCents: 1 });
     const baseline = await measureBaseline({ seatPrompt: "s", suite: RUBRIC_SUITE, actuals, judge: async (i) => ({ pass: i.actual.text === "GOOD" }) });
-    expect(baseline.fixtures).toEqual([{ id: "r:1", passed: false }, { id: "r:2", passed: true }]);
+    expect(baseline.fixtures).toEqual([{ id: "r:1", passed: false, score: 0 }, { id: "r:2", passed: true, score: 1 }]);
   });
 });
 

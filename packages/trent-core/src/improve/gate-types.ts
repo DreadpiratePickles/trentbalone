@@ -16,6 +16,11 @@ export interface ActualsInput {
   readonly temperature?: number;
   /** 1 for the deciding draw, 2 for the reliability re-draw (task I.12). */
   readonly draw?: number;
+  /**
+   * [D0] gate 3: which pass^k trial this is, 1..k. Trials share nothing, so a runner that keeps
+   * state (a sandbox, a workspace, a memo) resets on a new trial number.
+   */
+  readonly trial?: number;
 }
 
 export interface ActualsOutput {
@@ -59,6 +64,12 @@ export interface GateCandidate {
 export interface BaselineFixture {
   readonly id: string;
   readonly passed: boolean;
+  /**
+   * [D0] gate 2: the fixture's baseline score, so one side of the optimise/holdout partition can
+   * be compared with the same side of a candidate. Absent on a baseline measured before the
+   * partition existed, which falls back to the whole-suite score.
+   */
+  readonly score?: number;
 }
 
 export interface GateBaseline {
@@ -83,8 +94,10 @@ export type GateBlockReason =
   | "unverified"
   | "unstable"
   | "repetitive_loop"
-  | "private_regression"
-  | "budget_exhausted";
+  | "holdout_regression"
+  | "budget_exhausted"
+  | "frozen_surface"
+  | "content_vetoed";
 
 /** What the reliability re-draw did: which fixtures it re-ran, what it cost, which did not hold. */
 export interface RedrawReport {
@@ -92,6 +105,15 @@ export interface RedrawReport {
   actualsCalls: number;
   judgeCalls: number;
   unstable: string[];
+}
+
+/** One side of the optimise/holdout partition ([D0] gate 2). */
+export interface GatePartition {
+  /** Mean fixture score on this side; the whole suite's when the side is empty. */
+  score: number;
+  delta: number;
+  /** How many fixtures the side actually holds; 0 means this side was measured on the whole suite. */
+  fixtures: number;
 }
 
 export interface GateVerdict {
@@ -112,8 +134,11 @@ export interface GateVerdict {
   costCents: number;
   /** Present when a second draw ran on flipped fixtures (task I.12). */
   redraw?: RedrawReport;
-  /** Private fixtures the baseline passed and this candidate failed (task I.16). */
-  privateRegressions?: string[];
+  /** [D0] gate 2: what each side of the partition measured. The sweep reports `optimise`. */
+  optimise?: GatePartition;
+  holdout?: GatePartition & { regressions: string[] };
+  /** [D0] gate 3: how many consecutive trials every fixture had to pass. */
+  trials?: number;
 }
 
 export interface ExecuteGateInput {
@@ -128,10 +153,22 @@ export interface ExecuteGateInput {
   readonly cache?: GateCache;
   /** Temperature of the reliability re-draw. Default 0.7. */
   readonly redrawTemperature?: number;
+  /**
+   * [D0] gate 3: consecutive trials a fixture must pass. Default 1 here because this is the
+   * primitive; the loop's own default is `DEFAULT_PASS_K` (3), applied by `sweep.ts`.
+   */
+  readonly passK?: number;
+  /**
+   * [D0] gate 6: the judge is below its calibration floor, so a judge PASS may not make a rubric
+   * pass. The rubric stays pending and the verdict is `unverified`.
+   */
+  readonly judgeAdvisory?: boolean;
+  /** [D0] gate 2: share of fixtures held out. Default `DEFAULT_HOLDOUT_RATIO`. */
+  readonly holdoutRatio?: number;
 }
 
 export interface MeasuredBaseline extends GateBaseline {
-  fixtures: BaselineFixture[];
+  fixtures: Array<BaselineFixture & { score: number }>;
   costCents: number;
   actualsCalls: number;
   judgeCalls: number;

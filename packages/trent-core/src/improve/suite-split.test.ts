@@ -1,8 +1,8 @@
 /**
- * Task I.16 — public/private suite split (CS329A L4 @31:33, RLEF: public tests for iteration,
- * private tests for the reward, so the model cannot memorise the test; L7 @36:21: the scorer must
- * not train on what it ranks). Reflection reads public failures only; the gate scores everything;
- * a candidate that lifts public and drops private is blocked.
+ * Task I.16, extended by [D0] gate 2 — the ONE optimise/holdout partition (CS329A L4 @31:33,
+ * RLEF: public tests for iteration, private tests for the reward; L7 @36:21: the scorer must not
+ * train on what it ranks). The old public/private split IS this partition, renamed: reflection
+ * and the sweep's score read the optimise side, promotion eligibility is decided on the holdout.
  */
 import { describe, expect, it } from "vitest";
 
@@ -12,16 +12,16 @@ import type { FrozenSuite } from "./suites.js";
 import { runGepaPass } from "./gepa-pass.js";
 import { applyMechanicalOverlay } from "./mechanical-overlay.js";
 import { InMemoryImproveStore } from "./memory-store.js";
-import { isPrivateFixture, splitSuite } from "./suite-split.js";
+import { DEFAULT_HOLDOUT_RATIO, isHoldoutFixture, splitSuite } from "./suite-split.js";
 
 const rubric = { type: "llm_rubric" as const, weight: 1, rubric: "Is right." };
 const SUITE: FrozenSuite = {
   id: "s",
   version: "v1",
   fixtures: [
-    { id: "s:pub1", prompt: "PUBLIC-ONE-TEXT", graders: [rubric], private: false },
-    { id: "s:pub2", prompt: "PUBLIC-TWO-TEXT", graders: [rubric], private: false },
-    { id: "s:priv1", prompt: "PRIVATE-ONE-TEXT", graders: [rubric], private: true },
+    { id: "s:pub1", prompt: "OPTIMISE-ONE-TEXT", graders: [rubric], holdout: false },
+    { id: "s:pub2", prompt: "OPTIMISE-TWO-TEXT", graders: [rubric], holdout: false },
+    { id: "s:priv1", prompt: "HOLDOUT-ONE-TEXT", graders: [rubric], holdout: true },
   ],
 };
 
@@ -31,23 +31,31 @@ describe("splitSuite", () => {
     const a = splitSuite(big);
     const b = splitSuite(big);
     expect(a).toEqual(b);
-    expect(a.private.length).toBeGreaterThanOrEqual(6);
-    expect(a.private.length).toBeLessThanOrEqual(18);
-    expect(a.public.length + a.private.length).toBe(40);
-    expect(isPrivateFixture({ id: "x", prompt: "", graders: [], private: true })).toBe(true);
-    expect(isPrivateFixture({ id: "x", prompt: "", graders: [], private: false })).toBe(false);
+    expect(DEFAULT_HOLDOUT_RATIO).toBe(0.3);
+    expect(a.holdout.length).toBeGreaterThanOrEqual(6);
+    expect(a.holdout.length).toBeLessThanOrEqual(18);
+    expect(a.optimise.length + a.holdout.length).toBe(40);
+    expect(isHoldoutFixture({ id: "x", prompt: "", graders: [], holdout: true })).toBe(true);
+    expect(isHoldoutFixture({ id: "x", prompt: "", graders: [], holdout: false })).toBe(false);
   });
 
-  it("the mechanical overlay can name the private ids", () => {
-    const base: FrozenSuite = { id: "ads", version: "v1", fixtures: [{ id: "ads:1", prompt: "a", graders: [rubric], private: false }, { id: "ads:2", prompt: "b", graders: [rubric], private: false }] };
-    const out = applyMechanicalOverlay(base, { skill_name: "ads", evals: [], private: [2] });
-    expect(out.fixtures.map((f) => f.private)).toEqual([false, true]);
+  it("a configured ratio moves the partition and stays deterministic", () => {
+    const big: FrozenSuite = { id: "big", version: "v", fixtures: Array.from({ length: 40 }, (_, i) => ({ id: `big:${i}`, prompt: `p${i}`, graders: [rubric] })) };
+    const wide = splitSuite(big, 0.9);
+    expect(wide.holdout.length).toBeGreaterThan(splitSuite(big, 0.3).holdout.length);
+    expect(splitSuite(big, 0.9)).toEqual(wide);
+  });
+
+  it("the mechanical overlay can name the held-out ids", () => {
+    const base: FrozenSuite = { id: "ads", version: "v1", fixtures: [{ id: "ads:1", prompt: "a", graders: [rubric], holdout: false }, { id: "ads:2", prompt: "b", graders: [rubric], holdout: false }] };
+    const out = applyMechanicalOverlay(base, { skill_name: "ads", evals: [], holdout: [2] });
+    expect(out.fixtures.map((f) => f.holdout)).toEqual([false, true]);
     expect(out.version).not.toBe(base.version);
   });
 });
 
-describe("executeGate blocks a private regression (I.16)", () => {
-  it("a candidate that passes public and fails a private fixture is blocked private_regression", async () => {
+describe("[D0] gate 2 — promotion eligibility is decided on the holdout only", () => {
+  it("a candidate that improves optimise and regresses the holdout is blocked holdout_regression", async () => {
     const verdict = await executeGate({
       candidate: { id: "c", kind: "skill", content: "# skill" },
       seatPrompt: "seat",
@@ -56,22 +64,39 @@ describe("executeGate blocks a private regression (I.16)", () => {
         score: 2 / 3,
         failureClusters: { "rubric_failed:s:pub1": 1 },
         fixtures: [
-          { id: "s:pub1", passed: false },
-          { id: "s:pub2", passed: true },
-          { id: "s:priv1", passed: true },
+          { id: "s:pub1", passed: false, score: 0 },
+          { id: "s:pub2", passed: true, score: 1 },
+          { id: "s:priv1", passed: true, score: 1 },
         ],
       },
       actuals: async ({ fixtureId }) => ({ text: fixtureId, toolCalls: [], costCents: 0 }),
       judge: async ({ actual }) => ({ pass: !actual.text.includes("priv") }),
     });
     expect(verdict.promoted).toBe(false);
-    expect(verdict.blockedBy).toBe("private_regression");
-    expect(verdict.privateRegressions).toEqual(["s:priv1"]);
+    expect(verdict.blockedBy).toBe("holdout_regression");
+    expect(verdict.optimise?.delta).toBeGreaterThan(0);
+    expect(verdict.optimise?.score).toBe(1);
+    expect(verdict.holdout?.delta).toBeLessThan(0);
+    expect(verdict.holdout?.regressions).toEqual(["s:priv1"]);
+  });
+
+  it("a suite with no holdout fixture measures the holdout on the whole suite rather than skipping the check", async () => {
+    const one: FrozenSuite = { id: "one", version: "v1", fixtures: [{ id: "one:a", prompt: "A", graders: [rubric], holdout: false }] };
+    const verdict = await executeGate({
+      candidate: { id: "c", kind: "skill", content: "# skill" },
+      seatPrompt: "seat",
+      suite: one,
+      baseline: { score: 0, failureClusters: {}, fixtures: [{ id: "one:a", passed: false, score: 0 }] },
+      actuals: async () => ({ text: "fine", toolCalls: [], costCents: 0 }),
+      judge: async () => ({ pass: true }),
+    });
+    expect(verdict.holdout?.fixtures).toBe(1);
+    expect(verdict.promoted).toBe(true);
   });
 });
 
-describe("GEPA reflection never sees a private fixture (I.16)", () => {
-  it("the captured reflection prompt carries the failing public fixture and not the private one", async () => {
+describe("GEPA reflection never sees a held-out fixture (I.16)", () => {
+  it("the captured reflection prompt carries the failing optimise fixture and not the held-out one", async () => {
     const store = new InMemoryImproveStore();
     const failing: TraceRecord = {
       id: "t1",
@@ -101,7 +126,7 @@ describe("GEPA reflection never sees a private fixture (I.16)", () => {
       baseline: async () => ({
         score: 0,
         failureClusters: { "rubric_failed:s:pub1": 1, "rubric_failed:s:pub2": 1, "rubric_failed:s:priv1": 1 },
-        fixtures: SUITE.fixtures.map((f) => ({ id: f.id, passed: false })),
+        fixtures: SUITE.fixtures.map((f) => ({ id: f.id, passed: false, score: 0 })),
       }),
       actuals: async () => ({ text: "x", toolCalls: [], costCents: 0 }),
       judge: async () => ({ pass: false }),
@@ -114,9 +139,9 @@ describe("GEPA reflection never sees a private fixture (I.16)", () => {
     });
     expect(result.skipped).toBeUndefined();
     expect(prompts.length).toBe(1);
-    expect(prompts[0]).toContain("PUBLIC-ONE-TEXT");
-    expect(prompts[0]).toContain("PUBLIC-TWO-TEXT");
-    expect(prompts[0]).not.toContain("PRIVATE-ONE-TEXT");
+    expect(prompts[0]).toContain("OPTIMISE-ONE-TEXT");
+    expect(prompts[0]).toContain("OPTIMISE-TWO-TEXT");
+    expect(prompts[0]).not.toContain("HOLDOUT-ONE-TEXT");
     expect(prompts[0]).not.toContain("s:priv1");
   });
 });

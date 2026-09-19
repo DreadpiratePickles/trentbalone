@@ -23,12 +23,18 @@ export interface GateCache {
 
 /**
  * Bumped when what a cached baseline carries changes shape: v2 added per-fixture pass/fail (I.12)
- * and per-fixture rubric tags (I.9), so a v1 entry would block every candidate as a new cluster.
+ * and per-fixture rubric tags (I.9), so a v1 entry would block every candidate as a new cluster;
+ * v3 added the per-fixture SCORE the optimise/holdout partition compares against ([D0] gate 2).
  */
-export const BASELINE_CACHE_SCHEMA = "v2";
+export const BASELINE_CACHE_SCHEMA = "v3";
 
-export function baselineCacheKey(suiteId: string, suiteVersion: string, judged: boolean, seatPrompt: string): string {
-  return `baseline:${BASELINE_CACHE_SCHEMA}:${suiteId}:${suiteVersion}:${judged ? "judged" : "unjudged"}:${contentHash(seatPrompt)}`;
+/**
+ * `passK` is part of the key because a baseline measured over one trial is a different
+ * measurement from one measured over k ([D0] gate 3): reusing it would compare a pass^k candidate
+ * with a single-draw baseline.
+ */
+export function baselineCacheKey(suiteId: string, suiteVersion: string, judged: boolean, seatPrompt: string, passK = 1): string {
+  return `baseline:${BASELINE_CACHE_SCHEMA}:${suiteId}:${suiteVersion}:${judged ? "judged" : "unjudged"}:k${passK}:${contentHash(seatPrompt)}`;
 }
 
 export function judgeCacheKey(fixtureId: string, rubric: string, outputText: string): string {

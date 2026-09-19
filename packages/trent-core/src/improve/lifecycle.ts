@@ -10,6 +10,8 @@
 import { applyMemoryBytes, decodeMemoryDraft } from "../fleet-memory/memory-draft.js";
 import type { ImproveStorePort, SkillDraftRow } from "../store/StorePort.js";
 import { distillCleanTrace, groupRowsByRun, rawTraceFromRows, type CleanGolden } from "./clean-trace.js";
+import { frozenRefusalMessage, frozenViolations, type FrozenSurface } from "./frozen-surface.js";
+import { FROZEN_REFUSAL_ACTOR } from "./frozen-surface.js";
 import { contentHash, judgeAgreementFor, newId, nowIso, recordLedger } from "./ledger.js";
 import { SweepMeter } from "./meter.js";
 import { ProtectedPromptError } from "./protected-prompt.js";
@@ -27,6 +29,12 @@ export interface DistillOnPromote {
 
 export interface PromoteOptions {
   readonly actor: string;
+  /**
+   * [D0] gate 1: the frozen surface, checked at the promotion door as well as at the draft's.
+   * A draft that reached quarantine by another path (a memory delta, a hand-written row) is
+   * refused here with the path named, and the refusal is ledgered. Omit and nothing is enforced.
+   */
+  readonly frozen?: FrozenSurface;
   /** The iteration that produced the draft; found from the draft id when omitted. */
   readonly iterationId?: string;
   readonly now?: string;
@@ -97,6 +105,15 @@ export async function promoteDraft(store: ImproveStorePort, draftId: string, opt
   if (draft.status === "live") return draft;
 
   const now = options.now ?? nowIso();
+  if (options.frozen) {
+    const violations = frozenViolations(draft, options.frozen);
+    if (violations.length > 0) {
+      // The draft is NOT rejected here: a human asked for something the loop may not do, and the
+      // refusal is the answer. The ledger row is what makes the attempt visible in `history`.
+      await recordLedger(store, { action: "reject", artifact: draft, before: null, after: null, iterationId: null, actor: FROZEN_REFUSAL_ACTOR, now });
+      throw new ProtectedPromptError(`refusing to promote ${draft.kind} draft ${draftId}: ${frozenRefusalMessage(violations)}`);
+    }
+  }
   const iterationId = options.iterationId ?? (await iterationFor(store, draft));
   const prior = await currentLive(store, draft);
   if (prior) {

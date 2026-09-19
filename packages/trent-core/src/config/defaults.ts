@@ -1,6 +1,6 @@
 import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import type { TrentConfig } from "./schema.js";
-import { CONFIG_SCHEMA_VERSION } from "./schema.js";
+import { CONFIG_SCHEMA_VERSION, DEFAULT_BUDGET_PER_RUN_CAP } from "./schema.js";
 import { DEFAULT_MEMORY_BLOCKS } from "../tools/memory/blocks.js";
 // [A2.2] autonomy and hooks
 import { DEFAULT_AUTONOMY } from "../governance/autonomy.js";
@@ -79,6 +79,20 @@ export const DEFAULT_CONFIG: TrentConfig = {
   autonomy: DEFAULT_AUTONOMY,
   approvals: { deny: [] },
   hooks: { pre_tool_call: [], post_tool_call: [], session_start: [], session_stop: [] },
+  // [D0] improvement gates
+  // The loop's own gates (docs/improve.md). `sweep_cap_cents` is `budget.per_run_cap` above, in
+  // integer cents: a sweep may not outspend one run by accident (plan decision 8), and
+  // `config/improve-schema.test.ts` asserts the two stay equal. `pass_k` of 3 triples what a
+  // gated candidate costs, which is the price of not promoting a coin flip. Reflection is not
+  // configured here because it stays OFF: the CLI sweep passes `skipLLM: true`.
+  improve: {
+    holdout_ratio: 0.3,
+    pass_k: 3,
+    judge_min_tpr: 0.8,
+    judge_min_tnr: 0.8,
+    sweep_cap_cents: DEFAULT_BUDGET_PER_RUN_CAP,
+    frozen_paths: [],
+  },
   personality: "default",
   // [A2.1] workspace context
   // Per-file and whole-set caps on the workspace's instruction files. Mirrors the schema's

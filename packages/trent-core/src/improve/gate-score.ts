@@ -22,11 +22,17 @@ import type { FrozenSuite } from "./suites.js";
 
 export const DETERMINISTIC = new Set(["contains", "tool_call", "state_check"]);
 export const JUDGE_UNVERIFIED_TAG = "judge_unverified";
+/** [D0] gate 6: a rubric an advisory judge passed. It did not fail; it did not certify either. */
+export const JUDGE_ADVISORY_TAG = "judge_advisory";
 const RUBRIC_FAILED_TAG = "rubric_failed";
 
 export interface DrawOptions {
   readonly temperature?: number;
   readonly draw?: number;
+  /** [D0] gate 3: the pass^k trial number, handed to the runner so trials can isolate themselves. */
+  readonly trial?: number;
+  /** [D0] gate 6: the judge is advisory, so a judge PASS cannot make a rubric pass. */
+  readonly judgeAdvisory?: boolean;
 }
 
 interface Executed {
@@ -46,6 +52,7 @@ async function executeAll(suite: FrozenSuite, systemPrompt: string, actuals: Act
       fixtureId: fixture.id,
       ...(draw.temperature === undefined ? {} : { temperature: draw.temperature }),
       ...(draw.draw === undefined ? {} : { draw: draw.draw }),
+      ...(draw.trial === undefined ? {} : { trial: draw.trial }),
     });
     out.push({
       fixture,
@@ -89,8 +96,12 @@ function verifyEvidence(verdict: JudgeVerdict, outputText: string): { verdict: J
   return { verdict: { pass: false, score: 0, reason: "judge cited evidence that is not in the output" }, unverified: true };
 }
 
-/** Stage 2: the judge, memoised by output hash. A rubric with no judge stays pending and counts. */
-async function judgeStage(executed: readonly Executed[], judge: JudgeFn | undefined, cache: GateCache | undefined): Promise<JudgeStage> {
+/**
+ * Stage 2: the judge, memoised by output hash. A rubric with no judge stays pending and counts —
+ * and so does a rubric an ADVISORY judge passed ([D0] gate 6): a judge below its calibration
+ * floor is read and stored, but it may not be the reason a fixture passes.
+ */
+async function judgeStage(executed: readonly Executed[], judge: JudgeFn | undefined, cache: GateCache | undefined, advisory = false): Promise<JudgeStage> {
   const stage: JudgeStage = { judged: new Map(), failLabels: new Map(), judgeCalls: 0, judgeCostCents: 0, pendingRubrics: 0 };
   for (const e of executed) {
     const graders: EvalGrader[] = [];
@@ -124,6 +135,13 @@ async function judgeStage(executed: readonly Executed[], judge: JudgeFn | undefi
       }
       const { verdict, unverified } = verifyEvidence(raw, e.actual.text);
       const { costCents: _ignored, ...forGrader } = verdict;
+      if (advisory && forGrader.pass) {
+        // The verdict was taken and paid for; it just cannot certify anything while miscalibrated.
+        stage.pendingRubrics += 1;
+        labels.push(JUDGE_ADVISORY_TAG);
+        graders.push({ ...grader, verdict: { pass: false, score: 0, reason: "judge is advisory: calibration below the configured floor" } });
+        continue;
+      }
       if (!forGrader.pass) labels.push(unverified ? JUDGE_UNVERIFIED_TAG : `${RUBRIC_FAILED_TAG}:${e.fixture.id}`);
       graders.push({ ...grader, verdict: forGrader });
     }
@@ -200,7 +218,7 @@ export async function scoreUnder(
   }
 
   // Stage 2: the judge, only now. Verdicts are attached to the rubric graders the harness honours.
-  const stage = await judgeStage(executed, judge, cache);
+  const stage = await judgeStage(executed, judge, cache, draw.judgeAdvisory ?? false);
   const full = toEvalFixtures(executed, (e) => stage.judged.get(e.fixture.id) ?? []);
   const result = await runEvalSuite({
     subjectType: "seat",

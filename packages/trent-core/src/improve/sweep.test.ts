@@ -186,6 +186,9 @@ describe("cost accounting and budget (I.1-I.3)", () => {
       suiteFor: () => suiteOf(3),
       actuals: gw.actuals,
       judge: gw.judge,
+      // Cost arithmetic is stated at ONE trial; pass^k multiplies every number below by k and is
+      // proved on its own in pass-k.test.ts.
+      passK: 1,
     });
     const total = gw.calls.length + gw.judgeCalls();
     expect(total).toBeGreaterThan(0);
@@ -212,6 +215,7 @@ describe("cost accounting and budget (I.1-I.3)", () => {
       suiteFor: () => suiteOf(6),
       actuals: gw.actuals,
       judge: gw.judge,
+      passK: 1,
       budgetCents: 10,
     });
     expect(report.costCents).toBeLessThanOrEqual(10);
@@ -241,6 +245,7 @@ describe("cost accounting and budget (I.1-I.3)", () => {
       suiteFor: () => suiteOf(2),
       actuals: gw.actuals,
       judge: gw.judge,
+      passK: 1,
     };
     const first = await runImprovementSweep(COMPANY, deps);
     expect(first.phases.baseline.calls).toBe(2);
@@ -328,6 +333,6 @@ describe("clean traces and the tagged blocks (I.13, I.15, I.16)", () => {
     expect(ledger.map((l) => [l.action, l.actor])).toEqual([["reject", "gate:repetitive_loop"]]);
     const status = await improveStatus(store, COMPANY);
     expect(status.repetitiveLoops).toBe(1);
-    expect(status.privateRegressions).toBe(0);
+    expect(status.holdoutRegressions).toBe(0);
   });
 });

@@ -19,9 +19,13 @@ export interface BaselineLookup {
   readonly cache: GateCache;
   readonly meter: SweepMeter;
   readonly seatPrompt: () => Promise<string>;
+  /** [D0] gate 3: trials per fixture. Part of the cache key, so a k-baseline is never reused at another k. */
+  readonly passK?: number;
+  /** [D0] gate 6: measure the baseline under the same advisory rule the candidate is measured under. */
+  readonly judgeAdvisory?: boolean;
 }
 
-function isBaselineFixture(value: JsonValue): value is { id: string; passed: boolean } {
+function isBaselineFixture(value: JsonValue): value is { id: string; passed: boolean; score?: number } {
   return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.id === "string" && typeof value.passed === "boolean";
 }
 
@@ -42,11 +46,19 @@ export async function cachedOrMeasuredBaseline(input: BaselineLookup): Promise<G
   const { suite, actuals, judge } = input;
   if (!suite || !actuals) return undefined;
   const seatPrompt = await input.seatPrompt();
-  const key = baselineCacheKey(suite.id, suite.version, judge !== undefined, seatPrompt);
+  const key = baselineCacheKey(suite.id, suite.version, judge !== undefined, seatPrompt, input.passK ?? 1);
   const cached = baselineFromCache(await input.cache.get(key));
   if (cached) return cached;
   const measured = await input.meter.within("baseline", () =>
-    measureBaseline({ seatPrompt, suite, actuals, cache: input.cache, ...(judge === undefined ? {} : { judge }) }),
+    measureBaseline({
+      seatPrompt,
+      suite,
+      actuals,
+      cache: input.cache,
+      ...(judge === undefined ? {} : { judge }),
+      ...(input.passK === undefined ? {} : { passK: input.passK }),
+      ...(input.judgeAdvisory === undefined ? {} : { judgeAdvisory: input.judgeAdvisory }),
+    }),
   );
   await input.cache.put(key, { score: measured.score, failureClusters: measured.failureClusters, fixtures: measured.fixtures.map((f) => ({ ...f })) });
   return { score: measured.score, failureClusters: measured.failureClusters, fixtures: measured.fixtures };

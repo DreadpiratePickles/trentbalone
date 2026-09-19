@@ -25,6 +25,11 @@
 import type { AgentTraceRow, ImproveStorePort, IterationRow, JsonValue, SkillDraftRow } from "../store/StorePort.js";
 import { createSkillFoundry, type SkillDraftStore } from "../skills/foundry.js";
 import { shouldDistillSkill, type TraceRecord } from "../traces/trace-store.js";
+import { judgeCalibration, isJudgeAdvisory, type JudgeFloors } from "./calibration.js";
+import { refuseBeforeScoring, type DraftGateContext } from "./draft-gates.js";
+import type { FrozenSurface } from "./frozen-surface.js";
+import { DEFAULT_PASS_K } from "./pass-k.js";
+import { vetoedHashes } from "./veto.js";
 import { storeGateCache, type GateCache } from "./gate-cache.js";
 import { executeGate, type ActualsRunner, type GateBaseline, type GateVerdict, type JudgeFn } from "./gate.js";
 import { runGepaPass, type ReflectFn } from "./gepa-pass.js";
@@ -34,6 +39,7 @@ import { cachedOrMeasuredBaseline } from "./sweep-baseline.js";
 import { isBudgetExhausted, SweepMeter, type PhaseReport } from "./meter.js";
 import { isRepetitiveLoopTag } from "./repetitive-loop.js";
 import { resolveSweepScope, type SkippedSpecialist } from "./scope.js";
+import { assessHealth } from "./sweep-health.js";
 import { defaultSeatPromptProvider, type SeatPromptProvider } from "./seat-prompt.js";
 import type { SuiteProvider } from "./suites.js";
 
@@ -55,6 +61,14 @@ export interface SweepDeps {
   readonly retirement?: { staleAfterDays?: number; archiveAfterDays?: number };
   /** Hard cap on what this sweep may spend, integer cents. Omit for no cap. */
   readonly budgetCents?: number;
+  /** [D0] gate 3: consecutive trials a fixture must pass. Defaults to `DEFAULT_PASS_K`. */
+  readonly passK?: number;
+  /** [D0] gate 2: share of each suite held out for the promotion decision. */
+  readonly holdoutRatio?: number;
+  /** [D0] gate 1: the paths the loop may never write. Omit and the surface is not enforced. */
+  readonly frozenSurface?: FrozenSurface;
+  /** [D0] gate 6: the calibration floors below which the judge is advisory. */
+  readonly judgeFloors?: JudgeFloors;
   readonly now?: () => string;
 }
 
@@ -75,6 +89,10 @@ export interface AgentSweepReport {
 export interface SweepReport {
   companyId: string;
   at: string;
+  /** [D0] gate 3: trials every gated fixture had to pass in this sweep. */
+  passK: number;
+  /** [D0] gate 6: whether the judge was below its floor, so its verdicts could not pass a fixture. */
+  judgeAdvisory: boolean;
   agents: AgentSweepReport[];
   skippedSpecialists: SkippedSpecialist[];
   retirement: RetirementReport;
@@ -109,7 +127,14 @@ export function toTraceRecord(row: AgentTraceRow): TraceRecord {
 }
 
 /** Blocks the gate turns into a visible rejection row: a human reads the failure mode in `history`. */
-const LEDGERED_BLOCKS = new Set<string>(["repetitive_loop", "private_regression"]);
+const LEDGERED_BLOCKS = new Set<string>(["repetitive_loop"]);
+
+/**
+ * [D0] gate 2: a holdout regression does not condemn the candidate, it fails to clear it. The
+ * draft stays in QUARANTINE with the reason on its iteration, so a human still sees it in
+ * `trent improve status` and a later sweep with more holdout evidence can decide again.
+ */
+const QUARANTINE_BLOCKS = new Set<string>(["holdout_regression"]);
 
 /** I.13: process-clean traces only: completed, critic pass (or none), no repetitive-loop tag. */
 export function cleanTraces(rows: readonly AgentTraceRow[]): AgentTraceRow[] {
@@ -142,33 +167,6 @@ function foundryDraftStore(store: ImproveStorePort, agentId: string, onWrite: (c
   };
 }
 
-type Health = {
-  degraded: Set<string>;
-  degradedSkills: AgentSweepReport["degradedSkills"];
-  degradedTools: AgentSweepReport["degradedTools"];
-};
-
-/** The metric monitor and the tool cascade, from the wrapped pure modules. */
-async function assessHealth(traces: readonly TraceRecord[], byTaskType: Map<string, TraceRecord[]>, liveSkills: Map<string, string>): Promise<Health> {
-  const [{ computeSkillHealth, isSkillDegraded, describeDegradation }, { cascadeDegradedSkills }] = await Promise.all([
-    import("@/lib/skill-health"),
-    import("@/lib/tool-health"),
-  ]);
-  const health: Health = { degraded: new Set(), degradedSkills: [], degradedTools: [] };
-  for (const [taskType, group] of byTaskType) {
-    if (!liveSkills.has(taskType)) continue;
-    const h = computeSkillHealth(taskType, group as unknown as Parameters<typeof computeSkillHealth>[1]);
-    if (isSkillDegraded(h)) {
-      health.degraded.add(taskType);
-      health.degradedSkills.push({ taskType, reasons: describeDegradation(h) });
-    }
-  }
-  const cascade = cascadeDegradedSkills(traces as unknown as Parameters<typeof cascadeDegradedSkills>[0], liveSkills);
-  for (const taskType of cascade.degradedTaskTypes) health.degraded.add(taskType);
-  health.degradedTools = cascade.tools.map((t) => ({ tool: t.tool, successRate: t.successRate }));
-  return health;
-}
-
 interface AgentContext {
   companyId: string;
   agentId: string;
@@ -180,6 +178,10 @@ interface AgentContext {
   baseline: () => Promise<GateBaseline | undefined>;
   seatPrompt: () => Promise<string>;
   suite: Awaited<ReturnType<SuiteProvider>>;
+  /** [D0] the refusals that happen before any model call, shared by every draft in this sweep. */
+  gates: DraftGateContext;
+  passK: number;
+  judgeAdvisory: boolean;
 }
 
 function verdictJson(verdict: GateVerdict): JsonValue {
@@ -188,6 +190,12 @@ function verdictJson(verdict: GateVerdict): JsonValue {
 
 async function gateDraft(ctx: AgentContext, draft: SkillDraftRow): Promise<Pick<IterationRow, "decision" | "score" | "delta" | "blockedBy" | "verdicts">> {
   const { suite, deps } = ctx;
+  // [D0] gates 1 and 5 first: a frozen path or a vetoed hash is refused before anything is run.
+  const refused = await refuseBeforeScoring(ctx.gates, draft);
+  if (refused) {
+    ctx.report.skillsRejected += 1;
+    return refused;
+  }
   const actuals = deps.actuals;
   if (!suite) return { decision: "quarantined", score: null, delta: null, blockedBy: "no_suite", verdicts: null };
   if (!actuals) return { decision: "quarantined", score: null, delta: null, blockedBy: "no_gateway", verdicts: null };
@@ -204,6 +212,9 @@ async function gateDraft(ctx: AgentContext, draft: SkillDraftRow): Promise<Pick<
         baseline,
         actuals,
         cache: ctx.cache,
+        passK: ctx.passK,
+        judgeAdvisory: ctx.judgeAdvisory,
+        ...(deps.holdoutRatio === undefined ? {} : { holdoutRatio: deps.holdoutRatio }),
         ...(deps.judge === undefined ? {} : { judge: deps.judge }),
       }),
     );
@@ -212,16 +223,22 @@ async function gateDraft(ctx: AgentContext, draft: SkillDraftRow): Promise<Pick<
     if (isBudgetExhausted(error)) return { decision: "quarantined", score: null, delta: null, blockedBy: "budget_exhausted", verdicts: null };
     throw error;
   }
+  // [D0] gate 2: the sweep reports the OPTIMISE side; promotion was decided on the holdout.
+  const score = verdict.optimise?.score ?? verdict.score;
+  const delta = verdict.optimise?.delta ?? verdict.delta;
   if (verdict.promoted) {
     ctx.report.skillsGated += 1;
-    return { decision: "pending_approval", score: verdict.score, delta: verdict.delta, blockedBy: null, verdicts: verdictJson(verdict) };
+    return { decision: "pending_approval", score, delta, blockedBy: null, verdicts: verdictJson(verdict) };
+  }
+  if (verdict.blockedBy !== undefined && QUARANTINE_BLOCKS.has(verdict.blockedBy)) {
+    return { decision: "quarantined", score, delta, blockedBy: verdict.blockedBy, verdicts: verdictJson(verdict) };
   }
   ctx.report.skillsRejected += 1;
   const rejected = await ctx.deps.store.updateDraft(draft.id, { status: "rejected", retiredAt: ctx.now });
   if (verdict.blockedBy !== undefined && LEDGERED_BLOCKS.has(verdict.blockedBy)) {
     await recordLedger(ctx.deps.store, { action: "reject", artifact: rejected, before: null, after: null, iterationId: null, actor: `gate:${verdict.blockedBy}`, now: ctx.now });
   }
-  return { decision: "rejected", score: verdict.score, delta: verdict.delta, blockedBy: verdict.blockedBy ?? null, verdicts: verdictJson(verdict) };
+  return { decision: "rejected", score, delta, blockedBy: verdict.blockedBy ?? null, verdicts: verdictJson(verdict) };
 }
 
 async function sweepTaskType(ctx: AgentContext, taskType: string, rows: AgentTraceRow[], live: Set<string>, degraded: boolean): Promise<void> {
@@ -289,15 +306,18 @@ async function sweepTaskType(ctx: AgentContext, taskType: string, rows: AgentTra
   await store.appendIteration(iteration);
 }
 
-async function sweepAgent(
-  companyId: string,
-  agentId: string,
-  rows: AgentTraceRow[],
-  deps: SweepDeps,
-  meter: SweepMeter,
-  now: string,
-  seatPrompt: SeatPromptProvider,
-): Promise<AgentSweepReport> {
+interface SweepRunContext {
+  readonly deps: SweepDeps;
+  readonly meter: SweepMeter;
+  readonly now: string;
+  readonly seatPrompt: SeatPromptProvider;
+  readonly gates: DraftGateContext;
+  readonly passK: number;
+  readonly judgeAdvisory: boolean;
+}
+
+async function sweepAgent(companyId: string, agentId: string, rows: AgentTraceRow[], run: SweepRunContext): Promise<AgentSweepReport> {
+  const { deps, meter, now, seatPrompt } = run;
   const report: AgentSweepReport = {
     agentId,
     traces: rows.length,
@@ -334,6 +354,9 @@ async function sweepAgent(
     now,
     report,
     suite,
+    gates: run.gates,
+    passK: run.passK,
+    judgeAdvisory: run.judgeAdvisory,
     seatPrompt: () => (cachedPrompt ??= seatPrompt(agentId)),
     baseline: () =>
       (cachedBaseline ??= cachedOrMeasuredBaseline({
@@ -342,6 +365,8 @@ async function sweepAgent(
         judge: deps.judge,
         cache: ctx.cache,
         meter,
+        passK: run.passK,
+        judgeAdvisory: run.judgeAdvisory,
         seatPrompt: ctx.seatPrompt,
       })),
   };
@@ -393,9 +418,14 @@ export async function runImprovementSweep(companyId: string, input: SweepDeps): 
     ...(input.judge === undefined ? {} : { judge: meter.judge(input.judge) }),
     ...(input.reflect === undefined ? {} : { reflect: meter.reflect(input.reflect) }),
   };
+  const passK = Math.max(1, Math.trunc(input.passK ?? DEFAULT_PASS_K));
+  const calibration = judgeCalibration(await input.store.listLedger(companyId));
+  const judgeAdvisory = isJudgeAdvisory(calibration, input.judgeFloors ?? {});
   const report: SweepReport = {
     companyId,
     at: now,
+    passK,
+    judgeAdvisory,
     agents: [],
     skippedSpecialists: [],
     retirement: { stale: [], archived: [], kept: [] },
@@ -422,10 +452,24 @@ export async function runImprovementSweep(companyId: string, input: SweepDeps): 
       if (rows[0]) roleHints.set(agentId, rows[0].agentRole);
     }
     const seatPrompt = deps.seatPrompt ?? defaultSeatPromptProvider(deps.store, companyId, (id) => roleHints.get(id));
+    const run: SweepRunContext = {
+      deps,
+      meter,
+      now,
+      seatPrompt,
+      passK,
+      judgeAdvisory,
+      gates: {
+        store: deps.store,
+        now,
+        vetoed: await vetoedHashes(deps.store, companyId),
+        ...(deps.frozenSurface === undefined ? {} : { frozen: deps.frozenSurface }),
+      },
+    };
 
     for (const agentId of scope.agents) {
       try {
-        report.agents.push(await sweepAgent(companyId, agentId, rowsByAgent.get(agentId) ?? [], deps, meter, now, seatPrompt));
+        report.agents.push(await sweepAgent(companyId, agentId, rowsByAgent.get(agentId) ?? [], run));
       } catch (error) {
         report.errors.push(`agent[${agentId}]: ${error instanceof Error ? error.message : String(error)}`);
       }

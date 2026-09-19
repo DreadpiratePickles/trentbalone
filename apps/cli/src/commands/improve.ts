@@ -27,6 +27,7 @@ import {
   BUNDLED_MECHANICAL_OVERLAYS_DIR,
   InMemoryImproveStore,
   createFileExemplarStore,
+  createFrozenSurface,
   createGatewayActuals,
   createGatewayJudge,
   createGatewayRationale,
@@ -37,12 +38,14 @@ import {
   rejectDraft,
   rollback,
   runImprovementSweep,
+  verifyPromotion,
   type ActualsRunner,
   type ImproveHook,
   type ImproveStatus,
   type JudgeFn,
   type RationaleFn,
   type SweepReport,
+  type VerifyPromotionReport,
 } from "@trent/core/improve/index.js";
 import type { ModelProvider } from "@trent/core/model-gateway/index.js";
 import type { ImproveStorePort } from "@trent/core/store/index.js";
@@ -121,6 +124,16 @@ interface LoopConfig {
   installedAgents: string[];
   provider: string;
   model: string;
+  /** [D0] improvement gates, from `config.improve` (docs/improve.md). */
+  gates: {
+    sweepCapCents: number;
+    passK: number;
+    holdoutRatio: number;
+    minTpr: number;
+    minTnr: number;
+    frozenPaths: string[];
+    blocks: Array<{ label: string; file: string; description: string; limit: number; read_only: boolean }>;
+  };
 }
 
 function loopConfig(ctx: CommandContext): LoopConfig {
@@ -129,12 +142,25 @@ function loopConfig(ctx: CommandContext): LoopConfig {
     model: string;
     company?: { id?: string };
     fleet: { installed_agents?: string[]; active_agents?: string[] };
+    budget: { per_run_cap: number };
+    memory: { blocks: LoopConfig["gates"]["blocks"] };
+    improve: { sweep_cap_cents: number; pass_k: number; holdout_ratio: number; judge_min_tpr: number; judge_min_tnr: number; frozen_paths: string[] };
   };
   return {
     companyId: String(config.company?.id ?? DEFAULT_COMPANY_ID),
     installedAgents: [...(config.fleet.installed_agents ?? config.fleet.active_agents ?? [])],
     provider: config.provider,
     model: config.model,
+    gates: {
+      // Decision 8: an unset cap is one run's cap, never "no cap".
+      sweepCapCents: config.improve.sweep_cap_cents ?? config.budget.per_run_cap,
+      passK: config.improve.pass_k,
+      holdoutRatio: config.improve.holdout_ratio,
+      minTpr: config.improve.judge_min_tpr,
+      minTnr: config.improve.judge_min_tnr,
+      frozenPaths: [...config.improve.frozen_paths],
+      blocks: [...config.memory.blocks],
+    },
   };
 }
 
@@ -188,6 +214,16 @@ async function liveModel(ctx: CommandContext, cfg: LoopConfig): Promise<{ actual
   return { actuals: createGatewayActuals(gateway), judge: createGatewayJudge(gateway), rationalise: createGatewayRationale(gateway) };
 }
 
+/** [D0] gate 1: the paths this profile's loop may never write. */
+function frozenSurfaceFor(ctx: CommandContext, cfg: LoopConfig) {
+  return createFrozenSurface({ profileDir: ctx.config().getProfileDir(), blocks: cfg.gates.blocks, extraPaths: cfg.gates.frozenPaths });
+}
+
+/** The suites the CLI gates against: a skill's `evals/evals.json` plus the wrapper's mechanical overlay. */
+function suiteProvider() {
+  return fileSuiteProvider(BUNDLED_SKILLS_DIR, (agentId) => getCatalogAgent(agentId)?.skills ?? [], { overlayRoot: BUNDLED_MECHANICAL_OVERLAYS_DIR });
+}
+
 /** Where a promotion's clean exemplars go: one JSON per golden under the profile. */
 function exemplarDir(ctx: CommandContext): string {
   return path.join(ctx.config().getProfileDir(), "exemplars");
@@ -198,7 +234,7 @@ const statusSpec: CommandSpec = {
   description: "Traces per agent, drafts in quarantine, last sweep, frontier best, suite saturation, judge agreement rate",
   run: (ctx) =>
     withStore(ctx, async (opened, cfg) => {
-      const status = await improveStatus(opened.store, cfg.companyId);
+      const status = await improveStatus(opened.store, cfg.companyId, { minTpr: cfg.gates.minTpr, minTnr: cfg.gates.minTnr });
       return { data: { ...status, installedAgents: cfg.installedAgents, store: storeInfo(opened) } };
     }),
   render(data, ctx) {
@@ -212,10 +248,14 @@ const statusSpec: CommandSpec = {
     for (const [agent, best] of Object.entries(d.frontierBest)) lines.push(`    ${ctx.theme.meta("frontier")} ${agent}: best ${best.score} (delta ${best.delta}, ${best.candidates} candidates)`);
     const saturated = Object.entries(d.suiteSaturated).filter(([, yes]) => yes).map(([agent]) => agent);
     if (saturated.length > 0) lines.push(`  ${ctx.theme.meta("suite saturated")} ${saturated.join("  ")} (baseline 1.0: the suite can teach nothing; add goldens)`);
-    const ja = d.judgeAgreement;
-    lines.push(`  ${ctx.theme.meta("judge agreement")} ${ja.rate === null ? "no gated human decision yet" : `${ja.rate} (${ja.agreed} agreed, ${ja.disagreed} disagreed)`}`);
+    // [D0] gate 6: the two rates with their counts. Raw agreement is never printed on its own.
+    const ja = d.judgeCalibration;
+    const rate = (value: number | null, hit: number, total: number) => (value === null ? "no decision yet" : `${value} (${hit}/${total})`);
     lines.push(
-      `  ${ctx.theme.meta("blocked")} repetitive loops=${d.repetitiveLoops} (traces tagged ${d.repetitiveLoopTraces})   private regressions=${d.privateRegressions}`,
+      `  ${ctx.theme.meta("judge")} tpr ${rate(ja.tpr, ja.truePositives, ja.truePositives + ja.falseNegatives)}   tnr ${rate(ja.tnr, ja.trueNegatives, ja.trueNegatives + ja.falsePositives)}   ${ja.advisory ? ctx.theme.needsApproval("advisory: verdicts cannot pass a fixture") : ctx.theme.success("calibrated")}`,
+    );
+    lines.push(
+      `  ${ctx.theme.meta("blocked")} repetitive loops=${d.repetitiveLoops} (traces tagged ${d.repetitiveLoopTraces})   holdout regressions=${d.holdoutRegressions}   frozen=${d.frozenRefusals}   vetoed=${d.contentVetoes}`,
     );
     return lines;
   },
@@ -240,7 +280,14 @@ const sweepSpec: CommandSpec = {
         installedAgents: cfg.installedAgents,
         ...(agentFilter === undefined ? {} : { agentFilter }),
         ...(live === undefined ? {} : { actuals: live.actuals, judge: live.judge }),
-        suiteFor: fileSuiteProvider(BUNDLED_SKILLS_DIR, (agentId) => getCatalogAgent(agentId)?.skills ?? [], { overlayRoot: BUNDLED_MECHANICAL_OVERLAYS_DIR }),
+        suiteFor: suiteProvider(),
+        // [D0]: the cap (decision 8), pass^k, the partition, the frozen surface and the floors.
+        budgetCents: cfg.gates.sweepCapCents,
+        passK: cfg.gates.passK,
+        holdoutRatio: cfg.gates.holdoutRatio,
+        frozenSurface: frozenSurfaceFor(ctx, cfg),
+        judgeFloors: { minTpr: cfg.gates.minTpr, minTnr: cfg.gates.minTnr },
+        // Reflection stays OFF: no model rewrites a prompt until D1 turns it on (docs/improve.md).
         skipLLM: true,
       });
       return { data: { ...report, store: storeInfo(opened) } };
@@ -252,6 +299,10 @@ const sweepSpec: CommandSpec = {
       (a) => `  ${ctx.theme.value(a.agentId.padEnd(18))} traces=${a.traces} distilled=${a.skillsDistilled} gated=${a.skillsGated} rejected=${a.skillsRejected} gepa=${a.gepaPasses}${a.skipped.length ? `  skipped: ${a.skipped.join(", ")}` : ""}`,
     );
     for (const s of d.skippedSpecialists) lines.push(`  ${ctx.theme.meta("skipped")} ${s.agentId}: ${s.reason} (${s.traces}/${s.threshold})`);
+    // [D0] gate 7: what this sweep was allowed to spend, what it spent, and whether it stopped there.
+    lines.push(
+      `  ${ctx.theme.meta("cap")} ${d.budget.limitCents === null ? "none" : `${d.budget.limitCents} cents`}   ${ctx.theme.meta("spent")} ${d.costCents} cents   ${d.budget.exhausted ? ctx.theme.needsApproval("stopped at the cap") : ctx.theme.success("under the cap")}   ${ctx.theme.meta("pass^k")} ${d.passK}${d.judgeAdvisory ? `   ${ctx.theme.needsApproval("judge advisory")}` : ""}`,
+    );
     for (const e of d.errors) lines.push(`  ${ctx.theme.needsApproval("error")} ${e}`);
     return lines;
   },
@@ -277,22 +328,74 @@ function draftCommand(name: "promote" | "reject"): CommandSpec {
         const before = (await exemplars.list()).length;
         const result = await promoteDraft(opened.store, draftId, {
           actor: "human",
+          // [D0] gate 1: the promotion door is frozen too, whatever path the draft arrived by.
+          frozen: frozenSurfaceFor(ctx, cfg),
           distill: { exemplars, ...(live === undefined ? {} : { rationalise: live.rationalise }) },
         });
         const goldens = await exemplars.list();
+        // [D0] gate 4: the holdout is re-run against what is now live, under the sweep cap, and a
+        // regression rolls the promotion straight back. Without model access there is nothing to
+        // re-run, so the check is reported as not run rather than silently skipped.
+        const holdoutCheck = live === undefined ? null : await runHoldoutCheck(ctx, cfg, opened.store, result.id, live.actuals, live.judge);
         return {
           data: {
             draftId: result.id,
             agentId: result.agentId,
             taskType: result.taskType,
             kind: result.kind,
-            status: result.status,
+            status: (await opened.store.getDraft(result.id))?.status ?? result.status,
             exemplars: { dir: exemplarDir(ctx), distilled: goldens.length - before, rationalised: goldens.filter((g) => g.rationale !== undefined).length },
+            holdoutCheck,
           },
         };
       }),
-    render: (data, ctx) => [`  ${ctx.theme.success(name)} ${ctx.theme.value(String((data as { draftId?: string }).draftId ?? ""))} -> ${String((data as { status?: string }).status ?? "(dry run)")}`],
+    render(data, ctx) {
+      const d = data as { draftId?: string; status?: string; holdoutCheck?: VerifyPromotionReport | null };
+      const lines = [`  ${ctx.theme.success(name)} ${ctx.theme.value(String(d.draftId ?? ""))} -> ${String(d.status ?? "(dry run)")}`];
+      const check = d.holdoutCheck;
+      if (check) {
+        lines.push(
+          check.regressed
+            ? `  ${ctx.theme.needsApproval("rolled back")} holdout ${check.score} below ${check.previousScore}; the previous artifact is live again`
+            : `  ${ctx.theme.meta("holdout")} ${check.blockedBy ?? `${check.score} against ${check.previousScore} over ${check.fixtures} fixtures`}`,
+        );
+      }
+      return lines;
+    },
   };
+}
+
+/**
+ * [D0] gate 4: re-run the promoted artifact's holdout under the sweep cap. Returns null when the
+ * agent has no suite to re-run, which is the honest answer until a seat has one (plan task D1).
+ */
+async function runHoldoutCheck(
+  ctx: CommandContext,
+  cfg: LoopConfig,
+  store: ImproveStorePort,
+  draftId: string,
+  actuals: ActualsRunner,
+  judge: JudgeFn,
+): Promise<VerifyPromotionReport | null> {
+  const draft = await store.getDraft(draftId);
+  if (!draft) return null;
+  const suite = await suiteProvider()(draft.agentId);
+  if (!suite) return null;
+  const { defaultSeatPromptProvider } = await import("@trent/core/improve/index.js");
+  // The seat a specialist is plugged into comes from its own traces, as the sweep resolves it.
+  const traces = await store.listTraces(cfg.companyId, { agentId: draft.agentId });
+  const seatPrompt = await defaultSeatPromptProvider(store, cfg.companyId, () => traces[0]?.agentRole)(draft.agentId);
+  return verifyPromotion({
+    store,
+    draftId,
+    suite,
+    seatPrompt,
+    actuals,
+    judge,
+    passK: cfg.gates.passK,
+    holdoutRatio: cfg.gates.holdoutRatio,
+    budgetCents: cfg.gates.sweepCapCents,
+  });
 }
 
 const rollbackSpec: CommandSpec = {

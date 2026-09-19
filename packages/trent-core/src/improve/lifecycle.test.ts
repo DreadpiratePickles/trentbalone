@@ -165,8 +165,22 @@ describe("judge-versus-human agreement ledger (I.8)", () => {
     await rejectDraft(store, "ungated", "human", T(3));
     expect((await store.listLedger(COMPANY, { artifactId: "ungated" }))[0]?.judgeAgreement).toBeNull();
 
+    // [D0] gate 6: the same three decisions, reported as rates with their counts — one agreed
+    // promotion (TP), one promotion the gate would have blocked (FN), one rejection the gate
+    // would have promoted (FP). Raw agreement 0.33 never says which side the judge fails on.
     const status = await improveStatus(store, COMPANY);
-    expect(status.judgeAgreement).toEqual({ agreed: 1, disagreed: 2, rate: 0.33 });
+    expect(status.judgeCalibration).toEqual({
+      truePositives: 1,
+      falseNegatives: 1,
+      trueNegatives: 0,
+      falsePositives: 1,
+      tpr: 0.5,
+      tnr: 0,
+      agreed: 1,
+      disagreed: 2,
+      rate: 0.33,
+      advisory: true,
+    });
   });
 });
 

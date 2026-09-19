@@ -47,6 +47,7 @@ export {
   type GateBlockReason,
   type GateCandidate,
   type GateFixtureVerdict,
+  type GatePartition,
   type GateVerdict,
   type GatewayActualsOptions,
   type JudgeFn,
@@ -55,7 +56,7 @@ export {
   type MeasuredBaseline,
   type RedrawReport,
 } from "./gate.js";
-export { JUDGE_UNVERIFIED_TAG } from "./gate-score.js";
+export { JUDGE_ADVISORY_TAG, JUDGE_UNVERIFIED_TAG } from "./gate-score.js";
 export { DEFAULT_REDRAW_TEMPERATURE, flippedFixtures } from "./gate-redraw.js";
 export {
   DEFAULT_LOOP_LENGTH,
@@ -67,13 +68,45 @@ export {
   type ToolInvocation,
 } from "./repetitive-loop.js";
 export {
-  PRIVATE_SHARE,
-  buildPublicReflectionPrompt,
-  isPrivateFixture,
-  privateRegressions,
+  DEFAULT_HOLDOUT_RATIO,
+  buildOptimiseReflectionPrompt,
+  holdoutRegressions,
+  holdoutSuite,
+  isHoldoutFixture,
+  partitionMetrics,
   splitSuite,
+  type PartitionMetrics,
   type SuiteSplit,
 } from "./suite-split.js";
+// [D0] improvement gates: the frozen surface, the partition, pass^k, the veto, calibration and
+// the post-promotion re-run. Reflection stays off; these are what must exist before it is on.
+export {
+  FROZEN_REFUSAL_ACTOR,
+  GATE_CODE_DIRS,
+  JUDGE_PROMPT_FILES,
+  createFrozenSurface,
+  draftTargets,
+  frozenRefusalMessage,
+  frozenViolations,
+  refuseFrozenDraft,
+  type FrozenClass,
+  type FrozenSurface,
+  type FrozenSurfaceOptions,
+  type FrozenTarget,
+  type FrozenViolation,
+} from "./frozen-surface.js";
+export { DEFAULT_PASS_K, scoreUnderPassK, type PassKInput } from "./pass-k.js";
+export { VETO_REFUSAL_ACTOR, isVetoed, vetoedHashes } from "./veto.js";
+export {
+  DEFAULT_JUDGE_MIN_TNR,
+  DEFAULT_JUDGE_MIN_TPR,
+  isJudgeAdvisory,
+  judgeCalibration,
+  type JudgeCalibration,
+  type JudgeFloors,
+} from "./calibration.js";
+export { refuseBeforeScoring, type DraftDecision, type DraftGateContext } from "./draft-gates.js";
+export { HOLDOUT_ROLLBACK_ACTOR, verifyPromotion, type VerifyPromotionInput, type VerifyPromotionReport } from "./post-promote.js";
 export {
   distillCleanTrace,
   goldenId,

@@ -1,12 +1,13 @@
 /**
  * `trent improve status` — what the loop knows right now, as data. Traces per agent, drafts in
  * quarantine, the last sweep, each agent's frontier best, whether an agent's suite is saturated
- * (task I.10), the running judge-versus-human agreement rate (task I.8), and the two failure-mode
- * counters: gate rejections for a repetitive loop (I.15, plus the traces carrying the tag) and for
- * a private regression (I.16). Reads only.
+ * (task I.10), judge calibration as TPR and TNR with their counts ([D0] gate 6, task I.8), and the
+ * two failure-mode counters: gate rejections for a repetitive loop (I.15, plus the traces carrying
+ * the tag) and for a holdout regression (I.16, [D0] gate 2). Reads only.
  */
 
 import type { ImproveStorePort, IterationRow, SkillDraftRow, SkillLedgerRow } from "../store/StorePort.js";
+import { isJudgeAdvisory, judgeCalibration, type JudgeCalibration, type JudgeFloors } from "./calibration.js";
 import { SUITE_SATURATED } from "./gepa-pass.js";
 import { SEAT_PROMPT_TASK_TYPE } from "./protected-prompt.js";
 import { isRepetitiveLoopTag } from "./repetitive-loop.js";
@@ -30,12 +31,12 @@ export interface FrontierBest {
   updatedAt: string;
 }
 
-/** How often the gate's verdict matched the human's decision, over every human promote/reject that was gated. */
-export interface JudgeAgreement {
-  agreed: number;
-  disagreed: number;
-  /** agreed / (agreed + disagreed), two decimals; null until a gated human decision exists. */
-  rate: number | null;
+/**
+ * [D0] gate 6: the judge's calibration, reported as rates with their counts. `advisory` is the
+ * consequence a reader needs: while it is true the judge cannot make a fixture pass.
+ */
+export interface JudgeAgreement extends JudgeCalibration {
+  advisory: boolean;
 }
 
 export interface ImproveStatus {
@@ -47,24 +48,24 @@ export interface ImproveStatus {
   frontierBest: Record<string, FrontierBest>;
   /** Agents whose last GEPA pass found the baseline at 1.0: the suite can teach them nothing. */
   suiteSaturated: Record<string, boolean>;
+  /** Kept under its old name for anything reading `rate`; every surface prints the two rates. */
   judgeAgreement: JudgeAgreement;
+  judgeCalibration: JudgeAgreement;
   /** Candidates the gate refused because their fixture run looped on one tool (I.15). */
   repetitiveLoops: number;
   /** Traces on record that carry a `repetitive_loop:<tool>` tag (I.15). */
   repetitiveLoopTraces: number;
-  /** Candidates the gate refused because they regressed a held-out private fixture (I.16). */
-  privateRegressions: number;
+  /** Candidates the gate held in quarantine because they regressed the holdout ([D0] gate 2). */
+  holdoutRegressions: number;
+  /** Candidates refused on a frozen path, and on a hash that was rejected before ([D0] gates 1 and 5). */
+  frozenRefusals: number;
+  contentVetoes: number;
 }
 
-export function judgeAgreementOf(ledger: readonly SkillLedgerRow[]): JudgeAgreement {
-  let agreed = 0;
-  let disagreed = 0;
-  for (const row of ledger) {
-    if (row.judgeAgreement === true) agreed += 1;
-    else if (row.judgeAgreement === false) disagreed += 1;
-  }
-  const total = agreed + disagreed;
-  return { agreed, disagreed, rate: total === 0 ? null : Math.round((agreed / total) * 100) / 100 };
+/** The calibration plus the one consequence: is this judge advisory right now? */
+export function judgeAgreementOf(ledger: readonly SkillLedgerRow[], floors: JudgeFloors = {}): JudgeAgreement {
+  const calibration = judgeCalibration(ledger);
+  return { ...calibration, advisory: isJudgeAdvisory(calibration, floors) };
 }
 
 /** Per agent, whether the LATEST seat-prompt iteration was a saturation skip. */
@@ -86,7 +87,7 @@ function gateOf(iterations: readonly IterationRow[], draftId: string): Quarantin
   return row ? { decision: row.decision, score: row.score, delta: row.delta, blockedBy: row.blockedBy } : null;
 }
 
-export async function improveStatus(store: ImproveStorePort, companyId: string): Promise<ImproveStatus> {
+export async function improveStatus(store: ImproveStorePort, companyId: string, floors: JudgeFloors = {}): Promise<ImproveStatus> {
   const [tracesPerAgent, quarantine, live, iterations, ledger, traces] = await Promise.all([
     store.countTracesByAgent(companyId),
     store.listDrafts(companyId, { status: "quarantine" }),
@@ -131,9 +132,12 @@ export async function improveStatus(store: ImproveStorePort, companyId: string):
     lastSweep,
     frontierBest,
     suiteSaturated: saturationOf(iterations),
-    judgeAgreement: judgeAgreementOf(ledger),
+    judgeAgreement: judgeAgreementOf(ledger, floors),
+    judgeCalibration: judgeAgreementOf(ledger, floors),
     repetitiveLoops: blockedCount(iterations, "repetitive_loop"),
     repetitiveLoopTraces: traces.filter((t) => (t.failureTags ?? []).some(isRepetitiveLoopTag)).length,
-    privateRegressions: blockedCount(iterations, "private_regression"),
+    holdoutRegressions: blockedCount(iterations, "holdout_regression"),
+    frozenRefusals: blockedCount(iterations, "frozen_surface"),
+    contentVetoes: blockedCount(iterations, "content_vetoed"),
   };
 }

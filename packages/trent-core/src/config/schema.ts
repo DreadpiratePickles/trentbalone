@@ -61,6 +61,8 @@ export type Toolset = z.infer<typeof ToolsetSchema>;
 
 export const TerminalBackendSchema = z.enum(["docker", "local"]);
 export type TerminalBackendType = z.infer<typeof TerminalBackendSchema>;
+/** Integer cents. Named because `improve.sweep_cap_cents` defaults to it (plan decision 8). */
+export const DEFAULT_BUDGET_PER_RUN_CAP = 100;
 
 /**
  * Money is INTEGER CENTS everywhere, never floating-point dollars — this matches the
@@ -70,7 +72,7 @@ export type TerminalBackendType = z.infer<typeof TerminalBackendSchema>;
 export const BudgetConfigSchema = z.object({
   daily_cap: z.number().int().positive().default(1000),
   currency: z.string().default("USD"),
-  per_run_cap: z.number().int().positive().default(100),
+  per_run_cap: z.number().int().positive().default(DEFAULT_BUDGET_PER_RUN_CAP),
   alert_thresholds: z.array(z.number()).default([50, 80, 100]),
 });
 
@@ -287,6 +289,25 @@ export const TrentConfigSchema = z.object({
    * a shell string, and runs only after `trent hooks consent` records a hash of its exact spec.
    */
   hooks: HooksConfigSchema.default({}),
+  // [D0] improvement gates
+  /**
+   * The gates the self-improvement loop is held to before any reflection is switched on
+   * (docs/improve.md). `holdout_ratio` is the share of every suite's fixtures held back from
+   * reflection and scoring and used for promotion alone; `pass_k` is how many consecutive trials
+   * a fixture must pass to count as passed; `judge_min_tpr` / `judge_min_tnr` are the calibration
+   * floors below which the judge's verdicts are advisory and cannot make a fixture pass;
+   * `sweep_cap_cents` is the sweep's hard spend cap in INTEGER CENTS and defaults to
+   * `budget.per_run_cap` (plan decision 8); `frozen_paths` are extra paths the loop may never
+   * write, on top of the suites, the goldens, the judge prompt and the gate code.
+   */
+  improve: z.object({
+    holdout_ratio: z.number().gt(0).lt(1).default(0.3),
+    pass_k: z.number().int().min(1).default(3),
+    judge_min_tpr: z.number().min(0).max(1).default(0.8),
+    judge_min_tnr: z.number().min(0).max(1).default(0.8),
+    sweep_cap_cents: z.number().int().positive().default(DEFAULT_BUDGET_PER_RUN_CAP),
+    frozen_paths: z.array(z.string().min(1)).default([]),
+  }).default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   // [A2.1] workspace context

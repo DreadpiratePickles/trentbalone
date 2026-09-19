@@ -17,8 +17,13 @@
  *   - rubric failures are tagged per fixture so the frontier has a real profile;
  *   - a promotion must survive a second draw on the fixtures it flipped (`gate-redraw.ts`);
  *   - a candidate whose fixture run loops on one tool cannot be promoted (`repetitive_loop`);
- *   - a candidate that regresses a private fixture the reflection never saw cannot be promoted
- *     (`private_regression`, `suite-split.ts`).
+ *   - a candidate that regresses a held-out fixture the reflection never saw cannot be promoted
+ *     (`holdout_regression`, `suite-split.ts`).
+ *
+ * Plus the [D0] gates: every fixture is run `passK` times and passes only if it passed them all
+ * (`pass-k.ts`); promotion is decided on the HOLDOUT side of the partition, never on the side
+ * reflection optimises; and a judge below its calibration floor is advisory, so it cannot be the
+ * reason anything passes.
  *
  * Model access is injected (`ActualsRunner`, `JudgeFn`), so the whole gate is testable offline.
  * `createGatewayActuals` binds it to the real model gateway; `judge.ts` binds the judge. Every
@@ -27,10 +32,11 @@
 
 import type { GatewayMessage, ModelGateway } from "../model-gateway/types.js";
 import { redrawFlipped } from "./gate-redraw.js";
-import { scoreUnder } from "./gate-score.js";
+import { JUDGE_ADVISORY_TAG } from "./gate-score.js";
 import type { ActualsRunner, ExecuteGateInput, GateCandidate, GateVerdict, MeasuredBaseline } from "./gate-types.js";
+import { scoreUnderPassK } from "./pass-k.js";
 import { isRepetitiveLoopTag } from "./repetitive-loop.js";
-import { privateRegressions } from "./suite-split.js";
+import { partitionMetrics } from "./suite-split.js";
 
 export type * from "./gate-types.js";
 
@@ -41,19 +47,37 @@ export function composeSystemPrompt(seatPrompt: string, candidate: GateCandidate
   return `${seatPrompt}\n\n## Company skill (candidate)\n${candidate.content}`;
 }
 
+/**
+ * [D0] gate 6: `judge_advisory` is excluded. It says the judge is below its calibration floor,
+ * which is true of every candidate measured while that holds, so counting it as a new failure
+ * cluster would hide the real reason (`unverified`) behind a symptom.
+ */
 export function hasNewFailureCluster(current: Record<string, number>, baseline: Record<string, number>): boolean {
-  return Object.keys(current).some((tag) => !(tag in baseline));
+  return Object.keys(current).some((tag) => tag !== JUDGE_ADVISORY_TAG && !(tag in baseline));
 }
 
 /** Run the frozen suite WITH the candidate and decide. Never throws on a grader outcome. */
 export async function executeGate(input: ExecuteGateInput): Promise<GateVerdict> {
   const systemPrompt = composeSystemPrompt(input.seatPrompt, input.candidate);
-  const verdict = await scoreUnder(input.suite, systemPrompt, input.actuals, input.judge, input.cache, input.candidate.id, input.baseline.score);
-  if (verdict.stage === "deterministic") return verdict;
+  const scored = await scoreUnderPassK({
+    suite: input.suite,
+    systemPrompt,
+    actuals: input.actuals,
+    judge: input.judge,
+    cache: input.cache,
+    candidateId: input.candidate.id,
+    previousScore: input.baseline.score,
+    ...(input.passK === undefined ? {} : { passK: input.passK }),
+    ...(input.judgeAdvisory === undefined ? {} : { judgeAdvisory: input.judgeAdvisory }),
+  });
+  if (scored.stage === "deterministic") return scored;
+  const partitions = partitionMetrics(input.suite, input.baseline, scored, input.holdoutRatio);
+  const verdict: GateVerdict = { ...scored, optimise: partitions.optimise, holdout: partitions.holdout };
   // The two most specific reasons first, so a human reads the failure mode, not its symptom.
   if (verdict.fixtures.some((f) => f.failureTags.some(isRepetitiveLoopTag))) return { ...verdict, blockedBy: "repetitive_loop" };
-  const regressed = privateRegressions(input.suite, input.baseline, verdict);
-  if (regressed.length > 0) return { ...verdict, blockedBy: "private_regression", privateRegressions: regressed };
+  // [D0] gate 2: promotion is decided on the holdout. A candidate may lift everything the
+  // reflection could see and still be refused here, which is the whole point of holding it back.
+  if (partitions.holdout.regressions.length > 0 || partitions.holdout.delta < 0) return { ...verdict, blockedBy: "holdout_regression" };
   if (verdict.delta < 0) return { ...verdict, blockedBy: "regression" };
   if (hasNewFailureCluster(verdict.failureClusters, input.baseline.failureClusters)) return { ...verdict, blockedBy: "new_failure_cluster" };
   // A rubric nobody judged scored 0.75 on both sides; that is not a measurement, so it cannot promote.
@@ -75,11 +99,21 @@ export async function executeGate(input: ExecuteGateInput): Promise<GateVerdict>
 
 /** Measure the CURRENT artifact the same way, so the baseline is executed, not assumed. */
 export async function measureBaseline(input: Omit<ExecuteGateInput, "candidate" | "baseline">): Promise<MeasuredBaseline> {
-  const verdict = await scoreUnder(input.suite, input.seatPrompt, input.actuals, input.judge, input.cache, "baseline", undefined);
+  const verdict = await scoreUnderPassK({
+    suite: input.suite,
+    systemPrompt: input.seatPrompt,
+    actuals: input.actuals,
+    judge: input.judge,
+    cache: input.cache,
+    candidateId: "baseline",
+    previousScore: undefined,
+    ...(input.passK === undefined ? {} : { passK: input.passK }),
+    ...(input.judgeAdvisory === undefined ? {} : { judgeAdvisory: input.judgeAdvisory }),
+  });
   return {
     score: verdict.score,
     failureClusters: verdict.failureClusters,
-    fixtures: verdict.fixtures.map((f) => ({ id: f.id, passed: f.passed })),
+    fixtures: verdict.fixtures.map((f) => ({ id: f.id, passed: f.passed, score: f.score })),
     costCents: verdict.costCents,
     actualsCalls: verdict.actualsCalls,
     judgeCalls: verdict.judgeCalls,
