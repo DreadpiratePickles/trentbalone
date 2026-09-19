@@ -58,3 +58,6 @@ bdaab39). Bobby-only. Re-run after billing: `gh run rerun <id>` or any push.
 - Repo made public on Bobby's instruction after a full-history secret scan (all hits were test
   fixtures, scanner patterns or vendored doc placeholders; gem.env never committed). CI re-run
   35422933787 triggered.
+- CI green after the repo went public: run 35423798575 on 8dc9cd9 (all jobs), and the re-run
+  35422933787 on 8630e98 (the workflow commit). The failure on 45b5b36 was the billing-blocked
+  run and is superseded. Every done-criterion of the goal now holds, including CI.
