@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { CATEGORY_COLORS, SLOT_ENVIRONMENTS } from "@/lib/agent-catalog";
+import { createDefaultAgents } from "@/lib/agents";
 import { ConfigManager } from "../config/ConfigManager.js";
 import { TrentError } from "../errors/index.js";
 import { AgentInstaller, CORE_ROLES } from "./AgentInstaller.js";
@@ -153,6 +155,39 @@ describe("AgentInstaller", () => {
   it("lets a core role's own policy override the config cap", () => {
     const escalation = installer.install("escalation");
     expect(escalation.budget_cap_per_run_cents).toBe(CORE_ROLES.escalation?.budgetCapCents);
+  });
+
+  // ------------------------------- the ninth seat (audit §1.1: sales in, browser out)
+
+  it("carries no seat the orchestrator cannot assign a step to", () => {
+    expect(Object.keys(CORE_ROLES)).not.toContain("browser");
+  });
+
+  it("reads the sales seat's definition from the wrapped app rather than restating it", () => {
+    const appSales = createDefaultAgents("co_roster_probe").find((agent) => agent.role === "sales");
+    const core = CORE_ROLES.sales;
+
+    expect(core).toBeDefined();
+    expect(core?.name).toBe(appSales?.name);
+    expect(core?.description).toBe(appSales?.description);
+    expect(core?.modelPolicy).toBe(appSales?.modelPolicy);
+    expect(core?.budgetCapCents).toBe(SLOT_ENVIRONMENTS.sales.budgetCentsPerRun);
+    expect(core?.color).toBe(CATEGORY_COLORS.sales);
+    expect([...(core?.skills ?? [])]).toEqual([...(SLOT_ENVIRONMENTS.sales.skills ?? [])]);
+  });
+
+  it("installs the sales seat with the app's per-run cap and its skill bodies on disk", () => {
+    const installed = installer.install("sales");
+
+    expect(installed.id).toBe("sales");
+    expect(installed.budget_cap_per_run_cents).toBe(SLOT_ENVIRONMENTS.sales.budgetCentsPerRun);
+    expect(installed.skills).toEqual([...(SLOT_ENVIRONMENTS.sales.skills ?? [])]);
+    expect(installed.installed_skills.length).toBeGreaterThan(0);
+
+    const skillsDir = configManager.getSkillsDir();
+    for (const slug of installed.installed_skills) {
+      expect(fs.existsSync(path.join(skillsDir, `${slug}.md`)), `missing skill file ${slug}`).toBe(true);
+    }
   });
 
   // ------------------------------------------------------------------ uninstall

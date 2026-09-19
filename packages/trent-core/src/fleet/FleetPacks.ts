@@ -97,7 +97,9 @@ export const FLEET_PACKS: Record<string, FleetPack> = {
   "core-roles": {
     id: "core-roles",
     name: "Core Roles",
-    description: "The nine built-in cofounder roles: CEO, engineer, growth, content, support, analyst, finance, browser, escalation.",
+    // Named from the roster itself, so a seat can never be advertised here and be missing
+    // from the install (it advertised `browser`, which stopped being a seat on 2026-09-18).
+    description: `The ${CORE_ROLE_IDS.length} built-in cofounder roles: ${CORE_ROLE_IDS.join(", ")}.`,
     agents: [...CORE_ROLE_IDS],
   },
   // The label used to promise 164 specialists and install nine core roles. It now installs the

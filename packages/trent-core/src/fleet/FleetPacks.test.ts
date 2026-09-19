@@ -43,6 +43,15 @@ describe("FLEET_PACKS", () => {
     expect(new Set(core?.agents)).toEqual(coreIds);
   });
 
+  it("describes the core-roles pack with the seats it actually installs", () => {
+    const core = FLEET_PACKS["core-roles"];
+    const described = core?.description.toLowerCase() ?? "";
+    for (const id of core?.agents ?? []) {
+      expect(described, `the description omits the ${id} seat`).toContain(id);
+    }
+    expect(described, "the description still names a seat that is not in the pack").not.toContain("browser");
+  });
+
   it("resolves pack aliases to a real pack", () => {
     expect(resolveFleetPack("engineering")?.id).toBe("engineering");
     expect(resolveFleetPack("ALL")?.id).toBe("all");

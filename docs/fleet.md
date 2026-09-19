@@ -34,31 +34,53 @@ the source, not written for this page.
 | `support` | Support & Ops Responder | support | Drafts replies, mines customer feedback, and handles operations |
 | `analyst` | Market & Data Analyst | product | Researches markets, competitors, and revenue metrics |
 | `finance` | Finance & Treasury Lead | finance | Tracks spend, margins, budget caps, and financial runways |
-| `browser` | Autonomous Web Navigator | specialized | Executes web research, scraping, and form automation |
 | `escalation` | Critic & Compliance Auditor | specialized | Critiques plans and audits risk before irreversible execution |
+| `sales` | Sales | sales | Researches prospects, qualifies pipeline, and drafts approved outbound/follow-up material |
 
 Install them together with `fleet install core-roles --pack`.
+
+The nine ids are exactly the nine roles a plan step can be assigned to (`AgentRole` in
+`apps/web/lib/types.ts`), and a test asserts that equality so the two rosters cannot drift.
+
+`sales` replaced `browser` on 2026-09-18. `browser` had been listed here as a seat —
+"Autonomous Web Navigator" — although no such execution role exists, so no plan step could ever
+run on it, while `sales`, which does exist, was missing. **Browsing is a toolset, not a seat**:
+any seat can use it once it is enabled, and every seat keeps its own prompt, skills and budget
+while doing so.
+
+```bash
+npm run cli -- tools --enable browser
+```
+
+See [browser.md](browser.md) for what that toolset contains and what it needs on the machine.
+
+The `sales` seat's name, description, model policy, per-run cap and skills are read from the
+wrapped application at load time (`apps/web/lib/agents.ts` and `SLOT_ENVIRONMENTS.sales` in
+`apps/web/lib/agent-catalog.ts`) rather than restated in the CLI, so the roster cannot describe
+the seat differently from the seat that runs. Its per-run cap is therefore the app's 225 cents.
 
 ## Divisions
 
 Counted from `fleet list --json` on this repository. The counts cover all 173 rows, so each core seat
-appears inside its division.
+appears inside its division — including `executive`, which is the ceo seat's own category and holds
+no catalog specialist, and which earlier revisions of this page left out of the table.
 
 | Division | Agents |
 |---|---:|
-| specialized | 43 |
+| specialized | 42 |
 | marketing | 31 |
 | engineering | 30 |
 | design | 9 |
-| sales | 8 |
+| sales | 9 |
 | testing | 8 |
 | support | 7 |
 | paid-media | 7 |
-| product | 6 |
 | finance | 6 |
+| product | 6 |
 | project-management | 6 |
 | spatial-computing | 6 |
 | academic | 5 |
+| executive | 1 |
 
 That totals 173. Subtract the nine core seats and the catalog is exactly 164, asserted by
 `packages/trent-core/src/agents/catalog.test.ts`, which also checks the ids are unique and the

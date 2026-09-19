@@ -1,10 +1,10 @@
 # Trent Fleet
 
 Trent is a multi-agent AI cofounder that runs from your terminal. Nine seats (CEO, engineer,
-growth, content, support, analyst, finance, browser, escalation) work a task through a real
+growth, sales, content, support, analyst, finance, escalation) work a task through a real
 orchestrator, share one company memory, run their tools inside a sandbox that never sees a real API
-key, and improve their own prompts and skills under a human-gated loop. A catalog of 164 further
-specialists can be installed on top.
+key, and improve their own prompts and skills under a human-gated loop. Browsing is a toolset any
+seat can use, not a seat of its own. A catalog of 164 further specialists can be installed on top.
 
 It wraps an existing Next.js application (`apps/web/`, read-only) rather than rewriting it: the
 CLI, REPL, TUI, desktop app and installer all sit on top of the application's own orchestrator,
@@ -75,8 +75,10 @@ it for its own runs; the doctor checks the raw environment. Details in
 
 ## What you get
 
-- **A 9-seat fleet with 164 optional specialists.** `trent fleet list --json` returns 173 agents
-  across 13 divisions. They are data in the wrapped application, not prompts invented at runtime.
+- **A 9-seat fleet with 164 optional specialists.** `trent fleet list --json` returns 173 agents:
+  ceo, engineer, growth, sales, content, support, analyst, finance and escalation, plus the catalog.
+  They are data in the wrapped application, not prompts invented at runtime, and the nine ids are
+  exactly the nine roles a plan step can be assigned to.
 - **Shared fleet memory and cross-agent recall.** One `MEMORY.md`/`USER.md` pair per profile,
   injected into every seat's prelude; completed step outputs from any agent are ranked against the
   current objective and recalled within a character budget; `fleet_search` searches every agent's

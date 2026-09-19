@@ -10,6 +10,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { EXIT } from "@trent/core/errors/index.js";
+import { CORE_ROLE_IDS } from "@trent/core/fleet/index.js";
 import { InMemoryImproveStore } from "@trent/core/improve/index.js";
 import { runCli } from "../index.js";
 import { setImproveStoreForTests } from "../improve.js";
@@ -45,6 +46,39 @@ async function versionsOf(agentId: string): Promise<VersionsData> {
   expect(result.exitCode).toBe(EXIT.OK);
   return JSON.parse(result.stdout) as VersionsData;
 }
+
+describe("trent fleet list", () => {
+  interface ListData {
+    count: number;
+    total: number;
+    agents: Array<{ id: string; name: string; category: string }>;
+  }
+
+  it("lists the nine seats the orchestrator can assign, sales among them and no browser seat", async () => {
+    const result = await runCli(["fleet", "list", "--json"]);
+    expect(result.exitCode).toBe(EXIT.OK);
+
+    const data = JSON.parse(result.stdout) as ListData;
+    const ids = data.agents.map((agent) => agent.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(data.total).toBe(data.agents.length);
+
+    const byId = new Map(data.agents.map((agent) => [agent.id, agent]));
+    expect(CORE_ROLE_IDS.length).toBe(9);
+    for (const seat of CORE_ROLE_IDS) expect(byId.has(seat), `seat ${seat} is missing`).toBe(true);
+    // The ninth seat is sales, filed under the catalog division of the same name.
+    expect(byId.get("sales")?.category).toBe("sales");
+    // `browser` is a toolset every seat may enable, never a seat of its own.
+    expect(byId.has("browser")).toBe(false);
+  });
+
+  it("renders the sales seat in the human listing", async () => {
+    const result = await runCli(["fleet", "list"]);
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(result.stdout).toContain("sales");
+    expect(result.stdout).not.toContain("browser");
+  });
+});
 
 describe("trent fleet versions / promote / rollback", () => {
   it("versions snapshots a candidate on demand, promote makes it live, a second promote archives the first, rollback restores it", async () => {

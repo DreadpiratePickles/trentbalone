@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { CATEGORY_COLORS, SLOT_ENVIRONMENTS } from "@/lib/agent-catalog";
+import { createDefaultAgents } from "@/lib/agents";
 import { ConfigManager } from "../config/ConfigManager.js";
 import { AGENT_CATALOG, type CatalogAgent } from "../agents/index.js";
 import { TrentError, EXIT } from "../errors/index.js";
@@ -39,7 +41,32 @@ export interface CoreRole {
   description: string;
   /** Role-level per-run cap in INTEGER CENTS. Overrides `budget.per_run_cap` when set. */
   budgetCapCents?: number;
+  /** Skill slugs the seat asks for. Absent means the shared base set only. */
+  skills?: readonly string[];
 }
+
+/**
+ * The nine seats exactly as the wrapped application defines them
+ * (`apps/web/lib/agents.ts`). The company id is never persisted: the call is the only
+ * public accessor for that table, and the roster reads the seat's own name, description
+ * and model policy from it rather than restating them here.
+ */
+const APP_SEATS = createDefaultAgents("co_fleet_roster");
+
+function appSeat(role: string) {
+  const seat = APP_SEATS.find((agent) => agent.role === role);
+  if (!seat) {
+    throw new TrentError({
+      code: EXIT.CONFIG,
+      operation: "fleet.roster",
+      message: `The application defines no "${role}" seat; the CLI roster cannot carry one.`,
+      target: role,
+    });
+  }
+  return seat;
+}
+
+const SALES_SEAT = appSeat("sales");
 
 /** Every core role runs with the same base toolset. */
 export const CORE_ROLE_TOOLS: readonly InstalledAgentTool[] = [
@@ -108,14 +135,6 @@ export const CORE_ROLES: Record<string, CoreRole> = {
     modelPolicy: "cost-aware",
     description: "Tracks spend, margins, budget caps, and financial runways.",
   },
-  browser: {
-    name: "Autonomous Web Navigator",
-    emoji: "🌐",
-    category: "specialized",
-    color: "#7DD3FC",
-    modelPolicy: "balanced",
-    description: "Executes web research, scraping, and form automation.",
-  },
   escalation: {
     name: "Critic & Compliance Auditor",
     emoji: "🛡️",
@@ -125,6 +144,23 @@ export const CORE_ROLES: Record<string, CoreRole> = {
     description: "Critiques plans and audits risk before irreversible execution.",
     // A critique pass is short by design; a runaway auditor is a pure cost with no output.
     budgetCapCents: 50,
+  },
+  // The ninth seat, 2026-09-18. It replaced `browser`, which was listed here as a seat —
+  // "Autonomous Web Navigator" — although no such role exists in the execution union
+  // (`AgentRole`, apps/web/lib/types.ts), so no plan step could ever be assigned to it.
+  // Browsing is a TOOLSET every seat may enable (`trent tools --enable browser`), not a seat.
+  // Every field below is read from the application at load time, so the roster cannot drift
+  // from the seat that actually runs. Its glyph is empty because the app defines none and the
+  // style contract forbids emoji in output.
+  sales: {
+    name: SALES_SEAT.name,
+    emoji: "",
+    category: "sales",
+    color: CATEGORY_COLORS.sales,
+    modelPolicy: SALES_SEAT.modelPolicy,
+    description: SALES_SEAT.description,
+    budgetCapCents: SLOT_ENVIRONMENTS.sales.budgetCentsPerRun,
+    skills: SLOT_ENVIRONMENTS.sales.skills ?? [],
   },
 };
 
@@ -217,7 +253,7 @@ export class AgentInstaller {
       installed_at: new Date().toISOString(),
       active: true,
       tools: [...CORE_ROLE_TOOLS],
-      skills: [],
+      skills: [...(core.skills ?? [])],
       installed_skills: [],
       budget_cap_per_run_cents: cents,
       budget_cap_per_run: cents / 100,
