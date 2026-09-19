@@ -2,6 +2,8 @@ import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import type { TrentConfig } from "./schema.js";
 import { CONFIG_SCHEMA_VERSION } from "./schema.js";
 import { DEFAULT_MEMORY_BLOCKS } from "../tools/memory/blocks.js";
+// [A2.2] autonomy and hooks
+import { DEFAULT_AUTONOMY } from "../governance/autonomy.js";
 
 /** Money fields are INTEGER CENTS. daily_cap 1000 = USD 10.00 per day. */
 export const DEFAULT_CONFIG: TrentConfig = {
@@ -64,6 +66,14 @@ export const DEFAULT_CONFIG: TrentConfig = {
   model_overrides: {},
   privacy: { redact_prompts: false, patterns: [] },
   policy: { rules: [] },
+  // [A2.2] autonomy and hooks
+  // `ask_dangerous` is what Trent already did before the level existed: ask exactly where the
+  // approval floors ask (file_ops writes, dangerous terminal findings, plugins and mcp without
+  // auto_approve, ask_human) and nowhere else. Changing this default changes behaviour silently,
+  // so `governance/autonomy.test.ts` asserts it.
+  autonomy: DEFAULT_AUTONOMY,
+  approvals: { deny: [] },
+  hooks: { pre_tool_call: [], post_tool_call: [], session_start: [], session_stop: [] },
   personality: "default",
   // [A2.1] workspace context
   // Per-file and whole-set caps on the workspace's instruction files. Mirrors the schema's

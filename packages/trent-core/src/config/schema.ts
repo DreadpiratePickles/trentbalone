@@ -4,6 +4,9 @@ import { TelemetryConfigSchema } from "./telemetry-schema.js";
 import { PolicyRuleSchema } from "../governance/policy-rules.js";
 import { DEFAULT_MEMORY_BLOCKS, MEMORY_BLOCK_LABEL_PATTERN } from "../tools/memory/blocks.js";
 import { McpScanFindingSchema } from "../tools/mcp/scan.js";
+// [A2.2] autonomy and hooks
+import { ApprovalsConfigSchema, AutonomyLevelSchema, DEFAULT_AUTONOMY } from "../governance/autonomy.js";
+import { HooksConfigSchema } from "../hooks/types.js";
 
 /**
  * The five provider identities `apps/web` routes natively, then the four OpenAI-compatible
@@ -249,6 +252,22 @@ export const TrentConfigSchema = z.object({
   privacy: z.object({ redact_prompts: z.boolean().default(false), patterns: z.array(z.string()).default([]) }).default({}),
   /** Trace-level rules over tool classes; appended to the shipped defaults, same id overrides. */
   policy: z.object({ rules: z.array(PolicyRuleSchema).default([]) }).default({}),
+  // [A2.2] autonomy and hooks
+  /**
+   * How often a human is asked. `ask_dangerous` is today's behaviour and the default: ask exactly
+   * where the approval floors already ask. `ask_always` asks for every call that is not a pure
+   * read; `never` auto-approves what the floors would have asked about. No level lifts the
+   * hardline blocklist (`governance/hardline.ts`), an `approvals.deny` glob, or anything
+   * `tools/approval-floors.ts` marks never-auto-approvable. See docs/security.md.
+   */
+  autonomy: AutonomyLevelSchema.default(DEFAULT_AUTONOMY),
+  /** `deny`: globs over the command string and over file paths; a match is refused at every level. */
+  approvals: ApprovalsConfigSchema.default({}),
+  /**
+   * User hooks around tool calls and sessions. Each is an executable and an argument array, never
+   * a shell string, and runs only after `trent hooks consent` records a hash of its exact spec.
+   */
+  hooks: HooksConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   // [A2.1] workspace context

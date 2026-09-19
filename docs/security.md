@@ -232,6 +232,166 @@ Hermes `tools/approval_detection.py`) against each variant, so `r\m -rf /`, `rm$
 is checked inside `execute`, not only at `requiresApproval`, so it is never bypassed by an earlier
 approval. Tested in `approval-floors.test.ts`.
 
+## Autonomy levels
+
+`autonomy` in `config.yaml` decides how often a human is asked. It never decides whether the floor
+below it applies.
+
+| Level | Asks for |
+|---|---|
+| `ask_always` | every tool call that is not a pure read |
+| `ask_dangerous` | exactly where the adapters' own floors already ask (**default**) |
+| `never` | nothing the floors would have asked about |
+
+`ask_dangerous` is the default because it is what Trent did before the key existed: `file_ops` asks
+on a write, `terminal` and `code_execution` ask on a dangerous finding, `plugins` and `mcp` ask
+unless `auto_approve` names the tool, `ask_human` asks unless the call is delegated, and `memory`,
+`web`, `delegate`, `vision` and `browser` never ask. Setting the key to `ask_dangerous` changes
+nothing; that is the point of naming it.
+
+"Pure read" is decided by the same classifier the policy rules use
+(`governance/policy-rules.ts` `classifyCall`): a call is a pure read when `read_only` survives
+classification, which it does not once the call also writes, executes, sends, fetches or destroys.
+So `read_file` is a pure read, `web_search` is a network call, and a call nothing can classify is
+not a pure read — the safe direction for `ask_always`.
+
+Three things are refused at **every** level, behind any `--yolo`-style flag, and after any "always
+approve" answer, because an approval is granted loop-wide once a human says yes
+(`seat-agent-loop.ts:209`):
+
+1. the hardline blocklist below,
+2. an `approvals.deny` glob,
+3. anything `tools/approval-floors.ts` `floorBlock` marks never-auto-approvable.
+
+The order is fixed, so the most specific reason is the one reported. All of it is applied in
+`governance/autonomy-dispatch.ts`, wrapped around every adapter in `tools/index.ts`
+`buildTrentTools` — outside the policy and idempotency wrappers, so a refusal never enters the
+policy history ring and never reaches the idempotency store. It runs inside `execute`, not only at
+`requiresApproval`, so a second call in an already-approved step still hits it. Tested in
+`governance/autonomy.test.ts`, `autonomy-dispatch.test.ts` and `tools/autonomy-wiring.test.ts`.
+
+## The hardline blocklist
+
+`packages/trent-core/src/governance/hardline.ts`. One list, shipped in code, not configurable —
+a blocklist a tool call could edit is not a blocklist. Each rule is evaluated on the terminal or
+process command string AND on the file paths a tool would touch, and each has a positive and a
+negative case in `hardline.test.ts`.
+
+| Rule id | Refuses |
+|---|---|
+| `recursive-delete-of-root-home-or-profile` | `rm -rf` of `/`, `~`, `$HOME`, `~/.trent` or this profile directory |
+| `download-piped-into-a-shell` | `curl`/`wget` piped into a shell, `sh <(curl ...)`, `sh -c "$(curl ...)"`, `eval $(curl ...)` |
+| `chmod-or-chown-on-root` | a permission or ownership change applied to `/` |
+| `write-to-a-raw-disk-device` | `dd of=/dev/sdX`, a redirect to a raw device, `mkfs` |
+| `fork-bomb` | a function whose body pipes itself into itself in the background |
+| `write-to-trent-secrets` | a write to `~/.trent/.env`, the egress `ca.key`/`ca.crt`/`tokens.json`, or `workspace-trust.json` |
+| `read-trent-env-or-ssh-keys` | a read of `~/.trent/.env` or of anything under `~/.ssh` |
+| `force-push-to-a-protected-branch` | `git push --force` (or `-f`, or a `+refspec`) naming `main`, `master`, `trunk`, `develop`, `release`, `production` or `prod` |
+
+Commands are matched over the deobfuscated variants the approval floor already generates
+(`detectionVariants`: NFKC, ANSI and escape strip, `$IFS`, env unwrap, basename projection, `sh -c`
+payloads), so `r\m -rf /` and `rm${IFS}-rf${IFS}~` reach the same rule as the plain spelling. Rules
+that could otherwise fire on prose are matched over quote-masked variants, so
+`git commit -m 'never rm -rf /'` is a commit, not a refusal. Paths have `~` and `$HOME` expanded and
+`..` collapsed before they are compared.
+
+**This is a guardrail, not a sandbox.** It raises the cost of an accident and of an obvious injected
+instruction. It does not contain an attacker who already runs code as the user: a command can always
+be spelled another way, and a list that matched every spelling would refuse ordinary work. The
+containment boundary is the sandbox (`tools/sandbox.ts`) and the egress proxy. Read this list as
+"not even once, not even approved", never as "cannot happen".
+
+Two gaps are deliberate and named rather than hidden: reading the egress `ca.key` is not on the
+list (only writing it is), and `~/.ssh` writes are left to the `DANGEROUS_PATTERNS` approval tier
+rather than being refused outright.
+
+## Deny globs
+
+`approvals.deny` in `config.yaml` is a list of globs matched against the same subjects the hardline
+list sees: the command string and the file paths. A match is refused at every autonomy level, with
+the glob named in the refusal so the user can find and edit the rule that fired.
+
+```yaml
+approvals:
+  deny:
+    - "*terraform destroy*"
+    - "~/Documents/**"
+    - "*/prod-secrets/*"
+```
+
+One glob dialect, deliberately: `*` and `**` both match any run of characters **including** `/`,
+`?` matches exactly one character, everything else is literal, matching ignores case, and a leading
+`~` expands against the home directory. Path globbing usually stops `*` at a separator, but these
+globs are matched against command strings as often as against paths, and `*rm -rf /tmp*` failing
+because the command contains a slash is a footgun that costs more than the precision buys. The
+first configured glob that matches is the one reported, so the message is stable across runs.
+Tested in `governance/deny-globs.test.ts`.
+
+## User hooks
+
+`hooks` in `config.yaml` runs a command of the user's around every tool call and around a session.
+Four kinds: `pre_tool_call`, `post_tool_call`, `session_start`, `session_stop`.
+
+```yaml
+hooks:
+  pre_tool_call:
+    - command: ["/usr/local/bin/trent-gate", "--strict"]
+      timeout_ms: 3000
+      match: { tool: terminal }
+  post_tool_call:
+    - command: ["/usr/local/bin/trent-audit"]
+```
+
+**`command` is an argv array, never a shell string.** The executable is first, its arguments
+follow, and the process is spawned with `shell: false`. Nothing from a tool argument, a tool result
+or a model turn is ever interpolated into something a shell parses — that is the whole reason the
+key is an array.
+
+A hook receives one JSON document on stdin and answers with its exit code:
+
+- **`pre_tool_call` non-zero blocks the call.** The tail of its stderr (2000 characters, redacted)
+  becomes the reason the seat and the user see. A hook past its `timeout_ms` (default 5000ms) is
+  killed and counted as a failure, so a hung hook blocks rather than hanging the run.
+- **`post_tool_call` never blocks.** Its exit code is recorded. The call has already run, and a
+  transcript that claimed otherwise would be a lie.
+- **Session hooks are advisory** in the same way, and neither can stop a session opening or closing.
+
+The document is `{ hook, version, adapter, tool, arguments, run_id, step_id, seat }`, plus
+`result: { status, summary }` for a post hook and `session_id` for a session hook. **Every string in
+it, keys included, goes through the repository's one redactor** (`telemetry/redact.ts`, the same
+definition the OTel exporter and the session export use), so a `terminal` command carrying an
+`Authorization` header reaches the hook with the credential replaced. Redaction walks the structure
+rather than the serialised text, so a placeholder can never break the JSON a hook is about to parse.
+`match.tool` limits a hook to one tool name; omitted, it sees every call.
+
+### Hook consent
+
+A hook is arbitrary code a config file asks Trent to run, and a config file arrives by many routes.
+So a hook runs only after `trent hooks consent`, which records a SHA-256 hash of the exact spec —
+argv, timeout and match filter, scoped by hook kind — in `<profileDir>/hooks-consent.json`, mode
+0600. The file holds hashes only, never the commands.
+
+- An unconsented hook **never runs**, and the run reports it once (`TrentToolBuild.hookNotices`),
+  not once per tool call.
+- **Editing a hook loses its consent.** Change the argv, the timeout or the match filter and it
+  goes silent until the user grants it again. A hooks feature where an edited command keeps running
+  is a feature that lets anything able to write `config.yaml` run anything at all.
+- `trent hooks consent` **replaces** the record rather than adding to it, so removing a hook from
+  the config and re-running it revokes the old consent.
+- `trent hooks list` shows every configured hook, its argv, its filters and its consent state.
+- Consent is checked per hook per call, not once at start-up, so a spec edited mid-run goes quiet
+  immediately.
+
+Nothing in the `hooks` command group executes a hook. Granting consent is a decision about future
+runs; a command that ran the hook to "check it" would be the one command in the group that needed
+consent itself.
+
+Pre and post tool hooks are wired at the dispatch seam in `tools/index.ts` `buildTrentTools`.
+Session hooks are `runSessionHooks(kind, context)` from `@trent/core/hooks`; the owner of
+`apps/cli/src/runtime/headless.ts` calls it once the session id exists and once in the shutdown
+path. Tested in `hooks/consent.test.ts`, `hooks/runner.test.ts` and
+`apps/cli/src/commands/__tests__/hooks.test.ts`.
+
 ## Policy rules
 
 A single tool call is rarely the problem; the sequence is. Read a secret, then send a message.

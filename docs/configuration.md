@@ -53,6 +53,15 @@ toolsets:                     # file_ops terminal web browser code vision memory
   - human                     # ask_human: the seat asks you and waits (REPL prompt, or a chat reply via the gateway)
 disabled_toolsets: []
 
+autonomy: ask_dangerous       # ask_always | ask_dangerous | never  (see "Autonomy and hooks")
+approvals:
+  deny: []                    # globs refused at every autonomy level
+hooks:                        # argv arrays, never shell strings; consented with `trent hooks consent`
+  pre_tool_call: []
+  post_tool_call: []
+  session_start: []
+  session_stop: []
+
 budget:
   daily_cap: 1000             # INTEGER CENTS. 1000 = USD 10.00
   per_run_cap: 100            # INTEGER CENTS. 100 = USD 1.00
@@ -231,6 +240,64 @@ policy:
       when: deploy
       reason: deploys are run by hand
 ```
+
+### Autonomy and hooks
+
+`autonomy` sets how often a human is asked, and nothing else:
+
+| Value | Asks for |
+|---|---|
+| `ask_always` | every tool call that is not a pure read |
+| `ask_dangerous` | exactly where the adapters' own floors already ask (**default**) |
+| `never` | nothing the floors would have asked about |
+
+The default is `ask_dangerous` because it is the behaviour Trent already had before the key
+existed, so setting it explicitly changes nothing. No value lifts the shipped hardline blocklist,
+an `approvals.deny` glob, or anything `tools/approval-floors.ts` marks never-auto-approvable — see
+docs/security.md, "Autonomy levels" and "The hardline blocklist", which also states plainly that
+the blocklist is a guardrail and not a sandbox.
+
+`approvals.deny` is a list of globs matched against the command string a tool would run and the
+file paths it would touch. A match is refused at every level, naming the glob. `*` and `**` both
+match any run of characters including `/`, `?` matches one character, matching ignores case, and a
+leading `~` expands against the home directory.
+
+`hooks` runs a command of yours around tool calls and sessions. Each entry is
+`{ command: [...], timeout_ms?, match?: { tool } }` where `command` is an **argv array** — the
+executable first, then its arguments — spawned with no shell, so nothing from a tool argument is
+ever parsed as shell syntax. `timeout_ms` defaults to 5000. A `pre_tool_call` hook that exits
+non-zero blocks the call and its stderr tail becomes the reason; `post_tool_call`, `session_start`
+and `session_stop` exit codes are recorded and never block.
+
+```yaml
+autonomy: ask_dangerous
+
+approvals:
+  deny:
+    - "*terraform destroy*"
+    - "~/Documents/**"
+
+hooks:
+  pre_tool_call:
+    - command: ["/usr/local/bin/trent-gate", "--strict"]
+      timeout_ms: 3000
+      match: { tool: terminal }
+  post_tool_call:
+    - command: ["/usr/local/bin/trent-audit"]
+```
+
+A hook runs only after you have consented to that exact spec:
+
+```
+trent hooks list          # every configured hook, its argv, and whether it is consented
+trent hooks consent       # record a hash of each hook currently in config.yaml
+```
+
+The record is `<profileDir>/hooks-consent.json`, mode 0600, hashes only. Editing a hook's argv,
+timeout or match filter loses its consent, and `trent hooks consent` replaces the record rather
+than adding to it, so a hook you delete from the config is revoked. An unconsented hook never runs
+and the run reports it once. The full contract, including what the hook reads on stdin and how it
+is redacted, is in docs/security.md, "User hooks".
 
 ### Workspace context files
 

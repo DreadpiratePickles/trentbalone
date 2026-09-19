@@ -38,6 +38,7 @@ import { cronSpec } from "./groups/cron.js";
 import { heartbeatSpec } from "./groups/heartbeat.js";
 import { auditSpec } from "./groups/audit.js";
 import { jobsSpec } from "./groups/jobs.js";
+import { hooksSpec } from "./groups/hooks.js";
 import { workspaceSpec } from "./groups/workspace.js";
 
 export { CLI_VERSION } from "./registry.js";
@@ -62,6 +63,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   heartbeatSpec,
   auditSpec,
   jobsSpec,
+  hooksSpec,
   a2aSpec,
   acpSpec,
   gatewaySpec,

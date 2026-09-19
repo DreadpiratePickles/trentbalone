@@ -32,7 +32,8 @@
     "./errors": "./src/errors/index.ts",
     "./runtime": "./src/runtime/index.ts",
     "./telemetry": "./src/telemetry/index.ts",
-    "./store": "./src/store/index.ts"
+    "./store": "./src/store/index.ts",
+    "./hooks": "./src/hooks/index.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",

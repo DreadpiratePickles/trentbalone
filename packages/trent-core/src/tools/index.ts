@@ -5,11 +5,16 @@
  * the router advertises the top three catalog entries per step, so a family must be one entry.
  */
 import fs from "node:fs";
+import os from "node:os";
 import process from "node:process";
 import type { Toolset, TrentConfig } from "../config/schema.js";
 import { IdempotencyManager } from "../governance/IdempotencyManager.js";
 import { idempotentAdapters } from "../governance/idempotent-dispatch.js";
 import { PolicyDispatcher } from "../governance/policy-dispatch.js";
+import { autonomyAdapters } from "../governance/autonomy-dispatch.js";
+import { DEFAULT_AUTONOMY } from "../governance/autonomy.js";
+import { createToolHookRunner } from "../hooks/runner.js";
+import type { ToolHookPort } from "../hooks/types.js";
 import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import { createCodeExecutionAdapter } from "./code_execution/index.js";
 import { createCronAdapter } from "./cron/index.js";
@@ -27,7 +32,7 @@ import { askVision, createVisionAdapter, type VisionGateway } from "./vision/ind
 import type { ToolContext, TrentToolAdapter } from "./types.js";
 
 export type { ToolAdapter, ToolCallRecord, ToolContext, TrentToolAdapter } from "./types.js";
-export { floorBlock, dangerous, normaliseForDetection } from "./approval-floors.js";
+export { floorBlock, dangerous, normaliseForDetection, maskQuoted, detectionVariants } from "./approval-floors.js";
 export { createFileOpsAdapter, FILE_OPS_NAME, FILE_OPS_SCOPES } from "./file_ops/index.js";
 export { createTerminalAdapter, TERMINAL_NAME, TERMINAL_SCOPES } from "./terminal/index.js";
 export { fitSummary, headTail, spill, spilloverDir, SUMMARY_LIMIT } from "./spillover.js";
@@ -50,6 +55,10 @@ export type ToolBuildConfig = Pick<TrentConfig, "toolsets" | "disabled_toolsets"
   readonly mcp_servers?: TrentConfig["mcp_servers"];
   readonly policy?: TrentConfig["policy"];
   readonly terminal?: { readonly backend?: TrentConfig["terminal"]["backend"]; readonly docker?: { readonly image?: string } };
+  /** A2.2: the autonomy level, the user deny globs and the user hooks. Absent means the defaults. */
+  readonly autonomy?: TrentConfig["autonomy"];
+  readonly approvals?: TrentConfig["approvals"];
+  readonly hooks?: TrentConfig["hooks"];
 };
 
 export interface ToolBuildDeps {
@@ -92,6 +101,16 @@ export interface ToolBuildDeps {
    * process-wide `sharedHumanAnswers` the orchestrator's `answer()` writes to; tests pass their own.
    */
   readonly humanAnswers?: HumanAnswers;
+  /**
+   * A2.2: the home directory the hardline rules resolve `~` and `$HOME` against. Defaults to
+   * `os.homedir()`; tests pass a temporary one so a rule about `~/.ssh` can be proved without a
+   * real one existing.
+   */
+  readonly home?: string;
+  /** Named on every hook payload, so a hook can tell which seat asked. */
+  readonly seat?: string;
+  /** Overrides the hook runner built from `config.hooks`; tests pass their own. */
+  readonly hookRunner?: ToolHookPort;
 }
 
 /** One toolset that was enabled in config but could not be built here, and why the seat cannot use it. */
@@ -103,6 +122,12 @@ export interface SkippedToolset {
 export interface TrentToolBuild {
   readonly adapters: TrentToolAdapter[];
   readonly skipped: SkippedToolset[];
+  /**
+   * A2.2: one line per hook that was configured but did not run (unconsented, or its spec
+   * changed since consent). Read once by the surface that built the tools, so a silent hook is
+   * visible without a line per tool call. Empty when every configured hook is consented.
+   */
+  readonly hookNotices: readonly string[];
 }
 
 /**
@@ -191,7 +216,31 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
   }
   const idempotency = deps.idempotency ?? new IdempotencyManager({ dir: deps.profileDir });
   const policy = deps.policy ?? new PolicyDispatcher(undefined, config.policy?.rules ?? []);
-  return { adapters: policy.wrap(idempotentAdapters(adapters, idempotency)), skipped };
+  // A2.2. The autonomy wrapper goes OUTSIDE the policy and idempotency wrappers, so a hardline
+  // refusal, a deny-glob refusal or a blocking pre-tool hook never enters the policy history ring
+  // and never reaches the idempotency store. Anything it lets through is then classified by the
+  // policy rules and keyed by idempotency exactly as before.
+  const hooks =
+    deps.hookRunner ??
+    (config.hooks === undefined
+      ? undefined
+      : createToolHookRunner({ profileDir: deps.profileDir, hooks: config.hooks, ...(deps.seat === undefined ? {} : { seat: deps.seat }) }));
+  const guarded = autonomyAdapters(policy.wrap(idempotentAdapters(adapters, idempotency)), {
+    level: config.autonomy ?? DEFAULT_AUTONOMY,
+    deny: config.approvals?.deny ?? [],
+    hardline: { home: deps.home ?? os.homedir(), profileDir: deps.profileDir },
+    ...(hooks === undefined ? {} : { hooks }),
+    ...(deps.seat === undefined ? {} : { seat: deps.seat }),
+  });
+  return {
+    adapters: guarded,
+    skipped,
+    // A getter, not a snapshot: a hook is skipped when a CALL is made, which is always after the
+    // build returned. Reading this field at the end of a run is what makes the notice reachable.
+    get hookNotices(): readonly string[] {
+      return hooks?.notices() ?? [];
+    },
+  };
 }
 
 /** `buildTrentTools(...).adapters`: the shape the orchestrator and the older callers take. */
