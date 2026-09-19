@@ -82,6 +82,36 @@ describe("delegate_task", () => {
     expect(port.calls).toEqual([]);
   });
 
+  // [C5] Trust escalation is the named failure mode: a child's answer must not arrive at the
+  // parent cleaner than the page it was read off.
+  it("marks its record untrusted when any child tool call was untrusted, and says so in the body", async () => {
+    const port = fakePort({
+      status: "completed",
+      output: "the vendor page lists net-30 terms",
+      toolCalls: [
+        { adapter: "file_ops", action: "read_file", status: "completed", summary: "read notes.md", provenance: "trusted" },
+        { adapter: "web", action: "web_extract", status: "completed", summary: "fetched the vendor page", provenance: "untrusted" },
+      ],
+    });
+    const adapter = createDelegateAdapter({ profileDir, port });
+    const rec = await adapter.execute('delegate_task {"goal":"read the vendor page"}', {});
+    expect(rec.provenance).toBe("untrusted");
+    expect(rec.summary).toContain("untrusted");
+    expect(rec.summary).toContain("web_extract");
+  });
+
+  it("stays trusted when every child tool call was trusted", async () => {
+    const port = fakePort({
+      status: "completed",
+      output: "the repository has 41 packages",
+      toolCalls: [{ adapter: "file_ops", action: "read_file", status: "completed", summary: "read package.json", provenance: "trusted" }],
+    });
+    const adapter = createDelegateAdapter({ profileDir, port });
+    const rec = await adapter.execute('delegate_task {"goal":"count the packages"}', {});
+    expect(rec.provenance).toBe("trusted");
+    expect(rec.summary).not.toContain("untrusted");
+  });
+
   it("a port failure becomes a failed record, not a throw", async () => {
     const port: DelegatePort = { delegate: async () => { throw new Error("orchestrator offline"); } };
     const adapter = createDelegateAdapter({ profileDir, port });

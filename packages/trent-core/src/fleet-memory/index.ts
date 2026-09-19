@@ -29,12 +29,42 @@ export {
   freezeFleetSource,
   isDelegatedObjective,
   isDelegatedStep,
+  type FleetMemoryEntry,
   type FleetMemorySource,
   type FleetPlaybookEntry,
   type FleetRun,
   type FleetStep,
 } from "./source.js";
-export { createAppFleetSource } from "./app-source.js";
+export { createAppFleetSource, type AppFleetSourceOptions } from "./app-source.js";
+// [C1] app memory: the web app's own tiered company memory, read as recall candidates and
+// written back through the app's own writers. See README.md, "Company memory in the app".
+export {
+  APP_MEMORY_SOURCES,
+  DEFAULT_APP_MEMORY_BUDGETS,
+  activeAppDocuments,
+  buildAppMemoryEntries,
+  classifyAppDocument,
+  createAppMemoryReader,
+  loadAppMemoryModules,
+  type AppDocument,
+  type AppMemoryBudgets,
+  type AppMemoryModules,
+  type AppMemoryReader,
+  type AppMemorySourceName,
+} from "./app-tiers.js";
+export {
+  loadAppWriteModules,
+  seatEpisodeCycleId,
+  semanticFactSource,
+  withAppEpisodicMirror,
+  writeConsolidatedFacts,
+  writeSeatEpisode,
+  type AppEpisodicMirrorOptions,
+  type AppMemoryWriteModules,
+  type AppMirrorCaller,
+  type AppWriteOutcome,
+} from "./app-writes.js";
+// [/C1]
 // [C2] the brain repository: the truth for identity, standing decisions and episodic notes.
 export {
   BRAIN_DECISIONS_DIR,

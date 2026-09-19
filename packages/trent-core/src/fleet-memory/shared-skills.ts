@@ -40,6 +40,19 @@ export async function listSharedSkills(store: ImproveStorePort, companyId: strin
 export const SHARED_SKILLS_HEADING = '## Shared skills (fleet_skill_view {"skill": "<task type>"} for the body)';
 
 /**
+ * [C5] ONE line for one skill: the task type, the tier and the skill's own first heading. This is
+ * the whole of what a promoted skill costs another seat's prompt, and it is the only rendering of
+ * a skill anything in this module produces — recall included, which ranks against the body and
+ * still renders this. The body is reached with `fleet_skill_view` and nothing else, because a
+ * skill that is inlined everywhere is paid for on every turn by every seat whether it is used or
+ * not, and because a skill is executable content that should be read deliberately.
+ */
+export function sharedSkillIndexLine(skill: SharedSkill): string {
+  const title = firstHeading(skill.content);
+  return `${skill.taskType} [${skill.tier}]${title ? `: ${title}` : ""}`;
+}
+
+/**
  * One line per skill; the body is fetched on demand with `fleet_skill_view`.
  *
  * `heading` exists because the index is rendered TWICE into one prompt: the org tier is the same
@@ -48,11 +61,7 @@ export const SHARED_SKILLS_HEADING = '## Shared skills (fleet_skill_view {"skill
  */
 export function renderSharedSkillsIndex(skills: readonly SharedSkill[], heading: string = SHARED_SKILLS_HEADING): string {
   if (skills.length === 0) return "";
-  const lines = skills.map((s) => {
-    const title = firstHeading(s.content);
-    return `- ${s.taskType} [${s.tier}]${title ? `: ${title}` : ""}`;
-  });
-  return `${heading}\n${lines.join("\n")}`;
+  return `${heading}\n${skills.map((s) => `- ${sharedSkillIndexLine(s)}`).join("\n")}`;
 }
 
 /** Resolve `skill` as a task type or an id among the skills this seat may see. */

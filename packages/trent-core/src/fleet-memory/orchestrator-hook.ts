@@ -39,7 +39,10 @@
 import { createMemoryAdapter, type MemoryAdapter, type MemoryBlock } from "../tools/memory/index.js";
 import { createBrainReadAdapter } from "../tools/memory/brain-read.js";
 import { ORG_TIER_AGENT } from "../improve/org-tier.js";
-import type { TrentToolAdapter } from "../tools/types.js";
+import { worstProvenance } from "../governance/provenance.js";
+import type { OrcEvent } from "../orchestrator/types.js";
+import type { Provenance, TrentToolAdapter } from "../tools/types.js";
+import { FAILURES_BLOCK, createStepObserver, recallFailures, writeFailure, type FailureRecord } from "./failures.js";
 import { createBrain, type Brain } from "./brain.js";
 import { brainSystemFileFor, migrateBlocksToBrain } from "./brain-migrate.js";
 import { recallFromBrain } from "./brain-index.js";
@@ -49,7 +52,7 @@ import type { EmbedFn } from "./lexical.js";
 import { recallForObjective } from "./recall.js";
 import { createFleetSearchAdapter } from "./search.js";
 import { listSharedSkills, renderSharedSkillsIndex } from "./shared-skills.js";
-import { freezeFleetSource, isDelegatedObjective, type FleetMemorySource } from "./source.js";
+import { freezeFleetSource, isDelegatedObjective, withStepProvenance, type FleetMemorySource } from "./source.js";
 import {
   CONTEXT_BLOCKS,
   DEFAULT_CONTEXT_CEILING_CHARS,
@@ -121,6 +124,17 @@ export interface FleetMemoryHook {
   contextFor(runId: string, seat: string): AssembledContext | undefined;
   /** Installs (or replaces) the sink that receives `context_pressure`; the orchestrator bridges it to the bus. */
   setNoticeSink(sink: (notice: ContextNotice) => void): void;
+  /**
+   * [C5] The run's event stream, for the two things a prelude cannot learn from the store: which
+   * steps failed (they become `[failure]` entries under the brain) and what each step's tool calls
+   * were derived from. A surface composes it into `createOrchestrator({ traceSink })`; it is
+   * synchronous, swallows its own errors and never fails a run.
+   */
+  traceSink(event: OrcEvent): void;
+  /** [C5] Records one failure directly, for a caller that is not on the event stream. */
+  stepFailed(record: FailureRecord): boolean;
+  /** [C5] What a step's tool calls were derived from, as this process watched them. */
+  stepProvenance(runId: string, stepId: string): Provenance;
 }
 
 export interface FleetMemoryHookOptions {
@@ -240,8 +254,23 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
     }
   }
 
+  /**
+   * [C5] What each step's tool calls were derived from, keyed `<runId> <stepId>`. The app's step
+   * rows have no provenance column and `apps/web` is read-only, so the tag lives here and is
+   * handed back to recall by `withStepProvenance`.
+   */
+  const stepTags = new Map<string, Provenance>();
+
   /** Runs in flight, by id; the wrapper drains one job at a time but keeps the map general. */
   const runs = new Map<string, ActiveRun>();
+  const observeStep = createStepObserver({
+    brain,
+    objectiveFor: (runId) => runs.get(runId)?.objective,
+    tagStep: (runId, stepId, provenance) => {
+      const key = `${runId} ${stepId}`;
+      stepTags.set(key, worstProvenance([stepTags.get(key) ?? "trusted", provenance]));
+    },
+  });
   const assembled = new Map<string, SeatContext>();
   const stableText = new Map<string, string>();
   const firstSeat = new Map<string, string>();
@@ -293,7 +322,7 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
         // Recall is an index, not a truth: an unreadable one costs relevance, never a run.
       }
     }
-    const recall = await recallForObjective(run.source, {
+    const recall = await recallForObjective(withStepProvenance(run.source, (runId, stepId) => stepTags.get(`${runId} ${stepId}`)), {
       companyId: run.companyId,
       seat,
       objective: run.objective,
@@ -302,6 +331,22 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
       ...(options.embed === undefined ? {} : { embed: options.embed }),
     });
     if (recall.block) blocks.push(block("context", CONTEXT_BLOCKS.recall, recall.block));
+    // [C5] Failures last in the CONTEXT tier, which is also last to be trimmed: the block is the
+    // smallest thing here and the only one that says what NOT to try again (audit 3.5).
+    if (brain !== undefined) {
+      try {
+        const failures = await recallFailures({
+          brain,
+          objective: run.objective,
+          excludeRunId: run.runId,
+          config,
+          ...(options.embed === undefined ? {} : { embed: options.embed }),
+        });
+        if (failures.block) blocks.push(block("context", FAILURES_BLOCK, failures.block));
+      } catch {
+        // Advisory, like every other brain read: an unreadable channel costs a warning, never a run.
+      }
+    }
     return blocks;
   }
 
@@ -397,5 +442,8 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
     setNoticeSink(sink) {
       notify = sink;
     },
+    stepFailed: (record) => writeFailure(brain, record),
+    stepProvenance: (runId, stepId) => stepTags.get(`${runId} ${stepId}`) ?? "trusted",
+    traceSink: observeStep,
   };
 }

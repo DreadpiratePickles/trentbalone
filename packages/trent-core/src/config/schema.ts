@@ -156,6 +156,34 @@ export const TrentConfigSchema = z.object({
     })
     .strict()
     .default({}),
+  // [C5] provenance
+  /**
+   * What output derived from untrusted context may do (docs/security.md, "Prompt injection";
+   * `governance/provenance.ts`). Untrusted means the web and browser toolsets, MCP servers,
+   * plugin tools, and a delegated child that used any of them.
+   *
+   * `untrusted_writes` governs a write into a layer every seat loads next run — the `memory` tool
+   * today, a brain write when one exists. `hold` is the shipped rule: the write becomes a pending
+   * approval row on the durable approval path, named with the tools it came from, and lands only
+   * when the founder approves it, carrying `[provenance: untrusted via <tools>]` in the entry
+   * itself. `deny` refuses it outright; `allow` writes it tagged and is the setting that reopens
+   * the memory-poisoning path the research names, so it is a deliberate choice and not a default.
+   *
+   * `untrusted_skills` governs `skill_manage` from such a step. `deny` is the shipped rule,
+   * because a skill is executable content a later seat runs without reading it. It is refused
+   * with the reason named; quarantining a candidate instead is the curator's job, not this gate's.
+   *
+   * The block is NOT a filter: nothing here inspects untrusted text for an instruction, because
+   * that detection is unsolved (research item F12). It gates the combination of untrusted input
+   * and a durable write, which is what F13 recommends and what B14 already ships.
+   */
+  provenance: z
+    .object({
+      untrusted_writes: z.enum(["hold", "allow", "deny"]).default("hold"),
+      untrusted_skills: z.enum(["deny", "allow"]).default("deny"),
+    })
+    .strict()
+    .default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   improve: ImproveConfigSchema.default({}),

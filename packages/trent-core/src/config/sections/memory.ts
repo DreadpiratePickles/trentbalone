@@ -61,4 +61,26 @@ export const MemoryConfigSchema = z.object({
 export const MemoryGatesConfigSchema = MemoryConfigSchema.extend({
   consolidation_may_edit: z.array(z.string().regex(MEMORY_BLOCK_LABEL_PATTERN)).default([]),
   consolidation_max_removal_ratio: z.number().positive().max(1).default(0.3),
+  // [C1] app memory
+  /**
+   * Characters of candidate text taken from each surface of the web app's own company memory
+   * before the recall ranker sees it (docs/configuration.md, "Company memory in the app";
+   * `fleet-memory/app-tiers.ts`). `tiers` is the three tiers of `memory-tiers.ts` (working,
+   * episodic, semantic, superseded facts excluded), `documents` the company's other documents
+   * inside their validity window, `capabilities` this seat's capability outcomes, `registries`
+   * this seat's compounding registry, `decisions` the CEO decision journal and `wiki` the
+   * company's wiki notes. The budget bounds what the ranker scores and therefore what this tier
+   * can add to the assembled injection; the sum stays well under `context.ceiling_chars`. Zero
+   * turns one surface off without touching the others. Must stay equal to
+   * `DEFAULT_APP_MEMORY_BUDGETS` in `fleet-memory/app-tiers.ts`, which its suite asserts.
+   */
+  app_sources: z.object({
+    tiers: z.number().int().nonnegative().default(4_000),
+    documents: z.number().int().nonnegative().default(4_000),
+    capabilities: z.number().int().nonnegative().default(1_500),
+    registries: z.number().int().nonnegative().default(1_500),
+    decisions: z.number().int().nonnegative().default(1_500),
+    wiki: z.number().int().nonnegative().default(1_500),
+  }).strict().default({}),
+  // [/C1]
 });

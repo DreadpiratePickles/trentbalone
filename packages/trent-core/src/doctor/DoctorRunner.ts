@@ -34,6 +34,8 @@ import { checkSelfImprovement } from "./checks/self-improvement.js";
 import { checkTelemetry } from "./checks/telemetry.js";
 import { checkEmbedder } from "./checks/embedder.js";
 import { checkBrain } from "./checks/brain.js";
+// [C1] app memory
+import { checkAppMemory } from "./checks/app-memory.js";
 
 export interface DoctorRunnerOptions {
   checks?: DoctorCheck[];
@@ -72,6 +74,8 @@ export const DEFAULT_CHECKS: readonly DoctorCheck[] = [
   checkTelemetry,
   checkEmbedder,
   checkBrain,
+  // [C1] app memory
+  checkAppMemory,
 ];
 
 /** 3 (config) when any check failed; 0 when everything passed or only warned. */

@@ -226,6 +226,60 @@ which is why the two weights sum to 1: a blended score stays on the scale it was
 [doctor.md](doctor.md), "Recall Embedder". The weights and the floor are argued in full in
 [the fleet-memory README](../packages/trent-core/src/fleet-memory/README.md), "Hybrid recall".
 
+### Company memory in the app
+
+`memory.app_sources` decides how much of the web app's OWN company memory reaches a seat. The CLI
+wraps `apps/web`; that app has been writing company memory into `Document` rows since long before
+the fleet existed, and until this key a seat recalled only what the orchestrator itself produced —
+step outputs, run summaries, skills and the playbook. Six surfaces now join the recall corpus, each
+read through the app's own functions and each tagged with where it came from, so a line in the
+prelude says `[tiers | semantic | ...]` or `[decisions | ...]` and not just a bare fact.
+
+```yaml
+memory:
+  app_sources:
+    tiers: 4000             # working / episodic / semantic rows (memory-tiers.ts)
+    documents: 4000         # the company's other documents, inside their validity window
+    capabilities: 1500      # this seat's capability outcomes
+    registries: 1500        # this seat's compounding registry
+    decisions: 1500         # the CEO decision journal
+    wiki: 1500              # the company's wiki notes
+```
+
+| Key | What it carries |
+|---|---|
+| `tiers` | `memoryTier` rows: the episodic narrative written at cycle close and the semantic facts written by consolidation. A fact another row supersedes is never recalled — the validity window AND the supersedes chain are both honoured, because `SemanticMemory.flush` swallows a failed expiry and `validTo` alone is therefore not proof. |
+| `documents` | Everything else the company has on file — briefs, roadmaps, research, weekly reports — filtered by `filterActiveDocuments`, so a document that has not started or has already ended is not recalled. |
+| `capabilities` | Capability outcome records for THIS seat, summarised by the app's `summarizeCapability`: mean score, success rate, cost in integer cents, latency, sample count. |
+| `registries` | The seat's compounding registry, rendered by the app's own `buildSeatRegistryRecall`. Only `growth`, `sales` and `content` own one; every other seat gets nothing here. |
+| `decisions` | The CEO decision journal, one entry per run that produced one. |
+| `wiki` | The company's wiki notes, summarised through `buildWikiSources` / `buildWikiPageSummary`, which is also what keeps `.env`, keys and `node_modules` paths out of a prompt. |
+
+Every number is characters of candidate text, taken newest-first and clipped at the budget, before
+the ranker sees any of it. The sum (14,000) is under a quarter of `context.ceiling_chars`, so this
+tier cannot crowd out the memory blocks, the skills index or the transcript. Setting one to `0`
+turns that surface off and leaves the others alone.
+
+These candidates are ranked in a corpus of their OWN, never folded into the run-derived one. TF-IDF
+weights a term by how rare it is in the corpus it is scored against, and the app writes its own
+memory log and decision journal for the same run, so one shared corpus re-scored candidates that
+were already reaching the seat and dropped a relevant step output below the cut-off. A new source
+of context may add lines to the recall block; it may never take one away.
+
+**Writes, and where they can go.** A seat's `memory` append is mirrored into the app's episodic
+tier through the app's `writeEpisodicMemory`, filed under `<run id>:<seat>`; semantic facts are
+written only by the consolidation path, from its delta operations, with `supersedesId` set when an
+operation replaces an entry. Both go through the app's store singleton, which is chosen once at
+process start from `DATABASE_URL` (`apps/web/lib/store.ts`):
+
+| `DATABASE_URL` | App company memory |
+|---|---|
+| unset | Reachable, in-process, lost when the process exits. |
+| a postgres URL | Reachable and durable. |
+| a `file:` SQLite path | **Unreachable.** `apps/web/lib/db.ts` builds a client for a postgresql datasource, so every call throws — and this is what a standalone DURABLE profile sets. Recall falls back to the run-derived candidates and the writers report the reason; nothing fails. |
+
+`trent doctor` says which of the three this profile is in — see the `App Memory Tiers` line.
+
 ### Failure goldens
 
 A run that fails, or whose critic escalates or replans, writes one quarantined regression fixture

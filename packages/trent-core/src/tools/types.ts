@@ -10,12 +10,22 @@
 
 export type ToolCallStatus = "mocked" | "completed" | "needs_approval" | "failed" | "blocked";
 
+/**
+ * [C5] Where the bytes in `summary` came from. `untrusted` means the result is derived from
+ * content nobody on this machine authored — a web page, an MCP server, a plugin, or a delegated
+ * child that read one of those. Optional because the app's own adapters (`apps/web/lib/tools.ts`,
+ * read-only) do not set it; absent is read as `trusted` by `provenanceOf`.
+ */
+export type Provenance = "trusted" | "untrusted";
+
 export interface ToolCallRecord {
   adapter: string;
   action: string;
   status: ToolCallStatus;
   /** The only channel back to the model: everything a tool returns is this string. */
   summary: string;
+  /** [C5] Set by the provenance wrapper (`governance/provenance.ts`) on every call it sees. */
+  provenance?: Provenance;
 }
 
 export interface ToolAdapter {

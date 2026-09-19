@@ -105,7 +105,14 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // through: a profile with a Gemini or OpenAI key gets hybrid recall with no configuration, and a
   // profile with neither keeps the lexical ranking it already had. 32 inputs per request sits
   // inside both providers' batch limits. See docs/configuration.md, "Embedder".
-  memory: { blocks: [...DEFAULT_MEMORY_BLOCKS], consolidation_may_edit: [], consolidation_max_removal_ratio: 0.3, embedder: { provider: "auto", batch_size: 32 } },
+  // [C1] app memory
+  // How much of the web app's own company memory a seat may be handed per surface, in characters
+  // (`fleet-memory/app-tiers.ts`, `DEFAULT_APP_MEMORY_BUDGETS`, which `app-tiers.test.ts` asserts
+  // equal to these). 14,000 in total against a 60,000-char ceiling: the company's facts reach a
+  // seat without crowding out the memory blocks, the skills index or the transcript. Zero on one
+  // key turns that surface off and leaves the rest alone.
+  // [/C1]
+  memory: { blocks: [...DEFAULT_MEMORY_BLOCKS], consolidation_may_edit: [], consolidation_max_removal_ratio: 0.3, embedder: { provider: "auto", batch_size: 32 }, app_sources: { tiers: 4_000, documents: 4_000, capabilities: 1_500, registries: 1_500, decisions: 1_500, wiki: 1_500 } },
   // [B2.1] model tiers
   // Empty by default, which is the shipped behaviour: with no tier named, every tier resolves to
   // `model` above and a seat runs exactly what it ran before the key existed. Naming one tier
@@ -138,6 +145,15 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // ages at all. `scan_agent_skills` is the composed-skill gate; a flagged skill is quarantined,
   // never deleted. See docs/skills.md, "Curator".
   curator: { enabled: true, stale_after_days: 60, archive_after_days: 180, scan_agent_skills: true },
+  // [C5] provenance
+  // Hold, and deny. A memory entry derived from a web page, an MCP server, a plugin or a
+  // delegated child that read one of those is parked as a pending approval naming the tools it
+  // came from, and lands only when the founder approves it — tagged in the entry itself, so the
+  // block says where the line came from for as long as it exists. A skill authored from such a
+  // step is refused: it is executable content a later seat runs without reading it. `allow`
+  // exists for a profile that trusts its own sources, and reopens the memory-poisoning path
+  // deliberately. See docs/security.md, "Prompt injection".
+  provenance: { untrusted_writes: "hold", untrusted_skills: "deny" },
   personality: "default",
   theme: "dark",
   // [D0] improvement gates

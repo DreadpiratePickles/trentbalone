@@ -12,6 +12,8 @@ import { IdempotencyManager } from "../governance/IdempotencyManager.js";
 import { idempotentAdapters } from "../governance/idempotent-dispatch.js";
 import { PolicyDispatcher } from "../governance/policy-dispatch.js";
 import { autonomyAdapters } from "../governance/autonomy-dispatch.js";
+import { createProvenanceLedger, provenanceAdapters, type ProvenanceLedger } from "../governance/provenance.js";
+import { holdMemoryWrite } from "./memory/holds.js";
 import { DEFAULT_AUTONOMY } from "../governance/autonomy.js";
 import { createToolHookRunner } from "../hooks/runner.js";
 import type { ToolHookPort } from "../hooks/types.js";
@@ -36,7 +38,17 @@ import { askVision, createVisionAdapter, type VisionGateway } from "./vision/ind
 import { seatCapability } from "../fleet/seat-capabilities.js";
 import type { ToolContext, TrentToolAdapter } from "./types.js";
 
-export type { ToolAdapter, ToolCallRecord, ToolContext, TrentToolAdapter } from "./types.js";
+export type { Provenance, ToolAdapter, ToolCallRecord, ToolContext, TrentToolAdapter } from "./types.js";
+// [C5] provenance: the tag, the per-step ledger and the hold path a held memory write waits on.
+export {
+  DEFAULT_PROVENANCE_POLICY, SHARED_WRITE_TOOLS, SKILL_WRITE_TOOLS, UNTRUSTED_ADAPTERS,
+  adapterProvenance, createProvenanceLedger, isSharedWriteTool, isSkillWriteTool, provenanceAdapters, provenanceOf, worstProvenance,
+} from "../governance/provenance.js";
+export type { HeldWriteInput, ProvenanceLedger, ProvenancePolicy } from "../governance/provenance.js";
+export {
+  HELD_WRITE_ACTION, approveHeldMemoryWrite, denyHeldMemoryWrite, heldWriteAction, holdMemoryWrite, listHeldMemoryWrites, provenanceMarker,
+} from "./memory/holds.js";
+export type { ApproveHeldWriteResult, HeldWrite, HeldWriteDetails, HeldWriteRow } from "./memory/holds.js";
 export { floorBlock, dangerous, normaliseForDetection, maskQuoted, detectionVariants } from "./approval-floors.js";
 export { createFileOpsAdapter, FILE_OPS_NAME, FILE_OPS_SCOPES } from "./file_ops/index.js";
 export { createTerminalAdapter, TERMINAL_NAME, TERMINAL_SCOPES } from "./terminal/index.js";
@@ -77,6 +89,8 @@ export type ToolBuildConfig = Pick<TrentConfig, "toolsets" | "disabled_toolsets"
   readonly hooks?: TrentConfig["hooks"];
   /** A3: `tools.disclosure_threshold`. Absent means the shipped default. */
   readonly tools?: TrentConfig["tools"];
+  /** [C5] `provenance`: what a memory or skill write made from untrusted context may do. */
+  readonly provenance?: TrentConfig["provenance"];
 };
 
 export interface ToolBuildDeps {
@@ -136,6 +150,12 @@ export interface ToolBuildDeps {
    * outside this repository.
    */
   readonly extraAdapters?: readonly TrentToolAdapter[];
+  /**
+   * [C5] The per-step provenance ledger. Defaults to one per build, which is the right scope: a
+   * build is one surface's tool set, and the tags are keyed by (run, step) inside it. Tests pass
+   * their own to assert what a step accumulated.
+   */
+  readonly provenance?: ProvenanceLedger;
 }
 
 /** One toolset that was enabled in config but could not be built here, and why the seat cannot use it. */
@@ -147,6 +167,12 @@ export interface SkippedToolset {
 export interface TrentToolBuild {
   readonly adapters: TrentToolAdapter[];
   readonly skipped: SkippedToolset[];
+  /**
+   * [C5] The ledger the provenance wrapper writes to; a surface reads it to explain a hold.
+   * Optional because the legacy adapters-only seam (`buildAdapters`) builds a `TrentToolBuild`
+   * by hand and never wraps anything, so it has no ledger to report.
+   */
+  readonly provenance?: ProvenanceLedger;
   /**
    * A2.2: one line per hook that was configured but did not run (unconsented, or its spec
    * changed since consent). Read once by the surface that built the tools, so a silent hook is
@@ -271,16 +297,37 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
     ...(hooks === undefined ? {} : { hooks }),
     ...(deps.seat === undefined ? {} : { seat: deps.seat }),
   });
+  // [C5] Provenance sits OUTSIDE the autonomy, policy and idempotency wrappers and inside
+  // disclosure. Outside, because the tag has to describe the record the seat actually receives —
+  // including one a gate refused — and because a held write must be parked before any of those
+  // wrappers spends an idempotency key on it. Inside disclosure, because a `tool_call` through
+  // the bridge must be tagged and gated exactly as a direct call is.
+  const ledger = deps.provenance ?? createProvenanceLedger();
+  const tagged = provenanceAdapters(guarded, {
+    ledger,
+    ...(config.provenance === undefined ? {} : { policy: config.provenance }),
+    hold: (input) =>
+      holdMemoryWrite({
+        profileDir: deps.profileDir,
+        adapter: input.adapter,
+        action: input.action,
+        sources: input.sources,
+        ...(deps.seat === undefined ? {} : { seat: deps.seat }),
+        ...(input.runId === undefined ? {} : { runId: input.runId }),
+        ...(input.stepId === undefined ? {} : { stepId: input.stepId }),
+      }).line,
+  });
   // A3. Disclosure runs LAST, on the wrapped list, so the bridges hold wrapped adapters: a
   // `tool_call` re-enters the same autonomy, policy, idempotency and hook chain a direct call
   // enters. Reversing the order would make the bridge a hole in every gate at once.
-  const disclosed = discloseAdapters(guarded, TOOLSET_BY_ADAPTER, {
+  const disclosed = discloseAdapters(tagged, TOOLSET_BY_ADAPTER, {
     threshold: config.tools?.disclosure_threshold ?? DEFAULT_DISCLOSURE_THRESHOLD,
     ...(config.mcp_servers === undefined ? {} : { mcpServers: config.mcp_servers }),
   });
   return {
     adapters: disclosed,
     skipped,
+    provenance: ledger,
     // A getter, not a snapshot: a hook is skipped when a CALL is made, which is always after the
     // build returned. Reading this field at the end of a run is what makes the notice reachable.
     get hookNotices(): readonly string[] {

@@ -10,6 +10,7 @@
  */
 
 import type { ImproveStorePort } from "../store/StorePort.js";
+import { createAppMemoryReader, type AppMemoryBudgets, type AppMemoryReader } from "./app-tiers.js";
 import type { FleetMemorySource, FleetPlaybookEntry, FleetRun } from "./source.js";
 
 interface AppRunSnapshot {
@@ -32,13 +33,23 @@ interface AppPlaybookModule {
 
 export interface AppFleetSourceOptions {
   readonly improve?: ImproveStorePort;
+  /** [C1] Config `memory.app_sources`: characters of candidate text per app surface. */
+  readonly appMemoryBudgets?: AppMemoryBudgets;
+  /** [C1] The company-memory reader; the real one over `app-tiers.ts` when omitted (tests inject). */
+  readonly appMemory?: AppMemoryReader;
 }
 
 export function createAppFleetSource(options: AppFleetSourceOptions = {}): FleetMemorySource {
   let orchestrator: Promise<AppOrchestratorModule> | undefined;
   let playbook: Promise<AppPlaybookModule> | undefined;
+  // [C1] The company's own tiered memory: `Document` rows with validity windows are the truth for
+  // facts, so a seat reads them here rather than inferring facts from older step outputs.
+  const appMemory =
+    options.appMemory ??
+    createAppMemoryReader(options.appMemoryBudgets === undefined ? {} : { budgets: options.appMemoryBudgets });
   return {
     improve: options.improve,
+    listAppMemory: (companyId, seat) => appMemory(companyId, seat),
     async listRuns(companyId) {
       orchestrator ??= import("@/lib/orchestrator") as unknown as Promise<AppOrchestratorModule>;
       const runs = await (await orchestrator).listOrchestrationRunSnapshots(companyId);

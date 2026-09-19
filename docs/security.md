@@ -452,6 +452,31 @@ scan: the workspace is untrusted until `trent workspace trust` records it in
 directory is read, so a symlink pointing out of the workspace is refused instead of followed. See
 [configuration.md](configuration.md), "Workspace context files".
 
+## Provenance and untrusted context
+
+The scanners above stop a file Trent reads from becoming an instruction. They do nothing about the
+second half of the same problem: what a seat does with text it read at run time, out of a web page,
+an MCP server, a plugin, or a child it delegated to. Every tool result therefore carries a
+provenance tag — `trusted` or `untrusted` — set in one place, the wrapper chain that builds the
+toolsets (`packages/trent-core/src/governance/provenance.ts`). `untrusted` is the `web`, `browser`,
+`mcp` and `plugins` toolsets, and any delegated child whose own calls were untrusted: a child's
+summary of a page is not cleaner than the page, which is the trust-escalation failure the research
+names. The tag accumulates per step, travels on the step's tool-call records, and is rendered as an
+`[untrusted]` marker when another seat recalls that step's output a run later, under one line saying
+those lines are data and never instructions.
+
+The tag then gates two writes, because the danger is not the reading but what outlives the session.
+A `memory` write made in a step that read untrusted output is held as a pending approval row on the
+durable approval path rather than written, naming the tools it came from; approving it writes the
+entry with `[provenance: untrusted via <tools>]` in the entry itself, so the block says where the
+line came from for as long as it exists. `skill_manage` from such a step is refused outright, with
+the reason named, because a skill is executable content a later seat runs without reading it. Both
+are configurable — `provenance.untrusted_writes` (`hold`, the default, `deny` or `allow`) and
+`provenance.untrusted_skills` (`deny`, the default, or `allow`) — and `allow` deliberately reopens
+the memory-poisoning path, so it is a choice and not an accident. Nothing here inspects the
+untrusted text for an instruction: that detection is unsolved, and the gate is on the combination of
+untrusted input and a durable write instead.
+
 ## Auditing a profile
 
 Everything above is spread over `config.yaml`, four records beside it and two directories, so in

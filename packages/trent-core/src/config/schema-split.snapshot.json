@@ -141,7 +141,15 @@
         "batch_size": 32
       },
       "consolidation_may_edit": [],
-      "consolidation_max_removal_ratio": 0.3
+      "consolidation_max_removal_ratio": 0.3,
+      "app_sources": {
+        "tiers": 4000,
+        "documents": 4000,
+        "capabilities": 1500,
+        "registries": 1500,
+        "decisions": 1500,
+        "wiki": 1500
+      }
     },
     "models": {},
     "tools": {
@@ -160,6 +168,10 @@
       "stale_after_days": 60,
       "archive_after_days": 180,
       "scan_agent_skills": true
+    },
+    "provenance": {
+      "untrusted_writes": "hold",
+      "untrusted_skills": "deny"
     },
     "personality": "default",
     "theme": "dark",
@@ -420,7 +432,15 @@
       "consolidation_may_edit": [
         "company"
       ],
-      "consolidation_max_removal_ratio": 0.5
+      "consolidation_max_removal_ratio": 0.5,
+      "app_sources": {
+        "tiers": 4000,
+        "documents": 4000,
+        "capabilities": 1500,
+        "registries": 1500,
+        "decisions": 1500,
+        "wiki": 1500
+      }
     },
     "models": {
       "fast": "fixture-fast",
@@ -444,6 +464,10 @@
       "stale_after_days": 60,
       "archive_after_days": 180,
       "scan_agent_skills": true
+    },
+    "provenance": {
+      "untrusted_writes": "hold",
+      "untrusted_skills": "deny"
     },
     "personality": "fixture-personality",
     "theme": "light",

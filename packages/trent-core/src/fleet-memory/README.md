@@ -266,3 +266,129 @@ files' sizes and modification times when it is off. Nothing here touches `store/
 Proof: `brain.test.ts`, `brain-migrate.test.ts`, `brain-prompt.test.ts`, `brain-index.test.ts`,
 `../tools/memory/brain-read.test.ts`, `../doctor/checks/brain.test.ts`,
 `apps/cli/src/commands/__tests__/brain.test.ts`. Full documentation: `docs/brain.md`.
+
+## Company memory in the app (C1)
+
+The fleet's shared context used to be everything the ORCHESTRATOR produced: step outputs, run
+summaries, promoted skills, playbook bullets. The company's own memory — `Document` rows the web
+app has been writing for far longer — reached no seat at all. `app-tiers.ts` and `app-writes.ts`
+close that, and `app-source.ts` hangs them off the port as `listAppMemory(companyId, seat)`.
+
+**Truth rule.** `Document` rows with validity windows are the truth for FACTS; `brain/` is the
+truth for identity, standing decisions and episodic notes. So facts are read from the rows, and
+nothing in these two modules writes a brain file.
+
+**Reads.** Six surfaces, each tagged with its source so the ranker and the prelude can both say
+where a line was learned (`[tiers | semantic | ...]`, `[decisions | ...]`):
+
+| Source | Read through | Scope |
+|---|---|---|
+| `tiers` | `memory-tiers.ts` rows (`memoryTier`) | company |
+| `documents` | `active-documents.ts` `filterActiveDocuments` | company |
+| `capabilities` | `capability-memory.ts` `summarizeCapability` | this seat only |
+| `registries` | `seat-memory-registries.ts` `buildSeatRegistryRecall` | this seat only |
+| `decisions` | the CEO decision journal's rows | company |
+| `wiki` | `trench-wiki.ts` `buildWikiSources` / `buildWikiPageSummary` | company |
+
+Every rule belongs to an `apps/web` function and is CALLED, never restated — including the wiki
+path blocklist that keeps `.env` and keys out of a prompt. Exactly one rule is decided here: a
+document another document supersedes is dropped even when its `validTo` is unset, because
+`SemanticMemory.flush` expires the old row through `.catch(() => {})` and a silent failure would
+otherwise leave a replaced fact "active". Recalling a fact that has been replaced is the one
+failure this tier exists to prevent.
+
+**Budgets.** Config `memory.app_sources`, characters of candidate text per source, spent
+newest-first and clipped at the budget BEFORE the ranker sees anything. The sum (14,000) is under a
+quarter of `context.ceiling_chars`. `0` turns one surface off and leaves the rest alone.
+
+**Its own corpus.** These candidates are scored in a corpus of their own, never folded into the
+run-derived one. TF-IDF weights a term by how rare it is in the corpus it is scored against, and
+the app writes its own memory log and decision journal for the same run; one shared corpus dropped
+the engineer's step output from above the cut-off to 0.0899 in `fleet-memory.orchestrator.test.ts`
+the moment those rows joined it. A new source of context may add lines to the block; it may never
+take one away.
+
+**Writes.** Two, and deliberately only two. A seat's `memory` append is mirrored into the app's
+episodic tier through the app's `writeEpisodicMemory`, filed under the cycle id `<run id>:<seat>` —
+the only place a `Document` can carry the seat and the run, since the schema has no tag column and
+`apps/web` is read-only. Semantic facts are written ONLY by the consolidation path, from the C4
+delta operations, through `SemanticMemory.flush` with `supersedesId` set when an operation replaces
+an entry; a `remove` expires the row and writes nothing, a `merge` writes one fact that supersedes
+the first row and expires the others. The mirror is a DECORATOR over the adapter
+(`withAppEpisodicMirror`), so `tools/memory/index.ts` keeps owning the blocks, the gate and the lock
+and never learns about a store. Only a write the adapter itself COMPLETED is mirrored, so a refusal,
+a read-only block and a delegated child's write all mirror nothing.
+
+**Where the writes can go.** The app's store singleton is chosen once, at module evaluation, from
+`DATABASE_URL` (`apps/web/lib/store.ts:11`). Unset, it is the in-process store: the tiers work and
+are lost at exit. A postgres URL: durable. A `file:` SQLite path — which is exactly what a
+standalone DURABLE profile sets (`apps/cli/src/runtime/headless.ts:282`) — makes every call throw,
+because `apps/web/lib/db.ts` builds the client for a postgresql datasource. Every read and every
+write degrades rather than failing, and `doctor/checks/app-memory.ts` reports which of the three a
+profile is in.
+
+Proof: `app-tiers.test.ts`, `app-source.test.ts`, `app-writes.test.ts` (the last one also drives
+the app's real `memory-tiers.ts` against the in-process store), `app-memory.bun.test.ts` with
+`app-memory-runner.ts` for the cross-run propagation under Bun, and
+`../doctor/checks/app-memory.test.ts`. Full documentation: docs/configuration.md, "Company memory
+in the app".
+
+## Provenance, and the failure channel ([C5])
+
+Two of the failure modes the research names apply directly to a shared brain: **trust escalation**,
+where a sub-agent's output is treated as higher-trust than the untrusted data it derived from, and
+**memory poisoning**, where injection written into a store survives the session and reaches every
+seat afterwards (`01_discovery/output/agent-harness-sota-2026-09.md` section 4). Fleet memory is
+where both land, because everything here is shared and everything here outlives the run.
+
+**The tag.** Every tool result carries `provenance: trusted | untrusted`, set once in the wrapper
+chain (`../governance/provenance.ts`, wired in `../tools/index.ts`). Untrusted is the `web`,
+`browser`, `mcp` and `plugins` toolsets plus any delegated child whose own calls were untrusted —
+`delegate_task` reads the child's tags rather than guessing, and appends one line naming the tools,
+so the parent cannot mistake a summary for a verified fact. The tags accumulate per step, keyed by
+the run and step the orchestrator's `ToolCallContext` supplies; outside a seat turn they fall into
+one key per build, which is B14's own granularity (a session that touched untrusted context is
+untrusted until something clears it). The hook's `traceSink` carries a step's tag forward:
+`withStepProvenance` decorates the source's steps with it, and `recallForObjective` renders an
+`[untrusted]` marker plus one explaining line, so a line another seat recalls a run later still says
+what it came from. The tag lives in the wrapper because the step rows belong to the read-only app
+and have no column for it; a tag this process did not observe is simply absent, which reads as
+trusted exactly as it did before the field existed.
+
+**The write gate.** `provenance.untrusted_writes` (default `hold`) decides what a `memory` write
+made in an untrusted step does. `hold` parks it as a pending `ApprovalRow` in `<profile>/gateway.json`
+— the durable approval path that already exists, the same rows the heartbeat's fleet-state block
+counts — with the untrusted tools named in the tool result. `approveHeldMemoryWrite`
+(`../tools/memory/holds.ts`) replays the seat's own action against the UNWRAPPED adapter with
+`[provenance: untrusted via <tools>]` appended to every entry, so the block itself records where the
+line came from rather than laundering it at the moment of approval. `deny` refuses; `allow` writes it
+tagged. `provenance.untrusted_skills` (default `deny`) refuses `skill_manage` from such a step and
+names the reason; quarantining a candidate instead is the curator's job. Nothing here reads the
+untrusted text looking for an instruction — that detection is unsolved — so the gate is on the
+combination of untrusted input and a durable write. Proof: `../governance/provenance.test.ts`,
+`../tools/memory/holds.test.ts`, `recall.test.ts`, `failures.hook.test.ts`,
+`../tools/delegate/delegate.test.ts`.
+
+**Failures get a channel.** The fleet-brain audit's finding was flat: "failures have no channel at
+all" (3.5) — a failed step surfaced only as a step output inside recall, which usually ranked it
+away, so the next seat with a related objective lost the same hour again. `failures.ts` is that
+channel. A step that failed, was blocked, or whose critic escalated becomes ONE redacted line —
+objective, seat, the tool that failed, the failure tags, a one-line reason — appended through
+`Brain.appendNote` into `brain/memory/YYYY-MM-DD.md` and tagged `[failure]`, so it takes the brain's
+own lock, its 0600 write-then-rename and its commit trail, and nothing new appears on disk. Every
+field goes through `redactTranscript` first: a failure reason is usually an error message, which is
+the likeliest place in the system for a credential to appear, and this file is durable, committed and
+loaded into later prompts. `recallFailures` ranks them against the next run's objective through the
+same `scoreAgainst` seam as cross-agent recall, inside a third of `recallBudgetChars`, and the hook
+renders them as the last CONTEXT block — last to be trimmed, because it is the smallest block here
+and the only one that says what NOT to try. Every line keeps the `[failure]` marker in the prompt: an
+unmarked line saying what another seat tried and lost reads as advice. Proof: `failures.test.ts`,
+`failures.hook.test.ts`.
+
+**Propagation of skills, asserted.** A skill promoted to the `__org__` tier reaches every seat as one
+index line — task type, tier and the skill's own first heading — and its body is fetched with
+`fleet_skill_view` / `skill_view` and nowhere else. `sharedSkillIndexLine` is now the single
+rendering, and recall uses it too: a skill is RANKED against its whole body (`scoreText`) and
+RENDERED as its index line, which closes the back door where a relevant skill's body was clipped into
+the prelude at `recallSnippetChars`. The org tier is in the STABLE tier, so the bytes are identical
+for every seat of a run. Proof: `shared-skills.test.ts`.

@@ -48,8 +48,11 @@ import {
   readMemoryBytes,
   type MemoryBlockOps,
   type MemoryBytes,
+  type MemoryDraftPayload,
 } from "./memory-draft.js";
 import { DEFAULT_MAX_REMOVAL_RATIO, addressEntries, applyMemoryOps, parseMemoryOps, removalAllowance, type MemoryOp } from "./memory-ops.js";
+// [C1] The company's semantic facts. Promotion is the only path that writes them: see `writeAppFacts`.
+import { loadAppWriteModules, writeConsolidatedFacts, type AppMemoryWriteModules } from "./app-writes.js";
 
 export {
   MEMORY_DRAFT_AGENT,
@@ -369,9 +372,55 @@ async function ledgerRejection(
   return row.id;
 }
 
+/** [C1] Where the promoted operations also land: the company's semantic tier in the app's store. */
+export interface PromoteAppMemoryOptions {
+  /** The app writers; the real ones, imported lazily on first use, when omitted. */
+  readonly modules?: AppMemoryWriteModules;
+  /** One line when the facts could not be written. The files are already correct either way. */
+  readonly onFailure?: (message: string) => void;
+}
+
 export interface PromoteMemoryDraftOptions extends Pick<PromoteOptions, "actor" | "now" | "iterationId"> {
   readonly store: ImproveStorePort;
   readonly draftId: string;
+  /**
+   * [C1] `false` writes no `Document` row at all. Omitted, the facts are written: this is the ONLY
+   * writer of the company's semantic tier, because a seat is refused everything but `append` on a
+   * block (the C4 gate) and a draft in quarantine is a proposal, not a fact.
+   */
+  readonly appMemory?: false | PromoteAppMemoryOptions;
+}
+
+/**
+ * [C1] The promoted deltas as semantic facts: an `append` or a `replace` writes a row (with
+ * `supersedesId` set to the row the replaced entry wrote), a `remove` expires one, a `merge`
+ * writes one row and expires the entries it merged. It runs AFTER the files are written, because
+ * the files are the truth for the blocks and these rows are the company's view of the same change.
+ *
+ * Nothing here can fail a promotion. The app's store singleton is unreachable whenever
+ * `DATABASE_URL` names a SQLite file (`apps/web/lib/db.ts` is a postgresql client), which is what
+ * a standalone durable profile sets, and a founder's promotion must not depend on that.
+ */
+async function writeAppFacts(payload: MemoryDraftPayload, companyId: string, before: MemoryBytes, setting: PromoteMemoryDraftOptions["appMemory"]): Promise<void> {
+  const ops = payload.ops ?? [];
+  if (setting === false || ops.length === 0) return;
+  const options = setting ?? {};
+  const say = (reason: string) => options.onFailure?.(`The promoted memory did not reach the company's semantic tier: ${reason}`);
+  try {
+    const modules = options.modules ?? (await loadAppWriteModules());
+    for (const block of ops) {
+      const outcome = await writeConsolidatedFacts({
+        companyId,
+        block: block.label,
+        entries: canonicalEntries(textFor(before, block.label)),
+        ops: block.ops,
+        modules,
+      });
+      if (outcome.reason !== null) say(outcome.reason);
+    }
+  } catch (error) {
+    say(error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function baselineRow(store: ImproveStorePort, draft: SkillDraftRow, now: string): Promise<void> {
@@ -426,6 +475,9 @@ export async function promoteMemoryDraft(options: PromoteMemoryDraftOptions): Pr
   }
   await baselineRow(options.store, draft, now);
   const promoted = await promoteDraft(options.store, draft.id, { actor: options.actor, now, ...(options.iterationId ? { iterationId: options.iterationId } : {}) });
+  // Read before the write: the operation ids address the entries as they stand right now.
+  const before = readMemoryBytes(payload.profileDir, payload.blocks ?? []);
   applyMemoryBytes(payload.profileDir, payload);
+  await writeAppFacts(payload, draft.companyId, before, options.appMemory);
   return promoted;
 }
