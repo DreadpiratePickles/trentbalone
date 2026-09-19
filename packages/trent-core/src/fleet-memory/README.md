@@ -392,3 +392,35 @@ rendering, and recall uses it too: a skill is RANKED against its whole body (`sc
 RENDERED as its index line, which closes the back door where a relevant skill's body was clipped into
 the prelude at `recallSnippetChars`. The org tier is in the STABLE tier, so the bytes are identical
 for every seat of a run. Proof: `shared-skills.test.ts`.
+
+## Interrupted runs ([G2])
+
+**A stopped turn's text is never handed to the next run as an answer.** The REPL already refused to
+thread an interrupted turn back into the conversation (`apps/cli/src/repl/conversation.ts`), and the
+live proofs recorded what that left open: recall and the app's company memory could still carry it.
+Ctrl+C is not a clean stop — the drain loop only checks between jobs, so the step that was in flight
+finishes in the background and lands a `completed` step row, while the run itself never reaches a
+settled status and nobody ever saw the answer. So the RUN row is the honest signal: `isSettledRun`
+(`completed`, `failed`, `cancelled`) gates the step outputs and the consolidated summary that recall
+collects, and `guardInterrupted` adds what THIS process watched — a step whose seat call threw, or
+had not returned when the run closed — as a `FleetStep.interrupted` tag, drops the app-memory rows
+filed under such a run (the episodic `cycle:<runId>` row quotes every step's output), and hands
+`fleet_search` the same view with those steps removed, because it renders whatever it is given.
+The failure channel is deliberately separate: what was tried and lost still reaches the next seat as
+`[failure]` lines, marked as failures, because excluding an OUTPUT is about not passing a fragment
+off as an answer, not about hiding that the attempt happened.
+
+Two more doors, on the write side. The app-memory mirror now HOLDS a seat's episodic append for the
+step that made it and writes the row only once that step's seat call returns; a step that never
+finished takes its episodes with it, and their text is quarantined for the life of the process so
+the consolidation path refuses to promote a fact that carries it (`AppWriteOutcome.skipped`). And a
+daily note offered for a step still in flight is refused (`FleetMemoryHook.stepFailed`), since the
+brain's notes are read back into the next run's prelude.
+
+Two boundaries, stated rather than implied. The seat's own `memory` append lands in the block on
+disk at tool time even inside a turn the user stopped — the write completed, the seat was told so,
+and the block is append-only truth about what the seat did; what is stopped is its promotion into
+the company's episodic and semantic tiers. And a step this process never watched is judged by its
+run row alone, so a stopped run whose row some other process later marks `completed` would be
+recalled: the tag lives in the wrapper because `apps/web` owns the schema. Proof:
+`interrupted.test.ts`, `interrupted.orchestrator.test.ts`.

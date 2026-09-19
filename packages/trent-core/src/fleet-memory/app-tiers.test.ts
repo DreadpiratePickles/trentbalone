@@ -66,6 +66,27 @@ describe("classifyAppDocument", () => {
   });
 });
 
+describe("the run an app-memory row belongs to", () => {
+  it("[G2] carries the run id of an episodic row, so a stopped run's episodes can be left out", () => {
+    const entries = buildAppMemoryEntries({
+      companyId: "co_1",
+      seat: "growth",
+      documents: [
+        doc({ id: "d1", source: "cycle:run_1:growth", memoryTier: "episodic", content: "the migration plan starts with the index" }),
+        doc({ id: "d2", source: "cycle:orc_run_2", memoryTier: "episodic", content: "the run 2 episode quotes every step" }),
+        doc({ id: "d3", source: "founder-brief", memoryTier: "working", content: "the founder wants the backfill done" }),
+      ],
+      registryRecall: "",
+      modules: modules([]),
+      budgets: DEFAULT_APP_MEMORY_BUDGETS,
+      atIso: AT,
+    });
+    expect(entries.find((entry) => entry.id === "d1")?.runId).toBe("run_1");
+    expect(entries.find((entry) => entry.id === "d2")?.runId).toBe("orc_run_2");
+    expect(entries.find((entry) => entry.id === "d3")?.runId).toBeNull();
+  });
+});
+
 describe("activeAppDocuments", () => {
   it("honours the validity window through the app's own filter", () => {
     const expired = doc({ id: "old", validFrom: "2026-09-01T00:00:00.000Z", validTo: "2026-09-10T00:00:00.000Z" });

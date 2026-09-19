@@ -77,6 +77,30 @@ describe("the app memory mirror", () => {
     expect(modules.episodes[0]?.summary).toContain("doubled activation");
   });
 
+  it("[G2] mirrors nothing for a step the run was stopped around", async () => {
+    const modules = writeModules();
+    const hook = wireFleetMemory(deps({ appMemoryWrites: modules }));
+    hook.runStarted({ runId: "run_1", companyId: "co_1", objective: "raise activation" });
+    let release = () => {};
+    const seat = hook.wrapSeatModel(async () => {
+      await hook.memory.execute('memory {"action":"add","content":"the onboarding email doubled activation"}', {});
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return "late";
+    });
+    const call = seat({ companyId: "co_1", subtask: { id: "s1", seat: "growth", objective: "raise activation" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(modules.episodes).toEqual([]);
+
+    // Ctrl+C: the run closes while the seat is still answering, and the answer that arrives after
+    // it is nobody's. The seat's own block write stands; the company does not learn from it.
+    hook.runFinished("run_1");
+    release();
+    await call;
+    expect(modules.episodes).toEqual([]);
+  });
+
   it("mirrors nothing outside a run, because there is no run or seat to file it under", async () => {
     const modules = writeModules();
     const hook = wireFleetMemory(deps({ appMemoryWrites: modules }));

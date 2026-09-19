@@ -47,11 +47,14 @@ async function runPropagation(): Promise<PropagationResult> {
   const profileDir = mkdtempSync(path.join(tmpdir(), "trent-c1-"));
   const writeModules = await loadAppWriteModules();
   let caller = { companyId: company.id, runId: "run_1", seat: "growth" };
-  const memory = withAppEpisodicMirror(createMemoryAdapter({ profileDir }), {
+  // [G2] The mirror holds a seat's append for the step that made it; this append is made between
+  // steps, with no step in the caller, so it is written at once — the same path a surface takes
+  // when nothing is running.
+  const mirror = withAppEpisodicMirror(createMemoryAdapter({ profileDir }), {
     modules: writeModules,
     caller: () => caller,
   });
-  const hook = createFleetMemoryHook({ source: createAppFleetSource(), memory, brain: false });
+  const hook = createFleetMemoryHook({ source: createAppFleetSource(), memory: mirror.adapter, brain: false });
 
   const objective = "raise activation with an onboarding email";
   /** The fake model: it never calls a provider, it just keeps the prompt the wrapper handed it. */
@@ -64,7 +67,7 @@ async function runPropagation(): Promise<PropagationResult> {
   hook.runStarted({ runId: "run_1", companyId: company.id, objective });
   await seatModel({ companyId: company.id, subtask: { id: "step_1", seat: "growth", objective }, dynamicPrompt: "" });
   const run1Growth = prompts.growth ?? "";
-  const episodeWrite = await memory.execute(
+  const episodeWrite = await mirror.adapter.execute(
     'memory {"action":"add","content":"the onboarding email doubled signup completion for new founders"}',
     {},
   );

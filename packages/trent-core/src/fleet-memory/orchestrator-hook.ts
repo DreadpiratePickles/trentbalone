@@ -52,7 +52,15 @@ import type { EmbedFn } from "./lexical.js";
 import { recallForObjective } from "./recall.js";
 import { createFleetSearchAdapter } from "./search.js";
 import { listSharedSkills, renderSharedSkillsIndex } from "./shared-skills.js";
-import { freezeFleetSource, isDelegatedObjective, withStepProvenance, type FleetMemorySource } from "./source.js";
+import {
+  createInterruptionTracker,
+  freezeFleetSource,
+  guardInterrupted,
+  isDelegatedObjective,
+  withStepProvenance,
+  type FleetMemorySource,
+  type StepSettled,
+} from "./source.js";
 import {
   CONTEXT_BLOCKS,
   DEFAULT_CONTEXT_CEILING_CHARS,
@@ -62,6 +70,9 @@ import {
   type AssembledContext,
   type ContextBlock,
 } from "./tiers.js";
+
+/** [G2] The end of one step's seat call, as the hook watched it (`source.ts` defines it). */
+export type { StepSettled };
 
 /**
  * The slice of the pipeline's `SeatModelExecutionInput` the hook reads and extends. `objective`
@@ -131,8 +142,14 @@ export interface FleetMemoryHook {
    * synchronous, swallows its own errors and never fails a run.
    */
   traceSink(event: OrcEvent): void;
-  /** [C5] Records one failure directly, for a caller that is not on the event stream. */
+  /**
+   * [C5] Records one failure directly, for a caller that is not on the event stream. [G2] Refused
+   * while the step's own seat call is still running: a note written from a step in flight carries
+   * whatever had streamed, and the brain's notes reach the next run.
+   */
   stepFailed(record: FailureRecord): boolean;
+  /** [G2] True when this process watched the step's seat call not finish: a fragment, not an answer. */
+  stepInterrupted(runId: string, stepId: string): boolean;
   /** [C5] What a step's tool calls were derived from, as this process watched them. */
   stepProvenance(runId: string, stepId: string): Provenance;
 }
@@ -166,6 +183,12 @@ export interface FleetMemoryHookOptions {
    */
   readonly brain?: Brain | false;
   readonly onNotice?: (notice: ContextNotice) => void;
+  /**
+   * [G2] One step's seat call has settled. The app-memory mirror holds a seat's episodic append
+   * until this says the step finished (`app-writes.ts`); `completed` is false when the call threw
+   * or the run closed around it.
+   */
+  readonly onStepSettled?: (settled: StepSettled) => void;
 }
 
 interface SeatContext {
@@ -222,7 +245,15 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
       return createMemoryAdapter({ profileDir: options.profileDir, blocks: options.blocks });
     })();
   memory.bindCallerContext(() => ({ delegated: caller.delegated }));
-  const search = createFleetSearchAdapter({ source: options.source, config, seat: () => caller.seat || undefined });
+  // [G2] What this process watched being stopped (`source.ts`). `fleet_search` renders whatever
+  // steps it is handed, so it reads the PRUNED view: a stopped turn's output is not a hit. Recall
+  // reads the tagged view, because it reports what it kept.
+  const interrupted = createInterruptionTracker(options.onStepSettled);
+  const search = createFleetSearchAdapter({
+    source: guardInterrupted(options.source, interrupted.view, { drop: true }),
+    config,
+    seat: () => caller.seat || undefined,
+  });
 
   // [C2] The brain. Constructing it opens nothing: `ensure()` runs on the first stable tier of the
   // first run, so a profile that never runs anything never gets a `brain/` directory.
@@ -322,7 +353,8 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
         // Recall is an index, not a truth: an unreadable one costs relevance, never a run.
       }
     }
-    const recall = await recallForObjective(withStepProvenance(run.source, (runId, stepId) => stepTags.get(`${runId} ${stepId}`)), {
+    const tagged = withStepProvenance(run.source, (runId, stepId) => stepTags.get(`${runId} ${stepId}`));
+    const recall = await recallForObjective(guardInterrupted(tagged, interrupted.view), {
       companyId: run.companyId,
       seat,
       objective: run.objective,
@@ -410,7 +442,16 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
         }
         const context = await pending;
         const dynamicPrompt = [input.dynamicPrompt, context.assembled.text].filter((s): s is string => !!s && s.trim() !== "").join("\n\n");
-        return fn({ ...input, dynamicPrompt });
+        const stepId = input.subtask.id;
+        interrupted.begin(run.runId, stepId, seat);
+        try {
+          const result = await fn({ ...input, dynamicPrompt });
+          interrupted.settle(run.runId, stepId, true);
+          return result;
+        } catch (error) {
+          interrupted.settle(run.runId, stepId, false);
+          throw error;
+        }
       };
     },
     runStarted(input) {
@@ -427,6 +468,10 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
       current = run;
     },
     runFinished(runId) {
+      // [G2] A step still running when the run closed is a step the run was stopped around: Ctrl+C
+      // leaves the drain loop and the seat call lands its row in the background. Marked first, so
+      // the next run recalls neither the step nor the run.
+      interrupted.closeRun(runId);
       runs.delete(runId);
       if (current?.runId === runId) current = runs.values().next().value;
       // Writes made during this run become visible to the next one.
@@ -442,7 +487,12 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
     setNoticeSink(sink) {
       notify = sink;
     },
-    stepFailed: (record) => writeFailure(brain, record),
+    stepFailed: (record) => {
+      // [G2] Refused, not queued: the step's own end is where the failure channel already writes.
+      if (record.runId !== undefined && record.stepId !== undefined && interrupted.running(record.runId, record.stepId)) return false;
+      return writeFailure(brain, record);
+    },
+    stepInterrupted: (runId, stepId) => interrupted.view.step(runId, stepId) || interrupted.view.run(runId),
     stepProvenance: (runId, stepId) => stepTags.get(`${runId} ${stepId}`) ?? "trusted",
     traceSink: observeStep,
   };

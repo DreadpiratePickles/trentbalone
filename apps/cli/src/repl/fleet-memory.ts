@@ -149,11 +149,13 @@ export function fleetMemoryHookOptions(deps: FleetMemoryWiringDeps): FleetMemory
   };
 }
 
-/** The run and seat a `memory` call belongs to, as this wiring tracks it for the mirror. */
+/** The run, seat and step a `memory` call belongs to, as this wiring tracks it for the mirror. */
 interface MirrorCaller {
   companyId: string;
   runId: string;
   seat: string;
+  /** [G2] The step in flight; the mirror holds its episodes until the step finishes. */
+  stepId?: string;
 }
 
 export function wireFleetMemory(deps: FleetMemoryWiringDeps): FleetMemoryHook {
@@ -196,7 +198,16 @@ export function wireFleetMemory(deps: FleetMemoryWiringDeps): FleetMemoryHook {
     },
   );
 
-  const hook = createFleetMemoryHook({ ...options, memory });
+  // [G2] The mirror's step boundaries come from the hook, which is the one place that watches a
+  // seat call begin and end. An episode held for a step that never finished is dropped rather than
+  // written: an append made inside a turn the user stopped is the seat's own record, not something
+  // the company learned.
+  const hook = createFleetMemoryHook({
+    ...options,
+    memory: memory.adapter,
+    onStepSettled: (settled) =>
+      void memory.stepSettled(settled).catch((error: unknown) => deps.onAppMemoryFailure?.(String(error))),
+  });
 
   // The run and the seat are tracked the same way the hook tracks its own caller context: set on
   // the way in, one seat call at a time. A `memory` call happens inside `fn(input)`, so the seat
@@ -209,13 +220,25 @@ export function wireFleetMemory(deps: FleetMemoryWiringDeps): FleetMemoryHook {
     },
     runFinished(runId) {
       if (caller?.runId === runId) caller = undefined;
+      // The hook settles the steps still in flight first, so the mirror hears about each one; what
+      // reaches `runEnded` is whatever no seat call ever claimed.
       hook.runFinished(runId);
+      memory.runEnded(runId);
     },
     wrapSeatModel(fn) {
       const wrapped = hook.wrapSeatModel(fn);
       return async (input) => {
-        if (caller !== undefined) caller.seat = input.subtask.seat;
-        return wrapped(input);
+        if (caller !== undefined) {
+          caller.seat = input.subtask.seat;
+          caller.stepId = input.subtask.id;
+        }
+        try {
+          return await wrapped(input);
+        } finally {
+          // [G2] Outside the seat call there is no step to hold a write for: a `memory` append made
+          // between steps is written at once rather than waiting on a step that has already ended.
+          if (caller !== undefined) caller.stepId = undefined;
+        }
       };
     },
   };

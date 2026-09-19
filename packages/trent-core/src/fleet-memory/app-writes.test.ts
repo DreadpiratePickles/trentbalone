@@ -84,7 +84,7 @@ describe("writeSeatEpisode", () => {
       text: "pricing test beat the control by 12 percent",
       modules,
     });
-    expect(outcome).toEqual({ written: 1, expired: 0, reason: null });
+    expect(outcome).toEqual({ written: 1, expired: 0, skipped: 0, reason: null });
     expect(modules.episodes).toHaveLength(1);
     expect(modules.episodes[0]?.cycleId).toBe(seatEpisodeCycleId("run_1", "growth"));
     expect(modules.episodes[0]?.cycleId).toContain("run_1");
@@ -158,7 +158,7 @@ describe("writeConsolidatedFacts", () => {
       ops: [{ op: "remove", entry_id: "e2" }],
       modules,
     });
-    expect(outcome).toEqual({ written: 0, expired: 1, reason: null });
+    expect(outcome).toEqual({ written: 0, expired: 1, skipped: 0, reason: null });
     expect(modules.expired).toEqual(["doc_churn"]);
     expect(modules.facts).toEqual([]);
   });
@@ -183,7 +183,7 @@ describe("writeConsolidatedFacts", () => {
   it("writes nothing at all when no operation was proposed", async () => {
     const modules = fakeModules();
     const outcome = await writeConsolidatedFacts({ companyId: "co_1", block: "COMPANY.md", entries, ops: [], modules });
-    expect(outcome).toEqual({ written: 0, expired: 0, reason: null });
+    expect(outcome).toEqual({ written: 0, expired: 0, skipped: 0, reason: null });
   });
 });
 
@@ -211,7 +211,7 @@ describe("withAppEpisodicMirror", () => {
   it("mirrors a completed append into the app's episodic tier", async () => {
     const modules = fakeModules();
     const seen: string[] = [];
-    const mirrored = withAppEpisodicMirror(adapterReturning("completed"), {
+    const { adapter: mirrored } = withAppEpisodicMirror(adapterReturning("completed"), {
       modules,
       caller: () => ({ companyId: "co_1", runId: "run_1", seat: "growth" }),
       onFailure: (reason) => seen.push(reason),
@@ -225,7 +225,7 @@ describe("withAppEpisodicMirror", () => {
 
   it("mirrors nothing when the seat's write was refused or blocked", async () => {
     const modules = fakeModules();
-    const mirrored = withAppEpisodicMirror(adapterReturning("blocked"), {
+    const { adapter: mirrored } = withAppEpisodicMirror(adapterReturning("blocked"), {
       modules,
       caller: () => ({ companyId: "co_1", runId: "run_1", seat: "growth" }),
     });
@@ -235,7 +235,7 @@ describe("withAppEpisodicMirror", () => {
 
   it("mirrors nothing for a read, and never mirrors a replace", async () => {
     const modules = fakeModules();
-    const mirrored = withAppEpisodicMirror(adapterReturning("completed"), {
+    const { adapter: mirrored } = withAppEpisodicMirror(adapterReturning("completed"), {
       modules,
       caller: () => ({ companyId: "co_1", runId: "run_1", seat: "growth" }),
     });
@@ -246,7 +246,7 @@ describe("withAppEpisodicMirror", () => {
 
   it("never changes what the seat is told, even when the mirror fails", async () => {
     const failures: string[] = [];
-    const mirrored = withAppEpisodicMirror(adapterReturning("completed"), {
+    const { adapter: mirrored } = withAppEpisodicMirror(adapterReturning("completed"), {
       modules: {
         ...fakeModules(),
         async writeEpisodicMemory() {
@@ -283,7 +283,7 @@ describe("against the app's real memory-tiers module", () => {
       text: "the onboarding email doubled activation",
       modules,
     });
-    expect(episode).toEqual({ written: 1, expired: 0, reason: null });
+    expect(episode).toEqual({ written: 1, expired: 0, skipped: 0, reason: null });
 
     await writeConsolidatedFacts({
       companyId: company.id,

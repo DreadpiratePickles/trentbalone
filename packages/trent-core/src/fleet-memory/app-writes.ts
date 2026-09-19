@@ -67,13 +67,47 @@ export interface AppMemoryWriteModules {
 export interface AppWriteOutcome {
   readonly written: number;
   readonly expired: number;
+  /** [G2] Facts refused because their text was appended by a step that never completed. */
+  readonly skipped: number;
   readonly reason: string | null;
 }
 
-const NOTHING: AppWriteOutcome = { written: 0, expired: 0, reason: null };
+const NOTHING: AppWriteOutcome = { written: 0, expired: 0, skipped: 0, reason: null };
 
 function failed(error: unknown): AppWriteOutcome {
-  return { written: 0, expired: 0, reason: error instanceof Error ? error.message : String(error) };
+  return { written: 0, expired: 0, skipped: 0, reason: error instanceof Error ? error.message : String(error) };
+}
+
+/**
+ * [G2] What an interrupted step appended, kept for the length of this process.
+ *
+ * The seat's `memory` call itself completed, so the entry IS in the block on disk and the block is
+ * append-only truth about what the seat did. What must not happen is the next layer treating that
+ * entry as a settled company fact: the episodic mirror holds it (below), and the consolidation's
+ * promotion path refuses to file it in the app's semantic tier. Texts, not digests, because the
+ * consolidation rewords and a fact that CARRIES the fragment is the same leak as one that repeats
+ * it; bounded, because a long session must not grow a list nobody clears.
+ */
+const INTERRUPTED_APPENDS_KEPT = 200;
+const interruptedAppends: string[] = [];
+
+export function recordInterruptedAppend(text: string): void {
+  const clean = text.trim();
+  if (clean === "" || interruptedAppends.includes(clean)) return;
+  interruptedAppends.push(clean);
+  if (interruptedAppends.length > INTERRUPTED_APPENDS_KEPT) interruptedAppends.shift();
+}
+
+/** True when this text is, or carries, something a step appended and never finished. */
+export function isInterruptedAppend(text: string): boolean {
+  const clean = text.trim();
+  if (clean === "") return false;
+  return interruptedAppends.some((held) => clean.includes(held) || held.includes(clean));
+}
+
+/** Clears the quarantine. For tests, and for a surface that starts a genuinely new session. */
+export function forgetInterruptedAppends(): void {
+  interruptedAppends.length = 0;
 }
 
 /**
@@ -130,7 +164,7 @@ export async function writeSeatEpisode(input: WriteSeatEpisodeInput): Promise<Ap
       summary: text,
       agentResults: [{ role: input.seat, success: true, summary: text }],
     });
-    return { written: 1, expired: 0, reason: null };
+    return { written: 1, expired: 0, skipped: 0, reason: null };
   } catch (error) {
     return failed(error);
   }
@@ -180,8 +214,17 @@ export async function writeConsolidatedFacts(input: WriteConsolidatedFactsInput)
     const now = new Date().toISOString();
     const toExpire: string[] = [];
     let staged = 0;
+    let skipped = 0;
 
     for (const op of input.ops) {
+      // [G2] The consolidation may not promote a fragment. An operation whose text is — or carries
+      // — something a step appended and then never finished is dropped here rather than filed as a
+      // company fact: the block still holds the seat's own append, and nothing downstream reads it
+      // as settled. `remove` carries no new text and is always applied.
+      if (op.op !== "remove" && isInterruptedAppend(op.text)) {
+        skipped += 1;
+        continue;
+      }
       if (op.op === "append") {
         semantic.add({ factType: input.block, content: op.text, source: semanticFactSource(input.block, op.text) });
         staged += 1;
@@ -222,7 +265,7 @@ export async function writeConsolidatedFacts(input: WriteConsolidatedFactsInput)
 
     const written = staged === 0 ? [] : await semantic.flush();
     for (const id of toExpire) await input.modules.expireDocument(id, now);
-    return { written: written.length, expired: toExpire.length, reason: null };
+    return { written: written.length, expired: toExpire.length, skipped, reason: null };
   } catch (error) {
     return failed(error);
   }
@@ -233,6 +276,12 @@ export interface AppMirrorCaller {
   readonly companyId: string;
   readonly runId: string;
   readonly seat: string;
+  /**
+   * [G2] The step the call belongs to. Present inside a run, and then the episode is HELD until
+   * the step finishes; absent for a write made outside any step, which is written straight away
+   * because there is no step whose end could take it back.
+   */
+  readonly stepId?: string;
 }
 
 export interface AppEpisodicMirrorOptions {
@@ -265,6 +314,23 @@ function appendedTexts(action: string): string[] {
   return out;
 }
 
+/** [G2] One step ending, as the fleet hook watches its own seat calls settle. */
+export interface StepSettledInput {
+  readonly runId: string;
+  readonly stepId: string;
+  /** The step's seat call returned. False when it threw, or when the run closed around it. */
+  readonly completed: boolean;
+}
+
+/** The wrapped adapter plus the two step boundaries that decide what it may write. */
+export interface AppEpisodicMirror {
+  readonly adapter: MemoryAdapter;
+  /** The step ended: its held episodes are written, or quarantined and dropped. */
+  stepSettled(input: StepSettledInput): Promise<void>;
+  /** The run ended: every step still holding episodes was interrupted, so they are dropped. */
+  runEnded(runId: string): void;
+}
+
 /**
  * The `memory` adapter with its appends mirrored into the app's episodic tier.
  *
@@ -272,24 +338,68 @@ function appendedTexts(action: string): string[] {
  * gate and the lock, and none of that should learn about a store. Only a write the adapter itself
  * COMPLETED is mirrored, so a refusal, a block, a delegated child's write and a malformed action
  * all mirror nothing — the app tier can never carry a fact the blocks refused.
+ *
+ * [G2] And only a write whose STEP completed. The block append happens at tool time, because the
+ * seat must be told the truth about its own write; the episodic row is the company learning it,
+ * and a company does not learn from a turn the user stopped. So the row is held until the step's
+ * seat call returns, and a step that never finished takes its episodes with it.
  */
-export function withAppEpisodicMirror(adapter: MemoryAdapter, options: AppEpisodicMirrorOptions): MemoryAdapter {
+export function withAppEpisodicMirror(adapter: MemoryAdapter, options: AppEpisodicMirrorOptions): AppEpisodicMirror {
   const execute = adapter.execute.bind(adapter);
+  /** Episodes waiting on their step, keyed `<runId> <stepId>`, in the order they were appended. */
+  const held = new Map<string, { readonly caller: AppMirrorCaller; readonly texts: string[] }>();
+
+  async function write(caller: AppMirrorCaller, text: string): Promise<void> {
+    const outcome = await writeSeatEpisode({ ...caller, text, modules: options.modules });
+    if (outcome.reason !== null) options.onFailure?.(outcome.reason);
+  }
+
+  function drop(key: string): void {
+    const entry = held.get(key);
+    if (entry === undefined) return;
+    held.delete(key);
+    for (const text of entry.texts) recordInterruptedAppend(text);
+  }
+
   return {
-    ...adapter,
-    frozenSnapshot: adapter.frozenSnapshot.bind(adapter),
-    thaw: adapter.thaw.bind(adapter),
-    bindCallerContext: adapter.bindCallerContext.bind(adapter),
-    async execute(action: string, payload: Record<string, unknown>): Promise<ToolCallRecord> {
-      const result = await execute(action, payload);
-      if (result.status !== "completed") return result;
-      const caller = options.caller();
-      if (caller === undefined) return result;
-      for (const text of appendedTexts(action)) {
-        const outcome = await writeSeatEpisode({ ...caller, text, modules: options.modules });
-        if (outcome.reason !== null) options.onFailure?.(outcome.reason);
+    adapter: {
+      ...adapter,
+      frozenSnapshot: adapter.frozenSnapshot.bind(adapter),
+      thaw: adapter.thaw.bind(adapter),
+      bindCallerContext: adapter.bindCallerContext.bind(adapter),
+      async execute(action: string, payload: Record<string, unknown>): Promise<ToolCallRecord> {
+        const result = await execute(action, payload);
+        if (result.status !== "completed") return result;
+        const caller = options.caller();
+        if (caller === undefined) return result;
+        const texts = appendedTexts(action);
+        if (caller.stepId === undefined) {
+          for (const text of texts) await write(caller, text);
+          return result;
+        }
+        if (texts.length === 0) return result;
+        const key = `${caller.runId} ${caller.stepId}`;
+        const entry = held.get(key) ?? { caller, texts: [] };
+        entry.texts.push(...texts);
+        held.set(key, entry);
+        return result;
+      },
+    },
+    async stepSettled(input) {
+      const key = `${input.runId} ${input.stepId}`;
+      const entry = held.get(key);
+      if (entry === undefined) return;
+      if (!input.completed) {
+        drop(key);
+        return;
       }
-      return result;
+      held.delete(key);
+      for (const text of entry.texts) await write(entry.caller, text);
+    },
+    runEnded(runId) {
+      for (const key of [...held.keys()]) {
+        if (key.startsWith(`${runId} `)) drop(key);
+      }
     },
   };
 }

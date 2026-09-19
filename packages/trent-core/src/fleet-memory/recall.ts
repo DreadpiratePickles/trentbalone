@@ -13,7 +13,7 @@ import type { Provenance } from "../tools/types.js";
 import { DEFAULT_FLEET_MEMORY_CONFIG, type FleetMemoryConfig } from "./config.js";
 import { scoreAgainst, type EmbedFn } from "./lexical.js";
 import { listSharedSkills, sharedSkillIndexLine } from "./shared-skills.js";
-import { isDelegatedStep, type FleetMemorySource } from "./source.js";
+import { isDelegatedStep, isSettledRun, type FleetMemorySource } from "./source.js";
 
 /** `app` is the web app's own company memory (C1): tiers, documents, capabilities, registries, decisions, wiki. */
 export type RecallKind = "step" | "summary" | "skill" | "playbook" | "app";
@@ -79,7 +79,14 @@ async function collectCandidates(source: FleetMemorySource, input: RecallInput, 
   const out: Candidate[] = [];
   const runs = (await source.listRuns(input.companyId)).filter((r) => r.id !== input.excludeRunId).slice(0, config.recallRunWindow);
   runs.forEach((run, recency) => {
+    // [G2] A run nobody finished is a turn that was stopped, and what a stopped turn produced is a
+    // fragment: it is never offered to the next seat as one of "what other seats learned". The run
+    // row is the honest signal here — the step that was in flight at the interruption finishes in
+    // the background and lands a `completed` row — and `guardInterrupted` adds what this process
+    // watched on top of it. What was tried and lost still reaches a seat, as `[failure]` lines.
+    const settled = isSettledRun(run);
     for (const step of run.steps) {
+      if (!settled || step.interrupted === true) continue;
       if (step.status !== "completed" || !step.output?.trim()) continue;
       const tag = isDelegatedStep(step) ? `${step.agentRole}, delegated` : step.agentRole;
       out.push({
@@ -92,7 +99,7 @@ async function collectCandidates(source: FleetMemorySource, input: RecallInput, 
         ...(step.provenance === undefined ? {} : { provenance: step.provenance }),
       });
     }
-    if (run.summary?.trim()) {
+    if (settled && run.summary?.trim()) {
       out.push({ kind: "summary", agentId: "consolidated", runId: run.id, recency, label: `consolidated | ${clip(run.objective, 60)} | run ${shortId(run.id)}`, text: run.summary });
     }
   });

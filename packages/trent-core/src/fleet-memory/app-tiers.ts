@@ -141,6 +141,8 @@ export interface AppMemoryModules {
 }
 
 const CAPABILITY_SOURCE = "capability_memory";
+/** `writeEpisodicMemory` files a row as `cycle:<cycleId>`; the seat mirror's cycle id is `<runId>:<seat>`. */
+const EPISODE_PREFIX = "cycle:";
 const REGISTRY_PREFIX = "seat-registry:";
 const DECISION_PREFIX = "ceo-decision-journal:";
 const WIKI_PREFIX = "wiki:";
@@ -185,7 +187,16 @@ function newestFirst(a: AppDocument, b: AppDocument): number {
   return left.localeCompare(right);
 }
 
-/** `seat-registry:<seat>:<runId>:<stepId>` and `ceo-decision-journal:<runId>` carry a run id. */
+/**
+ * `seat-registry:<seat>:<runId>:<stepId>`, `ceo-decision-journal:<runId>` and the episodic row's
+ * `cycle:<cycleId>` carry a run id. [G2] The episodic one matters most: the app closes a run by
+ * writing one row that quotes every step's output, filed under the run as its cycle (the seat
+ * mirror files `<runId>:<seat>` under the same prefix, so the first segment answers both). A row
+ * filed under a run that was stopped is dropped by `guardInterrupted` before it can be recalled as
+ * company memory, and it can only be dropped if it says which run it belongs to. A cycle that is
+ * not a run — the weekly sweep files its own id — names a run nothing knows, which no view of
+ * interrupted runs ever matches.
+ */
 function runIdFrom(source: string, prefix: string): string | null {
   if (!source.startsWith(prefix)) return null;
   const rest = source.slice(prefix.length).split(":");
@@ -255,7 +266,7 @@ export function buildAppMemoryEntries(input: BuildAppMemoryInput): FleetMemoryEn
       id: document.id,
       label: `${document.memoryTier ?? "memory"} | ${document.title}`,
       text: document.content,
-      runId: null,
+      runId: runIdFrom(document.source ?? "", EPISODE_PREFIX),
     });
   }
   for (const document of buckets.get("documents") ?? []) {
