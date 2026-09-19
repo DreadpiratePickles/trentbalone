@@ -38,21 +38,28 @@ On a fresh machine this reports failures, and that is the point. Real output fro
 ```
 TRENT DOCTOR
 
-  ✓ Config Validity           Valid configuration (2 profiles loaded)
-  ✗ API Credentials           ANTHROPIC_API_KEY is not a usable Anthropic key: key is 16
-                              characters; an Anthropic key is at least 40. This looks like a
-                              placeholder.
-      fix: Replace it with a real key: `trent config set ANTHROPIC_API_KEY <your-api-key>`.
-  ✗ Standalone Environment Contract
-                              The standalone environment contract is violated
-                              (TRENT_QUEUE_FALLBACK must be "disabled"; ...).
-  ✓ Fleet Agents              5 installed agent(s) loaded, 4 active.
+  ◆ Config Validity            Config file not found at /Users/you/.trent/config.yaml; running
+                               with defaults.
+      fix: Run `trent setup` to generate an initial configuration.
+  ✗ API Credentials            Active provider "google" needs GEMINI_API_KEY; the secrets file
+                               does not exist yet.
+      fix: Run `trent config set GEMINI_API_KEY <your-api-key>`.
+  ✓ Standalone Environment Contract Standalone environment contract holds: the queue fallback is
+                               disabled and no Redis variable is set.
+  ✓ Fleet Agents               3 installed agent(s) loaded, 1 active.
   ...
-  total 13  passed 7  warnings 3  failed 2  skipped 1  in 880ms
-  2 check(s) failed — exit 3
+  · Brain Repository           The brain has not been created yet: it is written on the first run
+                               that assembles a prompt.
+  ◆ App Memory Tiers           The app's company memory is reachable but ephemeral: with no
+                               DATABASE_URL the app store is in-process.
+
+  total 18  passed 9  warnings 4  failed 1  skipped 4  in 7097ms
+  1 check(s) failed — exit 3
 ```
 
-Exit code 3 means configuration. See [doctor.md](doctor.md).
+That is an elided capture of `TRENT_HOME=$(mktemp -d) npm run cli -- doctor`, taken on 2026-09-18
+with `TRENT_QUEUE_FALLBACK=disabled` already exported. Your own counts will differ; the exit code
+is the part to read. Exit code 3 means configuration. See [doctor.md](doctor.md).
 
 ## 4. Set the environment contract
 
@@ -77,17 +84,25 @@ npm run cli -- setup --mode quick
 
 Three modes exist:
 
-- `--mode quick` writes a default provider and model and the core seats. With no keys present it
-  names the environment variables and the `.env` path and writes no credentials. It does not fake an
-  OAuth flow.
+- `--mode quick` writes a default provider and model, the starter seats, and all thirteen toolsets.
+  With no keys present it names the environment variables and the `.env` path and writes no
+  credentials. It does not fake an OAuth flow.
 - `--mode full` walks every provider, messaging platform and toolset interactively.
-- `--mode blank-slate` writes explicit disable lists for toolsets, skills and background work.
+- `--mode blank-slate` keeps `file_ops` and `terminal` and writes every other toolset name into
+  `disabled_toolsets`, `agent.disabled_toolsets` and `platform_toolsets.cli`, so a later update
+  reading any of the three cannot re-enable something you never asked for.
 
-The `toolsets` list in `config.yaml` is what the seats get. `file_ops`, `terminal`, `code`,
-`delegation`, `plugins`, `skills`, `cron` and `web` are registered by the REPL; `web` needs the
-egress proxy, and when it is off the banner says `skipped web (...)` instead of dropping it
-silently. `memory` rides in through the fleet-memory hook, not the toolsets list. The default is
-still `file_ops, terminal`; add the others explicitly.
+The `toolsets` list in `config.yaml` is what the seats get, and it accepts thirteen names:
+`file_ops`, `terminal`, `web`, `browser`, `code`, `vision`, `memory`, `delegation`, `cron`,
+`skills`, `plugins`, `mcp` and `human`. A `config.yaml` with no `toolsets` key gets nine of them —
+everything except `browser`, `vision`, `memory` and `mcp`. `web` needs the egress proxy, and when it
+is off the banner says `skipped web (...)` instead of dropping it silently. `memory` rides in
+through the fleet-memory hook whether or not the list names it, and the run's `todo`, `clarify` and
+`session_search` tools are registered on every build rather than enabled here. Above
+`tools.disclosure_threshold` registered tools (24 by default) everything outside the core toolsets
+is reached through `tool_search`, `tool_describe` and `tool_call` instead of being advertised
+directly; MCP, plugin and app-catalog tools are behind those bridges at any count. See
+[tools.md](tools.md).
 
 Setup writes `~/.trent/config.yaml`. Bare `npm run cli --` with no config on disk runs quick setup
 automatically. `doctor`, `setup`, `config` and `uninstall` never do, because those are what you run
@@ -178,6 +193,13 @@ from a second count, so they match the prompt the seat was given. The TUI shows 
 its context pane, and both surfaces print one pressure notice per run once the injection passes 80
 percent of the ceiling. `/help` lists every command the REPL takes.
 
+Two of those commands are about undoing work rather than asking for it. Every file a seat writes is
+recorded in a per-turn ledger under `<profile>/checkpoints/<run id>/` together with the bytes that
+were there before: `/checkpoints` lists the turn's writes and `/rollback` puts them back, and a
+write made while `checkpoints.enabled` was false was never recorded and cannot be undone. See
+[checkpoints.md](checkpoints.md). `/goal` and `/goals` open and list standing goals with shell
+quality gates ([goals.md](goals.md)); `/stop` interrupts a run that is in flight.
+
 ### One shot, for scripts, pipes and CI
 
 ```bash
@@ -195,8 +217,10 @@ code cannot give a final answer without fresh test or build evidence — `trent 
 `trent run` builds the same headless runtime the REPL, the gateway and `trent cron` build, runs one
 objective on it, and exits. It is not interactive: a step that needs an approval cannot be answered
 here, so the run parks, the approval is persisted, and the command prints the id and exits 7. Decide
-it in the REPL with `/approvals approve <id>` or `/approvals reject <id>`, then run the objective
-again. Ctrl+C aborts the run and releases the runtime before the process goes.
+it from the shell with `trent approvals approve <id>` or `trent approvals reject <id>` — or in the
+REPL with `/approvals approve <id>` — then run the objective again. `trent approvals list` shows
+everything waiting, including a memory write held because the step that produced it read untrusted
+context. Ctrl+C aborts the run and releases the runtime before the process goes.
 
 `--format stream-json` emits a `system` line (run id, profile, provider, model), then **every
 orchestrator event verbatim**, then one final `result` line. The event lines are the run bus's own
@@ -248,8 +272,12 @@ npm run cli -- --version        # 1.0.0
 npm run cli -- doctor --json    # machine-readable report, exit 3 on failure
 npm run cli -- fleet status     # active, installed, catalog, budget
 npm run cli -- sessions list
+npm run cli -- sessions search "launch email"       # full text over this profile's transcripts
 npm run cli -- sessions export <id>                 # structure and metrics, no message bodies
 npm run cli -- sessions export <id> --include-content --out run.json
+npm run cli -- brain status                         # identity, decisions, notes, git versioning
+npm run cli -- workspace status                     # what this directory would put in the prompt
+npm run cli -- security audit                       # read-only; exit 1 on a finding
 ```
 
 `sessions export` is the boundary a transcript crosses on its way off the machine: bodies are left

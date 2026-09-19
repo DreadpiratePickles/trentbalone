@@ -55,15 +55,22 @@ trent run "<objective>"     # one shot, no terminal: streams the run, exits 0/1/
 trent run - --format stream-json   # objective on stdin, one JSON object per line
 trent --tui                 # full-screen Ink TUI on the same session engine
 trent --continue            # resume the last conversation
-trent doctor                # 14 health checks; exit 3 on a configuration failure
+trent doctor                # 18 health checks; exit 3 on a configuration failure
 trent fleet list            # 173 agents: 9 core seats plus 164 catalog specialists
 trent fleet install <id>    # install a specialist with its tools, skills and model
+trent goal create "<obj>" --gate "tests=npm test"   # a goal whose shell gates must exit 0
+trent brain status          # the company brain: identity, standing decisions, episodic notes
+trent sessions search <q>   # full text over this profile's past transcripts
+trent curator status        # skill ages, quarantines and the append-only mutation ledger
 trent improve status        # traces, quarantined drafts, last sweep
+trent security audit        # read-only report over this profile; exit 1 on a finding
+trent approvals list        # everything waiting on a human; approve <id> and reject <id> decide it
+trent budget status         # the day's spend by surface, against the caps and the keys to raise
 trent cron start            # tick the schedule; trent heartbeat start for the periodic check
 trent jobs failed           # failed job runs, newest first; trent jobs retry <id> re-runs one
 trent workspace trust       # let this project's AGENTS.md, CLAUDE.md and .trent/*.md reach the prompt
 trent hooks list            # hooks configured for this profile; trent hooks consent allows one to run
-trent --help                # 27 commands, 93 with their subcommands
+trent --help                # 32 commands, 126 with their subcommands
 ```
 
 Add a model key with `trent config set GEMINI_API_KEY <key>` (or `ANTHROPIC_API_KEY`,
@@ -80,21 +87,46 @@ it for its own runs; the doctor checks the raw environment. Details in
 - **A 9-seat fleet with 164 optional specialists.** `trent fleet list --json` returns 173 agents:
   ceo, engineer, growth, sales, content, support, analyst, finance and escalation, plus the catalog.
   They are data in the wrapped application, not prompts invented at runtime, and the nine ids are
-  exactly the nine roles a plan step can be assigned to.
+  exactly the nine roles a plan step can be assigned to. A seat is a capability, not a prompt: its
+  toolsets, its approval gates and its per-run cap in integer cents come from the app's own
+  `SLOT_ENVIRONMENTS`, and its model tier from `SEAT_MANIFESTS`, so `trent fleet show <seat> --json`
+  prints what that seat may do, what it may not, and which of its manifest capabilities this install
+  cannot execute at all.
 - **Shared fleet memory and cross-agent recall.** One `MEMORY.md`/`USER.md` pair per profile,
   injected into every seat's prelude; completed step outputs from any agent are ranked against the
   current objective and recalled within a character budget; `fleet_search` searches every agent's
-  past runs; skills one agent earned are listed and viewable by the others. Only two writers exist
-  and both are locked and atomic. See
+  past runs; skills one agent earned are listed and viewable by the others. Recall is hybrid when
+  `memory.embedder` resolves a key — lexical TF-IDF blended with an embedding cosine — and lexical
+  otherwise, which `trent doctor` reports by making one cheap embedding call. A seat only ever adds
+  an entry; rewrites belong to the nightly consolidation, which proposes itemised operations over
+  entries by id rather than a rewritten block, and reaches disk only through `trent improve promote`.
+  Only two writers exist and both are locked and atomic. See
   [packages/trent-core/src/fleet-memory/README.md](packages/trent-core/src/fleet-memory/README.md).
 - **Durable orchestration.** The CLI drives the application's own orchestrator with its own drain
   loop; a run survives a process restart. Approvals, budget and the audit chain persist in a local
   SQLite database at `~/.trent/trent.db`.
-- **A REPL that streams the run.** Orchestrator events (run start, step start, step output, step
-  end) render as they happen. Ctrl+C aborts the in-flight stream and leaves the process alive.
-- **A doctor that fails honestly.** 14 checks; the credentials check makes one cheap authenticated
+- **A REPL that streams the run, and remembers it.** Orchestrator events (run start, step start,
+  step output, step end) render as they happen. Ctrl+C aborts the in-flight stream and leaves the
+  process alive. A session is a conversation: turns are appended under `~/.trent/sessions/`, the
+  last few travel with the next run, `trent --continue` resumes the most recent one with its spend,
+  and `trent sessions search <query>` runs full text over every past transcript of the profile.
+- **A doctor that fails honestly.** 18 checks; the credentials check makes one cheap authenticated
   call rather than testing for presence. Exit codes are documented in
   [docs/doctor.md](docs/doctor.md).
+- **A company brain, and an undo for what an agent wrote.** `<profile>/brain/` holds identity,
+  standing decisions and episodic notes as files, versioned with git when it is on PATH; the memory
+  blocks migrate into `brain/system/` on first use and every index over it is disposable. Separately,
+  every file a seat writes is recorded with its pre-image in a per-run checkpoint ledger, so
+  `/checkpoints` lists the turn's writes and `/rollback` puts them back. See
+  [docs/brain.md](docs/brain.md) and [docs/checkpoints.md](docs/checkpoints.md).
+- **Goals with deterministic gates.** `trent goal create "<objective>" --gate "name=<command>"`
+  opens a standing goal whose shell gates must each exit 0 before any judge is consulted; a red gate
+  ends the run and its output starts the next attempt. `goals.verify_on_stop` is on by default, so a
+  turn that edited code cannot give a final answer without fresh test or build evidence. See
+  [docs/goals.md](docs/goals.md).
+- **A curator for the skills a seat writes.** Ageing, adoption, quarantine and release, over an
+  append-only mutation ledger with an undo, plus a second scan of the whole composed skill after
+  every agent write. See [docs/skills.md](docs/skills.md).
 - **Scheduled jobs and a heartbeat.** `trent cron start` ticks the profile's schedule every 30
   seconds and delivers each result to a gateway target; `trent heartbeat start` runs the founder's
   `HEARTBEAT.md` checklist against live fleet state on an interval, outside quiet hours, and
@@ -124,6 +156,7 @@ Every seat's tools are Hermes-shaped toolsets (`02_plan/output/tools-build-spec.
 | `skills` | `skills_list`, `skill_view`, `skill_manage` | On by default |
 | `cron` | `cronjob_manage` | On by default; prompt-injection scan on stored prompts; the same `jobs.json` `trent cron` ticks ([docs/cron.md](docs/cron.md)) |
 | `plugins` | `plugins_list` + `~/.trent/plugins/*/plugin.json` commands | On by default; names cannot shadow built-ins, manifests must be 0600 |
+| `human` | `ask_human` | On by default; the seat asks the founder and waits, on the durable approval path |
 | `memory` | `memory`, `fleet_search`, `fleet_skill_view` | Always on, registered by the fleet-memory hook |
 | `browser` | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, ... | Opt-in; needs a Chromium on the machine, drives it through the egress proxy ([docs/browser.md](docs/browser.md)) |
 | `vision` | `vision_analyze` | Opt-in; sends the image to the configured model ([docs/browser.md](docs/browser.md)) |
@@ -133,7 +166,9 @@ Every seat's tools are Hermes-shaped toolsets (`02_plan/output/tools-build-spec.
 | `clarify` | `clarify` | Always on; up to five founder questions in one card, on the same durable path as `ask_human` |
 | `session_search` | `session_search` | Always on; full text over this profile's past transcripts (FTS5, lexical fallback), also `trent sessions search <query>` |
 
-Quick setup turns on the first eight; blank-slate setup turns on `file_ops` and `terminal` only.
+`toolsets` accepts thirteen names. Quick setup writes all thirteen; blank-slate setup writes
+`file_ops` and `terminal` and puts every other name in `disabled_toolsets`; a `config.yaml` with no
+`toolsets` key gets the schema default of nine, which is every row above marked on by default.
 The last four rows are not toolsets a founder enables: they are the wrapper's own mechanics and are
 registered on every build. Every tool call goes through the approval floors in
 `tools/approval-floors.ts` — including one made through `tool_call`, which re-enters the same
@@ -166,10 +201,21 @@ material as applied in
 [01_discovery/references/cs329a-applied.md](01_discovery/references/cs329a-applied.md); all 17
 tasks in its plan landed (session logs `docs/sessions/2026-09-13-cs329a-batch-2.md` and `-3.md`).
 
-Not done: an automatic sweep (it runs on command; `trent cron` schedules prompts, not the sweep,
-and the heartbeat only drafts memory consolidations), a separate model family for judge and executor,
-tree search, an offline reward model for seats without a verifier, and weighting the judge by the
-judge-versus-human agreement ledger (the ledger exists; the weighting does not).
+The sweep also runs unattended. With `heartbeat.sweep.enabled` on — opt-in, false by default — a
+heartbeat tick runs at most one sweep every `heartbeat.sweep_interval_hours`, never inside quiet
+hours, and only while the day's ledger still holds `improve.sweep_cap_cents` under
+`budget.daily_cap`; `trent heartbeat sweep` runs the same builder once by hand. Nothing it produces
+is promoted: drafts land in quarantine and `trent improve promote` is still the only way out.
+Tool descriptions improve on the same path: tool-health signals become gated proposals that
+`trent improve tools` lists and the same promote gate decides.
+
+The judge is no longer the executor. `improve.judge_model` resolves a planner-tier model and a judge
+equal to the executor is a configuration error naming both; on a single provider key the two still
+come from one model family, which plan decision 6 records as the limit until a second key exists.
+
+Not done: tree search, an offline reward model for seats without a verifier, and weighting the judge
+by the judge-versus-human agreement ledger (the ledger exists; the weighting does not). `trent cron`
+schedules prompts, not sweeps.
 
 ## Desktop
 
@@ -206,6 +252,24 @@ external dependencies to install", not "a single binary": Next.js cannot be comp
   repository.
 - **Human approvals** persist across restarts and are enforced in the REPL, the TUI and the
   messaging gateway.
+- **Autonomy levels, deny globs and a hardline blocklist.** `autonomy` (`ask_always`,
+  `ask_dangerous` the default, `never`) decides how often a human is asked and nothing else: no
+  level lifts the shipped blocklist, an `approvals.deny` glob, or a floor marked
+  never-auto-approvable. [docs/security.md](docs/security.md#autonomy-levels).
+- **User hooks that only run after consent.** Each hook is an argv array, never a shell string, and
+  runs only once `trent hooks consent` has recorded a hash of its exact spec; editing the argv,
+  timeout or match filter loses the consent. [docs/security.md](docs/security.md#user-hooks).
+- **Provenance on every tool result.** The `web`, `browser`, `mcp` and `plugins` toolsets — and any
+  delegated child that used them — mark a step `untrusted`. A `memory` write from such a step is
+  held as a pending approval instead of written and carries `[provenance: untrusted via <tools>]`
+  once approved; `skill_manage` from one is refused. `trent approvals list` shows both kinds of
+  waiting row — a parked run step and a held memory write — and `approve <id>` / `reject <id>`
+  decide either without knowing which file it lives in.
+  [docs/security.md](docs/security.md#provenance-and-untrusted-context).
+- **One read-only report over the whole profile.** `trent security audit` walks autonomy,
+  approvals, hooks, egress, workspace trust, redaction, MCP, plugins, the audit chain, file
+  permissions and `config.yaml` for credential-shaped values, writes nothing, and exits 1 on a
+  finding. [docs/security.md](docs/security.md#auditing-a-profile).
 - **Policy rules over tool sequences.** Every tool call is classified and a rule list is evaluated
   against the run's recent history at dispatch, so "read a secret, then send a message" is denied
   before the second call runs. [docs/security.md](docs/security.md#policy-rules).
@@ -243,9 +307,15 @@ comes first; nothing is "done" without executable evidence. Session logs live in
 |---|---|
 | [getting-started.md](docs/getting-started.md) | Clone to first real conversation |
 | [configuration.md](docs/configuration.md) | Config schema, the yaml/env split, profiles, the env contract |
-| [doctor.md](docs/doctor.md) | The 13 checks, exit codes, `--json`, `--fix` |
+| [doctor.md](docs/doctor.md) | The 18 checks, exit codes, `--json`, `--fix` |
 | [fleet.md](docs/fleet.md) | The catalog, core seats, packs, agent versions with promote and rollback, export and import |
-| [skills.md](docs/skills.md) | The skills hub and the pre-install scanner |
+| [skills.md](docs/skills.md) | The skills hub, the pre-install scanner and the curator |
+| [tools.md](docs/tools.md) | The toolsets, progressive disclosure, and the todo, clarify and session-search tools |
+| [brain.md](docs/brain.md) | `<profile>/brain/`: the truth rule, migration, signposts and recall |
+| [checkpoints.md](docs/checkpoints.md) | The agent-write ledger, per-turn checkpoints and `/rollback` |
+| [goals.md](docs/goals.md) | Standing goals, shell quality gates and `goals.verify_on_stop` |
+| [improve.md](docs/improve.md) | Gates, goldens, the judge model, promotion and rollback |
+| [a2a.md](docs/a2a.md) | The A2A specification on the wire, and ACP over stdio for editors |
 | [gateway.md](docs/gateway.md) | The eight messaging adapters, pairing, approvals and reaction decisions, push alerts, threads as sessions, double texting |
 | [cron.md](docs/cron.md) | `trent cron`: the schedule file, the runner, run history, delivery |
 | [heartbeat.md](docs/heartbeat.md) | `trent heartbeat`: `HEARTBEAT.md`, quiet hours, memory consolidation, history and the lock |

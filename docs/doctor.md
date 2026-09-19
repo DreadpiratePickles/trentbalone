@@ -1,6 +1,6 @@
 # Doctor
 
-`trent doctor` runs 16 checks. Each one inspects something real: a file, a daemon, a socket, an
+`trent doctor` runs 18 checks. Each one inspects something real: a file, a daemon, a socket, an
 authenticated request. None of them return a hard-coded green.
 
 ```bash
@@ -54,11 +54,11 @@ TRENT DOCTOR
 
 Glyphs carry the status when colour is off: `✓` ok, `◆` warn, `✗` fail, `·` skip.
 
-That capture, and the JSON one further down, are verbatim from a run that predates the egress root
-check, so both report `total 14`. They are transcripts, not specifications; the table below is the
-current list.
+That capture, and the JSON one further down, are verbatim from a run that predates the egress root,
+brain and app-memory checks, so both report `total 14`. They are transcripts, not specifications;
+the table below is the current list, and a run of `trent doctor` here today reports `total 18`.
 
-## The 16 checks
+## The 18 checks
 
 | # | Name | What it actually inspects | Auto-fixable |
 |---|---|---|:---:|
@@ -78,6 +78,8 @@ current list.
 | 14 | Self-Improvement Loop | Creates the trace directory if absent, then writes and deletes a probe file to prove it is writable | yes |
 | 15 | OTel Trace Export | Posts an empty OTLP batch to `telemetry.otlp_endpoint` under the probe deadline and reports reachable or unreachable. With no endpoint it reports `not configured` as a skip: a skipped check is not a pass, and the line says so | no |
 | 16 | Recall Embedder | Resolves `memory.embedder` against the profile's keys, then embeds one character on the chosen endpoint with the cache off and a single attempt. `ok` names the provider, the model and the MEASURED dimension count; 401/403 fails; unreachable warns. With no key, or `provider: none`, it reports lexical TF-IDF ranking as a skip | no |
+| 17 | Brain Repository | Stats `<profile>/brain/` and counts the system files, notes, decisions and seat directories actually on disk, and reports whether git versioning resolved. A brain that has not been written yet is a skip, not a failure: it is created by the first run that assembles a prompt | no |
+| 18 | App Memory Tiers | Resolves the wrapped application's store from `DATABASE_URL` and reports which of the three cases this profile is in — unset (reachable but in-process, so tier rows die with the process), a postgres URL (reachable and durable), or a `file:` SQLite path (unreachable, recall falls back to run-derived candidates). See [configuration.md](configuration.md), "Company memory in the app" | no |
 
 Checks 6, 9 and 13 used to return hard-coded green from inside a try block that could not throw.
 Each now has a test that induces a real failure and asserts it is reported

@@ -105,11 +105,16 @@ heartbeat:
   #   end: "20:00"            # a window that crosses midnight (22:00-06:00) wraps
   #   tz: Europe/Berlin       # IANA zone, default UTC
   consolidate_memory: true    # once a day, inside quiet hours, draft itemised edits to every writable memory block
+  sweep:
+    enabled: false            # opt-in: run the improvement sweep unattended on a tick
+  sweep_interval_hours: 24    # at most one unattended sweep per this many hours
 
 fleet:
   installed_agents: [ceo, eng-ai-engineer, support-responder]
   active_agents: [ceo]
   default_agent: ceo
+
+mcp_servers: {}               # Model Context Protocol servers; see docs/mcp.md and `trent mcp add`
 
 memory:
   blocks:                     # named memory blocks; every seat reads all of them in its prelude
@@ -139,6 +144,51 @@ privacy:
 
 policy:
   rules: []                   # appended to the shipped rules; a rule with a shipped id replaces it
+
+tools:
+  disclosure_threshold: 24    # above this many registered tools, everything outside the core
+                              # toolsets is reached through tool_search/tool_describe/tool_call
+
+brain:
+  enabled: true               # false: no <profile>/brain/ is created and no brain block is injected
+  versioning: auto            # auto | off; auto commits each write with git when git is on PATH
+
+checkpoints:
+  enabled: true               # record every agent write with its pre-image, so /rollback can undo it
+  max_bytes_per_run: 52428800 # pre-image bytes one run may store; past it a row carries hashes only
+
+curator:
+  enabled: true               # false: no ageing pass runs; curator status and log still read
+  stale_after_days: 60        # measured from the last LOAD by a seat, not from when it was written
+  archive_after_days: 180     # only skills declared created_by: agent are ever aged
+  scan_agent_skills: true     # rescan the whole composed skill after every agent write
+
+provenance:
+  untrusted_writes: hold      # hold | allow | deny: a memory write from an untrusted step
+  untrusted_skills: deny      # deny | allow: skill_manage from an untrusted step
+
+goals:
+  verify_on_stop: true        # a turn that edited code needs fresh test or build evidence to finish
+  verify_commands:            # what counts as that evidence
+    - npm test
+    - npm run typecheck
+    - npx vitest
+    - npx tsc
+    - pytest
+    - go test
+    - cargo test
+  auto_continue: false        # a red gate never starts another metered run on its own
+  max_continuations: 3        # ceiling on attempts at one goal
+
+improve:
+  holdout_ratio: 0.3          # share of each suite held back from reflection, used for promotion
+  pass_k: 3                   # consecutive trials a fixture must pass to count as passed
+  judge_min_tpr: 0.8          # below these the judge's verdicts are advisory and cannot pass a fixture
+  judge_min_tnr: 0.8
+  sweep_cap_cents: 100        # INTEGER CENTS; defaults to budget.per_run_cap
+  frozen_paths: []            # extra paths the loop may never write
+  judge_model: ""             # empty means resolve one at run time; never equal to the executor
+  min_goldens: 5              # promoted goldens a seat needs before a live sweep reflects for it
 ```
 
 ### Memory blocks
@@ -424,6 +474,89 @@ timeout or match filter loses its consent, and `trent hooks consent` replaces th
 than adding to it, so a hook you delete from the config is revoked. An unconsented hook never runs
 and the run reports it once. The full contract, including what the hook reads on stdin and how it
 is redacted, is in docs/security.md, "User hooks".
+
+### Tool disclosure
+
+`tools.disclosure_threshold` (integer, default 24) is the count of registered tools above which
+everything outside the core toolsets is taken out of a seat's advertised list and reached through
+`tool_search`, `tool_describe` and `tool_call` instead. MCP, plugin and app-catalog tools are
+deferred at **any** count, because their number is not Trent's to bound. Raising the threshold buys
+direct schemas at the cost of prompt context on every turn; lowering it buys context at the cost of
+one extra round trip the first time a tool is needed. A call made through `tool_call` re-enters the
+same wrapper chain a direct call enters, so the approval floors, the policy rules and the hooks all
+still apply. See [tools.md](tools.md).
+
+### The brain
+
+`brain.enabled` (default true) creates `<profile>/brain/`, the file tree that holds identity,
+standing decisions and episodic notes; the memory blocks migrate into `brain/system/` on first use
+and every index over it is disposable. `brain.versioning` is `auto` or `off`: `auto` commits each
+write with git when git is on PATH, naming the seat that made it and the run it belonged to, and
+falls back to plain files otherwise — which `trent doctor` reports as a line, not a failure.
+Versioning is for audit and rollback, never for merging concurrent writers; that is the memory
+lock's job. `brain.enabled: false` means no directory is created and no brain block reaches a
+prompt, and the memory blocks stay where they are. See [brain.md](brain.md).
+
+### Checkpoints
+
+`checkpoints.enabled` (default true) records every file an agent writes, with the bytes that were
+there before, under `<profile>/checkpoints/<run id>/` — 0600 files in a 0700 directory. That ledger
+is what `/checkpoints` lists and what `/rollback` restores. `checkpoints.max_bytes_per_run` (default
+52428800, that is 50 MiB) caps the pre-image bytes one run may store: past it a row still carries
+both hashes and says why it carries no bytes, and that path is refused at rollback rather than
+restored from something approximate. A write made while `enabled` was false was never recorded and
+can never be undone. See [checkpoints.md](checkpoints.md).
+
+### The skill curator
+
+`curator.enabled` (default true) runs the ageing pass; with it false no skill is ever aged, while
+`trent curator status` and `trent curator log` still read, because seeing what the curator would do
+is not curation. `stale_after_days` (60) and `archive_after_days` (180) are measured from the last
+LOAD of a skill by a seat's run, not from when it was written, and only skills declared
+`created_by: agent` are ever aged by them: a skill a person installed is reported and left alone
+however old it gets. `scan_agent_skills` (true) is the second scan gate — the composed skill, its
+document and its whole bundle put past the pre-install scanner after every agent write, with a
+flagged skill held `quarantined` until a human releases it. The toolset builder does not yet pass
+this setting into the adapter, so the gate is on regardless of what is written here. See
+[skills.md](skills.md).
+
+### Provenance
+
+`provenance` decides what output derived from untrusted context may do. Untrusted means the `web`
+and `browser` toolsets, MCP servers, plugin tools, and a delegated child that used any of them.
+`untrusted_writes` governs a write into a layer every seat loads next run: `hold` (the default)
+turns it into a pending approval row naming the tools it came from, `deny` refuses it outright, and
+`allow` writes it tagged — which deliberately reopens the memory-poisoning path, so it is a choice
+and not a default. `untrusted_skills` governs `skill_manage` from such a step and ships as `deny`,
+because a skill is executable content a later seat runs without reading it. Nothing here inspects
+untrusted text for an instruction; the gate is on the combination of untrusted input and a durable
+write. See [security.md](security.md), "Provenance and untrusted context".
+
+### Goals
+
+`goals.verify_on_stop` is **on by default**: a turn that edited code cannot give a final answer
+without fresh evidence from one of `goals.verify_commands`, which defaults to `npm test`,
+`npm run typecheck`, `npx vitest`, `npx tsc`, `pytest`, `go test` and `cargo test`. A goal opened
+with `trent goal create "<objective>" --gate "name=<command>"` carries its own shell gates, and
+every gate must exit 0 before any judge is consulted; a red gate ends the run and its output starts
+the next attempt. `auto_continue` is **off** by default, because a red gate that silently starts
+another metered run is a bill nobody authorised — `trent goal continue <id>` is the explicit path,
+and `max_continuations` (3) bounds both. See [goals.md](goals.md).
+
+### Improvement gates
+
+`improve` holds the gates the self-improvement loop is held to. `holdout_ratio` (0.3) is the share
+of every suite held back from reflection and scoring and used for promotion alone; `pass_k` (3) is
+how many consecutive trials a fixture must pass to count as passed; `judge_min_tpr` and
+`judge_min_tnr` (0.8) are the calibration floors below which the judge's verdicts are advisory and
+cannot make a fixture pass; `sweep_cap_cents` is the sweep's hard spend cap in integer cents and
+defaults to `budget.per_run_cap`; `frozen_paths` are extra paths the loop may never write, on top of
+the suites, the goldens, the judge prompt and the gate code. `judge_model` empty is not "no judge":
+it means resolve one at run time — the configured planner-tier model when it differs from the
+executor, else the strongest priced Gemini model that does — and a judge equal to the executor is a
+configuration error naming both. `min_goldens` (5) is how many promoted goldens a seat's suite must
+hold before `trent improve sweep --live` spends a model call reflecting for it. See
+[improve.md](improve.md).
 
 ### Workspace context files
 
@@ -757,7 +890,9 @@ whenever the stored shape changes.
 - Cloud profiles or a hosted configuration store. `TRENT_CLOUD_TOKEN` is reserved in the secrets
   schema and nothing consumes it.
 - A `trent config edit` command. Edit the YAML directly.
-- Voice transcription. There is no `voice` section in the schema and no speech engine behind the
-  `/voice` command; calling it raises a `TrentError` (`voice.transcribe: voice transcription is not
-  available in this release`). A `voice:` block left over in an older `config.yaml` is ignored, not
-  migrated: the schema passes unknown top-level keys through untouched.
+- Voice transcription. There is no `voice` section in the schema, no `/voice` command in the REPL
+  (typing one answers `Unknown command: /voice`), and no speech engine behind
+  `packages/trent-core/src/voice/`: its one entry point always throws a `TrentError`
+  (`voice.transcribe: voice transcription is not available in this release`, exit code 2). A
+  `voice:` block left over in an older `config.yaml` is ignored, not migrated: the schema passes
+  unknown top-level keys through untouched.

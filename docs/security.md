@@ -225,6 +225,13 @@ status — so a stale index entry for an already-answered approval is harmless.
 The test that matters kills the process mid-approval and asserts the approval is still pending and
 still answerable, and that the budget and the audit chain persisted with it.
 
+Progressive tool disclosure does not open a way around any of this. Above
+`tools.disclosure_threshold` a tool is reached through `tool_call` rather than advertised directly,
+and `tool_call` re-enters the same wrapper chain a direct call enters — the autonomy dispatch, the
+deny globs, the hardline floor, the policy rules, the hooks and the idempotency store all run for
+the inner call, on the inner tool's own name. MCP, plugin and app-catalog tools sit behind that
+bridge at any count. See [tools.md](tools.md).
+
 Approval floors are matched over deobfuscated command variants:
 `packages/trent-core/src/tools/approval-floors.ts` (`floorBlock`, `dangerous`, `detectionVariants`)
 runs every rule in `approval-patterns.ts` (`HARDLINE_PATTERNS`, `DANGEROUS_PATTERNS`, ported from
@@ -475,7 +482,10 @@ are configurable — `provenance.untrusted_writes` (`hold`, the default, `deny` 
 `provenance.untrusted_skills` (`deny`, the default, or `allow`) — and `allow` deliberately reopens
 the memory-poisoning path, so it is a choice and not an accident. Nothing here inspects the
 untrusted text for an instruction: that detection is unsolved, and the gate is on the combination of
-untrusted input and a durable write instead.
+untrusted input and a durable write instead. A held write is decided on either surface — `trent
+approvals list` and `/approvals` show each one's kind, the seat that made it and the untrusted tools
+it came from, `approve <id>` replays the seat's own action with the provenance recorded in the
+entry, and `reject <id>` discards it, leaving the denied row behind as the record of the refusal.
 
 ## Auditing a profile
 
