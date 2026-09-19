@@ -65,3 +65,16 @@ Bobby's gate, then waves.
   the app adapters and a local clip pipeline. Side defects: `fromCatalog` reads unset
   `designedTools`; `seat-prompt.ts:27` non-V3 lookup; `fleet create` omits the budget cap.
 - RC (harness upgrade audit) was cut by the weekly usage limit before writing; resumed.
+- RC landed -> `01_discovery/output/harness-upgrade-audit-2026-09-19.md`. LangGraph: do not adopt
+  (none of principle 11's escalation conditions holds; resume-re-executes-the-node would demand
+  idempotency in the app's seat loop we cannot edit and create a second run truth); borrow two
+  patterns: `orchestrator.resume(runId)` over the app's hydrate + select-ready-steps, and one
+  typed resume Command. RAG: no ingestion exists today (brain CLI is status/log/show; the index
+  covers three dirs and cuts at 4,000 chars; file_ops reads binaries as UTF-8); build `trent brain
+  import` (files-are-truth Markdown under brain/docs with sha256/page/provenance front matter,
+  heading- and page-aware chunks, contextual prefixes, the existing Gemini embedder), hybrid +
+  a local ONNX cross-encoder rerank, chunk-id citations into the CONTEXT tier, and a recall@8
+  golden gate in the improve loop. Correction to the roadmap: the app's planner/seat grounding
+  path DOES use wiki-embeddings.ts (hash vectors on a Gemini-only profile), so the wrapper drains
+  a pipeline ranked by hash vectors today.
+- Discovery complete (4 files). Next: design doc with options -> Fable review -> Bobby's gate.
