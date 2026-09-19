@@ -53,3 +53,15 @@ Bobby's gate, then waves.
   at $0/clip, hosted transcription fallback, Gemini/FLUX thumbnails ~$0.05/image, YouTube private
   uploads until the audit. Demand evidence supports approval gates (89% of creators always
   review AI output). Fresha closed; Vagaro/Boulevard gated; X API $200/mo Basic.
+- RA landed -> `01_discovery/output/upgrade-agents-audit-2026-09-19.md`. Catalog specialists are
+  metadata plus category-default skills (no prompt, tools, model policy or suite); `fleet install`
+  writes a record nobody runs; only the nine seats execute; specialists produce no traces so the
+  improve loop never sweeps them. Assistant gaps: booking/quotes/invoices/reviews tools absent,
+  customer messaging has no executor. Social: the web app already has live adapters for X, FB,
+  IG, LinkedIn, TikTok, YouTube plus a calendar with an approval gate, none wrapped into core;
+  four social skills unassignable. Creator: ffmpeg absent, sandbox inert, transcription stub
+  throws, no media toolset. Recommendation: fleet packs (small-business, social, creator) over
+  existing seats plus newly assignable skills, with new `social` and `media` toolsets wrapping
+  the app adapters and a local clip pipeline. Side defects: `fromCatalog` reads unset
+  `designedTools`; `seat-prompt.ts:27` non-V3 lookup; `fleet create` omits the budget cap.
+- RC (harness upgrade audit) was cut by the weekly usage limit before writing; resumed.
