@@ -228,3 +228,16 @@ stop rules and output are recorded verbatim in the chat transcript of this sessi
 in the memory note; the helpers it names live in scripts/dev/. Blockers already known for it:
 the GitHub workflow scope (pending-workflow-changes.patch), W3.1 wiring, the D2 spend ledger,
 the interrupted-fragment rule on recall and app memory.
+- D4 landed (goals, gates before judge, verify_on_stop). Not done: auto_continue has no surface; no goal judge model wired.
+- D5 landed (bdaab39). Working tree synced to HEAD (schema.ts, defaults.ts, sections/memory.ts,
+  doctor/index.ts, commands/index.ts). Wave 3 closed.
+
+## Wave close evidence (clean worktree of HEAD bdaab39)
+See `scratchpad/iso-wave-close.log`: tsc, core build, repo-scan and the full core+CLI vitest
+run recorded below in the final summary lines of this session.
+tsc exit=0
+core build exit=0
+repo-scan exit=0
+      Tests  2853 passed | 1 skipped (2854)
+ Test Files  287 passed (287)
+vitest exit=0
