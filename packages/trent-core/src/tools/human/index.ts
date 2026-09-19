@@ -109,6 +109,58 @@ function toDetails(args: Record<string, unknown>): QuestionDetails | string {
   return { kind: "question", question, ...(context ? { context } : {}), ...(options.length ? { options } : {}) };
 }
 
+/**
+ * A3 — one entry of a multi-question card (`tools/clarify`). The type lives here, not in
+ * `clarify/`, so `questionFromEvent` can read a clarify card without importing the tool that
+ * writes one: the surfaces (`repl/engine.ts`, `commands/groups/run.ts`, `gateway/RunApprovalLink`)
+ * already read every gate through this one function and must not learn a second shape.
+ */
+export interface QuestionEntry {
+  readonly id: string;
+  readonly question: string;
+  readonly context?: string;
+  readonly choices?: readonly string[];
+}
+
+/** The `details` a multi-question card parks with. */
+export interface QuestionsDetails {
+  readonly kind: "questions";
+  readonly questions: readonly QuestionEntry[];
+}
+
+/** Adapters that park a founder card. Both ride the app's tool-approval gate; nothing else does. */
+export const CARD_ADAPTER_NAMES: readonly string[] = [HUMAN_ADAPTER_NAME, "clarify"];
+
+/**
+ * The card text for several questions at once: how to answer, then one line per question with its
+ * choices beside it. The per-question choices are NOT flattened into `options` — a numbered list
+ * that means something different on every line is a trap, so a multi-question card is answered in
+ * text and only a single-question one keeps the numbered options the REPL already renders.
+ */
+export function renderQuestions(details: QuestionsDetails): string {
+  const lines = [`${details.questions.length} questions. Answer each on its own line, as "<id>: <answer>".`, ""];
+  for (const entry of details.questions) {
+    lines.push(`${entry.id}: ${entry.question}`);
+    if (entry.context) lines.push(`  ${entry.context}`);
+    if (entry.choices?.length) lines.push(`  choices: ${entry.choices.join(", ")}`);
+  }
+  return lines.join("\n");
+}
+
+function fromQuestions(details: QuestionsDetails): QuestionDetails | undefined {
+  const [single] = details.questions;
+  if (single === undefined) return undefined;
+  if (details.questions.length === 1) {
+    return {
+      kind: "question",
+      question: single.question,
+      ...(single.context === undefined ? {} : { context: single.context }),
+      ...(single.choices?.length ? { options: [...single.choices] } : {}),
+    };
+  }
+  return { kind: "question", question: renderQuestions(details) };
+}
+
 /** The card text a founder sees: the question, its context, and the suggested answers numbered. */
 export function renderQuestion(details: QuestionDetails): string {
   const lines = [details.question];
@@ -132,8 +184,9 @@ export function questionFromEvent(event: OrcEvent): QuestionDetails | undefined 
     const details = parseDetails(pending.action);
     if (typeof details !== "string") return details;
   }
-  const parked = [...(step?.toolCalls ?? [])].reverse().find((call) => call.adapter === HUMAN_ADAPTER_NAME && call.status === "needs_approval");
-  const details = (parked as Partial<QuestionRecord> | undefined)?.details;
+  const parked = [...(step?.toolCalls ?? [])].reverse().find((call) => CARD_ADAPTER_NAMES.includes(call.adapter) && call.status === "needs_approval");
+  const details = (parked as { details?: QuestionDetails | QuestionsDetails } | undefined)?.details;
+  if (details?.kind === "questions" && Array.isArray(details.questions)) return fromQuestions(details);
   if (details?.kind === "question" && typeof details.question === "string") return details;
   if (parked) {
     const parsed = parseDetails(parked.action);

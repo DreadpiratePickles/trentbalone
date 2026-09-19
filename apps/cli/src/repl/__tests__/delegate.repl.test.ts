@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ConfigManager } from "@trent/core";
+import { ALWAYS_ON_ADAPTERS } from "@trent/core/tools/index.js";
 import { createTheme } from "../../ui/index.js";
 import { createOrchestrator, type OrcEvent, type Orchestrator, type OrchestratorDepsWithImprove } from "@trent/core/orchestrator/index.js";
 import { PROMPT } from "../engine.js";
@@ -186,7 +187,9 @@ describe("ClassicRepl binds delegate_task to the orchestrator's delegated child 
 
     const transcript = s.out.join("\n");
     expect(transcript).toContain("Run complete");
-    expect((received?.tools ?? []).map((tool) => tool.name)).toEqual(["file_ops", "terminal", "delegation"]);
+    // A3: plus the three always-on tools. Three toolsets are well under `tools.disclosure_threshold`,
+    // so no bridge is registered and `delegate_task` is still reached directly, once.
+    expect((received?.tools ?? []).map((tool) => tool.name)).toEqual(["file_ops", "terminal", "delegation", ...ALWAYS_ON_ADAPTERS]);
 
     const runId = events.find((event) => event.kind === "run_start")?.runId;
     expect(runId).toBeDefined();

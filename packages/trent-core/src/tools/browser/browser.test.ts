@@ -279,12 +279,14 @@ describe("browser toolset without a Chromium", () => {
 
 describe("buildTrentTools wires browser and vision", () => {
   it("builds browser behind egress and vision behind a gateway; browser is skipped with a reason, vision is unavailable", async () => {
-    const { buildTrentTools } = await import("../index.js");
+    const { buildTrentTools, ALWAYS_ON_ADAPTERS } = await import("../index.js");
     const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-build-bv-"));
     const caCertPath = path.join(profileDir, "ca.pem");
     fs.writeFileSync(caCertPath, EGRESS.caPem);
     const none = buildTrentTools({ toolsets: ["browser", "vision"], disabled_toolsets: [] }, { workspace: profileDir, profileDir, backend: "local" });
-    expect(none.adapters.map((a) => `${a.name}:${a.availability}`)).toEqual(["vision:unavailable"]);
+    // A3 registers todo, clarify and session_search on every build; this assertion is about the
+    // two toolsets under test, so the always-on three are filtered out rather than restated.
+    expect(none.adapters.filter((a) => !ALWAYS_ON_ADAPTERS.includes(a.name)).map((a) => `${a.name}:${a.availability}`)).toEqual(["vision:unavailable"]);
     expect(none.skipped.map((s) => s.toolset)).toEqual(["browser"]);
     expect(none.skipped[0]?.reason).toMatch(/egress/i);
     const noModel = await none.adapters[0]!.execute('vision_analyze {"image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==","question":"?"}', {});
@@ -296,7 +298,7 @@ describe("buildTrentTools wires browser and vision", () => {
       { toolsets: ["browser", "vision"], disabled_toolsets: [] },
       { workspace: profileDir, profileDir, backend: "local", egress: { proxyUrl: EGRESS.proxyUrl, token: EGRESS.token, caCertPath }, gateway },
     );
-    expect(both.adapters.map((a) => a.name)).toEqual(["browser", "vision"]);
+    expect(both.adapters.filter((a) => !ALWAYS_ON_ADAPTERS.includes(a.name)).map((a) => a.name)).toEqual(["browser", "vision"]);
     expect(both.skipped).toEqual([]);
     await Promise.all(both.adapters.map((a) => a.cleanup()));
     fs.rmSync(profileDir, { recursive: true, force: true });

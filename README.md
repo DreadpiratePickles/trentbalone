@@ -128,10 +128,16 @@ Every seat's tools are Hermes-shaped toolsets (`02_plan/output/tools-build-spec.
 | `browser` | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, ... | Opt-in; needs a Chromium on the machine, drives it through the egress proxy ([docs/browser.md](docs/browser.md)) |
 | `vision` | `vision_analyze` | Opt-in; sends the image to the configured model ([docs/browser.md](docs/browser.md)) |
 | `mcp` | `mcp_<server>_<tool>`, `mcp_status` | Opt-in; servers from `trent mcp add` (stdio or http), scanned at install time ([docs/mcp.md](docs/mcp.md)) |
+| `tools` | `tool_search`, `tool_describe`, `tool_call` | Registered when there is anything to defer; MCP, plugin and app-catalog tools are behind these bridges at any catalog size, everything outside the core toolsets once `tools.disclosure_threshold` (24) is passed ([docs/tools.md](docs/tools.md)) |
+| `todo` | `todo` | Always on; the run's task list, durable across a restart, outside the transcript compaction shortens |
+| `clarify` | `clarify` | Always on; up to five founder questions in one card, on the same durable path as `ask_human` |
+| `session_search` | `session_search` | Always on; full text over this profile's past transcripts (FTS5, lexical fallback), also `trent sessions search <query>` |
 
 Quick setup turns on the first eight; blank-slate setup turns on `file_ops` and `terminal` only.
-Every tool call goes through the approval floors in `tools/approval-floors.ts`; output over 24K
-characters spills to a file.
+The last four rows are not toolsets a founder enables: they are the wrapper's own mechanics and are
+registered on every build. Every tool call goes through the approval floors in
+`tools/approval-floors.ts` — including one made through `tool_call`, which re-enters the same
+wrapper chain a direct call enters; output over 24K characters spills to a file.
 
 ## Connect to things
 

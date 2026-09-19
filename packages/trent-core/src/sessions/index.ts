@@ -13,6 +13,17 @@ export type {
   SessionStatus,
 } from "./schema.js";
 export * from "./SessionStore.js";
+// A3: full-text search over the transcripts (`trent sessions search`, the `session_search` tool).
+export {
+  searchSessions,
+  snippetAround,
+  SESSION_SEARCH_DEFAULT_LIMIT,
+  SESSION_SEARCH_MAX_LIMIT,
+  type SessionSearchBackend,
+  type SessionSearchHit,
+  type SessionSearchOptions,
+  type SessionSearchResult,
+} from "./search.js";
 export * from "./SessionManager.js";
 export {
   COMPACTION_CONTENT_PREFIX,

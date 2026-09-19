@@ -7,7 +7,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { SessionManager } from "@trent/core/sessions/index.js";
+import { SessionManager, searchSessions, SESSION_SEARCH_DEFAULT_LIMIT, type SessionSearchHit } from "@trent/core/sessions/index.js";
 import { exportSession, type ExportedSession } from "@trent/core/telemetry/index.js";
 import { MCP_CONNECTOR_GALLERY, mcpConnectorTemplateById } from "@trent/core/mcp/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
@@ -140,6 +140,40 @@ export const sessionsSpec: CommandSpec = {
           `  ${ctx.theme.success("exported")} ${ctx.theme.value(session.id)} ${ctx.theme.meta(`${session.messageCount} msgs · ${bodies}`)}`,
           `  ${ctx.theme.meta("written to")} ${ctx.theme.value(where)}`,
         ];
+      },
+    },
+    {
+      // A3. The transcripts are mode 0600 on purpose, so `grep` was never the supported way in.
+      // Ranking is `@trent/core/sessions/search.js`: FTS5 where SQLite has it, a TF-IDF scan where
+      // it does not, and the backend is reported rather than assumed.
+      name: "search <query...>",
+      description: "Full-text search across this profile's session transcripts",
+      options: [
+        { flags: "--limit <n>", description: "Maximum rows to return" },
+        { flags: "--session <id>", description: "Search inside one session only" },
+      ],
+      run(ctx, opts, args) {
+        const query = args.join(" ").trim();
+        if (query === "") {
+          throw new TrentError({ code: EXIT.USAGE, operation: "sessions.search", message: "a search needs a non-empty query" });
+        }
+        const limitRaw = typeof opts.limit === "string" ? Number(opts.limit) : Number.NaN;
+        const sessionId = typeof opts.session === "string" && opts.session.trim() !== "" ? opts.session.trim() : undefined;
+        const result = searchSessions(new SessionManager(ctx.config()).listSessions(), query, {
+          limit: Number.isFinite(limitRaw) ? limitRaw : SESSION_SEARCH_DEFAULT_LIMIT,
+          ...(sessionId === undefined ? {} : { sessionId }),
+        });
+        return { data: { query: result.query, backend: result.backend, count: result.hits.length, hits: result.hits } };
+      },
+      render(data, ctx) {
+        const d = data as { query: string; backend: string; count: number; hits: SessionSearchHit[] };
+        const lines = [ctx.theme.emphasis(`SESSION SEARCH (${d.count})`), ctx.theme.meta(`  ${d.query} via ${d.backend}`)];
+        for (const hit of d.hits) {
+          lines.push(`  ${ctx.theme.value(hit.sessionId)} ${ctx.theme.meta(`#${hit.messageIndex} ${hit.timestamp} ${hit.role}`)}`);
+          lines.push(`    ${ctx.theme.body(hit.snippet)}`);
+        }
+        if (d.hits.length === 0) lines.push(ctx.theme.meta("  no transcript matches"));
+        return lines;
       },
     },
     {

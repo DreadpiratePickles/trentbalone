@@ -15,7 +15,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTheme } from "../../ui/index.js";
 import { DEFAULT_CONFIG } from "@trent/core/config/index.js";
 import type { TrentConfig } from "@trent/core/config/index.js";
-import { buildTrentToolAdapters, type ToolBuildDeps } from "@trent/core/tools/index.js";
+import { ALWAYS_ON_ADAPTERS, buildTrentToolAdapters, TOOL_BRIDGE_ADAPTER_NAME, type ToolBuildDeps } from "@trent/core/tools/index.js";
 import { runCommand } from "../commands.js";
 import { BudgetLedger } from "../budget.js";
 import { ApprovalGate } from "../approvals.js";
@@ -79,7 +79,11 @@ describe("wireTools builds the adapters the config asks for", () => {
     const config = localConfig({ toolsets: ["file_ops", "terminal"], disabled_toolsets: ["terminal"], egress: { ...DEFAULT_CONFIG.egress, enabled: false } });
     const wiring = await wireTools({ config, workspace, profileDir, buildAdapters: build });
     try {
-      expect(wiring.adapters.map((a) => a.name)).toEqual(["file_ops"]);
+      // A3: todo, clarify and session_search are registered on every build whatever `toolsets`
+      // says; the bridges are not, because one core toolset is far under `tools.disclosure_threshold`.
+      expect(wiring.adapters.map((a) => a.name)).toEqual(["file_ops", ...ALWAYS_ON_ADAPTERS]);
+      expect(wiring.adapters.map((a) => a.name)).not.toContain(TOOL_BRIDGE_ADAPTER_NAME);
+      expect(wiring.adapters.flatMap((a) => a.scopes)).toEqual(expect.arrayContaining(["read_file", "todo", "clarify", "session_search"]));
       expect(wiring.toolsets).toEqual(["file_ops"]);
       expect(seen[0]?.deps.workspace).toBe(workspace);
       expect(seen[0]?.deps.profileDir).toBe(profileDir);
@@ -169,7 +173,8 @@ describe("wireTools registers web, skills and cron", () => {
     const config = localConfig({ toolsets: ["file_ops", "web", "skills", "cron"], egress: { ...DEFAULT_CONFIG.egress, enabled: false } });
     const wiring = await wireTools({ config, workspace, profileDir });
     try {
-      expect(wiring.adapters.map((a) => a.name)).toEqual(["file_ops", "skills", "cron"]);
+      // A3: plus the three always-on tools; still under the disclosure threshold, so no bridges.
+      expect(wiring.adapters.map((a) => a.name)).toEqual(["file_ops", "skills", "cron", ...ALWAYS_ON_ADAPTERS]);
       expect(wiring.skipped).toEqual([{ toolset: "web", reason: expect.stringMatching(/egress/i) }]);
       const line = toolsStatusLine(wiring, createTheme("none"));
       expect(line).toMatch(/tools file_ops, skills, cron/);
@@ -344,11 +349,18 @@ describe("/tools lists the real adapters", () => {
     }
   });
 
-  it("says plainly when no adapter is registered", async () => {
+  it("lists only the always-on tools when no toolset is enabled", async () => {
     const config = localConfig({ toolsets: [], egress: { ...DEFAULT_CONFIG.egress, enabled: false } });
     const wiring = await wireTools({ config, workspace, profileDir });
     try {
-      expect(await runCommand("tools", [], contextFor(wiring, config))).toMatch(/no tool/i);
+      // A3: the run's task list, the founder card and a read of this profile's own transcripts are
+      // the wrapper's own mechanics, not capabilities a founder grants, so an empty `toolsets` no
+      // longer means an empty catalog. Nothing that touches the machine is registered here.
+      const listed = await runCommand("tools", [], contextFor(wiring, config));
+      for (const name of ALWAYS_ON_ADAPTERS) expect(listed).toContain(name);
+      expect(listed).not.toContain("file_ops");
+      expect(listed).not.toContain("terminal");
+      expect(listed).not.toContain(TOOL_BRIDGE_ADAPTER_NAME === "tools" ? "tool_call" : TOOL_BRIDGE_ADAPTER_NAME);
     } finally {
       await wiring.cleanup();
     }

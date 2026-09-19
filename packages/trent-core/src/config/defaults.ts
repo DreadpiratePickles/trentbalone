@@ -98,6 +98,12 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // `model` above and a seat runs exactly what it ran before the key existed. Naming one tier
   // changes that tier alone (docs/configuration.md, "Model tiers").
   models: {},
+  // [A3] tool disclosure
+  // 24 is the count at which the catalog stops being something a seat can hold in one prompt: the
+  // twelve built toolsets are already 40-odd tools, so one MCP server puts any real install over
+  // it. It must stay equal to `DEFAULT_DISCLOSURE_THRESHOLD` in `tools/tool_search/index.ts`,
+  // which `tools/tool_search/disclosure.test.ts` asserts.
+  tools: { disclosure_threshold: 24 },
   personality: "default",
   theme: "dark",
   // [D0] improvement gates

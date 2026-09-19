@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ConfigManager } from "@trent/core";
+import { ALWAYS_ON_ADAPTERS, TOOL_BRIDGE_ADAPTER_NAME } from "@trent/core/tools/index.js";
 import { createTheme } from "../../ui/index.js";
 import { createOrchestrator, type Orchestrator, type OrchestratorDepsWithImprove } from "@trent/core/orchestrator/index.js";
 import { PROMPT } from "../engine.js";
@@ -166,7 +167,10 @@ describe("ClassicRepl wires the toolsets into the orchestrator", () => {
     expect(names).toEqual(expect.arrayContaining(["file_ops", "terminal"]));
     // Quick-setup default (config/defaults.ts): every implemented toolset. This session runs with
     // no egress proxy, so web is skipped with a visible reason rather than registered.
-    expect(names).toEqual(["file_ops", "terminal", "code_execution", "delegation", "cron", "skills", "plugins", "human"]);
+    // A3: plus the three always-on tools. Eight toolsets and those three are 24 registered tools,
+    // which is `tools.disclosure_threshold` exactly and not past it, so no bridge is registered.
+    expect(names).toEqual(["file_ops", "terminal", "code_execution", "delegation", "cron", "skills", "plugins", "human", ...ALWAYS_ON_ADAPTERS]);
+    expect(names).not.toContain(TOOL_BRIDGE_ADAPTER_NAME);
     const everything = s.out.join("");
     expect(everything).toContain("file_ops");
     expect(everything).toContain("terminal");
@@ -192,7 +196,8 @@ describe("ClassicRepl registers web, skills and cron and /tools lists them", () 
     s.stdin.emit("end");
     await started;
 
-    expect((recorder.received[0]?.tools ?? []).map((tool) => tool.name)).toEqual(["file_ops", "web", "skills", "cron"]);
+    // A3: plus the three always-on tools; four toolsets stay far under the disclosure threshold.
+    expect((recorder.received[0]?.tools ?? []).map((tool) => tool.name)).toEqual(["file_ops", "web", "skills", "cron", ...ALWAYS_ON_ADAPTERS]);
     const everything = s.out.join("");
     for (const name of ["web_search", "web_extract", "skills_list", "skill_view", "skill_manage", "cronjob_manage"]) {
       expect(everything, name).toContain(name);
@@ -215,7 +220,8 @@ describe("ClassicRepl registers web, skills and cron and /tools lists them", () 
     s.stdin.emit("end");
     await started;
 
-    expect((recorder.received[0]?.tools ?? []).map((tool) => tool.name)).toEqual(["file_ops", "skills", "cron"]);
+    // A3: plus the three always-on tools; still under the disclosure threshold, so no bridges.
+    expect((recorder.received[0]?.tools ?? []).map((tool) => tool.name)).toEqual(["file_ops", "skills", "cron", ...ALWAYS_ON_ADAPTERS]);
     expect(s.out.join("")).toMatch(/skipped web/);
   }, 30_000);
 });
@@ -233,7 +239,13 @@ describe("ClassicRepl and the egress proxy lifecycle", () => {
     expect(await portOpen(port)).toBe(true);
     const handed = (recorder.received[0]?.tools ?? []).map((tool) => tool.name);
     // With the proxy listening, web is registered too — the full quick-setup default.
-    expect(handed).toEqual(["file_ops", "terminal", "web", "code_execution", "delegation", "cron", "skills", "plugins", "human"]);
+    // A3: the three always-on tools, and — because `web` registers here too, putting the catalog at
+    // 27 tools, past `tools.disclosure_threshold` — the `tools` bridge. The toolsets themselves are
+    // unchanged; what changed is that the tools outside the core adapters are now reached through it.
+    expect(handed).toEqual([
+      "file_ops", "terminal", "web", "code_execution", "delegation", "cron", "skills", "plugins", "human",
+      ...ALWAYS_ON_ADAPTERS, TOOL_BRIDGE_ADAPTER_NAME,
+    ]);
 
     s.stdin.emit("end");
     await started;

@@ -110,3 +110,46 @@ describe("trent sessions export", () => {
     expect(result.exitCode).toBe(EXIT.CONFIG);
   });
 });
+
+/**
+ * A3 — `trent sessions search`. The transcripts were searchable by nothing but `grep` on files the
+ * store deliberately keeps at mode 0600; this is the supported way in, and `--json` is the shape a
+ * surface or a script reads.
+ */
+describe("trent sessions search", () => {
+  it("prints the session, the message index and a snippet", async () => {
+    const seeded = seed();
+    const result = await runCli(["sessions", "search", "rotate that key"]);
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(result.stdout).toContain(seeded.id);
+    expect(result.stdout.toLowerCase()).toContain("rotate");
+  });
+
+  it("--json returns the rows", async () => {
+    const seeded = seed();
+    const result = await runCli(["sessions", "search", "rotate that key", "--json"]);
+    expect(result.exitCode).toBe(EXIT.OK);
+
+    const data = JSON.parse(result.stdout) as {
+      query: string;
+      backend: string;
+      count: number;
+      hits: { sessionId: string; messageIndex: number; timestamp: string; snippet: string }[];
+    };
+    expect(data.query).toBe("rotate that key");
+    expect(["fts5", "lexical"]).toContain(data.backend);
+    expect(data.count).toBe(data.hits.length);
+    const hit = data.hits.find((h) => h.sessionId === seeded.id);
+    expect(hit).toBeDefined();
+    expect(hit?.messageIndex).toBe(1);
+    expect(hit?.snippet.toLowerCase()).toContain("rotate");
+    expect(typeof hit?.timestamp).toBe("string");
+  });
+
+  it("returns no rows rather than an error when nothing matches", async () => {
+    seed();
+    const result = await runCli(["sessions", "search", "kubernetes ingress annotations", "--json"]);
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect((JSON.parse(result.stdout) as { hits: unknown[] }).hits).toEqual([]);
+  });
+});

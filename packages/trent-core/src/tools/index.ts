@@ -25,6 +25,10 @@ import { createHumanAdapter, type HumanAnswers } from "./human/index.js";
 import { createMcpAdapter } from "./mcp/index.js";
 import { createPluginsAdapter } from "./plugins/index.js";
 import { createSkillsAdapter } from "./skills/index.js";
+import { createClarifyAdapter } from "./clarify/index.js";
+import { createSessionSearchAdapter } from "./session_search/index.js";
+import { createTodoAdapter, type TodoAdapter } from "./todo/index.js";
+import { discloseAdapters, DEFAULT_DISCLOSURE_THRESHOLD, isToolBridge } from "./tool_search/index.js";
 import { createTerminalAdapter } from "./terminal/index.js";
 import { createWebToolsAdapter } from "./web/index.js";
 import { createBrowserAdapter } from "./browser/index.js";
@@ -48,8 +52,19 @@ export { createSkillsAdapter, SKILLS_ADAPTER_NAME, SKILL_TOOL_SCHEMAS } from "./
 export { createCronAdapter, CRON_ADAPTER_NAME, CRON_TOOL_SCHEMAS } from "./cron/index.js";
 export { createBrowserAdapter, findChromium, BROWSER_ADAPTER_NAME, BROWSER_TOOL_SCHEMAS } from "./browser/index.js";
 export { createVisionAdapter, askVision, VISION_ADAPTER_NAME, VISION_TOOL_SCHEMAS, type VisionGateway } from "./vision/index.js";
-export { createHumanAdapter, questionFromEvent, renderQuestion, HumanAnswers, sharedHumanAnswers, HUMAN_ADAPTER_NAME, HUMAN_SCOPES, HUMAN_TOOL_SCHEMAS } from "./human/index.js";
-export type { HumanAdapter, HumanCallerContext, QuestionDetails, QuestionRecord } from "./human/index.js";
+export { createHumanAdapter, questionFromEvent, renderQuestion, renderQuestions, HumanAnswers, sharedHumanAnswers, CARD_ADAPTER_NAMES, HUMAN_ADAPTER_NAME, HUMAN_SCOPES, HUMAN_TOOL_SCHEMAS } from "./human/index.js";
+export type { HumanAdapter, HumanCallerContext, QuestionDetails, QuestionEntry, QuestionRecord, QuestionsDetails } from "./human/index.js";
+// A3: progressive disclosure and the three tools the catalog was missing.
+export {
+  CORE_ADAPTERS, DEFAULT_DISCLOSURE_THRESHOLD, discloseAdapters, isToolBridge, parseToolBlocks, rankDocuments,
+  TOOL_BRIDGE_ADAPTER_NAME, TOOL_BRIDGE_SCHEMAS, TOOL_BRIDGE_SCOPES, TOOL_CALL_TOOL, TOOL_DESCRIBE_TOOL, TOOL_SEARCH_TOOL,
+} from "./tool_search/index.js";
+export type { DeferredTool, ToolBridgeAdapter, UnknownToolRecord } from "./tool_search/index.js";
+export { createTodoAdapter, TodoStore, TODO_ADAPTER_NAME, TODO_SCOPES, TODO_STATUSES, TODO_TOOL_SCHEMAS } from "./todo/index.js";
+export type { TodoAdapter, TodoItem, TodoStatus } from "./todo/index.js";
+export { createClarifyAdapter, splitAnswers, CLARIFY_ADAPTER_NAME, CLARIFY_MAX_QUESTIONS, CLARIFY_SCOPES, CLARIFY_TOOL_SCHEMAS } from "./clarify/index.js";
+export type { ClarifyRecord } from "./clarify/index.js";
+export { createSessionSearchAdapter, renderHits, SESSION_SEARCH_ADAPTER_NAME, SESSION_SEARCH_SCOPES, SESSION_SEARCH_TOOL_SCHEMAS } from "./session_search/index.js";
 
 /** The config slice the tool builder reads. */
 export type ToolBuildConfig = Pick<TrentConfig, "toolsets" | "disabled_toolsets"> & {
@@ -60,6 +75,8 @@ export type ToolBuildConfig = Pick<TrentConfig, "toolsets" | "disabled_toolsets"
   readonly autonomy?: TrentConfig["autonomy"];
   readonly approvals?: TrentConfig["approvals"];
   readonly hooks?: TrentConfig["hooks"];
+  /** A3: `tools.disclosure_threshold`. Absent means the shipped default. */
+  readonly tools?: TrentConfig["tools"];
 };
 
 export interface ToolBuildDeps {
@@ -112,6 +129,13 @@ export interface ToolBuildDeps {
   readonly seat?: string;
   /** Overrides the hook runner built from `config.hooks`; tests pass their own. */
   readonly hookRunner?: ToolHookPort;
+  /**
+   * A3: adapters a caller registers itself — the app's catalog adapters, a host integration, a
+   * test's fixture. They are wrapped by the same gate chain as the built ones and their tools are
+   * deferred behind the bridges whatever the catalog size, because their descriptions are written
+   * outside this repository.
+   */
+  readonly extraAdapters?: readonly TrentToolAdapter[];
 }
 
 /** One toolset that was enabled in config but could not be built here, and why the seat cannot use it. */
@@ -137,6 +161,13 @@ export interface TrentToolBuild {
  * every `ToolsetSchema` value is either here or in `NOT_YET_IMPLEMENTED` with a reason, so a new
  * enum value can never be a silent no-op.
  */
+/**
+ * A3. Registered on every build, whatever `config.toolsets` says, because they are the wrapper's
+ * own mechanics rather than a capability a founder grants: the run's task list, the founder card,
+ * and a read of this profile's own transcripts. They are not `Toolset` values for the same reason.
+ */
+export const ALWAYS_ON_ADAPTERS: readonly string[] = ["todo", "clarify", "session_search"];
+
 export const IMPLEMENTED_TOOLSETS = ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp", "human"] as const satisfies readonly Toolset[];
 
 /** Enum values this builder does NOT produce, each with the reason a seat will see. */
@@ -215,6 +246,13 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
       skipped.push({ toolset, reason: pending.get(toolset) ?? `"${toolset}" is not a toolset this builder knows` });
     }
   }
+  // A3. Three tools that are not a toolset the founder enables or disables: a task list, the
+  // founder card, and a read of this profile's own transcripts. They cost one schema each and a
+  // seat without them re-plans from a transcript compaction is shortening.
+  adapters.push(createTodoAdapter({ profileDir: deps.profileDir }));
+  adapters.push(createClarifyAdapter(deps.humanAnswers ? { answers: deps.humanAnswers } : {}));
+  adapters.push(createSessionSearchAdapter({ profileDir: deps.profileDir }));
+  if (deps.extraAdapters?.length) adapters.push(...deps.extraAdapters);
   const idempotency = deps.idempotency ?? new IdempotencyManager({ dir: deps.profileDir });
   const policy = deps.policy ?? new PolicyDispatcher(undefined, config.policy?.rules ?? []);
   // A2.2. The autonomy wrapper goes OUTSIDE the policy and idempotency wrappers, so a hardline
@@ -233,8 +271,15 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
     ...(hooks === undefined ? {} : { hooks }),
     ...(deps.seat === undefined ? {} : { seat: deps.seat }),
   });
+  // A3. Disclosure runs LAST, on the wrapped list, so the bridges hold wrapped adapters: a
+  // `tool_call` re-enters the same autonomy, policy, idempotency and hook chain a direct call
+  // enters. Reversing the order would make the bridge a hole in every gate at once.
+  const disclosed = discloseAdapters(guarded, TOOLSET_BY_ADAPTER, {
+    threshold: config.tools?.disclosure_threshold ?? DEFAULT_DISCLOSURE_THRESHOLD,
+    ...(config.mcp_servers === undefined ? {} : { mcpServers: config.mcp_servers }),
+  });
   return {
-    adapters: guarded,
+    adapters: disclosed,
     skipped,
     // A getter, not a snapshot: a hook is skipped when a CALL is made, which is always after the
     // build returned. Reading this field at the end of a run is what makes the notice reachable.
@@ -269,6 +314,13 @@ export const TOOLSET_BY_ADAPTER: Readonly<Record<string, Toolset>> = {
   human: "human",
   memory: "memory",
   fleet_search: "memory",
+  // A3. `clarify` is the founder card, so it follows `human`; `session_search` reads this profile's
+  // own transcripts, so it follows `memory`. Both are in `SHARED_SEAT_TOOLSETS`, so every seat keeps
+  // them. `todo` and the `tools` bridge are deliberately absent: a task list and the way to reach a
+  // deferred tool are not capabilities a manifest grants, and the bridge is narrowed per seat by
+  // {@link adaptersForSeat} instead.
+  clarify: "human",
+  session_search: "memory",
 };
 
 /**
@@ -278,8 +330,12 @@ export const TOOLSET_BY_ADAPTER: Readonly<Record<string, Toolset>> = {
  */
 export function adaptersForSeat(adapters: readonly TrentToolAdapter[], seat: string): TrentToolAdapter[] {
   const allowed = new Set<string>(seatCapability(seat).toolsets);
-  return adapters.filter((adapter) => {
+  const keep = (adapter: TrentToolAdapter): boolean => {
     const toolset = TOOLSET_BY_ADAPTER[adapter.name];
     return toolset === undefined || allowed.has(toolset);
-  });
+  };
+  // A3. The bridge is narrowed to the same subset, so `tool_call` cannot reach a toolset this
+  // seat's manifest does not entitle it to. Without this the disclosure layer would be a way
+  // around the per-seat gate rather than a way around the context cost.
+  return adapters.filter(keep).map((adapter) => (isToolBridge(adapter) ? adapter.restrict(keep) : adapter));
 }
