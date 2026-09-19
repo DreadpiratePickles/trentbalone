@@ -1,14 +1,16 @@
 /**
- * A2A: signed agent cards, and the HTTP adapter over the task lifecycle.
+ * The PRE-SPECIFICATION A2A surface: the HMAC-signed agent card, and `POST /a2a/tasks` with
+ * Trent's own payload.
+ *
+ * The specification transport — the Agent Card at the well-known URI and JSON-RPC at the server
+ * root — is covered by `spec-transport.test.ts`. This file covers what is kept for ONE release
+ * behind a deprecation header (`legacy.ts`): the payload reaches the same engine, the old response
+ * shape comes back, a refusal becomes 503, an unknown id becomes 404, bad JSON becomes 400, and
+ * every one of those responses carries the header that says where to go instead.
  *
  * The previous version of the third test asserted the server's own canned literal
  * (`status === "completed"`, `"... resolved successfully."`) with nothing behind it — the exact
- * anti-test AGENTS.md invariant 4 forbids.
- *
- * The lifecycle itself is covered by `TaskLifecycle.test.ts`. The wire shape here is Trent's own,
- * not the A2A specification's, and is expected to be replaced, so these tests stay at adapter
- * depth: the payload reaches the engine, a task comes back, a refusal becomes 503, an unknown id
- * becomes 404, and bad JSON becomes 400. No live model is involved on any path here.
+ * anti-test AGENTS.md invariant 4 forbids. No live model is involved on any path here.
  */
 import { describe, it, expect } from "vitest";
 import type { AgentRunner, AgentRunInput } from "../agent-runner/index.js";
@@ -19,7 +21,8 @@ import {
   verifyAgentCardSignature,
   A2AServer,
   a2aObjective,
-  type A2ATask,
+  A2A_DEPRECATION_HEADERS,
+  type A2ALegacyTask,
   type AgentCard,
 } from "./index.js";
 
@@ -51,13 +54,13 @@ const payload = {
   parameters: { repo: "acme/backend" },
 };
 
-async function postTask(port: number, body: Record<string, unknown>): Promise<{ code: number; json: any }> {
+async function postTask(port: number, body: Record<string, unknown>): Promise<{ code: number; json: any; deprecated: string | null }> {
   const res = await fetch(`http://127.0.0.1:${port}/a2a/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  return { code: res.status, json: (await res.json()) as any };
+  return { code: res.status, json: (await res.json()) as any, deprecated: res.headers.get("deprecation") };
 }
 
 describe("A2A agent cards", () => {
@@ -115,7 +118,7 @@ describe("a2aObjective", () => {
   });
 });
 
-describe("A2A task endpoint", () => {
+describe("the deprecated A2A task endpoint", () => {
   it("serves a signed card and runs a delegated task on the injected runtime", async () => {
     const runner = fakeRunner([
       ev("run_start", { run: { objective: "x" } }),
@@ -133,9 +136,11 @@ describe("A2A task endpoint", () => {
       expect(cardData.id).toBe("engineer");
       expect(cardData.signature).toBeDefined();
 
-      const { code, json } = await postTask(7895, payload);
-      const task = json as A2ATask;
+      const { code, json, deprecated } = await postTask(7895, payload);
+      const task = json as A2ALegacyTask;
       expect(code).toBe(200);
+      // Kept for one release, and every response says so.
+      expect(deprecated).toBe(A2A_DEPRECATION_HEADERS.Deprecation);
 
       // The lifecycle actually happened, in order, and the terminal state is the runner's.
       expect(task.history.map((h) => h.state)).toEqual(["submitted", "working", "completed"]);
@@ -168,8 +173,9 @@ describe("A2A task endpoint", () => {
     const server = new A2AServer({ port: 7894, secret });
     await server.start();
     try {
-      const { code, json } = await postTask(7894, payload);
+      const { code, json, deprecated } = await postTask(7894, payload);
       expect(code).toBe(503);
+      expect(deprecated).toBe(A2A_DEPRECATION_HEADERS.Deprecation);
       expect(json.error).toBe(NO_RUNNER_REASON);
       expect(json.status).toBeUndefined();
       expect(JSON.stringify(json)).not.toContain("completed");

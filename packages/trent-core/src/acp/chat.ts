@@ -6,9 +6,10 @@
  * one real orchestration run, and the answer is THAT run's output. With no runtime attached it
  * refuses; it never answers on the runtime's behalf.
  *
- * `ACPServer` is a thin JSON-RPC-over-HTTP adapter over this. The real ACP is stdio JSON-RPC and
- * this server speaks HTTP, so the wire layer is expected to be replaced — which is the reason the
- * behaviour and its tests live here rather than inside the request handler.
+ * `ACPServer` is a thin JSON-RPC-over-HTTP adapter over this, reached as `trent acp --http`. The
+ * real protocol is stdio JSON-RPC and lives in `./stdio.ts`, which is what `trent acp` runs; the
+ * behaviour and its tests live here rather than inside a request handler precisely so that the
+ * wire layer could be replaced without them moving.
  */
 
 import { collectAgentRun, NO_RUNNER_REASON, type AgentRunner } from "../agent-runner/index.js";

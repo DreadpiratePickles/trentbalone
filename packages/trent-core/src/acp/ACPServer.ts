@@ -7,9 +7,10 @@
  * puts the outcome into a JSON-RPC envelope. The handshake (`initialize`), `fleet/status` and
  * `file/read` are unchanged.
  *
- * WIRE SHAPE IS PROVISIONAL. The Agent Client Protocol is stdio JSON-RPC; this server speaks
- * JSON-RPC over HTTP on port 7890. That transport is expected to be replaced, so nothing here is
- * hardened for it; keep new behaviour in `chat.ts`.
+ * THIS IS NOT THE PROTOCOL. The Agent Client Protocol is stdio JSON-RPC, and Trent speaks it in
+ * `./stdio.ts`, which is what `trent acp` runs. This server speaks JSON-RPC over HTTP on port 7890
+ * and survives as `trent acp --http` for the integrations and tests that already use it. Nothing
+ * here is hardened; keep new behaviour in `chat.ts` or `stdio.ts`.
  */
 
 import http from "node:http";

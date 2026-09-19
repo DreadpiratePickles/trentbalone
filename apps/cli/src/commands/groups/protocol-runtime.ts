@@ -7,10 +7,14 @@
  * boundary as the `AgentRunner` port the servers take, and a server built without one refuses
  * honestly instead of composing an answer.
  *
- * It lives beside `servers.ts` rather than inside it only to keep that file under 500 lines.
+ * It lives beside `servers.ts` rather than inside it only to keep that file under 500 lines, and
+ * for the same reason it carries the two helpers every long-running command shares: the port
+ * parser and the "listening" renderer. `servers.ts` and `protocol-commands.ts` both read them from
+ * here, so neither file has to import the other.
  */
 
 import type { AgentRunner } from "@trent/core/a2a/index.js";
+import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import type { CommandContext } from "../context.js";
 import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime } from "../../runtime/headless.js";
@@ -37,5 +41,35 @@ export async function openProtocolRuntime(ctx: CommandContext): Promise<Protocol
       run: ({ objective, signal }) => runtime.run(objective, signal === undefined ? {} : { signal }),
     },
     release: () => runtime.cleanup(),
+  };
+}
+
+export const A2A_DEFAULT_PORT = "7895";
+export const ACP_DEFAULT_PORT = "7890";
+export const WEB_DEFAULT_PORT = "3000";
+
+export function parsePort(value: unknown, operation: string, fallback: string): number {
+  const port = Number(typeof value === "string" && value !== "" ? value : fallback);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new TrentError({
+      code: EXIT.USAGE,
+      operation,
+      message: "port must be an integer between 1 and 65535",
+      target: String(value),
+    });
+  }
+  return port;
+}
+
+export function listeningRender(kind: string) {
+  return (data: Record<string, unknown> | unknown[], ctx: CommandContext): string[] => {
+    const d = data as { port?: number; listening?: boolean; dryRun?: boolean };
+    if (d.dryRun === true) {
+      return [`  ${ctx.theme.meta(`would start ${kind} on port`)} ${ctx.theme.value(String(d.port))}`];
+    }
+    return [
+      `  ${ctx.theme.success(`${kind} listening`)} ${ctx.theme.value(`http://127.0.0.1:${String(d.port)}`)}`,
+      `  ${ctx.theme.meta("Ctrl+C to stop")}`,
+    ];
   };
 }

@@ -1,5 +1,6 @@
 /**
- * Long-running surfaces: `a2a`, `acp`, `gateway`, `egress`, `web`.
+ * Long-running surfaces: `gateway`, `egress`, `web`. The `a2a` and `acp` specs live in
+ * `protocol-commands.ts` and are re-exported here, so the registry's import is unchanged.
  *
  * `trent serve` used to start the A2A server, which collides with the desktop's need for a web
  * server. A2A is now `trent a2a serve` and the web server is `trent web`; `serve` is a shim in
@@ -9,8 +10,6 @@
  * consumers get one parseable object at startup instead of waiting for a process that never ends.
  */
 
-import { A2AServer, generateAgentCard } from "@trent/core/a2a/index.js";
-import { ACPServer } from "@trent/core/acp/index.js";
 import { GatewayManager, linkRunApprovals, type RunApprovalLink } from "@trent/core/gateway/index.js";
 import { egressBindHosts, TokenManager } from "@trent/core/egress/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
@@ -22,7 +21,7 @@ import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime } from "../../runtime/headless.js";
 import { releaseOnSignal } from "../../signals.js";
 import { openHeartbeat } from "./heartbeat.js";
-import { openProtocolRuntime } from "./protocol-runtime.js";
+import { ACP_DEFAULT_PORT, listeningRender, parsePort, WEB_DEFAULT_PORT } from "./protocol-runtime.js";
 import {
   BUILD_HINT,
   buildStandalone,
@@ -33,131 +32,7 @@ import {
   type WebTarget,
 } from "../web-server.js";
 
-const A2A_DEFAULT_PORT = "7895";
-const ACP_DEFAULT_PORT = "7890";
-const WEB_DEFAULT_PORT = "3000";
-
-function parsePort(value: unknown, operation: string, fallback: string): number {
-  const port = Number(typeof value === "string" && value !== "" ? value : fallback);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new TrentError({
-      code: EXIT.USAGE,
-      operation,
-      message: "port must be an integer between 1 and 65535",
-      target: String(value),
-    });
-  }
-  return port;
-}
-
-function listeningRender(kind: string) {
-  return (data: Record<string, unknown> | unknown[], ctx: CommandContext): string[] => {
-    const d = data as { port?: number; listening?: boolean; dryRun?: boolean };
-    if (d.dryRun === true) {
-      return [`  ${ctx.theme.meta(`would start ${kind} on port`)} ${ctx.theme.value(String(d.port))}`];
-    }
-    return [
-      `  ${ctx.theme.success(`${kind} listening`)} ${ctx.theme.value(`http://127.0.0.1:${String(d.port)}`)}`,
-      `  ${ctx.theme.meta("Ctrl+C to stop")}`,
-    ];
-  };
-}
-
-export const a2aSpec: CommandSpec = {
-  name: "a2a",
-  description: "Agent-to-Agent protocol: serve tasks and export signed agent cards",
-  subcommands: [
-    {
-      name: "serve",
-      description: "Start the A2A protocol server (previously `trent serve`)",
-      options: [{ flags: "--port <port>", description: "Port to bind", defaultValue: A2A_DEFAULT_PORT }],
-      async run(ctx, opts) {
-        const port = parsePort(opts.port, "a2a.serve", A2A_DEFAULT_PORT);
-        if (ctx.dryRun) return { data: { dryRun: true, command: "a2a serve", port } };
-        // A delegated task is one real run on this runtime. Without it the endpoint can only
-        // refuse (HTTP 503); it never answers on the runtime's behalf.
-        const { runner, release } = await openProtocolRuntime(ctx);
-        const server = new A2AServer({ port, runner });
-        try {
-          await server.start();
-        } catch (error) {
-          await release();
-          throw error;
-        }
-        releaseOnSignal(async () => {
-          await server.stop();
-          await release();
-        }, ctx.overrides.signals);
-        return {
-          data: { server: "a2a", port: server.getPort(), listening: true, runner: server.hasRunner() },
-          keepAlive: true,
-        };
-      },
-      render: listeningRender("a2a"),
-    },
-    {
-      name: "card <agentId>",
-      description: "Export a signed agent card for an installed agent",
-      options: [{ flags: "--endpoint <url>", description: "Advertised task endpoint" }],
-      run(ctx, opts, args) {
-        const agentId = String(args[0]);
-        const endpoint =
-          typeof opts.endpoint === "string" ? opts.endpoint : `http://127.0.0.1:${A2A_DEFAULT_PORT}/a2a/tasks`;
-        // The signing secret comes from the profile secrets file, never from a literal in source.
-        const secret = String(ctx.config().get("TRENT_A2A_SIGNING_KEY") ?? "trent-a2a-key");
-        const card = generateAgentCard(
-          {
-            id: agentId,
-            name: `Trent ${agentId} agent`,
-            description: `Autonomous cofounder specialist: ${agentId}.`,
-            category: "specialist",
-            capabilities: ["task-execution", "analysis", "synthesis"],
-            endpoint,
-          },
-          secret,
-        );
-        return { data: card as unknown as Record<string, unknown> };
-      },
-      render(data, ctx) {
-        const d = data as { id?: string; endpoint?: string };
-        return [
-          `  ${ctx.theme.meta("agent")}    ${ctx.theme.value(String(d.id))}`,
-          `  ${ctx.theme.meta("endpoint")} ${ctx.theme.value(String(d.endpoint))}`,
-          `  ${ctx.theme.meta("use --json for the full signed card")}`,
-        ];
-      },
-    },
-  ],
-};
-
-export const acpSpec: CommandSpec = {
-  name: "acp",
-  description: "Start the ACP editor integration server (VS Code, Cursor, Zed)",
-  options: [{ flags: "--port <port>", description: "Port to bind", defaultValue: ACP_DEFAULT_PORT }],
-  async run(ctx, opts) {
-    const port = parsePort(opts.port, "acp", ACP_DEFAULT_PORT);
-    if (ctx.dryRun) return { data: { dryRun: true, command: "acp", port } };
-    // `agent/chat` from the editor is one real run on this runtime; with none attached the
-    // method returns a JSON-RPC error rather than a string this process wrote.
-    const { runner, release } = await openProtocolRuntime(ctx);
-    const server = new ACPServer({ port, configManager: ctx.config(), runner });
-    try {
-      await server.start();
-    } catch (error) {
-      await release();
-      throw error;
-    }
-    releaseOnSignal(async () => {
-      await server.stop();
-      await release();
-    }, ctx.overrides.signals);
-    return {
-      data: { server: "acp", port: server.getPort(), listening: true, runner: server.hasRunner() },
-      keepAlive: true,
-    };
-  },
-  render: listeningRender("acp"),
-};
+export { a2aSpec, acpSpec } from "./protocol-commands.js";
 
 export const gatewaySpec: CommandSpec = {
   name: "gateway",

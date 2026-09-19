@@ -41,6 +41,12 @@ export interface AgentRunOutcome {
   readonly runId: string | undefined;
   /** How many frames the stream carried. Zero means the runtime produced nothing at all. */
   readonly events: number;
+  /**
+   * The question the run parked on, when it parked on an approval gate. It is the gate's own text
+   * (`detail`, else the step title), so a protocol that has somewhere to put a question — A2A's
+   * `input-required` status message — can hand the caller the real one instead of a placeholder.
+   */
+  readonly question?: string;
 }
 
 /** Returned by a server that was built with no runner. HTTP 503 / JSON-RPC error, never a result. */
@@ -62,30 +68,56 @@ function messageOf(error: unknown): string {
 }
 
 /**
- * Drives one run to its end and folds the event stream into an outcome.
+ * The fold, one event at a time.
  *
- * A throw from the runtime is a failed run carrying the real message, not an exception the HTTP
- * layer has to invent a body for.
+ * `collectAgentRun` drives a run to its end; a streaming transport (A2A `message/stream`) has to
+ * emit a frame per event AND still end with the same outcome, so the fold is separated from the
+ * loop rather than written twice. Both paths therefore agree by construction.
  */
-export async function collectAgentRun(runner: AgentRunner, input: AgentRunInput): Promise<AgentRunOutcome> {
+export interface AgentRunFold {
+  /** Feed one frame. Returns the text this frame added to the run's output, if any. */
+  apply(event: OrcEvent): string | undefined;
+  /** The outcome as the frames seen so far describe it. */
+  outcome(): AgentRunOutcome;
+  /** Record a throw from the runtime as a failed run carrying the real message. */
+  fail(error: unknown): AgentRunOutcome;
+}
+
+export function createAgentRunFold(): AgentRunFold {
   let runId: string | undefined;
   let output = "";
   let status: AgentRunStatus | undefined;
+  let question: string | undefined;
   let gated = false;
   let events = 0;
 
-  try {
-    for await (const event of runner.run(input)) {
+  const settle = (): AgentRunOutcome => {
+    const base = { runId, events, ...(question === undefined ? {} : { question }) };
+    if (status !== undefined) return { status, output, ...base };
+    // No terminal frame. An open approval gate is real state and gets its own A2A state; anything
+    // else is a run that simply produced nothing, which is a failure and is reported as one.
+    if (gated) return { status: "input-required", output: output === "" ? AWAITING_APPROVAL_REASON : output, ...base };
+    return { status: "failed", output: output === "" ? NO_TERMINAL_FRAME_REASON : output, ...base };
+  };
+
+  return {
+    apply(event: OrcEvent): string | undefined {
       events += 1;
       if (runId === undefined && typeof event.runId === "string" && event.runId !== "") runId = event.runId;
 
       switch (event.kind) {
+        case "step_output": {
+          const text = event.step?.output;
+          return text !== undefined && text !== "" ? text : undefined;
+        }
         case "consolidate_end":
         case "run_done": {
           const summary = event.run?.summary;
           if (summary !== undefined && summary !== "") output = summary;
           if (event.kind === "run_done") status = "completed";
-          break;
+          // The summary is the run's RESULT, not progress: it leaves as the task artifact, so it
+          // is deliberately not reported here as another chunk of intermediate text.
+          return undefined;
         }
         case "run_failed": {
           const detail = event.detail;
@@ -93,26 +125,41 @@ export async function collectAgentRun(runner: AgentRunner, input: AgentRunInput)
           if (detail !== undefined && detail !== "") output = detail;
           else if (summary !== undefined && summary !== "") output = summary;
           status = "failed";
-          break;
+          return undefined;
         }
         case "run_cancelled":
           status = "cancelled";
-          break;
+          return undefined;
         case "run_awaiting_approval":
-        case "step_awaiting_approval":
+        case "step_awaiting_approval": {
           gated = true;
-          break;
+          const asked = event.detail !== undefined && event.detail !== "" ? event.detail : event.step?.title;
+          if (question === undefined && asked !== undefined && asked !== "") question = asked;
+          return undefined;
+        }
         default:
-          break;
+          return undefined;
       }
-    }
-  } catch (error) {
-    return { status: "failed", output: messageOf(error), runId, events };
-  }
+    },
+    outcome: settle,
+    fail(error: unknown): AgentRunOutcome {
+      return { status: "failed", output: messageOf(error), runId, events, ...(question === undefined ? {} : { question }) };
+    },
+  };
+}
 
-  if (status !== undefined) return { status, output, runId, events };
-  // No terminal frame. An open approval gate is real state and gets its own A2A state; anything
-  // else is a run that simply produced nothing, which is a failure and is reported as one.
-  if (gated) return { status: "input-required", output: output === "" ? AWAITING_APPROVAL_REASON : output, runId, events };
-  return { status: "failed", output: output === "" ? NO_TERMINAL_FRAME_REASON : output, runId, events };
+/**
+ * Drives one run to its end and folds the event stream into an outcome.
+ *
+ * A throw from the runtime is a failed run carrying the real message, not an exception the HTTP
+ * layer has to invent a body for.
+ */
+export async function collectAgentRun(runner: AgentRunner, input: AgentRunInput): Promise<AgentRunOutcome> {
+  const fold = createAgentRunFold();
+  try {
+    for await (const event of runner.run(input)) fold.apply(event);
+  } catch (error) {
+    return fold.fail(error);
+  }
+  return fold.outcome();
 }
