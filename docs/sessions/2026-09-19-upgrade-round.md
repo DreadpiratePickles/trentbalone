@@ -36,3 +36,12 @@ Bobby's gate, then waves.
   agents must be droppable into other harnesses, not only ours.
 - Model note: the session switched to Opus 5 at this point (Bobby's /model); reasoning-heavy
   synthesis and the design review should still go to a Fable agent per the standing rule.
+- RB landed -> `01_discovery/output/portable-agents-research-2026-09-19.md`. Findings: no target
+  harness carries a per-run budget, memory/brain, verifier suites or version pins natively;
+  Grok Build reads `.claude/agents/*.md` (one Claude renderer covers two hosts); Grok Bot has no
+  file surface (remote-call only); Codex agents are `.codex/agents/*.toml` and Codex dropped its
+  MCP-server mode; Hermes imports Claude Code/Codex but not subagent files; Trent has no MCP
+  server today and `agent.json` omits gates/budget/tier/eval/brain; our frontmatter parser cannot
+  read the nested `metadata:` map. Recommendation: (ii) `trent mcp serve` first (reuse the A2A
+  runner), then (iii) a `trent-agent/2` package (Agent Plugins 1.0.0 dir + `extensions["ai.trent.agent"]`,
+  skills/, mcp.json, brain/) with per-harness renderers producing (i).
