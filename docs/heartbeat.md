@@ -159,3 +159,36 @@ exits, for launchd, systemd timers or system cron.
 
 The structured log carries the decision, the duration, the cost and a delivery or failure reason.
 The checklist and the reply body never reach the log.
+
+## The daily spend ledger the sweep is metered against
+
+`budget.daily_cap` is one cap over every surface, not one per surface. Each charge is appended as
+one JSON line to `<profile>/spend.ndjson` (mode 0600, append-only) —
+`{ at, surface, run_id, seat?, model, provider, cents, tokens }`, integer cents throughout — and
+the surfaces read that same file: the REPL opens its ticker on the day's total and refuses the
+next turn once the total reaches the cap even if another surface spent it, a run records what it
+cost through the orchestrator's run-end hook tagged with the surface that asked for it (`repl`,
+`run`, `gateway`, `cron`, `heartbeat`, or `unknown` when the surface does not say), and the
+unattended sweep both charges the day for what it spent and computes its headroom from the day's
+cross-surface total. A sweep is refused with `budget` when that total leaves less than
+`improve.sweep_cap_cents`; before this ledger the heartbeat measured its headroom against its own
+`runs.jsonl` alone, so a founder who had spent the cap in the REPL at noon still bought a sweep at
+midnight. The two views are reconciled by taking the larger, so a surface that does not yet write
+the ledger cannot buy extra headroom.
+
+The file is the layer, not the store: the durable store's schema is derived from the read-only
+`apps/web` Prisma schema, so there is no spend table to add without editing it, and under Node
+every durable layer is ephemeral anyway (AGENTS.md defect 9) — a store-only ledger would forget
+the day's spend on every process exit. `SpendIndexPort` is the seam for a store-side index when
+the schema can carry one; the file stays the record.
+
+```
+npm run cli -- budget status
+npm run cli -- budget status --json
+npm run cli -- budget status --date 2026-09-17 --json
+```
+
+`budget status` prints the day (on `heartbeat.active_hours.tz`), the total against
+`budget.daily_cap` with what is left, the spend of each surface that charged that day largest
+first, `budget.per_run_cap` and `improve.sweep_cap_cents`, and the path every surface appends to.
+It reads and writes nothing, so `--dry-run` reports exactly what a normal run does.

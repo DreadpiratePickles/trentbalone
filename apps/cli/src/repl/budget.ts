@@ -7,17 +7,46 @@
  * from `config.budget.alert_thresholds` — never a literal in this file.
  */
 
+import type { SpendLedger } from "@trent/core/governance/index.js";
+
 import type { Theme } from "../ui/index.js";
+
+/**
+ * [G3] The day's shared ledger, as this ticker uses it: read the total every surface has written,
+ * write this surface's own costs back. Only the two methods are required, so a test needs no file.
+ */
+export type SpendLedgerPort = Pick<SpendLedger, "append" | "dailyTotalCents">;
+
+/** What the REPL knows about a cost beyond its cents; each field rides into the ledger row. */
+export interface BudgetChargeMeta {
+  model?: string;
+  provider?: string;
+  tokens?: number;
+  seat?: string;
+  runId?: string;
+}
 
 export interface BudgetLedgerOptions {
   /** Daily cap in integer cents (`config.budget.daily_cap`). */
   capCents: number;
   /** Percentages (`config.budget.alert_thresholds`). */
   thresholds: readonly number[];
-  /** Cents already spent today, if a previous session is being resumed. */
+  /** Cents already spent today, if a previous session is being resumed. Ignored when `spend` is wired. */
   openingCents?: number;
   /** Per-run cap in integer cents (`config.budget.per_run_cap`). Zero or absent disables it. */
   perRunCapCents?: number;
+  /**
+   * [G3] The profile's shared spend ledger. With one, the daily figure IS the day's cross-surface
+   * total: the ticker opens on what `trent run`, the gateway, cron and the heartbeat have already
+   * spent today, every cost recorded here is written back for them, and the refusal is measured
+   * against that total rather than against this session. Without one, nothing changes.
+   */
+  spend?: SpendLedgerPort;
+  /** The surface tag written to the ledger. Defaults to the REPL, which is what this ticker serves. */
+  surface?: string;
+  /** The run these costs belong to, when the surface knows it. */
+  runId?: string;
+  now?: () => Date;
 }
 
 /**
@@ -32,6 +61,10 @@ export interface BudgetStop {
 
 const DOLLAR = "$";
 const CENTS_PER_UNIT = 100;
+/** The surface this ticker serves; the TUI renders the same ledger. */
+const DEFAULT_SURFACE = "repl";
+/** Written when the cost arrived without the model or provider that was billed. */
+const UNATTRIBUTED = "unattributed";
 
 /** The one place cents become a dollar string. */
 export function formatCents(cents: number): string {
@@ -50,12 +83,23 @@ export class BudgetLedger {
   #runSpent = 0;
   #announced = new Set<number>();
   #pending: number[] = [];
+  readonly #spend: SpendLedgerPort | undefined;
+  readonly #surface: string;
+  readonly #runId: string;
+  readonly #now: () => Date;
 
   constructor(options: BudgetLedgerOptions) {
     this.capCents = options.capCents;
     this.perRunCapCents = options.perRunCapCents ?? 0;
     this.#thresholds = [...options.thresholds].sort((a, b) => a - b);
-    this.#spent = options.openingCents ?? 0;
+    this.#spend = options.spend;
+    this.#surface = options.surface ?? DEFAULT_SURFACE;
+    this.#runId = options.runId ?? "";
+    this.#now = options.now ?? ((): Date => new Date());
+    // The day's opening figure: the shared ledger when there is one, the caller's resumed total
+    // otherwise. A session that starts after the gateway spent the cap starts already refused.
+    this.#spent = this.#spend === undefined ? options.openingCents ?? 0 : this.#spend.dailyTotalCents(this.#now());
+    this.#announce();
   }
 
   get spentCents(): number {
@@ -73,13 +117,39 @@ export class BudgetLedger {
     return Math.floor((this.#spent * 100) / this.capCents);
   }
 
-  /** Records one real cost. Rejects floats, because money is integer cents. */
-  record(costCents: number): void {
+  /**
+   * Records one real cost. Rejects floats, because money is integer cents. With a shared ledger
+   * the cost is written there first and the daily figure is then re-read from it, so this session
+   * and every other surface are reading one number.
+   */
+  record(costCents: number, meta?: BudgetChargeMeta): void {
     if (!Number.isInteger(costCents)) {
       throw new TypeError(`budget costs must be integer cents, received ${costCents}`);
     }
-    this.#spent += costCents;
     this.#runSpent += costCents;
+    if (this.#spend === undefined) {
+      this.#spent += costCents;
+    } else {
+      this.#spend.append({
+        surface: this.#surface,
+        run_id: meta?.runId ?? this.#runId,
+        ...(meta?.seat === undefined ? {} : { seat: meta.seat }),
+        model: meta?.model ?? UNATTRIBUTED,
+        provider: meta?.provider ?? UNATTRIBUTED,
+        cents: costCents,
+        tokens: Math.trunc(meta?.tokens ?? 0),
+      });
+      this.#refresh();
+    }
+    this.#announce();
+  }
+
+  /** Re-reads the day's cross-surface total. Cheap enough at a turn boundary; not per frame. */
+  #refresh(): void {
+    if (this.#spend !== undefined) this.#spent = this.#spend.dailyTotalCents(this.#now());
+  }
+
+  #announce(): void {
     for (const threshold of this.#thresholds) {
       if (this.percent >= threshold && !this.#announced.has(threshold)) {
         this.#announced.add(threshold);
@@ -104,6 +174,9 @@ export class BudgetLedger {
    * mid-flight is stopped rather than merely warned about.
    */
   exceeded(): BudgetStop | null {
+    // Another surface may have spent while this one sat idle, so the day's total is re-read here.
+    this.#refresh();
+    this.#announce();
     if (this.capCents > 0 && this.#spent >= this.capCents) {
       return { kind: "daily", capCents: this.capCents, spentCents: this.#spent };
     }

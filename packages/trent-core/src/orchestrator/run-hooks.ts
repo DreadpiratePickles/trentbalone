@@ -8,6 +8,7 @@
  * the same four fields twice.
  */
 
+import { currentSpendLedger } from "../governance/spend-ledger.js";
 import type { ConversationMessage, OrcEvent } from "./types.js";
 
 export interface RunScopeInput {
@@ -16,6 +17,8 @@ export interface RunScopeInput {
   readonly objective: string;
   /** The surface's earlier turns, oldest first. Absent for a scheduled or delegated run. */
   readonly history?: readonly ConversationMessage[];
+  /** Which surface asked for this run, as the headless runtime reports it. */
+  readonly surface?: string;
 }
 
 /** What a run-scoped hook must answer to. `FleetMemoryHook` and the delegate port both satisfy it. */
@@ -29,6 +32,80 @@ export interface RunScopeOptions {
   readonly companyId: string;
   readonly objective: string;
   readonly history?: readonly ConversationMessage[];
+  /**
+   * The surface behind the run, when the caller names one. `unknown` is recorded rather than
+   * guessed, so a surface that has not been taught to say goes on the meter honestly.
+   */
+  readonly surface?: string;
+}
+
+/**
+ * [G3] One charge, as the gateway's usage events already carry it: integer cents, the model and
+ * provider that were billed, and the seat when the charge belongs to one.
+ */
+export interface RunSpendUsage {
+  readonly model: string;
+  readonly provider: string;
+  readonly cents: number;
+  readonly tokens: number;
+  readonly seat?: string;
+}
+
+/** The surface tag used when the run options name none. */
+const UNKNOWN_SURFACE = "unknown";
+
+interface RunSpendScope {
+  readonly surface: string;
+  /** Charges grouped by seat, model and provider, so a long run writes a handful of rows. */
+  readonly groups: Map<string, RunSpendUsage>;
+}
+
+/**
+ * The open runs' spend. Module-scoped for the same reason the notice bus is keyed by run id: one
+ * orchestrator serves every concurrent run, and a charge names only the run it belongs to.
+ */
+const spendScopes = new Map<string, RunSpendScope>();
+
+/**
+ * Records one charge against a run in flight. Called by whichever surface observes the gateway's
+ * usage events; a charge for a run that was never opened, or has already closed, is dropped rather
+ * than attributed to the wrong run.
+ */
+export function recordRunSpend(runId: string, usage: RunSpendUsage): void {
+  const scope = spendScopes.get(runId);
+  if (scope === undefined) return;
+  const key = `${usage.seat ?? ""}|${usage.model}|${usage.provider}`;
+  const held = scope.groups.get(key);
+  scope.groups.set(
+    key,
+    held === undefined
+      ? { ...usage, cents: Math.trunc(usage.cents), tokens: Math.trunc(usage.tokens) }
+      : { ...held, cents: held.cents + Math.trunc(usage.cents), tokens: held.tokens + Math.trunc(usage.tokens) },
+  );
+}
+
+/**
+ * The run-end half: what the run cost goes to the one daily ledger, tagged with its surface, so
+ * `budget.daily_cap` is measured across surfaces instead of once per surface. A process with no
+ * ledger installed writes nothing and behaves exactly as it did before.
+ */
+function closeRunSpend(runId: string): void {
+  const scope = spendScopes.get(runId);
+  if (scope === undefined) return;
+  spendScopes.delete(runId);
+  const ledger = currentSpendLedger();
+  if (ledger === undefined) return;
+  for (const usage of scope.groups.values()) {
+    ledger.append({
+      surface: scope.surface,
+      run_id: runId,
+      ...(usage.seat === undefined ? {} : { seat: usage.seat }),
+      model: usage.model,
+      provider: usage.provider,
+      cents: usage.cents,
+      tokens: usage.tokens,
+    });
+  }
 }
 
 /** Opens the run on every hook present. Absent hooks are simply not told. */
@@ -43,13 +120,18 @@ export function openRunScope(
     objective: options.objective,
     // A run with no conversation must not carry an empty `history` key: the hooks branch on absence.
     ...(options.history === undefined ? {} : { history: options.history }),
+    ...(options.surface === undefined ? {} : { surface: options.surface }),
   };
+  // [G3] The run's meter opens with its scope, so a charge recorded mid-run has somewhere to go.
+  spendScopes.set(runId, { surface: options.surface ?? UNKNOWN_SURFACE, groups: new Map() });
   for (const hook of hooks) hook?.runStarted(input);
 }
 
 /** Closes it. A run that never got an id (it failed before launch) closes nothing. */
 export function closeRunScope(hooks: readonly (RunScopedHook | undefined)[], runId: string | undefined): void {
   if (runId === undefined) return;
+  // [G3] The run-end hook is where the run's cost reaches the day's ledger, once, for every surface.
+  closeRunSpend(runId);
   for (const hook of hooks) hook?.runFinished(runId);
 }
 

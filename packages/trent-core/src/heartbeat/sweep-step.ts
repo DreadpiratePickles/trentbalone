@@ -18,6 +18,7 @@
  * ran leaves the counts, the spend and the cap. Nothing here promotes anything: every draft a
  * sweep produces is in quarantine, and `trent improve promote` is still the human gate.
  */
+import { AGGREGATE_CHARGE, currentSpendLedger } from "../governance/spend-ledger.js";
 import type { SweepReport } from "../improve/sweep.js";
 import type { HeartbeatBudgetPort } from "./fleet-state.js";
 import { localDayKey } from "./quiet-hours.js";
@@ -159,12 +160,21 @@ export function summariseSweep(report: SweepReport, request: HeartbeatSweepReque
   };
 }
 
-/** What the day's ledger still allows, or nothing when no ledger is wired or it caps nothing. */
-export function ledgerHeadroomCents(budget: HeartbeatBudgetPort | undefined): number | undefined {
+/**
+ * What the day's ledger still allows, or nothing when no ledger is wired or it caps nothing.
+ *
+ * [G3] With a shared spend ledger installed, the day's spend is what EVERY surface wrote today —
+ * the REPL, `trent run`, the gateway, cron and this heartbeat — so one `budget.daily_cap` is one
+ * cap rather than one per surface. The larger of the two views wins: a surface that has not been
+ * taught to write the ledger still shows up in the heartbeat's own history, and a view that has
+ * seen less must never buy extra headroom.
+ */
+export function ledgerHeadroomCents(budget: HeartbeatBudgetPort | undefined, at: Date = new Date()): number | undefined {
   if (budget === undefined) return undefined;
   const limit = budget.limitCents();
   if (limit <= 0) return undefined;
-  return limit - budget.spentCents();
+  const shared = currentSpendLedger()?.dailyTotalCents(at) ?? 0;
+  return limit - Math.max(budget.spentCents(), shared);
 }
 
 /**
@@ -173,7 +183,9 @@ export function ledgerHeadroomCents(budget: HeartbeatBudgetPort | undefined): nu
  */
 export async function sweepThroughPort(deps: HeartbeatSweepDeps, request: HeartbeatSweepRequest): Promise<HeartbeatSweepRecord> {
   try {
-    return summariseSweep(await deps.runSweep(request), request);
+    const record = summariseSweep(await deps.runSweep(request), request);
+    chargeSharedLedger(record);
+    return record;
   } catch (error) {
     return {
       ...request,
@@ -187,6 +199,25 @@ export async function sweepThroughPort(deps: HeartbeatSweepDeps, request: Heartb
       errors: [error instanceof Error ? error.message : String(error)],
     };
   }
+}
+
+/**
+ * [G3] What the sweep cost goes on the day's shared ledger, so the REPL's next turn and the next
+ * unattended sweep are both measured against it. A sweep spans seats and models and its report
+ * carries no per-model breakdown, so the charge is recorded as an aggregate; `trent improve status`
+ * holds the detail. A sweep that cost nothing writes nothing.
+ */
+function chargeSharedLedger(record: HeartbeatSweepRecord): void {
+  if (record.costCents <= 0) return;
+  currentSpendLedger()?.append({
+    at: record.at,
+    surface: "heartbeat",
+    run_id: `sweep:${record.at}`,
+    model: AGGREGATE_CHARGE,
+    provider: AGGREGATE_CHARGE,
+    cents: record.costCents,
+    tokens: 0,
+  });
 }
 
 function plural(count: number, one: string, many: string): string {

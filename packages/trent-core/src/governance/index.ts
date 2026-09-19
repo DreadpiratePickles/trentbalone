@@ -9,3 +9,4 @@ export * from "./hardline.js";
 export * from "./deny-globs.js";
 export * from "./autonomy.js";
 export * from "./autonomy-dispatch.js";
+export * from "./spend-ledger.js";
