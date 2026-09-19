@@ -128,10 +128,14 @@ export class SkillsHub {
       trust: MIGRATED_SKILL_TRUST,
       tags: item?.tags ?? [item?.category ?? DEFAULT_SKILL_CATEGORY],
       instructions: content,
+      // [D3] A person ran `trent skills install`, so the skill is theirs: declared provenance,
+      // which is what keeps the curator from aging it out from under them.
+      createdBy: "human",
     });
     this.loader.invalidate(slug);
 
-    return this.loader.loadFull(slug);
+    // Installing is not using: the counters stay at zero and `promoted_at` is the aging baseline.
+    return this.loader.loadFull(slug, { recordUse: false });
   }
 
   public remove(slug: string): boolean {

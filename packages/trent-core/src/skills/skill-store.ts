@@ -17,8 +17,28 @@
 import fs from "node:fs";
 import path from "node:path";
 import { NODE_IO, atomicWriteFileSync } from "../config/atomic-fs.js";
+import { NO_USAGE, forgetSkillUsage, readSkillUsage } from "./usage.js";
 
 export type SkillTrust = "builtin" | "official" | "trusted" | "community";
+
+/**
+ * [D3] The curator's lifecycle. `active` is advertised to seats; `stale` still is, and is the
+ * warning that nothing has loaded it in a long time; `archived` is not advertised and is kept on
+ * disk so it can be restored; `quarantined` is what an agent-authored skill gets when the
+ * composed-skill scan flags it, and only a human clears that.
+ */
+export type SkillStatus = "active" | "stale" | "archived" | "quarantined";
+export const SKILL_STATUSES: readonly SkillStatus[] = ["active", "stale", "archived", "quarantined"];
+export const DEFAULT_SKILL_STATUS: SkillStatus = "active";
+
+/**
+ * [D3] Declared provenance, never inferred from telemetry. Only `agent` skills are eligible for
+ * autonomous curation; `human` and `import` are reported and left alone until someone adopts them.
+ */
+export type SkillProvenance = "human" | "agent" | "import";
+export const SKILL_PROVENANCES: readonly SkillProvenance[] = ["human", "agent", "import"];
+/** A skill with nothing declared is treated as the founder's: the curator never touches it. */
+export const DEFAULT_SKILL_PROVENANCE: SkillProvenance = "human";
 export const SKILL_TRUST_TIERS: readonly SkillTrust[] = ["builtin", "official", "trusted", "community"];
 export const BUNDLE_DIRS = ["references", "scripts", "assets"] as const;
 export const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -47,6 +67,18 @@ export interface SkillRecord {
   file: string;
   /** SKILL.md body without frontmatter, or the flat file's instructions. */
   instructions: string;
+  /** [D3] Lifecycle state. Absent frontmatter reads as `active`. */
+  status: SkillStatus;
+  /** [D3] Declared provenance. Absent frontmatter reads as `human`. */
+  createdBy: SkillProvenance;
+  /** [D3] When the skill entered the store, the aging baseline before anything has loaded it. */
+  promotedAt: string | null;
+  /** [D3] Why the composed-skill scan quarantined it; null unless `status` is `quarantined`. */
+  quarantineReason: string | null;
+  /** [D3] Loads by a seat's run, from the `.usage.json` sidecar. */
+  useCount: number;
+  /** [D3] The last of those loads. Null when nothing has loaded it. */
+  lastUsedAt: string | null;
 }
 
 export interface SkillWriteInput {
@@ -59,6 +91,10 @@ export interface SkillWriteInput {
   author?: string;
   tags?: readonly string[];
   instructions: string;
+  status?: SkillStatus;
+  createdBy?: SkillProvenance;
+  promotedAt?: string | null;
+  quarantineReason?: string | null;
 }
 
 export interface SkillStoreOptions {
@@ -69,6 +105,16 @@ export interface SkillStoreOptions {
 /** The agent may only change skills it (or a person) authored: trusted and community. */
 export function isMutable(trust: SkillTrust): boolean {
   return trust === "trusted" || trust === "community";
+}
+
+/** [D3] Whether a seat is told this skill exists. Archived and quarantined skills are not. */
+export function isAdvertised(record: Pick<SkillRecord, "status">): boolean {
+  return record.status === "active" || record.status === "stale";
+}
+
+/** [D3] The curator may age, archive and draft against declared agent skills, and nothing else. */
+export function isCuratable(record: Pick<SkillRecord, "createdBy">): boolean {
+  return record.createdBy === "agent";
 }
 
 interface Frontmatter {
@@ -125,6 +171,19 @@ export function skillDirFor(skillsDir: string, name: string, category?: string):
   return path.join(skillsDir, folder, name);
 }
 
+/** Dot entries are curator metadata — the ledger, the blob store, the usage sidecar — not skills. */
+function isDotEntry(name: string): boolean {
+  return name.startsWith(".");
+}
+
+function statusOf(raw: string | undefined): SkillStatus {
+  return SKILL_STATUSES.includes(raw as SkillStatus) ? (raw as SkillStatus) : DEFAULT_SKILL_STATUS;
+}
+
+function provenanceOf(raw: string | undefined): SkillProvenance {
+  return SKILL_PROVENANCES.includes(raw as SkillProvenance) ? (raw as SkillProvenance) : DEFAULT_SKILL_PROVENANCE;
+}
+
 function readCanonical(dir: string, name: string, fallbackCategory: string): SkillRecord | null {
   const file = path.join(dir, SKILL_FILE);
   if (kindOf(file) !== "file") return null;
@@ -135,6 +194,11 @@ function readCanonical(dir: string, name: string, fallbackCategory: string): Ski
     : "community";
   const tags = splitTags(fields.tags);
   return {
+    status: statusOf(fields.status),
+    createdBy: provenanceOf(fields.created_by),
+    promotedAt: fields.promoted_at || null,
+    quarantineReason: fields.quarantine_reason || null,
+    ...NO_USAGE,
     name,
     title: fields.name || meta.title,
     description: fields.description || meta.description,
@@ -170,6 +234,12 @@ function readFlat(skillsDir: string, file: string): SkillRecord | null {
     const str = (key: string): string => (typeof raw[key] === "string" ? (raw[key] as string) : "");
     const tags = Array.isArray(raw.tags) ? raw.tags.filter((t): t is string => typeof t === "string") : [];
     return {
+      status: DEFAULT_SKILL_STATUS,
+      // A flat file predates the lifecycle and came from another surface: imported, not adopted.
+      createdBy: "import",
+      promotedAt: null,
+      quarantineReason: null,
+      ...NO_USAGE,
       name,
       title: str("name") || name,
       description: str("description"),
@@ -185,6 +255,11 @@ function readFlat(skillsDir: string, file: string): SkillRecord | null {
   }
   const meta = headingMeta(text, name);
   return {
+    status: DEFAULT_SKILL_STATUS,
+    createdBy: "import",
+    promotedAt: null,
+    quarantineReason: null,
+    ...NO_USAGE,
     name,
     title: meta.title,
     description: meta.description || `Skill for ${meta.title}`,
@@ -203,6 +278,7 @@ function readFlat(skillsDir: string, file: string): SkillRecord | null {
 function canonicalRecords(skillsDir: string): Map<string, SkillRecord> {
   const out = new Map<string, SkillRecord>();
   for (const top of fs.readdirSync(skillsDir)) {
+    if (isDotEntry(top)) continue;
     const topDir = path.join(skillsDir, top);
     if (kindOf(topDir) !== "dir") continue;
     const direct = readCanonical(topDir, top, DEFAULT_SKILL_CATEGORY);
@@ -211,6 +287,7 @@ function canonicalRecords(skillsDir: string): Map<string, SkillRecord> {
       continue;
     }
     for (const sub of fs.readdirSync(topDir)) {
+      if (isDotEntry(sub)) continue;
       const subDir = path.join(topDir, sub);
       if (kindOf(subDir) !== "dir") continue;
       const entry = readCanonical(subDir, sub, top);
@@ -224,6 +301,7 @@ function canonicalRecords(skillsDir: string): Map<string, SkillRecord> {
 function flatFiles(skillsDir: string): string[] {
   return fs
     .readdirSync(skillsDir)
+    .filter((f) => !isDotEntry(f))
     .filter((f) => f.endsWith(".md") || f.endsWith(".json"))
     .filter((f) => kindOf(path.join(skillsDir, f)) === "file")
     .sort()
@@ -271,11 +349,39 @@ export function listSkillRecords(skillsDir: string, options: SkillStoreOptions =
     if (record === null || out.has(record.name)) continue;
     out.set(record.name, record);
   }
-  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const usage = readSkillUsage(skillsDir);
+  return [...out.values()]
+    .map((record) => ({ ...record, ...(usage.get(record.name) ?? NO_USAGE) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** [D3] What a seat is told about: everything but the archived and the quarantined. */
+export function listAdvertisedSkillRecords(skillsDir: string, options: SkillStoreOptions = {}): SkillRecord[] {
+  return listSkillRecords(skillsDir, options).filter(isAdvertised);
 }
 
 export function findSkillRecord(skillsDir: string, name: string, options: SkillStoreOptions = {}): SkillRecord | null {
   return listSkillRecords(skillsDir, options).find((s) => s.name === name) ?? null;
+}
+
+/** [D3] The skill's bytes exactly as they sit on disk: what the ledger content-addresses. */
+export function readSkillDocument(record: Pick<SkillRecord, "file">): string {
+  return fs.readFileSync(record.file, "utf8");
+}
+
+/**
+ * [D3] Change frontmatter metadata in place, leaving the body and every other field untouched.
+ * A null value removes the key rather than writing an empty one. Returns the new document.
+ */
+export function updateSkillMeta(record: Pick<SkillRecord, "file">, patch: Record<string, string | null>): string {
+  const { fields, body } = parseFrontmatter(readSkillDocument(record));
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete fields[key];
+    else fields[key] = value;
+  }
+  const next = renderFrontmatter(fields, body);
+  writeSkillFile(record.file, next);
+  return next;
 }
 
 /** Write one skill in the canonical form. Returns the SKILL.md path. */
@@ -288,6 +394,7 @@ export function writeSkillRecord(skillsDir: string, input: SkillWriteInput): str
   const category = (input.category ?? DEFAULT_SKILL_CATEGORY).trim() || DEFAULT_SKILL_CATEGORY;
   const dir = skillDirFor(skillsDir, input.name, category);
   const file = path.join(dir, SKILL_FILE);
+  const quarantineReason = input.quarantineReason ?? null;
   const fields: Record<string, string> = {
     name: input.title ?? input.name,
     description: input.description ?? "",
@@ -296,6 +403,11 @@ export function writeSkillRecord(skillsDir: string, input: SkillWriteInput): str
     version: input.version ?? DEFAULT_SKILL_VERSION,
     author: input.author ?? "community",
     tags: (input.tags ?? [category]).join(", "),
+    // [D3] The lifecycle travels with the skill, so a profile copied anywhere keeps its state.
+    status: input.status ?? DEFAULT_SKILL_STATUS,
+    created_by: input.createdBy ?? DEFAULT_SKILL_PROVENANCE,
+    promoted_at: input.promotedAt ?? new Date().toISOString(),
+    ...(quarantineReason === null ? {} : { quarantine_reason: quarantineReason }),
   };
   writeSkillFile(file, renderFrontmatter(fields, input.instructions));
   return file;
@@ -322,5 +434,7 @@ export function removeSkillRecord(skillsDir: string, name: string): boolean {
       removed = true;
     }
   }
+  // Counters outlive nothing: a reinstall of the same slug starts from no usage at all.
+  if (removed) forgetSkillUsage(skillsDir, name);
   return removed;
 }

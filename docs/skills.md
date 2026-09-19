@@ -99,6 +99,113 @@ Files are written with an atomic write-then-rename, `0600` inside a `0700` direc
 
 Every skill gets a slash command derived from its slug: `repo-audit` becomes `/repo-audit`.
 
+## Curator
+
+Skills decay. One a seat wrote for a problem it had once is still in the store a year later, still
+advertised, still costing context on every list. The curator is the part that notices, and the
+ledger is the part that makes everything it does reversible.
+
+```bash
+npm run cli -- curator status
+npm run cli -- curator age
+npm run cli -- curator adopt repo-audit
+npm run cli -- curator release deploy-runbook
+npm run cli -- curator log repo-audit
+npm run cli -- curator undo mut_9f3c1ab27d40e651
+```
+
+### Lifecycle
+
+Every skill carries four more frontmatter fields, and two counters that live beside it:
+
+| Field | Where | Meaning |
+|---|---|---|
+| `status` | `SKILL.md` | `active`, `stale`, `archived` or `quarantined` |
+| `created_by` | `SKILL.md` | `human`, `agent` or `import` — declared, never inferred |
+| `promoted_at` | `SKILL.md` | when the skill entered the store: the aging baseline |
+| `quarantine_reason` | `SKILL.md` | why the scan gate held it; absent otherwise |
+| `use_count` | `.usage.json` | loads by a seat's run |
+| `last_used_at` | `.usage.json` | the last of those loads |
+
+The counters are a sidecar (`<profile>/skills/.usage.json`, `0600`) and not frontmatter for one
+reason: the ledger content-addresses the skill's bytes, so a counter bumped on every load would
+change those bytes on every load and every blob would be unique. `SkillLoader.loadFull` is where a
+load is counted — the one path that puts a skill's instructions in front of a model. Installing a
+skill is not using it, so `trent skills install` leaves the counters at zero and `promoted_at` is
+what the clock runs from until something loads it.
+
+`trent curator age` applies the transitions. A skill unused for `curator.stale_after_days` (60)
+becomes `stale`; unused for `curator.archive_after_days` (180) it becomes `archived`; a `stale`
+skill that gets loaded again goes back to `active`, because a fresh load is the answer to
+staleness. An `archived` skill is **not advertised** to seats — `skills_list` does not show it and
+the seat cannot use it — but it is still on disk, still readable with `trent skills view`, and
+`trent curator release` puts it back. Nothing is ever deleted by aging.
+
+Nothing wires this to the heartbeat yet. `ageSkills` takes its clock and both thresholds as
+arguments and reads no configuration, so a heartbeat tick can call exactly the function the CLI
+calls when that is switched on.
+
+### Declared provenance is the autonomy policy
+
+Only `created_by: agent` skills are aged, archived or quarantined by the curator.
+A skill you installed or imported is **reported** by `curator status` and `curator age` with its
+idle days, and left exactly where it is however old it gets. Provenance changes in one place and
+one way — `trent curator adopt <skill>` — and never from telemetry: how often a skill is used says
+nothing about whose it is. `trent skills install` writes `created_by: human`, `skill_manage`
+writes `agent`, and a legacy flat file migrates as `import`.
+
+### The scan gate on agent-authored skills
+
+`skill_manage` already refuses dangerous text operation by operation, and that write gate is
+unchanged. The curator adds a second one, after the write: the **composed** skill — its `SKILL.md`
+and every file in its `references/`, `scripts/` and `assets/` bundle, scanned together — goes past
+the same pre-install scanner. No single operation ever sees that much, which is the point: a
+poisoned bundle file that arrived by another path is caught the next time an agent touches the
+skill. A flagged skill is not rolled back and not deleted. It sits `quarantined` with the reason
+in its frontmatter, is not advertised to any seat, and waits for `trent curator release <skill>`,
+which is a human command.
+
+The gate is on for every agent write today. `curator.scan_agent_skills` is the setting meant to
+switch it off, and `createSkillsAdapter({ scanAgentSkills: false })` is the seam it feeds, but the
+toolset builder (`packages/trent-core/src/tools/index.ts`) does not pass the setting through yet,
+so the key is read by nothing.
+
+### The mutation ledger
+
+Every change to a skill — create, edit, delete, age, archive, restore, quarantine, promote, adopt,
+undo — appends one line to `<profile>/skills/.ledger.ndjson` (`0600`, append-only):
+
+```json
+{"id":"mut_9f3c1ab27d40e651","skill":"repo-audit","kind":"age","actor":"curator",
+ "before":"<sha256>","after":"<sha256>","detail":"active to stale after 74 idle days",
+ "undoes":null,"createdAt":"2026-09-18T00:00:00.000Z","prevHash":"<sha256>","hash":"<sha256>"}
+```
+
+`actor` is a seat id, `human`, or `curator`. `before` and `after` name content-addressed blobs
+under `<profile>/skills/.blobs/<sha256>` (`0600` inside `0700`), so a row is small, identical
+content is stored once, and a rollback restores the exact document rather than a reconstruction.
+Each row's `hash` covers its `prevHash` and all of its own fields, the same construction the audit
+export uses: edit a row in place and every hash after it stops matching. `trent curator status`
+and `trent curator log` both report whether the chain is intact, and `log` names the line where a
+break starts.
+
+`trent curator undo <mutation_id>` reverses **exactly one** mutation: it writes the `before` blob
+back (or removes the skill, when the mutation created it) and appends its own `undo` row naming
+what it reversed. Undoing anything but the newest mutation of that skill is refused, naming the
+newer mutation, because reversing a change with later changes stacked on it would discard them
+silently. Undo the newer one first.
+
+### What the curator does not do
+
+- **No LLM consolidation into umbrella skills.** Hermes' curator can run a model pass that folds
+  several skills into one. SkillAxe measured raw LLM-authored skills at zero gain, so the loop
+  that would write them is not here and is not planned.
+- **No automatic runs.** `curator age` is a command. The heartbeat does not call it yet.
+- **Bundle files are not blobbed.** A row records the bundle path it touched in `detail`, but the
+  ledger content-addresses `SKILL.md` alone, so `undo` restores the document and not a bundled
+  file.
+- **No backup, pause, resume, pin, prune or purge.** Hermes has all six; this is the first cut.
+
 ## Migration from the older flat form
 
 Older releases wrote one flat file per skill — `<slug>.md`, or `<slug>.json` with the metadata

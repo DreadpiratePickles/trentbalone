@@ -131,6 +131,13 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // `checkpoints/config.test.ts` asserts. See docs/checkpoints.md.
   checkpoints: { enabled: true, max_bytes_per_run: 50 * 1024 * 1024 },
   // [/E1]
+  // [D3] curator
+  // On by default, and on by default it does nothing surprising: aging only ever touches skills
+  // declared `created_by: agent`, and 60/180 days of no load is a long silence for a skill a seat
+  // wrote for itself. Both numbers are measured from the last load, so a skill in weekly use never
+  // ages at all. `scan_agent_skills` is the composed-skill gate; a flagged skill is quarantined,
+  // never deleted. See docs/skills.md, "Curator".
+  curator: { enabled: true, stale_after_days: 60, archive_after_days: 180, scan_agent_skills: true },
   personality: "default",
   theme: "dark",
   // [D0] improvement gates

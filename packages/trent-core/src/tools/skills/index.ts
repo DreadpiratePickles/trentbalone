@@ -15,9 +15,11 @@ import { fitSummary } from "../spillover.js";
 import { parseAction, record as toRecord, stringArg, type ToolSpec } from "../action.js";
 import { renderToolInstructions } from "../web/schemas.js";
 import { SKILL_DESCRIPTION_CLIP, SKILLS_LIST_BUDGET, SKILL_TOOL_SCHEMAS } from "./schemas.js";
+import { recordSkillWrite } from "../../curator/lifecycle.js";
 import {
   SKILL_NAME_PATTERN,
   findSkill,
+  isAdvertised,
   isMutable,
   listBundle,
   listSkills,
@@ -59,6 +61,18 @@ export interface SkillsAdapterOptions {
   skillsDir?: string;
   /** Tier stamped on skills this seat creates. Defaults to community. */
   createTrust?: Exclude<SkillTrust, "builtin" | "official">;
+  /**
+   * [D3] Who the curator's ledger records as the author of every write this adapter makes.
+   * A seat id when one is known; `agent` otherwise, which is still enough for the provenance
+   * policy, because what matters there is that it was not a person.
+   */
+  seatId?: string;
+  /**
+   * [D3] Run the curator's composed-skill scan gate after every write. True by default. The
+   * `curator.scan_agent_skills` setting is the switch meant to feed this, but the toolset builder
+   * (`tools/index.ts`) does not pass it yet, so today the gate is always on.
+   */
+  scanAgentSkills?: boolean;
 }
 
 type Status = ToolCallRecord["status"];
@@ -78,12 +92,16 @@ function opsOf(args: Record<string, unknown>): Record<string, unknown>[] {
 export function createSkillsAdapter(options: SkillsAdapterOptions): TrentToolAdapter {
   const skillsDir = options.skillsDir ?? path.join(options.profileDir, "skills");
   const createTrust: SkillTrust = options.createTrust ?? "community";
+  const seatId = options.seatId ?? "agent";
+  const scanAgentSkills = options.scanAgentSkills ?? true;
   const record = (action: string, status: Status, summary: string) =>
     toRecord(SKILLS_ADAPTER_NAME, action, status, fitSummary(summary, options.profileDir, "skills"));
 
   function skillsList(action: string, args: Record<string, unknown>): ToolCallRecord {
     const category = argString(args, "category");
-    const all = listSkills(skillsDir).filter((s) => !category || s.category === category);
+    // [D3] Archived and quarantined skills exist but are not advertised: a seat is told about
+    // what it may use, and a quarantined skill waits for a human, not for a model to find it.
+    const all = listSkills(skillsDir).filter(isAdvertised).filter((s) => !category || s.category === category);
     if (!all.length) return record(action, "completed", category ? `No skills in category "${category}".` : "No skills installed.");
     const header = `${all.length} skill(s). Use skill_view {"name": ...} for the full text.`;
     const lines: string[] = [];
@@ -137,6 +155,23 @@ export function createSkillsAdapter(options: SkillsAdapterOptions): TrentToolAda
     return { status: "blocked", line: `${label}: "${entry.name}" is a ${entry.trust} skill and is read-only.` };
   }
 
+  /**
+   * [D3] Ledger the write, then put the COMPOSED skill — its document and its whole bundle — past
+   * the scan gate. The per-operation scan above is the write gate and is unchanged; this is the
+   * second one, and what it flags sits quarantined until a human runs `trent curator release`.
+   * Returns the clause to append to the operation's line, empty when nothing was flagged.
+   */
+  function curate(
+    kind: "create" | "edit" | "delete",
+    name: string,
+    before: string | null,
+    detail: string,
+  ): string {
+    const outcome = recordSkillWrite({ skillsDir, name, actor: seatId, kind, before, gate: scanAgentSkills, detail });
+    if (outcome.quarantine === null) return "";
+    return `, quarantined by the curator's scan gate: ${outcome.findings.join("; ")}; a human must run \`trent curator release ${name}\``;
+  }
+
   function create(op: Record<string, unknown>, name: string): OpOutcome {
     const label = `create ${name}`;
     const content = typeof op.content === "string" ? op.content : "";
@@ -153,9 +188,16 @@ export function createSkillsAdapter(options: SkillsAdapterOptions): TrentToolAda
       description,
       trust: createTrust,
       instructions: content,
+      // [D3] A seat wrote it, so the curator may age it. Provenance is declared here, at the
+      // one place that knows who is writing, and never inferred later from telemetry.
+      createdBy: "agent",
       ...(category === undefined ? {} : { category }),
     });
-    return { status: "completed", line: `${label}: created ${path.relative(skillsDir, file)} (${createTrust}).` };
+    const gated = curate("create", name, null, `created ${path.relative(skillsDir, file)}`);
+    return {
+      status: "completed",
+      line: `${label}: created ${path.relative(skillsDir, file)} (${createTrust})${gated}.`,
+    };
   }
 
   function patch(op: Record<string, unknown>, entry: SkillEntry): OpOutcome {
@@ -177,15 +219,19 @@ export function createSkillsAdapter(options: SkillsAdapterOptions): TrentToolAda
     const nextBody = body.replace(oldString, newString);
     const blocked = scanOrBlock(label, nextBody);
     if (blocked) return blocked;
+    const before = fs.readFileSync(entry.file, "utf8");
     writeAtomic(entry.file, renderFrontmatter(fields, nextBody));
-    return { status: "completed", line: `${label}: applied.` };
+    const gated = curate("edit", entry.name, before, "patched SKILL.md");
+    return { status: "completed", line: `${label}: applied${gated}.` };
   }
 
   function remove(entry: SkillEntry): OpOutcome {
     const label = `delete ${entry.name}`;
     const guard = guardMutable(entry, label);
     if (guard) return guard;
+    const before = entry.dir === null ? null : fs.readFileSync(entry.file, "utf8");
     removeSkillRecord(skillsDir, entry.name);
+    curate("delete", entry.name, before, "removed from the store");
     return { status: "completed", line: `${label}: removed.` };
   }
 
@@ -197,16 +243,19 @@ export function createSkillsAdapter(options: SkillsAdapterOptions): TrentToolAda
     if (!filePath) return { status: "failed", line: `${label}: "file_path" is required.` };
     const resolved = resolveBundlePath(entry, filePath);
     if (!resolved.ok) return { status: resolved.blocked ? "blocked" : "failed", line: `${label}: ${resolved.reason}.` };
+    const before = entry.dir === null ? null : fs.readFileSync(entry.file, "utf8");
     if (!write) {
       if (!fs.existsSync(resolved.file)) return { status: "failed", line: `${label}: no such file "${filePath}".` };
       fs.unlinkSync(resolved.file);
-      return { status: "completed", line: `${label}: removed ${filePath}.` };
+      const gone = curate("edit", entry.name, before, `removed bundled ${filePath}`);
+      return { status: "completed", line: `${label}: removed ${filePath}${gone}.` };
     }
     const content = typeof op.content === "string" ? op.content : "";
     const blocked = scanOrBlock(label, content);
     if (blocked) return blocked;
     writeAtomic(resolved.file, content);
-    return { status: "completed", line: `${label}: wrote ${filePath} (${content.length} chars).` };
+    const gated = curate("edit", entry.name, before, `wrote bundled ${filePath}`);
+    return { status: "completed", line: `${label}: wrote ${filePath} (${content.length} chars)${gated}.` };
   }
 
   function runOne(op: Record<string, unknown>): OpOutcome {

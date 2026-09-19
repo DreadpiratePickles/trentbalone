@@ -27,6 +27,7 @@ import { runSpec } from "./groups/run.js";
 import { configSpec, modelSpec, toolsSpec } from "./groups/configuration.js";
 import { fleetSpec } from "./groups/fleet.js";
 import { skillsSpec } from "./groups/skills.js";
+import { curatorSpec } from "./groups/curator.js";
 import { sessionsSpec } from "./groups/sessions.js";
 import { mcpSpec } from "./groups/mcp.js";
 import { a2aSpec, acpSpec, egressSpec, gatewaySpec, webSpec } from "./groups/servers.js";
@@ -54,6 +55,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   modelSpec,
   fleetSpec,
   skillsSpec,
+  curatorSpec,
   improveSpec,
   toolsSpec,
   sandboxSpec,

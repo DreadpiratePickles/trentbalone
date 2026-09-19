@@ -133,6 +133,29 @@ export const TrentConfigSchema = z.object({
   // the ledger that reads it (`checkpoints/config-schema.ts`, docs/checkpoints.md).
   checkpoints: CheckpointsConfigSchema.default({}),
   // [/E1]
+  // [D3] curator
+  /**
+   * The skill curator (docs/skills.md, "Curator"). `enabled` false means no aging pass ever runs;
+   * `trent curator status` and `log` still read, because seeing what the curator would do is not
+   * curation. `stale_after_days` and `archive_after_days` are measured from the last LOAD of a
+   * skill by a seat's run, not from when it was written, and only skills declared
+   * `created_by: agent` are ever aged by them — a skill a person installed is reported and left
+   * alone however old it gets. `scan_agent_skills` is the second scan gate: the composed skill,
+   * its document and its whole bundle together, put past the pre-install scanner after every
+   * agent write, with a flagged skill held `quarantined` until a human releases it. Turning it
+   * off would leave only the per-operation write scan, which no single operation sees the whole
+   * of — but the toolset builder does not pass this setting into the adapter yet, so the gate is
+   * on regardless of what is written here.
+   */
+  curator: z
+    .object({
+      enabled: z.boolean().default(true),
+      stale_after_days: z.number().int().positive().default(60),
+      archive_after_days: z.number().int().positive().default(180),
+      scan_agent_skills: z.boolean().default(true),
+    })
+    .strict()
+    .default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   improve: ImproveConfigSchema.default({}),

@@ -155,6 +155,12 @@
       "enabled": true,
       "max_bytes_per_run": 52428800
     },
+    "curator": {
+      "enabled": true,
+      "stale_after_days": 60,
+      "archive_after_days": 180,
+      "scan_agent_skills": true
+    },
     "personality": "default",
     "theme": "dark",
     "improve": {
@@ -432,6 +438,12 @@
     "checkpoints": {
       "enabled": false,
       "max_bytes_per_run": 123456
+    },
+    "curator": {
+      "enabled": true,
+      "stale_after_days": 60,
+      "archive_after_days": 180,
+      "scan_agent_skills": true
     },
     "personality": "fixture-personality",
     "theme": "light",

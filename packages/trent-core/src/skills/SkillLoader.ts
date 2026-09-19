@@ -5,7 +5,14 @@
  * installed are the same skill here.
  */
 import fs from "node:fs";
-import { findSkillRecord, listSkillRecords, type SkillRecord } from "./skill-store.js";
+import {
+  findSkillRecord,
+  listSkillRecords,
+  type SkillProvenance,
+  type SkillRecord,
+  type SkillStatus,
+} from "./skill-store.js";
+import { recordSkillUse } from "./usage.js";
 
 export interface SkillMetadata {
   slug: string;
@@ -16,6 +23,22 @@ export interface SkillMetadata {
   slashCommand: string;
   author: string;
   file: string;
+  /** [D3] Lifecycle state and declared provenance, so a caller can filter without a second read. */
+  status: SkillStatus;
+  createdBy: SkillProvenance;
+  useCount: number;
+  lastUsedAt: string | null;
+}
+
+export interface LoadOptions {
+  /**
+   * [D3] Count this load as a use. True by default, because `loadFull` is the path a seat's run
+   * takes to get a skill's instructions, and that load is exactly what staleness measures. The
+   * install path passes false: writing a skill is not using it.
+   */
+  recordUse?: boolean;
+  /** Replace `now` so a test can age a skill deterministically. */
+  now?: string;
 }
 
 export interface LoadedSkill extends SkillMetadata {
@@ -32,6 +55,10 @@ function toMetadata(record: SkillRecord): SkillMetadata {
     slashCommand: `/${record.name}`,
     author: record.author,
     file: record.file,
+    status: record.status,
+    createdBy: record.createdBy,
+    useCount: record.useCount,
+    lastUsedAt: record.lastUsedAt,
   };
 }
 
@@ -68,12 +95,21 @@ export class SkillLoader {
     else this.cache.delete(slug);
   }
 
-  public loadFull(slug: string): LoadedSkill {
+  /**
+   * The load path. Every caller that puts a skill's instructions in front of a model comes
+   * through here, so this is where the curator's usage counters are bumped: a skill nobody loads
+   * is a skill that ages, and one loaded every day never does.
+   */
+  public loadFull(slug: string, options: LoadOptions = {}): LoadedSkill {
     const record = findSkillRecord(this.skillsDir, slug);
     if (record === null) {
       throw new Error(`Skill "${slug}" not found in ${this.skillsDir}`);
     }
-    const meta = toMetadata(record);
+    const usage =
+      options.recordUse === false
+        ? { useCount: record.useCount, lastUsedAt: record.lastUsedAt }
+        : recordSkillUse(this.skillsDir, slug, options.now);
+    const meta = { ...toMetadata(record), ...usage };
     this.cache.set(slug, meta);
     return { ...meta, instructions: record.instructions };
   }

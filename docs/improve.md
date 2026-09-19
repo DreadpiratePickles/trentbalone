@@ -219,6 +219,24 @@ improve:
   min_goldens: 5     # promoted goldens a seat needs before --live will reflect for it
 ```
 
+## [D3] Provenance: which skills the loop is allowed to touch
+
+The curator's autonomy is bounded by one declared field. A skill in the profile's store carries
+`created_by: human | agent | import`, and only `agent` skills are eligible for autonomous
+curation — the aging pass that moves a skill `active` to `stale` to `archived`, and the
+composed-skill scan gate that can hold one `quarantined`. A skill a person installed with
+`trent skills install`, or one that arrived through an import, is **reported** with its idle days
+and left alone however old it gets. (This loop's own skill drafts are a different store, and their
+gate is the one above: `promoteDraft` is a human command and nothing else opens it.)
+Provenance is declared and never inferred: nothing reads usage counts, authorship of the last
+edit, or any other signal and concludes a skill is the agent's. The one way it changes is
+`trent curator adopt <skill>`, a human command, and that change is itself a ledger row. The point
+is that the loop's autonomy has a boundary a person drew on purpose, rather than one that drifts
+as telemetry accumulates — the same reason promotion is a human command. Every mutation the
+curator makes is appended to `<profile>/skills/.ledger.ndjson` with content-addressed before and
+after blobs, so any single one can be reversed with `trent curator undo <id>`. See
+[skills.md](skills.md), "Curator".
+
 ## What is deliberately not here
 
 - **Automatic promotion.** Promotion is a human command and stays one (`improve/lifecycle.ts`),
