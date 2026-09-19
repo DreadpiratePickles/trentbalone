@@ -68,9 +68,9 @@ export interface SkillsAdapterOptions {
    */
   seatId?: string;
   /**
-   * [D3] Run the curator's composed-skill scan gate after every write. True by default. The
-   * `curator.scan_agent_skills` setting is the switch meant to feed this, but the toolset builder
-   * (`tools/index.ts`) does not pass it yet, so today the gate is always on.
+   * [D3] Run the curator's composed-skill scan gate after every write. True by default, and
+   * `buildTrentTools` feeds it `curator.scan_agent_skills` (W3.1), so a profile that turns the key
+   * off turns the gate off and a profile that never names it keeps the gate on.
    */
   scanAgentSkills?: boolean;
 }

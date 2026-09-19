@@ -39,19 +39,19 @@ import { sandboxSpec } from "./groups/sandbox.js";
 import { cronSpec } from "./groups/cron.js";
 import { heartbeatSpec } from "./groups/heartbeat.js";
 import { auditSpec } from "./groups/audit.js";
+import { approvalsSpec } from "./groups/approvals.js";
+import { budgetSpec } from "./groups/budget.js";
 import { jobsSpec } from "./groups/jobs.js";
 import { hooksSpec } from "./groups/hooks.js";
 import { workspaceSpec } from "./groups/workspace.js";
 import { brainSpec } from "./groups/brain.js";
 import { securitySpec } from "./groups/security.js";
-import { budgetSpec } from "./groups/budget.js";
 
 export { CLI_VERSION } from "./registry.js";
 export type { CommandContext, CliOverrides } from "./context.js";
 
 /** The whole surface, in help order. Adding a command here is the only way to add one. */
 export const COMMAND_SPECS: readonly CommandSpec[] = [
-  budgetSpec,
   runSpec,
   doctorSpec,
   setupSpec,
@@ -71,6 +71,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   cronSpec,
   heartbeatSpec,
   auditSpec,
+  approvalsSpec,
+  budgetSpec,
   jobsSpec,
   hooksSpec,
   securitySpec,

@@ -9,6 +9,7 @@
 
 import { activeCheckpointSession } from "@trent/core/checkpoints/index.js";
 import { GOAL_COMMANDS } from "./goal-commands.js";
+import { decideHeldWrite, heldWriteLines, heldWrites } from "./held-writes.js";
 import { GLYPHS, fadingRule, type Theme } from "../ui/index.js";
 import { formatCents } from "./budget.js";
 import { contextReport, contextReportLines } from "./context-report.js";
@@ -185,28 +186,27 @@ export const REPL_COMMANDS: Record<string, ReplCommand> = {
 
   approvals: {
     name: "approvals",
-    description: "Pending human decisions, and how to answer them",
+    description: "Pending human decisions — run approvals and held memory writes — and how to answer them",
     args: "[approve <id> | reject <id>]",
     async run(args, ctx) {
       const [sub, id] = args;
+      const held = heldWrites();
       if ((sub === "approve" || sub === "reject") && id !== undefined) {
+        // [C5 -> W3.1] A held write and a run approval are two durable paths and one command: the
+        // id decides which, so a founder never has to know that one row lives in the session store
+        // and the other in the profile's gateway file.
+        if (held.some((row) => row.id === id)) return decideHeldWrite(ctx.theme, id, sub);
         const resolved = await ctx.approvals.answer(id, sub === "approve" ? "approved" : "rejected");
         return `  ${ctx.theme.body(`Approval ${resolved.id} ${resolved.status}.`)}`;
       }
       const pending = await ctx.approvals.pending();
       const lines = [heading("approvals", ctx.theme)];
-      if (pending.length === 0) {
-        lines.push(empty(ctx.theme, "Nothing is waiting on you."));
-        return lines.join("\n");
-      }
+      if (pending.length === 0 && held.length === 0) return [...lines, empty(ctx.theme, "Nothing is waiting on you.")].join("\n");
       for (const approval of pending) {
-        lines.push(
-          `  ${ctx.theme.needsApproval(GLYPHS.needsApproval)} ${ctx.theme.emphasis(approval.id)} ${ctx.theme.body(
-            approval.action,
-          )}`,
-        );
+        lines.push(`  ${ctx.theme.needsApproval(GLYPHS.needsApproval)} ${ctx.theme.emphasis(approval.id)} ${ctx.theme.body(approval.action)}`);
         lines.push(`    ${ctx.theme.meta(approval.reason)}`);
       }
+      lines.push(...heldWriteLines(held, ctx.theme));
       lines.push(empty(ctx.theme, "Answer with /approvals approve <id> or /approvals reject <id>."));
       return lines.join("\n");
     },

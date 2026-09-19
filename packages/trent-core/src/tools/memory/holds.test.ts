@@ -5,7 +5,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FileGatewayStore } from "../../gateway/store/GatewayStore.js";
 import { createMemoryAdapter } from "./index.js";
-import { approveHeldMemoryWrite, denyHeldMemoryWrite, heldWriteAction, holdMemoryWrite, listHeldMemoryWrites } from "./holds.js";
+import {
+  activeHeldWriteSession,
+  approveHeldMemoryWrite,
+  closeHeldWriteSession,
+  denyHeldMemoryWrite,
+  heldWriteAction,
+  holdMemoryWrite,
+  listHeldMemoryWrites,
+  openHeldWriteSession,
+} from "./holds.js";
 import { memoryPath } from "./store.js";
 import { DEFAULT_MEMORY_BLOCKS } from "./blocks.js";
 
@@ -73,5 +82,37 @@ describe("approveHeldMemoryWrite", () => {
     expect(fs.existsSync(memoryPath(profileDir, DEFAULT_MEMORY_BLOCKS[0]!))).toBe(false);
     const missing = await approveHeldMemoryWrite({ profileDir, id: "appr_nothing", memory });
     expect(missing.ok === false && missing.reason).toBe("unknown");
+  });
+});
+
+/**
+ * [W3.1] The process's held-write session. A surface that wants to DECIDE a held write needs two
+ * things it cannot invent: the profile whose `gateway.json` holds the rows, and the unwrapped
+ * memory adapter the approval replays against — unwrapped, because replaying through the
+ * provenance gate that held the write would hold it again. The runtime that built both registers
+ * them here, the way `checkpoints/session.ts` registers the open ledger.
+ */
+describe("the process's held-write session", () => {
+  it("hands the open session to a surface and forgets it when it is closed", async () => {
+    expect(activeHeldWriteSession()).toBeUndefined();
+    const memory = createMemoryAdapter({ profileDir });
+    const session = openHeldWriteSession({ profileDir, memory });
+
+    expect(activeHeldWriteSession()).toBe(session);
+    const held = holdMemoryWrite({ profileDir, adapter: "memory", action: ACTION, sources: ["web_extract"] });
+    const open = activeHeldWriteSession()!;
+    expect(await approveHeldMemoryWrite({ profileDir: open.profileDir, id: held.id, memory: open.memory })).toMatchObject({ ok: true });
+
+    closeHeldWriteSession(session);
+    expect(activeHeldWriteSession()).toBeUndefined();
+  });
+
+  it("a stale close does not take a newer session down with it", () => {
+    const first = openHeldWriteSession({ profileDir, memory: createMemoryAdapter({ profileDir }) });
+    const second = openHeldWriteSession({ profileDir, memory: createMemoryAdapter({ profileDir }) });
+    closeHeldWriteSession(first);
+    expect(activeHeldWriteSession()).toBe(second);
+    closeHeldWriteSession();
+    expect(activeHeldWriteSession()).toBeUndefined();
   });
 });

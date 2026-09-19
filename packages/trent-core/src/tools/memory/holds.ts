@@ -171,3 +171,69 @@ export function denyHeldMemoryWrite(input: { profileDir: string; id: string; dec
   const decided = decide(input.profileDir, input.id, "denied", input.decidedBy ?? "human");
   return "ok" in decided ? decided : { ok: true, row: decided };
 }
+
+/**
+ * [W3.1] One held write as a surface lists it. A founder deciding this row needs three facts and
+ * not the raw action: what KIND of write it is (the adapter — a memory entry or a skill edit),
+ * which seat made it, and which untrusted tools its content is derived from. Both surfaces read
+ * this one function, so `trent approvals list` and `/approvals` cannot describe a row differently.
+ */
+export interface HeldWriteSummary {
+  readonly id: string;
+  /** The adapter the write was made through: `memory`, `skills`. */
+  readonly kind: string;
+  /** The tool the seat actually called, e.g. `memory` or `skill_manage`. */
+  readonly tool: string;
+  readonly seat: string;
+  /** The untrusted tools this write's content came from; `holdMemoryWrite`'s `sources`. */
+  readonly tools: readonly string[];
+  readonly createdAt: string;
+  readonly runId: string | null;
+}
+
+export function summariseHeldWrite(row: HeldWriteRow): HeldWriteSummary {
+  return {
+    id: row.id,
+    kind: row.details.adapter,
+    tool: row.details.action.trim().split(/\s+/)[0] ?? row.details.adapter,
+    seat: row.agentId,
+    tools: [...row.details.sources],
+    createdAt: row.createdAt,
+    runId: row.runId ?? null,
+  };
+}
+
+/**
+ * [W3.1] The process's held-write session: the profile whose `gateway.json` holds the rows, and
+ * the UNWRAPPED memory adapter an approval replays against.
+ *
+ * A surface that decides a held write cannot invent either one. It must not build its own adapter
+ * over a guessed profile (it would write into the wrong blocks) and it must not reach for the
+ * wrapped one (replaying through the provenance gate that held the write would hold it again). So
+ * the runtime that built both registers them here and `/approvals` looks them up, exactly the way
+ * `/checkpoints` looks up the open ledger through `activeCheckpointSession()`.
+ */
+export interface HeldWriteSession {
+  readonly profileDir: string;
+  readonly memory: Pick<MemoryAdapter, "execute">;
+}
+
+let openSession: HeldWriteSession | undefined;
+
+/** Opens the process's held-write session, replacing any previous one. */
+export function openHeldWriteSession(session: HeldWriteSession): HeldWriteSession {
+  openSession = session;
+  return openSession;
+}
+
+export function activeHeldWriteSession(): HeldWriteSession | undefined {
+  return openSession;
+}
+
+/**
+ * Closes the session. With a session given, closes only that one: a runtime whose session has
+ * already been replaced must not take the replacement down with it on cleanup.
+ */
+export function closeHeldWriteSession(session?: HeldWriteSession): void {
+  if (session === undefined || openSession === session) openSession = undefined;
+}

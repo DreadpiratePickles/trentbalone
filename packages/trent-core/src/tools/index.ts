@@ -48,9 +48,10 @@ export {
 } from "../governance/provenance.js";
 export type { HeldWriteInput, ProvenanceLedger, ProvenancePolicy } from "../governance/provenance.js";
 export {
-  HELD_WRITE_ACTION, approveHeldMemoryWrite, denyHeldMemoryWrite, heldWriteAction, holdMemoryWrite, listHeldMemoryWrites, provenanceMarker,
+  HELD_WRITE_ACTION, activeHeldWriteSession, approveHeldMemoryWrite, closeHeldWriteSession, denyHeldMemoryWrite, heldWriteAction,
+  holdMemoryWrite, listHeldMemoryWrites, openHeldWriteSession, provenanceMarker, summariseHeldWrite,
 } from "./memory/holds.js";
-export type { ApproveHeldWriteResult, HeldWrite, HeldWriteDetails, HeldWriteRow } from "./memory/holds.js";
+export type { ApproveHeldWriteResult, HeldWrite, HeldWriteDetails, HeldWriteRow, HeldWriteSession, HeldWriteSummary } from "./memory/holds.js";
 export { floorBlock, dangerous, normaliseForDetection, maskQuoted, detectionVariants } from "./approval-floors.js";
 export { createFileOpsAdapter, FILE_OPS_NAME, FILE_OPS_SCOPES } from "./file_ops/index.js";
 export { createTerminalAdapter, TERMINAL_NAME, TERMINAL_SCOPES } from "./terminal/index.js";
@@ -93,6 +94,13 @@ export type ToolBuildConfig = Pick<TrentConfig, "toolsets" | "disabled_toolsets"
   readonly tools?: TrentConfig["tools"];
   /** [C5] `provenance`: what a memory or skill write made from untrusted context may do. */
   readonly provenance?: TrentConfig["provenance"];
+  /**
+   * [D3] `curator.scan_agent_skills`: whether an agent-authored skill is scanned as a composed
+   * bundle before it becomes active. D3 declared the key and nothing read it, so the gate was
+   * always on; the builder feeds it to `createSkillsAdapter` here. Absent keeps the shipped
+   * behaviour, which is the gate on. `TrentConfig` satisfies this structurally.
+   */
+  readonly curator?: { readonly scan_agent_skills?: boolean };
 };
 
 export interface ToolBuildDeps {
@@ -256,7 +264,16 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
     else if (toolset === "code") adapters.push(createCodeExecutionAdapter(ctx));
     else if (toolset === "delegation") adapters.push(createDelegateAdapter({ profileDir: deps.profileDir, ...(deps.delegate ? { port: deps.delegate } : {}) }));
     else if (toolset === "plugins") adapters.push(createPluginsAdapter(ctx, deps.pluginsDir ? { pluginsDir: deps.pluginsDir } : {}));
-    else if (toolset === "skills") adapters.push(createSkillsAdapter({ profileDir: deps.profileDir, ...(deps.skillsDir ? { skillsDir: deps.skillsDir } : {}) }));
+    else if (toolset === "skills")
+      adapters.push(
+        createSkillsAdapter({
+          profileDir: deps.profileDir,
+          ...(deps.skillsDir ? { skillsDir: deps.skillsDir } : {}),
+          // [D3] The gate the profile asked for. Absent leaves the adapter's own default, which is
+          // the gate on, so a profile that never names the key keeps the shipped behaviour.
+          ...(config.curator?.scan_agent_skills === undefined ? {} : { scanAgentSkills: config.curator.scan_agent_skills }),
+        }),
+      );
     else if (toolset === "cron") adapters.push(createCronAdapter({ profileDir: deps.profileDir }));
     else if (toolset === "mcp") adapters.push(createMcpAdapter(config, { profileDir: deps.profileDir, env: deps.env ?? process.env, ...(egress ? { egress } : {}) }));
     else if (toolset === "human") adapters.push(createHumanAdapter(deps.humanAnswers ? { answers: deps.humanAnswers } : {}));
