@@ -37,6 +37,8 @@ export interface ModelTierConfig {
   readonly executor?: string;
   /** The strong tier (opus), which the app also uses for the critic. Defaults to `executor`. */
   readonly planner?: string;
+  /** B2.1: the critic's own model, where a provider has a critic variable. Defaults to its tier. */
+  readonly judge?: string;
 }
 
 /** The model block `applyModelEnv` reads: the configured provider/model plus the optional tiers. */
@@ -94,7 +96,9 @@ function applyTierEnv(provider: string, config: ModelEnvConfig, written: string[
     if (typeof name === "string" && name !== "" && value !== "") setIfUnset(name, value, written, kept);
   }
   for (const follower of FOLLOWER_VARS[provider] ?? []) {
-    const value = modelForTier(config, follower.tier);
+    // B2.1: `models.judge` names the critic outright; unset, the critic follows its tier as before.
+    const judge = config.models?.judge?.trim();
+    const value = judge === undefined || judge === "" ? modelForTier(config, follower.tier) : judge;
     if (value !== "") setIfUnset(follower.name, value, written, kept);
   }
 }

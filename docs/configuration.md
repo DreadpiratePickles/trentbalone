@@ -540,6 +540,48 @@ A provider that cannot be routed fails at startup with exit code 3 and says whic
 It is never quietly swapped for another provider: that was the old behaviour and it billed you for
 a model you did not choose.
 
+### Model tiers
+
+`model` is one model for everything. The wrapped application routes each seat to a `haiku`,
+`sonnet` or `opus` tier from its own manifest (`SEAT_MANIFESTS[role].modelTier`) and resolves that
+tier through the per-provider tier variables, so naming a model per tier is what makes a cheap seat
+cheap and a planning seat strong. The `models` block is that mapping:
+
+```yaml
+provider: google
+model: gemini-3.5-flash-lite   # the fallback for every tier below
+models:
+  fast: gemini-3.5-flash-lite  # haiku tier
+  executor: gemini-3.6-flash   # sonnet tier, and the fallback for the other tiers
+  planner: gemini-3.6-pro      # opus tier
+  # judge: gemini-3.6-pro      # the critic, where the provider has a critic variable
+```
+
+| Key | Tier | Variable written |
+|---|---|---|
+| `models.fast` | `haiku` | `<PROVIDER>_MODEL_FAST` |
+| `models.executor` | `sonnet` | `<PROVIDER>_MODEL_DEFAULT` |
+| `models.planner` | `opus` | `<PROVIDER>_MODEL_STRONG` (and `OPENAI_MODEL_CRITIC`) |
+| `models.judge` | — | `OPENAI_MODEL_CRITIC` alone; no other provider has a critic variable |
+
+A tier nothing names falls back to `executor`, and `executor` itself to the top-level `model`, so a
+profile with no `models` block reaches exactly the variables and values it reached before this key
+existed. An unknown key inside the block is a config error rather than a setting that does nothing.
+An environment variable you set yourself always wins over the file — only unset or empty variables
+are filled — and values are never logged, only names. The OpenAI-compatible aliases (`ollama`,
+`lmstudio`, `deepseek`, `groq`) resolve to `openai` plus a base URL and their tiers are written
+first, so aliasing and tiering compose.
+
+The block reaches a live run through the session runtime, which hands it to the orchestrator with
+the provider and model; `trent fleet show <seat> --json` prints the model a seat would resolve to
+under its manifest tier. The self-improvement loop's judge is a different setting,
+`improve.judge_model`, which resolves against the planner tier (docs/improve.md).
+
+```bash
+npm run cli -- config set models.planner gemini-3.6-pro
+npm run cli -- fleet show finance        # model + tier the finance seat resolves
+```
+
 ## Retry and fallback
 
 Every provider attempt is bounded: **3 attempts**, exponential backoff with full jitter, 500 ms

@@ -171,6 +171,18 @@ interface ModelOverridesSlice {
   >;
 }
 
+// [B2.1] model tiers
+/**
+ * The `models` tier block. It travels with the model config for the same reason `model_overrides`
+ * does — the orchestrator builds its gateway with no arguments — and `applyModelEnv` maps it onto
+ * the per-provider tier variables the app's resolver reads. Without this the tier mapping B2 added
+ * reached `fleet show` and nothing else: a live run wrote one model into every tier variable and
+ * every seat ran it, whatever its manifest tier said (docs/configuration.md, "Model tiers").
+ */
+interface ModelTiersSlice {
+  models?: { fast?: string; executor?: string; planner?: string; judge?: string };
+}
+
 /** The `runtime` config block the orchestrator's run cap comes from; `TrentConfig` satisfies it structurally. */
 interface RuntimeSlice {
   runtime?: { max_concurrent_runs?: number };
@@ -318,10 +330,17 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     // An empty map is the default, and passing it would write an empty bridge variable for nothing.
     const overrides = (config as ModelOverridesSlice).model_overrides;
     const modelOverrides = overrides && Object.keys(overrides).length > 0 ? { overrides } : {};
+    // [B2.1] The tiers ride the same block. An empty `models` is no tiers at all, so it is left
+    // off entirely and the model dep stays byte-identical to what an untiered profile sent before.
+    const tiers = (config as ModelTiersSlice).models;
+    const modelTiers = tiers && Object.keys(tiers).length > 0 ? { models: tiers } : {};
+    // A variable, not a literal in the call: the tier block is carried to `applyModelEnv`, which
+    // reads it, through a dep type that declares provider, model and prices only.
+    const model = { provider: config.provider, model: config.model, ...modelOverrides, ...modelTiers };
     const orchestrator = createOrchestrator({
       ...(durable ? { databaseUrl } : {}),
       ...(maxConcurrentRuns === undefined ? {} : { maxConcurrentRuns }),
-      model: { provider: config.provider, model: config.model, ...modelOverrides },
+      model,
       tools: tools.adapters,
       fleetMemory,
       delegate,

@@ -51,6 +51,28 @@ const EVENTS: OrcEvent[] = [
   ev("run_done", { run: { status: "completed" } }),
 ];
 
+// [B2.1] model tiers
+/** The `models` block on the orchestrator's model dep, which `OrchestratorModelConfig` accepts structurally. */
+interface ModelTiers {
+  models?: { fast?: string; executor?: string; planner?: string; judge?: string };
+}
+const GOOGLE_TIER_VARS = ["MODEL_PREFERRED_PROVIDER", "GOOGLE_MODEL_FAST", "GOOGLE_MODEL_DEFAULT", "GOOGLE_MODEL_STRONG"];
+const OPENAI_TIER_VARS = ["MODEL_PREFERRED_PROVIDER", "OPENAI_MODEL_FAST", "OPENAI_MODEL_DEFAULT", "OPENAI_MODEL_STRONG", "OPENAI_MODEL_CRITIC"];
+
+/** Runs `fn` with `names` unset, restoring every one of them (including absence) afterwards. */
+async function withCleanEnv(names: readonly string[], fn: () => Promise<void>): Promise<void> {
+  const saved = names.map((name) => [name, process.env[name]] as const);
+  for (const name of names) delete process.env[name];
+  try {
+    await fn();
+  } finally {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
 interface Fakes {
   deps: HeadlessRuntimeDeps;
   received: OrchestratorDepsWithImprove[];
@@ -206,6 +228,68 @@ describe("createHeadlessRuntime", () => {
     expect(f.received[0]?.model).toEqual({
       provider: f.deps.configManager.loadConfig().provider,
       model: f.deps.configManager.loadConfig().model,
+    });
+  });
+
+  // [B2.1] model tiers
+  it("carries the configured model tiers to the orchestrator, so each tier resolves its own model", async () => {
+    // B2's tier mapping reached `fleet show` through passthrough and stopped there: this file
+    // forwarded provider, model and model_overrides only, so a live run still wrote ONE model into
+    // every tier variable and every seat ran it whatever its manifest tier said.
+    const TIERS = { fast: "gemini-3.5-flash-lite", executor: "gemini-3.6-flash", planner: "gemini-3.6-pro" };
+    await withCleanEnv(GOOGLE_TIER_VARS, async () => {
+      const f = fakes((manager) => {
+        const config = manager.loadConfig();
+        config.models = { ...TIERS };
+        manager.saveConfig(config);
+      });
+      await createHeadlessRuntime(f.deps);
+      expect((f.received[0]?.model as ModelTiers | undefined)?.models).toEqual(TIERS);
+
+      const { applyModelEnv } = await import("@trent/core/orchestrator/index.js");
+      applyModelEnv(f.received[0]?.model);
+      expect(process.env.GOOGLE_MODEL_FAST).toBe(TIERS.fast);
+      expect(process.env.GOOGLE_MODEL_DEFAULT).toBe(TIERS.executor);
+      expect(process.env.GOOGLE_MODEL_STRONG).toBe(TIERS.planner);
+      expect(process.env.GOOGLE_MODEL_STRONG).not.toBe(process.env.GOOGLE_MODEL_DEFAULT);
+    });
+  });
+
+  it("names the critic's own model when models.judge is set on a provider that has a critic variable", async () => {
+    const TIERS = { executor: "gpt-5.6-terra", planner: "gpt-5.6-strong", judge: "gpt-5.6-judge" };
+    await withCleanEnv(OPENAI_TIER_VARS, async () => {
+      const f = fakes((manager) => {
+        const config = manager.loadConfig();
+        config.provider = "openai";
+        config.models = { ...TIERS };
+        manager.saveConfig(config);
+      });
+      await createHeadlessRuntime(f.deps);
+
+      const { applyModelEnv } = await import("@trent/core/orchestrator/index.js");
+      applyModelEnv(f.received[0]?.model);
+      expect(process.env.OPENAI_MODEL_STRONG).toBe(TIERS.planner);
+      expect(process.env.OPENAI_MODEL_CRITIC).toBe(TIERS.judge);
+    });
+  });
+
+  it("writes exactly what the single model wrote before when no tiers are configured", async () => {
+    // The byte-identical guarantee: an untiered profile must reach the same variables with the
+    // same values it did before the key existed, or this is a behaviour change nobody asked for.
+    await withCleanEnv(GOOGLE_TIER_VARS, async () => {
+      const f = fakes();
+      await createHeadlessRuntime(f.deps);
+      const loaded = f.deps.configManager.loadConfig();
+      const { applyModelEnv } = await import("@trent/core/orchestrator/index.js");
+
+      const forwarded = applyModelEnv(f.received[0]?.model);
+      const after = GOOGLE_TIER_VARS.map((name) => [name, process.env[name]]);
+      for (const name of GOOGLE_TIER_VARS) delete process.env[name];
+      const single = applyModelEnv({ provider: loaded.provider, model: loaded.model });
+
+      expect(GOOGLE_TIER_VARS.map((name) => [name, process.env[name]])).toEqual(after);
+      expect(forwarded.written).toEqual(single.written);
+      expect(f.received[0]?.model).toEqual({ provider: loaded.provider, model: loaded.model });
     });
   });
 

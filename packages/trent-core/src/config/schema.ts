@@ -343,6 +343,24 @@ export const TrentConfigSchema = z.object({
     consolidation_may_edit: z.array(z.string().regex(MEMORY_BLOCK_LABEL_PATTERN)).default([]),
     consolidation_max_removal_ratio: z.number().positive().max(1).default(0.3),
   }).default({}),
+  // [B2.1] model tiers
+  /**
+   * `models`: one model id per tier. `orchestrator/model-env.ts` maps these onto the per-provider
+   * `*_MODEL_FAST` / `*_MODEL_DEFAULT` / `*_MODEL_STRONG` variables the app's resolver reads, so a
+   * seat's manifest tier (`SEAT_MANIFESTS[role].modelTier`) chooses a different model instead of
+   * every seat running the one `model` above. `fast` is the haiku tier, `executor` the sonnet tier
+   * and `planner` the opus tier; `judge` names the critic's model where a provider has a critic
+   * variable of its own (`OPENAI_MODEL_CRITIC`) — the self-improvement loop's judge is a separate
+   * key, `improve.judge_model`. A tier nothing names falls back to `executor`, and `executor`
+   * itself to `model`, so an untiered profile behaves exactly as it did before this key existed.
+   * An operator's own environment variable still wins. See docs/configuration.md, "Model tiers".
+   */
+  models: z.object({
+    fast: z.string().min(1).optional(),
+    executor: z.string().min(1).optional(),
+    planner: z.string().min(1).optional(),
+    judge: z.string().min(1).optional(),
+  }).strict().default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   // [D0] improvement gates

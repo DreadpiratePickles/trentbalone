@@ -93,6 +93,11 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // profile with neither keeps the lexical ranking it already had. 32 inputs per request sits
   // inside both providers' batch limits. See docs/configuration.md, "Embedder".
   memory: { blocks: [...DEFAULT_MEMORY_BLOCKS], consolidation_may_edit: [], consolidation_max_removal_ratio: 0.3, embedder: { provider: "auto", batch_size: 32 } },
+  // [B2.1] model tiers
+  // Empty by default, which is the shipped behaviour: with no tier named, every tier resolves to
+  // `model` above and a seat runs exactly what it ran before the key existed. Naming one tier
+  // changes that tier alone (docs/configuration.md, "Model tiers").
+  models: {},
   personality: "default",
   theme: "dark",
   // [D0] improvement gates
