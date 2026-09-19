@@ -13,10 +13,12 @@ import { ConfigManager } from "@trent/core/config/index.js";
 import { EXIT } from "@trent/core/errors/index.js";
 import { GatewayManager, type OutboundMessage } from "@trent/core/gateway/index.js";
 import { NO_REPLY, heartbeatLockPath, readHeartbeatRuns, type HeartbeatRunRow } from "@trent/core/heartbeat/index.js";
+import { InMemoryImproveStore } from "@trent/core/improve/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import type { CliOverrides } from "../context.js";
 import type { HeadlessRuntime } from "../../runtime/headless.js";
 import { runCli } from "../index.js";
+import { setImproveStoreForTests } from "../improve.js";
 
 let home: string;
 
@@ -97,7 +99,9 @@ function fakes(reply = NO_REPLY, at = "2026-09-15T09:00:00.000Z"): Fakes {
     return undefined;
   });
   const runtime = {
-    companyId: "cmp_local",
+    // The id `commands/improve.ts` resolves for a profile that names no company, so the
+    // unattended sweep and `trent improve status` speak about the same company.
+    companyId: "trent-local",
     store: {},
     run: (objective: string, options: { trigger: string }) => {
       runs.push({ objective, trigger: options.trigger });
@@ -341,6 +345,110 @@ describe("trent heartbeat", () => {
     const human = await runCli(["heartbeat", "runs", "--no-color"]);
     expect(human.exitCode).toBe(EXIT.OK);
     expect(human.stdout).toContain("no_reply");
+  });
+});
+
+/**
+ * [D2.1] The unattended sweep builds itself the way `trent improve sweep` does: the profile's
+ * improve store, the same cap, and the SEAT SUITES — a seat's promoted goldens plus its mechanical
+ * overlays. Before this, the heartbeat bound `runImprovementSweep` with no `suiteFor`, so every
+ * draft it produced was blocked `no_suite` however many goldens a human had promoted.
+ *
+ * Offline throughout: `live: false`, so no model is reached and `no_gateway` is the honest next
+ * refusal for a seat that now HAS a suite.
+ */
+describe("[D2.1] the heartbeat sweep gates against the same seat suites as improve sweep", () => {
+  let store: InMemoryImproveStore;
+
+  beforeEach(() => {
+    store = new InMemoryImproveStore();
+    setImproveStoreForTests(store);
+  });
+
+  afterEach(() => {
+    setImproveStoreForTests(undefined);
+  });
+
+  async function seedTraces(agentId: string, runId: string): Promise<void> {
+    for (const id of ["a", "b", "c"]) {
+      await store.appendTrace({
+        id: `${agentId}_${id}`,
+        companyId: "trent-local",
+        agentRole: agentId,
+        agentId,
+        runId,
+        taskType: "ship-feature",
+        stepTitle: "implement",
+        status: "completed",
+        toolCalls: ["GitHub", "memory:read"],
+        toolCallCount: 2,
+        critiqueVerdict: id === "b" ? "retry" : "pass",
+        improvement: null,
+        evalScore: 0.9,
+        costCents: 1,
+        latencyMs: 10,
+        humanCorrected: false,
+        skillApplied: false,
+        createdAt: "2026-09-12T10:00:00.000Z",
+      });
+    }
+  }
+
+  /** A captured failure golden on `runId`, exactly as the orchestrator writes it (quarantined). */
+  function capture(index: number, runId: string): string {
+    const dir = path.join(home, "goldens");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, `golden-${runId}-${String(index)}.json`),
+      JSON.stringify({
+        id: `orcgolden_${String(index)}`,
+        companyId: "trent-local",
+        runId,
+        objective: `Ship the ${String(index)}th release note and verify the totals`,
+        reason: "run_failed: the engineer step never verified the build",
+        status: "quarantined",
+        trajectoryFailureTags: ["trajectory_terminal_event_emitted"],
+        capturedAt: "2026-09-18T10:00:00.000Z",
+      }),
+      "utf8",
+    );
+    return `orcgolden_${String(index)}`;
+  }
+
+  async function quarantineGates(): Promise<Map<string, string | null>> {
+    const status = await runCli(["improve", "status", "--json"]);
+    expect(status.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(status.stdout) as { quarantine: Array<{ agentId: string; gate: { blockedBy: string | null } | null }> };
+    return new Map(data.quarantine.map((q) => [q.agentId, q.gate?.blockedBy ?? null]));
+  }
+
+  it("sweep --now gates a seat whose golden a human promoted, and names the seat that has none", async () => {
+    configure();
+    await seedTraces("engineer", "run_1");
+    await seedTraces("finance", "run_2");
+    const promoted = capture(1, "run_1");
+    capture(2, "run_2");
+    expect((await runCli(["improve", "goldens", "promote", promoted, "--json"])).exitCode).toBe(EXIT.OK);
+
+    const f = fakes();
+    const swept = await runCli(["heartbeat", "sweep", "--now", "--json"], { overrides: f.overrides });
+    expect(swept.exitCode).toBe(EXIT.OK);
+    const record = (JSON.parse(swept.stdout) as { ran: boolean; record: { capCents: number; costCents: number; drafts: number } }).record;
+    // The same cap as `trent improve sweep`, and offline it still costs a real zero.
+    expect(record).toMatchObject({ capCents: 100, costCents: 0 });
+    expect(record.drafts).toBeGreaterThanOrEqual(2);
+
+    const gates = await quarantineGates();
+    // The promoted golden IS the engineer's suite, so the gate stops answering no_suite.
+    expect(gates.get("engineer"), "the unattended sweep drafted for the seat with a golden").toBeDefined();
+    expect(gates.get("engineer")).not.toContain("no_suite");
+    expect(gates.get("engineer")).toBe("no_gateway");
+    // The seat with nothing promoted is refused by name, with both counts.
+    const finance = gates.get("finance") ?? "";
+    expect(finance).toContain("no_suite");
+    expect(finance).toContain("finance");
+    expect(finance).toContain("0 promoted");
+    expect(finance).toContain("1 quarantined");
   });
 });
 

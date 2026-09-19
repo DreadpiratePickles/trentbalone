@@ -26,6 +26,7 @@ import type { CommandSpec } from "../registry.js";
 import type { CommandContext } from "../context.js";
 import type { ReplConfig } from "../../repl/types.js";
 import { fallbackImproveStore } from "../improve.js";
+import { buildMeteredSweep } from "../improve-sweep.js";
 import { createHeadlessRuntime, type HeadlessRuntime } from "../../runtime/headless.js";
 import { releaseOnSignal, type SignalTarget } from "../../signals.js";
 
@@ -48,16 +49,21 @@ function improveOf(store: unknown): ImproveStorePort | undefined {
 }
 
 /**
- * [D2] The unattended sweep this profile may run: `runImprovementSweep` over the same improve
- * store the run path writes traces to, OFFLINE (`skipLLM: true`, no `actuals`, no `judge`) — a
- * sweep nobody is watching never reflects through a model, so its meter reports a real zero and
+ * [D2] The unattended sweep this profile may run, and [D2.1] the ONE builder it shares with
+ * `trent improve sweep`: `buildMeteredSweep` wires the profile's improve store, the frozen
+ * surface, pass^k, the holdout and — the part D2 could not reach — the seat suites, so a seat
+ * whose golden a human promoted is gated here exactly as it is at the command line, and a seat
+ * with none is refused by name instead of a bare `no_suite`.
+ *
+ * `live: false` is the offline rule (`skipLLM`, no `actuals`, no `judge`): a sweep nobody is
+ * watching never reflects through a model, so its meter reports a real zero and
  * `trent improve sweep --live` stays the only path that spends. The cap it is handed is
  * `improve.sweep_cap_cents`; the day's ledger is what this heartbeat has already written to its
  * own history today, against `budget.daily_cap`. Every draft it produces is in quarantine:
  * `trent improve promote` is still the only way one reaches a seat.
  */
 function sweepWiring(wiring: HeartbeatWiring): HeartbeatSweepDeps {
-  const { configManager, config, runtime } = wiring;
+  const { configManager, config } = wiring;
   const profileDir = configManager.getProfileDir();
   const tz = config.heartbeat.active_hours?.tz ?? "UTC";
   return {
@@ -66,19 +72,7 @@ function sweepWiring(wiring: HeartbeatWiring): HeartbeatSweepDeps {
       limitCents: () => config.budget.daily_cap,
       spentCents: () => spentTodayCents(readHeartbeatRuns(profileDir), (wiring.now ?? (() => new Date()))(), tz),
     },
-    runSweep: async (request) => {
-      const { createFrozenSurface, runImprovementSweep } = await import("@trent/core/improve/index.js");
-      return runImprovementSweep(runtime.companyId, {
-        store: improveOf(runtime.store) ?? fallbackImproveStore(),
-        installedAgents: config.fleet.installed_agents,
-        budgetCents: request.capCents,
-        passK: config.improve.pass_k,
-        holdoutRatio: config.improve.holdout_ratio,
-        judgeFloors: { minTpr: config.improve.judge_min_tpr, minTnr: config.improve.judge_min_tnr },
-        frozenSurface: createFrozenSurface({ profileDir, blocks: config.memory.blocks, extraPaths: config.improve.frozen_paths }),
-        skipLLM: true,
-      });
-    },
+    runSweep: (request) => buildMeteredSweep({ config: () => configManager }, { live: false, budgetCents: request.capCents }),
   };
 }
 

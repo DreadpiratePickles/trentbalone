@@ -14,6 +14,12 @@
  * return data and never print. The store is the profile's `trent.db` (bun:sqlite); under a runtime
  * without it the command still answers, from an in-process store, and says so in `store.durable`.
  *
+ * [D2.1] `sweep` builds nothing of its own: `improve-sweep.ts` is the one builder `trent heartbeat
+ * sweep --now` and the unattended heartbeat sweep run through too, so all three gate against the
+ * same seat suites under the same cap and the same offline/live rule. That module also carries the
+ * store plumbing (`withStore`, `loopConfig`, `liveModel`, the frozen surface, the golden index)
+ * the other subcommands here share.
+ *
  * `createImproveRunDeps` is the other half: what the run path spreads into `createOrchestrator`
  * so every run writes traces AND every seat call sees the skills a human promoted here
  * (`hook.seatModel`), which is what makes `skillApplied` on a trace true.
@@ -22,32 +28,18 @@
 import path from "node:path";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import {
-  InMemoryImproveStore,
   createFileExemplarStore,
-  createFrozenSurface,
-  createGatewayActuals,
-  createGatewayJudge,
-  createGatewayRationale,
   createImproveHook,
   goldenActuals,
   improveStatus,
-  resolveJudgeModel,
   promoteDraft,
   rejectDraft,
-  resolveSweepScope,
   rollback,
-  runImprovementSweep,
-  verifyPromotion,
-  type ActualsRunner,
   type ImproveHook,
   type ImproveStatus,
-  type JudgeFn,
-  type RationaleFn,
-  type SeatSuites,
   type SweepReport,
   type VerifyPromotionReport,
 } from "@trent/core/improve/index.js";
-import type { ModelProvider } from "@trent/core/model-gateway/index.js";
 import type { ImproveStorePort } from "@trent/core/store/index.js";
 
 export interface ImproveRunDepsInput {
@@ -93,176 +85,24 @@ export function createImproveRunDeps(input: ImproveRunDepsInput): ImproveRunDeps
   return { improve: hook, executeSeatModelFn: hook.seatModel(underlying) as unknown as (...args: never[]) => unknown };
 }
 // [D1] the goldens that ARE a seat's suite, their human gate, and the reflection floor.
+import { goldensSpec, holdoutRecheck, rolesByRun, seatSuitesFor } from "./improve-goldens.js";
+// [D2.1] the one sweep builder every trigger shares, and the store plumbing it carries.
 import {
-  goldenDirFor,
-  holdoutRecheck,
-  goldensSpec,
-  loadGoldenIndex,
-  reflectionFloor,
-  reflectionRefusal,
-  rolesByRun,
-  seatSuitesFor,
-  type GoldenIndex,
-} from "./improve-goldens.js";
+  buildMeteredSweep,
+  fallbackImproveStore,
+  frozenSurfaceFor,
+  goldenIndexFor,
+  liveModel,
+  setImproveStoreForTests,
+  storeInfo,
+  sweepPlan,
+  withStore,
+} from "./improve-sweep.js";
 import type { CommandContext } from "./context.js";
 import type { CommandSpec } from "./registry.js";
 
-const DEFAULT_COMPANY_ID = "trent-local";
-/** Mirrors `improve.min_goldens`; used only when a profile predates the key. */
-const DEFAULT_MIN_GOLDENS = 5;
-
-/** Test seam: an injected store replaces the profile database for the life of the process. */
-let injectedStore: ImproveStorePort | undefined;
-export function setImproveStoreForTests(store: ImproveStorePort | undefined): void {
-  injectedStore = store;
-}
-
-/** Process-local fallback when bun:sqlite is unavailable, so a Node run still answers. */
-let fallbackStore: InMemoryImproveStore | undefined;
-/** The same fallback the REPL run path uses, so a promotion and a run in one process share it. */
-export function fallbackImproveStore(): ImproveStorePort {
-  if (injectedStore) return injectedStore;
-  fallbackStore ??= new InMemoryImproveStore();
-  return fallbackStore;
-}
-
-interface OpenedStore {
-  store: ImproveStorePort;
-  durable: boolean;
-  reason?: string;
-  close(): Promise<void>;
-}
-
-interface LoopConfig {
-  companyId: string;
-  installedAgents: string[];
-  provider: string;
-  model: string;
-  /** [D1] `models.planner`, when the profile configures model tiers; the judge prefers it. */
-  plannerModel?: string;
-  /** [D0] improvement gates, from `config.improve` (docs/improve.md). */
-  gates: {
-    sweepCapCents: number;
-    /** [D1] the judge's model id, empty when it is resolved at run time, and the reflection floor. */
-    judgeModel: string;
-    minGoldens: number;
-    passK: number;
-    holdoutRatio: number;
-    minTpr: number;
-    minTnr: number;
-    frozenPaths: string[];
-    blocks: Array<{ label: string; file: string; description: string; limit: number; read_only: boolean }>;
-  };
-}
-
-function loopConfig(ctx: CommandContext): LoopConfig {
-  const config = ctx.config().loadConfig() as unknown as {
-    provider: string;
-    model: string;
-    company?: { id?: string };
-    fleet: { installed_agents?: string[]; active_agents?: string[] };
-    budget: { per_run_cap: number };
-    memory: { blocks: LoopConfig["gates"]["blocks"] };
-    models?: { planner?: string };
-    improve: { sweep_cap_cents: number; pass_k: number; holdout_ratio: number; judge_min_tpr: number; judge_min_tnr: number; frozen_paths: string[]; judge_model?: string; min_goldens?: number };
-  };
-  const planner = config.models?.planner;
-  return {
-    companyId: String(config.company?.id ?? DEFAULT_COMPANY_ID),
-    installedAgents: [...(config.fleet.installed_agents ?? config.fleet.active_agents ?? [])],
-    provider: config.provider,
-    model: config.model,
-    ...(planner === undefined ? {} : { plannerModel: planner }),
-    gates: {
-      // Decision 8: an unset cap is one run's cap, never "no cap".
-      sweepCapCents: config.improve.sweep_cap_cents ?? config.budget.per_run_cap,
-      judgeModel: config.improve.judge_model ?? "",
-      minGoldens: config.improve.min_goldens ?? DEFAULT_MIN_GOLDENS,
-      passK: config.improve.pass_k,
-      holdoutRatio: config.improve.holdout_ratio,
-      minTpr: config.improve.judge_min_tpr,
-      minTnr: config.improve.judge_min_tnr,
-      frozenPaths: [...config.improve.frozen_paths],
-      blocks: [...config.memory.blocks],
-    },
-  };
-}
-
-async function openStore(ctx: CommandContext, companyId: string): Promise<OpenedStore> {
-  if (injectedStore) return { store: injectedStore, durable: false, reason: "injected", close: async () => undefined };
-  const url = `file:${path.join(ctx.config().getProfileDir(), "trent.db")}`;
-  try {
-    const { createSqliteStore } = await import("@trent/core/store/index.js");
-    const sqlite = await createSqliteStore({ url });
-    if ((await sqlite.getCompany(companyId)) === null) {
-      await sqlite.createCompany({ id: companyId, name: companyId, slug: companyId });
-    }
-    if (sqlite.improve === undefined) throw new Error("store has no improve tables");
-    return { store: sqlite.improve(), durable: true, close: () => sqlite.close() };
-  } catch (error) {
-    fallbackStore ??= new InMemoryImproveStore();
-    return {
-      store: fallbackStore,
-      durable: false,
-      reason: `bun:sqlite unavailable under this runtime (${error instanceof Error ? error.message.split("\n")[0] : String(error)})`,
-      close: async () => undefined,
-    };
-  }
-}
-
-async function withStore<T>(ctx: CommandContext, run: (opened: OpenedStore, cfg: LoopConfig) => Promise<T>): Promise<T> {
-  const cfg = loopConfig(ctx);
-  const opened = await openStore(ctx, cfg.companyId);
-  try {
-    return await run(opened, cfg);
-  } finally {
-    await opened.close();
-  }
-}
-
-function storeInfo(opened: OpenedStore): { durable: boolean; reason?: string } {
-  return opened.reason === undefined ? { durable: opened.durable } : { durable: opened.durable, reason: opened.reason };
-}
-
-/**
- * The loop's model access for `--live`: the configured provider through the real gateway for the
- * executor, and [D1] a SECOND gateway pinned to a different model for the judge — a judge that is
- * the executor grades its own output with its own blind spots (plan decision 6, `judge-model.ts`).
- */
-async function liveModel(ctx: CommandContext, cfg: LoopConfig): Promise<{ actuals: ActualsRunner; judge: JudgeFn; rationalise: RationaleFn; judgeModel: string }> {
-  ctx.config().loadSecrets();
-  const { createModelGateway } = await import("@trent/core/model-gateway/index.js");
-  const preferredProvider = cfg.provider as ModelProvider;
-  const gateway = await createModelGateway({ preferredProvider, models: { executor: cfg.model } });
-  if (gateway.configuredProviders().length === 0) {
-    throw new TrentError({ code: EXIT.AUTH, operation: "improve.sweep", message: `no API key configured for provider ${cfg.provider}` });
-  }
-  const judge = resolveJudgeModel({
-    configured: cfg.gates.judgeModel,
-    executor: cfg.model,
-    ...(cfg.plannerModel === undefined ? {} : { planner: cfg.plannerModel }),
-  });
-  const judgeGateway = await createModelGateway({ preferredProvider, models: { executor: judge.model } });
-  return {
-    actuals: createGatewayActuals(gateway),
-    judge: createGatewayJudge(judgeGateway),
-    rationalise: createGatewayRationale(gateway),
-    judgeModel: judge.model,
-  };
-}
-
-/** [D0] gate 1: the paths this profile's loop may never write. */
-function frozenSurfaceFor(ctx: CommandContext, cfg: LoopConfig) {
-  return createFrozenSurface({ profileDir: ctx.config().getProfileDir(), blocks: cfg.gates.blocks, extraPaths: cfg.gates.frozenPaths });
-}
-
-/**
- * [D1] the golden index for this profile: every capture under `<profile>/goldens`, attributed to
- * the seats whose traces show they ran it. Read once per command, from the durable store.
- */
-async function goldenIndexFor(ctx: CommandContext, cfg: LoopConfig, store: ImproveStorePort): Promise<GoldenIndex> {
-  return loadGoldenIndex(goldenDirFor(ctx), await store.listTraces(cfg.companyId));
-}
+/** The improve store seams live with the sweep builder; every earlier caller imports them here. */
+export { fallbackImproveStore, setImproveStoreForTests };
 
 /** Where a promotion's clean exemplars go: one JSON per golden under the profile. */
 function exemplarDir(ctx: CommandContext): string {
@@ -308,45 +148,13 @@ const sweepSpec: CommandSpec = {
     { flags: "--agent <id>", description: "Sweep one seat or installed specialist only" },
     { flags: "--live", description: "Execute the eval gate through the configured model provider (costs model calls)" },
   ],
-  run: (ctx, opts) =>
-    withStore(ctx, async (opened, cfg) => {
-      const agentFilter = typeof opts.agent === "string" ? opts.agent : undefined;
-      const live = opts.live === true;
-      // [D1] the suites are the seats' promoted goldens plus their skills, so both are read first.
-      const index = await goldenIndexFor(ctx, cfg, opened.store);
-      const suites = seatSuitesFor(index);
-      const scope = resolveSweepScope({
-        installedAgents: cfg.installedAgents,
-        traceCounts: await opened.store.countTracesByAgent(cfg.companyId),
-        ...(agentFilter === undefined ? {} : { agentFilter }),
-      });
-      const reflection = reflectionFloor(index, scope.agents, cfg.gates.minGoldens);
-      if (ctx.dryRun) {
-        return { data: { dryRun: true, command: "improve sweep", companyId: cfg.companyId, installedAgents: cfg.installedAgents, agentFilter: agentFilter ?? null, live, reflection } };
-      }
-      // The floor is checked BEFORE model access, so a refusal never costs a call.
-      if (live && reflection.blocked !== null) throw reflectionRefusal(reflection);
-      const model = live ? await liveModel(ctx, cfg) : undefined;
-      const report = await runImprovementSweep(cfg.companyId, {
-        store: opened.store,
-        installedAgents: cfg.installedAgents,
-        ...(agentFilter === undefined ? {} : { agentFilter }),
-        // [D1] the runner is wrapped so a golden's failure-tag grader has the tags to read.
-        ...(model === undefined ? {} : { actuals: goldenActuals(model.actuals, index.goldens), judge: model.judge }),
-        suiteFor: suites.suiteFor,
-        noSuiteReason: suites.noSuiteReason,
-        // [D0]: the cap (decision 8), pass^k, the partition, the frozen surface and the floors.
-        budgetCents: cfg.gates.sweepCapCents,
-        passK: cfg.gates.passK,
-        holdoutRatio: cfg.gates.holdoutRatio,
-        frozenSurface: frozenSurfaceFor(ctx, cfg),
-        judgeFloors: { minTpr: cfg.gates.minTpr, minTnr: cfg.gates.minTnr },
-        // [D1] reflection follows `--live` and nothing else: offline the Foundry and GEPA keep
-        // their deterministic fallbacks, which is the literal-marker path and costs no call.
-        skipLLM: !live,
-      });
-      return { data: { ...report, judgeModel: model?.judgeModel ?? null, reflection, store: storeInfo(opened) } };
-    }),
+  run: async (ctx, opts) => {
+    // [D2.1] the one builder `trent heartbeat sweep` and the unattended sweep also run through:
+    // the same store, the same seat suites, the same cap, the same offline/live rule.
+    const options = { live: opts.live === true, ...(typeof opts.agent === "string" ? { agentFilter: opts.agent } : {}) };
+    if (ctx.dryRun) return { data: { ...(await sweepPlan(ctx, options)), command: "improve sweep" } };
+    return { data: (await buildMeteredSweep(ctx, options)) as unknown as Record<string, unknown> };
+  },
   render(data, ctx) {
     const d = data as unknown as SweepReport & { dryRun?: boolean; judgeModel?: string | null; reflection?: { minGoldens: number } };
     if (d.dryRun === true) return [`  ${ctx.theme.meta("would sweep")} ${ctx.theme.value(String((d as { companyId: string }).companyId))}`];
