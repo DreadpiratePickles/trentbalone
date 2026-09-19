@@ -59,7 +59,20 @@ export const DEFAULT_CONFIG: TrentConfig = {
   repl: { double_text_policy: "enqueue", history_turns: 8, history_chars: 6000 },
   context: { ceiling_chars: 60_000 },
   runtime: { max_concurrent_runs: 2 },
-  heartbeat: { enabled: false, interval_minutes: 60, consolidate_memory: true },
+  heartbeat: {
+    enabled: false,
+    interval_minutes: 60,
+    consolidate_memory: true,
+    // [D2] heartbeat sweep
+    // Opt-in, and off: a profile that already ticks keeps its exact behaviour and its exact bill
+    // until `heartbeat.sweep.enabled` is set. Once a day is the cadence `improve.sweep_cap_cents`
+    // was sized for, and the day's ledger must still hold that cap before a sweep starts
+    // (docs/heartbeat.md, "Unattended sweeps"). The keys live here, next to the rest of
+    // `heartbeat`, because that is the object they belong to.
+    sweep: { enabled: false },
+    sweep_interval_hours: 24,
+    // [/D2]
+  },
   fleet: {
     installed_agents: ["ceo", "eng-ai-engineer", "sup-support-responder"],
     active_agents: ["ceo"],

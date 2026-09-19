@@ -5,6 +5,7 @@ npm run cli -- heartbeat start
 npm run cli -- heartbeat start --once
 npm run cli -- heartbeat status
 npm run cli -- heartbeat runs --last 10
+npm run cli -- heartbeat sweep --now
 ```
 
 The heartbeat is the founder's periodic check. Every `heartbeat.interval_minutes` (default 60),
@@ -67,6 +68,63 @@ its rollback byte-exact. A `read_only` block joins the pass only while
 `memory.consolidation_may_edit` names its label, and even then a seat still cannot write it and a
 human still promotes the draft.
 
+## Unattended sweeps
+
+With `heartbeat.sweep.enabled` (default **false**) a tick may also run one self-improvement sweep,
+so the loop that reads the founder's checklist is also the loop that improves the fleet. It is
+opt-in: a profile that already runs a heartbeat keeps its exact behaviour and its exact bill until
+the key is set.
+
+```yaml
+heartbeat:
+  enabled: true
+  sweep:
+    enabled: true          # off by default
+  sweep_interval_hours: 24 # at most one sweep this often
+improve:
+  sweep_cap_cents: 100     # the hard cap on one sweep, integer cents
+budget:
+  daily_cap: 1000          # the day's ledger the cap is taken from
+```
+
+A tick sweeps only when all four hold, checked in this order:
+
+1. **opt-in** — `heartbeat.enabled` and `heartbeat.sweep.enabled` are both true;
+2. **outside quiet hours** — the same window a tick obeys; a quiet tick consolidates memory and
+   nothing else;
+3. **the interval** — `sweep_interval_hours` has passed since the last sweep in
+   `<profile>/heartbeat/runs.jsonl`, so a restart cannot buy a second sweep;
+4. **headroom** — the day's ledger still holds `improve.sweep_cap_cents`. That ledger is the
+   heartbeat's own history: every tick's `costCents` and every sweep's, for the current local day,
+   against `budget.daily_cap`. It is the only record of what the machine spent while nobody was
+   watching.
+
+Whichever of the four stopped it is written to the tick's own row as `sweepSkipped`
+(`disabled`, `quiet_hours`, `interval`, `budget`), so a sweep that never happens is as visible as
+one that did.
+
+The sweep itself runs **offline**: `skipLLM`, no gate runner and no judge, so no model is called
+and the meter reports a real zero. Reflection costs money and stays with the founder's own
+`trent improve sweep --live`. What an unattended sweep does is distil skills from the traces the
+fleet has produced, retire what nobody uses, and leave every draft in quarantine. **Nothing is
+promoted.** `trent improve status` reads the drafts and `trent improve promote <draftId>` is still
+the only way one reaches a seat.
+
+What it did is written to the tick's row as `sweep` — drafts produced, how many the gate passed and
+are awaiting promotion, how many are still quarantined, how many were rejected, the spend against
+the cap, and why seats produced nothing — and delivered to `gateway.owner` through the same
+gateway manager a reply uses. With no owner configured the row carries `deliveryError` and the
+counts stay on disk.
+
+`trent heartbeat sweep --now` runs one immediately, through the same port with the same cap, past
+the interval and past the opt-in: it is the founder asking. The day's ledger still applies, and a
+day with less than the cap left refuses rather than half-spending. It reports to the terminal
+instead of messaging the owner, and leaves its own `sweep` row in the history, which never moves
+the next tick. Without `--now` the command refuses and names the flag.
+
+`trent heartbeat status` shows whether the unattended sweep is on, its cadence, and the last
+sweep's time, trigger, counts and cost.
+
 ## Delivery
 
 A reply goes through the gateway manager's `send` to `gateway.owner` with the subject
@@ -82,8 +140,10 @@ and the same manager the listeners use; its JSON output reports `heartbeat: true
 
 Every tick appends one row to `<profile>/heartbeat/runs.jsonl` (mode 0600, newest last, capped at
 200): `{ at, decision }` plus `chars` for a reply, `costCents` when the run reported cost, `reason`
-for a failed run, `deliveryError` and `text` when a reply could not be sent, and `consolidated`
-when memory consolidation ran. Decisions are `quiet`, `no_reply`, `reply` and `failed`.
+for a failed run, `deliveryError` and `text` when a reply could not be sent, `consolidated`
+when memory consolidation ran, and `sweep` or `sweepSkipped` for the unattended sweep. Decisions
+are `quiet`, `no_reply`, `reply` and `failed`; a row whose decision is `sweep` is the one
+`trent heartbeat sweep --now` leaves, and it is a command, not a tick.
 
 `start` takes `<profile>/heartbeat/runner.lock` with its pid and refuses (exit 3, "already
 running") while another live process holds it; a lock left by a dead pid is taken over. The command
@@ -91,8 +151,9 @@ claims Ctrl+C as well as SIGTERM and SIGHUP: each releases the lock, the manager
 and the process exits 130 only once that release has settled. `--once` ticks one time and
 exits, for launchd, systemd timers or system cron.
 
-`status` reports `enabled`, `intervalMinutes`, `activeHours`, `quietNow`, `running`, the last row
-and `nextTickAt` (the last row plus the interval; `null` before the first tick).
+`status` reports `enabled`, `intervalMinutes`, `activeHours`, `quietNow`, `running`, the last row,
+`nextTickAt` (the last TICK row plus the interval; `null` before the first tick) and `sweep`
+(`enabled`, `intervalHours`, the last sweep record and `nextAt`).
 
 ## Logging
 

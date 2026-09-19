@@ -19,17 +19,31 @@ import { StructuredLogger } from "../telemetry/logger.js";
 import { NO_REPLY, readHeartbeatChecklist } from "./checklist.js";
 import { renderFleetState, type HeartbeatBudgetPort } from "./fleet-state.js";
 import { isQuiet, localDayKey } from "./quiet-hours.js";
+import {
+  decideSweep,
+  lastSweepRecord,
+  ledgerHeadroomCents,
+  renderSweepRecord,
+  sweepThroughPort,
+  type HeartbeatSweepDeps,
+  type HeartbeatSweepOutcome,
+  type HeartbeatSweepRecord,
+  type HeartbeatSweepSkip,
+  type HeartbeatSweepTrigger,
+} from "./sweep-step.js";
 
 export { DEFAULT_HEARTBEAT_MD, HEARTBEAT_MD, NO_REPLY } from "./checklist.js";
 
 export const HEARTBEAT_HISTORY_LIMIT = 200;
 const FILE_MODE = 0o600;
 const MINUTE_MS = 60_000;
+const HOUR_MS = 3_600_000;
 
 /** The sentence that closes every objective; the model's whole contract with the founder. */
 export const NO_REPLY_CONTRACT = `If nothing on this checklist needs the founder, answer exactly ${NO_REPLY}.`;
 
-export type HeartbeatDecision = "quiet" | "no_reply" | "reply" | "failed";
+/** `sweep` is the row `trent heartbeat sweep --now` leaves; it is a command, never a tick. */
+export type HeartbeatDecision = "quiet" | "no_reply" | "reply" | "failed" | "sweep";
 
 /** One line of `<profile>/heartbeat/runs.jsonl`. */
 export interface HeartbeatRunRow {
@@ -46,6 +60,10 @@ export interface HeartbeatRunRow {
   text?: string;
   /** True on the quiet row whose tick ran memory consolidation. */
   consolidated?: boolean;
+  /** [D2] the unattended sweep this row's tick ran, or the sweep `--now` asked for. */
+  sweep?: HeartbeatSweepRecord;
+  /** [D2] why this tick did not sweep. Absent when no sweep port is wired at all. */
+  sweepSkipped?: HeartbeatSweepSkip;
 }
 
 export interface HeartbeatRunOptions {
@@ -70,6 +88,11 @@ export interface HeartbeatLoopDeps {
   readonly consolidate?: (() => Promise<unknown>) | undefined;
   /** Extra fleet state the profile files do not carry: the budget. */
   readonly state?: { readonly budget?: HeartbeatBudgetPort | undefined } | undefined;
+  /**
+   * [D2] the unattended improvement sweep: the port that runs one, its cap in integer cents, and
+   * the day's ledger. Absent, the loop never sweeps and no row mentions one.
+   */
+  readonly sweep?: HeartbeatSweepDeps | undefined;
   readonly now?: (() => Date) | undefined;
   readonly timers?: HeartbeatTimers | undefined;
   readonly io?: Partial<ConfigIO> | undefined;
@@ -85,6 +108,13 @@ export interface HeartbeatStatus {
   running: boolean;
   last: HeartbeatRunRow | null;
   nextTickAt: string | null;
+  /** [D2] the unattended sweep: whether it is on, its cadence, the last one and the next one due. */
+  sweep: {
+    enabled: boolean;
+    intervalHours: number;
+    last: HeartbeatSweepRecord | null;
+    nextAt: string | null;
+  };
 }
 
 /** `<profile>/heartbeat/runs.jsonl` — one row per tick, newest last. */
@@ -138,6 +168,9 @@ export function heartbeatRunnerActive(profileDir: string, ioOverride?: Partial<C
 export function heartbeatStatus(profileDir: string, config: HeartbeatConfig, now: Date, ioOverride?: Partial<ConfigIO>): HeartbeatStatus {
   const rows = readHeartbeatRuns(profileDir, ioOverride);
   const last = rows[rows.length - 1] ?? null;
+  // A `sweep` row is a command, not a tick: it must not move the next tick.
+  const lastTick = rows.filter((row) => row.decision !== "sweep").pop() ?? null;
+  const lastSweep = lastSweepRecord(rows);
   return {
     enabled: config.enabled,
     intervalMinutes: config.interval_minutes,
@@ -145,7 +178,13 @@ export function heartbeatStatus(profileDir: string, config: HeartbeatConfig, now
     quietNow: isQuiet(now, config.active_hours),
     running: heartbeatRunnerActive(profileDir, ioOverride),
     last,
-    nextTickAt: last === null ? null : new Date(new Date(last.at).getTime() + config.interval_minutes * MINUTE_MS).toISOString(),
+    nextTickAt: lastTick === null ? null : new Date(new Date(lastTick.at).getTime() + config.interval_minutes * MINUTE_MS).toISOString(),
+    sweep: {
+      enabled: config.sweep.enabled,
+      intervalHours: config.sweep_interval_hours,
+      last: lastSweep,
+      nextAt: lastSweep === null ? null : new Date(new Date(lastSweep.at).getTime() + config.sweep_interval_hours * HOUR_MS).toISOString(),
+    },
   };
 }
 
@@ -229,16 +268,93 @@ export class HeartbeatLoop {
     const startedAt = this.now();
     const quiet = isQuiet(startedAt, this.deps.config.active_hours);
     const consolidated = await this.maybeConsolidate(startedAt, quiet);
+    // [D2] the sweep is decided before the turn, so a quiet tick still says why it did not sweep.
+    const swept = await this.maybeSweep(startedAt, quiet);
     if (quiet) {
-      const row: HeartbeatRunRow = { at: startedAt.toISOString(), decision: "quiet", ...(consolidated ? { consolidated: true } : {}) };
+      const row: HeartbeatRunRow = { at: startedAt.toISOString(), decision: "quiet", ...(consolidated ? { consolidated: true } : {}), ...swept };
       this.appendHistory(row);
       this.logger.info("heartbeat.tick.quiet", { consolidated });
       return row;
     }
-    const row = await this.runTurn(startedAt);
+    const row = { ...(await this.runTurn(startedAt)), ...swept };
     if (consolidated) row.consolidated = true;
     this.appendHistory(row);
     return row;
+  }
+
+  /**
+   * [D2] At most one sweep every `sweep_interval_hours`, only while the founder has opted in, only
+   * outside quiet hours, and only while the day's ledger still holds the cap. What happened is
+   * returned as the fields the tick's row carries, so a skip is as visible as a run.
+   */
+  private async maybeSweep(now: Date, quiet: boolean): Promise<{ sweep?: HeartbeatSweepRecord; sweepSkipped?: HeartbeatSweepSkip }> {
+    const deps = this.deps.sweep;
+    if (deps === undefined) return {};
+    const { config } = this.deps;
+    const skip = decideSweep({
+      now,
+      quiet,
+      enabled: config.enabled && config.sweep.enabled,
+      intervalHours: config.sweep_interval_hours,
+      lastSweepAt: lastSweepRecord(readHeartbeatRuns(this.deps.profileDir, this.deps.io))?.at,
+      capCents: deps.capCents,
+      headroomCents: ledgerHeadroomCents(deps.budget),
+    });
+    if (skip !== null) {
+      this.logger.info("heartbeat.sweep.skipped", { reason: skip });
+      return { sweepSkipped: skip };
+    }
+    const record = await this.runSweep(now, "heartbeat");
+    const deliveryError = await this.deliverSweep(record);
+    if (deliveryError !== undefined) record.deliveryError = deliveryError;
+    return { sweep: record };
+  }
+
+  /** One metered sweep through the injected port, logged by what it made and what it cost. */
+  private async runSweep(now: Date, trigger: HeartbeatSweepTrigger): Promise<HeartbeatSweepRecord> {
+    const deps = this.deps.sweep;
+    if (deps === undefined) throw new TrentError({ code: EXIT.CONFIG, operation: "heartbeat.sweep", message: "no sweep port is wired to this heartbeat loop" });
+    const record = await sweepThroughPort(deps, { at: now.toISOString(), capCents: deps.capCents, trigger });
+    this.logger.log(record.errors.length > 0 ? "error" : "info", "heartbeat.sweep.done", {
+      trigger,
+      drafts: record.drafts,
+      awaitingPromotion: record.awaitingPromotion,
+      costCents: record.costCents,
+      capCents: record.capCents,
+      exhausted: record.exhausted,
+    });
+    return record;
+  }
+
+  /** The sweep's report down the same gateway path a reply takes; the error, if any, is the row's. */
+  private async deliverSweep(record: HeartbeatSweepRecord): Promise<string | undefined> {
+    if (this.deps.owner === undefined) return "gateway.owner is not configured; set gateway.owner { platform, channelId } in config.yaml";
+    try {
+      await this.deps.deliver(renderSweepRecord(record));
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  /**
+   * [D2] `trent heartbeat sweep --now`: one sweep whatever the interval and the opt-in say, still
+   * capped, and still refused when the day's ledger cannot cover the cap. The founder is at the
+   * terminal, so the record is returned rather than messaged, and it lands in the history as its
+   * own `sweep` row.
+   */
+  public async sweepNow(): Promise<HeartbeatSweepOutcome> {
+    const deps = this.deps.sweep;
+    if (deps === undefined) return { ran: false, skipped: "disabled" };
+    const at = this.now();
+    const headroom = ledgerHeadroomCents(deps.budget);
+    if (headroom !== undefined && headroom < deps.capCents) {
+      this.logger.info("heartbeat.sweep.skipped", { reason: "budget", trigger: "manual" });
+      return { ran: false, skipped: "budget" };
+    }
+    const record = await this.runSweep(at, "manual");
+    this.appendHistory({ at: record.at, decision: "sweep", sweep: record });
+    return { ran: true, record };
   }
 
   private async runTurn(startedAt: Date): Promise<HeartbeatRunRow> {

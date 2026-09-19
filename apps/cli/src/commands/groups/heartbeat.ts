@@ -10,7 +10,16 @@ import process from "node:process";
 import type { ConfigManager, TrentConfig } from "@trent/core";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { GatewayManager } from "@trent/core/gateway/index.js";
-import { HeartbeatLoop, heartbeatStatus, readHeartbeatRuns, type HeartbeatRunRow, type HeartbeatStatus } from "@trent/core/heartbeat/index.js";
+import {
+  HeartbeatLoop,
+  heartbeatStatus,
+  readHeartbeatRuns,
+  spentTodayCents,
+  type HeartbeatRunRow,
+  type HeartbeatStatus,
+  type HeartbeatSweepDeps,
+  type HeartbeatSweepRecord,
+} from "@trent/core/heartbeat/index.js";
 import type { ImproveStorePort } from "@trent/core/store/index.js";
 import type { ModelProvider } from "@trent/core/model-gateway/index.js";
 import type { CommandSpec } from "../registry.js";
@@ -39,6 +48,41 @@ function improveOf(store: unknown): ImproveStorePort | undefined {
 }
 
 /**
+ * [D2] The unattended sweep this profile may run: `runImprovementSweep` over the same improve
+ * store the run path writes traces to, OFFLINE (`skipLLM: true`, no `actuals`, no `judge`) — a
+ * sweep nobody is watching never reflects through a model, so its meter reports a real zero and
+ * `trent improve sweep --live` stays the only path that spends. The cap it is handed is
+ * `improve.sweep_cap_cents`; the day's ledger is what this heartbeat has already written to its
+ * own history today, against `budget.daily_cap`. Every draft it produces is in quarantine:
+ * `trent improve promote` is still the only way one reaches a seat.
+ */
+function sweepWiring(wiring: HeartbeatWiring): HeartbeatSweepDeps {
+  const { configManager, config, runtime } = wiring;
+  const profileDir = configManager.getProfileDir();
+  const tz = config.heartbeat.active_hours?.tz ?? "UTC";
+  return {
+    capCents: config.improve.sweep_cap_cents,
+    budget: {
+      limitCents: () => config.budget.daily_cap,
+      spentCents: () => spentTodayCents(readHeartbeatRuns(profileDir), (wiring.now ?? (() => new Date()))(), tz),
+    },
+    runSweep: async (request) => {
+      const { createFrozenSurface, runImprovementSweep } = await import("@trent/core/improve/index.js");
+      return runImprovementSweep(runtime.companyId, {
+        store: improveOf(runtime.store) ?? fallbackImproveStore(),
+        installedAgents: config.fleet.installed_agents,
+        budgetCents: request.capCents,
+        passK: config.improve.pass_k,
+        holdoutRatio: config.improve.holdout_ratio,
+        judgeFloors: { minTpr: config.improve.judge_min_tpr, minTnr: config.improve.judge_min_tnr },
+        frozenSurface: createFrozenSurface({ profileDir, blocks: config.memory.blocks, extraPaths: config.improve.frozen_paths }),
+        skipLLM: true,
+      });
+    },
+  };
+}
+
+/**
  * The loop over this profile. The gateway manager and the model gateway for consolidation are
  * both built on first use: a heartbeat that answers `NO_REPLY` all day never touches either.
  */
@@ -50,6 +94,9 @@ export function openHeartbeat(wiring: HeartbeatWiring): { loop: HeartbeatLoop; c
     profileDir: configManager.getProfileDir(),
     config: config.heartbeat,
     owner,
+    // [D2] the sweep port is always wired: the loop's own gates decide whether it ever runs, and
+    // `trent heartbeat sweep --now` needs it even while the scheduled sweep is off.
+    sweep: sweepWiring(wiring),
     now: wiring.now,
     log: wiring.log,
     run: (objective, options) => runtime.run(objective, options),
@@ -109,6 +156,11 @@ function releaseOnExit(close: () => Promise<void>, stopSync: () => void, signals
   (signals ?? process).once("exit", stopSync);
 }
 
+/** [D2] one sweep in one clause: what it made, what waits for a human, what it cost of its cap. */
+function sweepExtra(record: HeartbeatSweepRecord): string {
+  return `sweep: ${record.drafts} drafts, ${record.awaitingPromotion} awaiting promotion, ${record.costCents} of ${record.capCents} cents`;
+}
+
 function runLine(row: HeartbeatRunRow, ctx: CommandContext): string {
   const decision = row.decision === "failed" ? ctx.theme.error(row.decision.padEnd(8, " ")) : ctx.theme.success(row.decision.padEnd(8, " "));
   const extras = [
@@ -117,6 +169,10 @@ function runLine(row: HeartbeatRunRow, ctx: CommandContext): string {
     row.consolidated === true ? "memory consolidated" : "",
     row.reason !== undefined ? `reason: ${row.reason}` : "",
     row.deliveryError !== undefined ? `delivery failed: ${row.deliveryError}` : "",
+    // [D2] a sweep that ran, and a skip the founder can act on. "disabled" is the shipped state,
+    // so it is not repeated on every row; `heartbeat status` names it once.
+    row.sweep === undefined ? "" : sweepExtra(row.sweep),
+    row.sweepSkipped !== undefined && row.sweepSkipped !== "disabled" ? `sweep skipped: ${row.sweepSkipped}` : "",
   ].filter((s) => s !== "");
   return `  ${decision} ${ctx.theme.value(row.at)}${extras.length > 0 ? ` ${ctx.theme.meta(extras.join(", "))}` : ""}`;
 }
@@ -202,6 +258,71 @@ export const heartbeatSpec: CommandSpec = {
           lines.push(`  ${ctx.theme.meta("last    ")} ${ctx.theme.value(d.last.at)} ${ctx.theme.body(d.last.decision)}`);
           lines.push(`  ${ctx.theme.meta("next    ")} ${ctx.theme.value(d.nextTickAt ?? "")}`);
         }
+        // [D2] the unattended sweep: whether it is on, when the last one ran, what it cost and made.
+        const sweepState = d.sweep.enabled ? ctx.theme.success(`every ${d.sweep.intervalHours} h`) : ctx.theme.meta(`off (heartbeat.sweep.enabled, every ${d.sweep.intervalHours} h when on)`);
+        lines.push(`  ${ctx.theme.meta("sweep   ")} ${sweepState}`);
+        const sweep = d.sweep.last;
+        if (sweep === null) lines.push(ctx.theme.meta("  no sweep yet; trent heartbeat sweep --now runs one"));
+        else {
+          lines.push(`  ${ctx.theme.meta("  last  ")} ${ctx.theme.value(sweep.at)} ${ctx.theme.body(sweep.trigger)} ${ctx.theme.meta(sweepExtra(sweep))}`);
+          if (d.sweep.nextAt !== null && d.sweep.enabled) lines.push(`  ${ctx.theme.meta("  next  ")} ${ctx.theme.value(d.sweep.nextAt)}`);
+        }
+        return lines;
+      },
+    },
+    {
+      // [D2] the unattended sweep, on demand. The scheduled one runs from the loop; this is the
+      // same port, the same cap and the same ledger, with the interval and the opt-in bypassed.
+      name: "sweep",
+      description: "Run one metered improvement sweep now, capped at improve.sweep_cap_cents; drafts stay in quarantine for trent improve promote",
+      options: [{ flags: "--now", description: "Sweep immediately, whatever heartbeat.sweep_interval_hours and heartbeat.sweep.enabled say" }],
+      async run(ctx, opts) {
+        const configManager = ctx.config();
+        const config = configManager.loadConfig();
+        const capCents = config.improve.sweep_cap_cents;
+        if (ctx.dryRun) {
+          return { data: { dryRun: true, command: "heartbeat sweep", capCents, intervalHours: config.heartbeat.sweep_interval_hours, scheduled: config.heartbeat.sweep.enabled } };
+        }
+        if (opts.now !== true) {
+          throw new TrentError({
+            code: EXIT.CONFIG,
+            operation: "heartbeat.sweep",
+            message: "pass --now to sweep from here; the unattended one runs from the loop (trent config set heartbeat.sweep.enabled true)",
+          });
+        }
+        const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config: config as unknown as ReplConfig });
+        const { loop, close } = openHeartbeat({
+          configManager,
+          config,
+          runtime,
+          buildManager: ctx.overrides.gatewayManager ?? ((cm, options) => new GatewayManager(cm, options)),
+          now: ctx.overrides.now,
+          log: (line) => ctx.err(line),
+        });
+        try {
+          return { data: { ...(await loop.sweepNow()), capCents } as unknown as Record<string, unknown> };
+        } finally {
+          await close();
+          await runtime.cleanup();
+        }
+      },
+      render(data, ctx) {
+        const d = data as { dryRun?: boolean; capCents?: number; intervalHours?: number; ran?: boolean; skipped?: string; record?: HeartbeatSweepRecord };
+        if (d.dryRun === true) {
+          return [`  ${ctx.theme.meta("would sweep now, capped at")} ${ctx.theme.value(`${String(d.capCents)} cents`)} ${ctx.theme.meta(`(unattended: every ${String(d.intervalHours)} hours)`)}`];
+        }
+        if (d.ran !== true || d.record === undefined) {
+          return [`  ${ctx.theme.needsApproval(`no sweep: ${d.skipped ?? ""}`)} ${ctx.theme.meta(`the day's ledger cannot cover ${String(d.capCents)} cents; raise budget.daily_cap or wait for tomorrow`)}`];
+        }
+        const r = d.record;
+        const lines = [
+          `  ${ctx.theme.emphasis("SWEEP")} ${ctx.theme.value(r.at)}`,
+          `  ${ctx.theme.meta("drafts  ")} ${ctx.theme.value(String(r.drafts))} ${ctx.theme.meta(`(${r.awaitingPromotion} awaiting promotion, ${r.quarantined} quarantined, ${r.rejected} rejected)`)}`,
+          `  ${ctx.theme.meta("spend   ")} ${ctx.theme.value(`${r.costCents} of ${r.capCents} cents`)}${r.exhausted ? ctx.theme.needsApproval(" (stopped at the cap)") : ""}`,
+        ];
+        for (const reason of r.blocked) lines.push(`  ${ctx.theme.meta("blocked ")} ${ctx.theme.body(reason)}`);
+        for (const error of r.errors) lines.push(`  ${ctx.theme.error("error   ")} ${ctx.theme.body(error)}`);
+        lines.push(ctx.theme.meta("  nothing was promoted; trent improve status reads the drafts, trent improve promote <draftId> takes one live"));
         return lines;
       },
     },

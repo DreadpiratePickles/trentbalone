@@ -249,6 +249,76 @@ describe("trent heartbeat", () => {
     expect(human.stdout).toContain("no_reply");
   });
 
+  /**
+   * [D2] The unattended sweep. Nothing here reaches a model: the sweep runs offline
+   * (`skipLLM`), so the meter reports a real zero and every draft the loop could produce would
+   * still be waiting for `trent improve promote`.
+   */
+  it("sweep --now runs one metered sweep against improve.sweep_cap_cents and records it", async () => {
+    configure();
+    const f = fakes();
+    const result = await runCli(["heartbeat", "sweep", "--now", "--json"], { overrides: f.overrides });
+    expect(result.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as { ran: boolean; record: { trigger: string; capCents: number; costCents: number; drafts: number; blocked: string[] } };
+    expect(data.ran).toBe(true);
+    expect(data.record).toMatchObject({ trigger: "manual", capCents: 100, costCents: 0, drafts: 0 });
+    // The seats nobody has run yet are named, so a sweep that produced nothing says why.
+    expect(data.record.blocked.join(" ")).toContain("below_threshold");
+    // No model call, and the founder is at the terminal, so nothing is messaged.
+    expect(f.runs).toEqual([]);
+    expect(f.sent).toEqual([]);
+
+    const rows = readHeartbeatRuns(home);
+    expect(rows.map((r) => r.decision)).toEqual(["sweep"]);
+    const status = JSON.parse((await runCli(["heartbeat", "status", "--json"], { overrides: f.overrides })).stdout) as {
+      sweep: { enabled: boolean; intervalHours: number; last: { trigger: string; costCents: number } | null; nextAt: string | null };
+      nextTickAt: string | null;
+    };
+    expect(status.sweep).toMatchObject({ enabled: false, intervalHours: 24 });
+    expect(status.sweep.last).toMatchObject({ trigger: "manual", costCents: 0 });
+    expect(status.sweep.nextAt).toBe("2026-09-16T09:00:00.000Z");
+    // A manual sweep is not a tick.
+    expect(status.nextTickAt).toBe(null);
+
+    const human = await runCli(["heartbeat", "status", "--no-color"], { overrides: f.overrides });
+    expect(human.stdout).toContain("sweep");
+  });
+
+  it("sweep without --now refuses and names the flag, and --dry-run says what it would spend", async () => {
+    configure();
+    const f = fakes();
+    const refused = await runCli(["heartbeat", "sweep", "--json"], { overrides: f.overrides });
+    expect(refused.exitCode).toBe(EXIT.CONFIG);
+    expect(refused.stdout).toContain("--now");
+    expect(readHeartbeatRuns(home)).toEqual([]);
+
+    const dry = await runCli(["heartbeat", "sweep", "--now", "--dry-run", "--json"], { overrides: f.overrides });
+    expect(dry.exitCode).toBe(EXIT.OK);
+    expect(JSON.parse(dry.stdout)).toMatchObject({ dryRun: true, command: "heartbeat sweep", capCents: 100 });
+    expect(readHeartbeatRuns(home)).toEqual([]);
+  });
+
+  it("start --once sweeps when heartbeat.sweep.enabled is on, delivers the report, and says why when it is off", async () => {
+    configure({ sweep: { enabled: true } });
+    const f = fakes();
+    const result = await runCli(["heartbeat", "start", "--once", "--json"], { overrides: f.overrides });
+    expect(result.exitCode).toBe(EXIT.OK);
+    const run = (JSON.parse(result.stdout) as { run: HeartbeatRunRow }).run;
+    expect(run).toMatchObject({ decision: "no_reply" });
+    expect(run.sweep).toMatchObject({ trigger: "heartbeat", capCents: 100, costCents: 0 });
+    expect(run.sweepSkipped).toBeUndefined();
+    // The report goes down the path a reply takes: the same manager, the same owner.
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]?.message.text).toContain("improve promote");
+
+    fs.rmSync(path.join(home, "heartbeat", "runs.jsonl"), { force: true });
+    configure({ sweep: { enabled: false } });
+    const off = fakes();
+    const second = await runCli(["heartbeat", "start", "--once", "--json"], { overrides: off.overrides });
+    expect((JSON.parse(second.stdout) as { run: HeartbeatRunRow }).run.sweepSkipped).toBe("disabled");
+    expect(off.sent).toEqual([]);
+  });
+
   it("runs --json lists the rows newest last and --last N trims them", async () => {
     configure();
     const empty = await runCli(["heartbeat", "runs", "--json"]);
