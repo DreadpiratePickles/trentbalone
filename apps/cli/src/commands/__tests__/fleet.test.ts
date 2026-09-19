@@ -10,7 +10,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { EXIT } from "@trent/core/errors/index.js";
-import { CORE_ROLE_IDS, seatCapability } from "@trent/core/fleet/index.js";
+import { CORE_ROLE_IDS, SEAT_CAPABILITIES, seatCapability } from "@trent/core/fleet/index.js";
 import { InMemoryImproveStore } from "@trent/core/improve/index.js";
 import { runCli } from "../index.js";
 import { setImproveStoreForTests } from "../improve.js";
@@ -139,6 +139,27 @@ describe("trent fleet show", () => {
     const result = await runCli(["fleet", "show", "browser", "--json"]);
     expect(result.exitCode).toBe(EXIT.CONFIG);
     expect(`${result.stdout}${result.stderr}`).toContain("browser");
+  });
+
+  // Every other command that takes an id — `sessions resume <id>`, `jobs retry <id>`,
+  // `improve promote <draftId>`, `fleet install <agentId>` — answers `--dry-run` with a
+  // `{ dryRun, command, ... }` payload and exit 0, reporting existence instead of throwing
+  // (`improve promote` reports `exists`, `mcp test` reports `configured`). `fleet show` must do
+  // the same, or the registry invariant cannot probe it with a placeholder argument.
+  it("--dry-run reports whether the seat is defined instead of refusing, the way every other id command does", async () => {
+    const unknown = await runCli(["fleet", "show", "sample", "--dry-run", "--json"]);
+    expect(unknown.exitCode).toBe(EXIT.OK);
+    const unknownData = JSON.parse(unknown.stdout) as { roster: string[] };
+    expect(unknownData).toMatchObject({ dryRun: true, command: "fleet show", seat: "sample", defined: false });
+    expect(unknownData.roster).toEqual(Object.keys(SEAT_CAPABILITIES));
+
+    const known = await runCli(["fleet", "show", "engineer", "--dry-run", "--json"]);
+    expect(known.exitCode).toBe(EXIT.OK);
+    expect(JSON.parse(known.stdout)).toMatchObject({ dryRun: true, command: "fleet show", seat: "engineer", defined: true });
+
+    const human = await runCli(["fleet", "show", "sample", "--dry-run"]);
+    expect(human.exitCode).toBe(EXIT.OK);
+    expect(human.stdout).toContain("sample");
   });
 });
 

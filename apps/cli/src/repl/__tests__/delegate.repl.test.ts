@@ -153,6 +153,16 @@ describe("ClassicRepl binds delegate_task to the orchestrator's delegated child 
             if (input.subtask.seat === "support") return reply({ toolCall: { name: "memory", action: 'memory {"target":"memory","action":"add","content":"child note"}' }, summary: null });
             return done(CHILD_OUTPUT);
           }
+          // Only the engineer's planned step is the delegating parent under test. The run also
+          // holds a SECOND planned step: `repairOrchestrationPlanRoutes`
+          // (`apps/web/lib/orchestrator-runtime.ts:436`) sees a plan with no step for the seat the
+          // objective routes to — "brief support" routes to `support:inbound_email` — and inserts
+          // `[s2] Execute primary workstream with support:inbound_email`. That repair only fires
+          // now that the support seat is routable again (4f32807 / 95d8981); before then the
+          // objective routed to a remapped seat and no step was inserted. A script that delegated
+          // from every non-delegated step's first turn therefore delegated twice, and the repaired
+          // step's analyst task became a third `[delegated]` child that completed after the parent.
+          if (input.subtask.seat !== "engineer") return done("Support workstream handled directly; nothing delegated from the route-repaired step.");
           if (turn === 1) {
             const tasks = [
               { goal: "Write the support note about the partner API", context: "the client is integrated", agent: "support" },
@@ -184,6 +194,12 @@ describe("ClassicRepl binds delegate_task to the orchestrator's delegated child 
     const steps = (snapshot?.steps ?? []) as unknown as StepWithTools[];
     const children = steps.filter((step) => step.title.startsWith("[delegated]"));
     expect(children.map((step) => step.agentRole).sort(), "two [delegated] child steps exist in the run").toEqual(["analyst", "support"]);
+    // The delegating parent is the engineer's step alone. The route-repaired support step is a
+    // planned step, not a child, and it delegates nothing: exactly one `delegation` tool call is
+    // made in the whole run, so each task in the one `delegate_task` call yields one child.
+    const planned = steps.filter((step) => !step.title.startsWith("[delegated]"));
+    expect(planned.map((step) => step.id)).toContain("s1");
+    expect(planned.flatMap((step) => (step.toolCalls ?? []).filter((call) => call.adapter === "delegation")).length).toBe(1);
     const support = children.find((step) => step.agentRole === "support");
     const childWrite = support?.toolCalls?.find((call) => call.adapter === "memory");
     expect(childWrite?.status).toBe("blocked");

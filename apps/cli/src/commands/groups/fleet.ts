@@ -3,7 +3,7 @@
  * moved to `./skills.ts`, where it shares one store with the `skills` toolset.
  */
 
-import { FleetManager, seatCapability } from "@trent/core/fleet/index.js";
+import { FleetManager, SEAT_CAPABILITIES, isSeatRole, seatCapability } from "@trent/core/fleet/index.js";
 import { resolveSeatModel } from "@trent/core/orchestrator/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import fs from "node:fs";
@@ -69,6 +69,15 @@ export const fleetSpec: CommandSpec = {
       description: "Show what makes one seat a seat: toolsets, unavailable capabilities, floor overrides, budget, model tier and eval suite",
       run(ctx, _opts, args) {
         const seat = String(args[0] ?? "").trim();
+        // Same contract as every other command that takes an id (`sessions resume`, `jobs retry`,
+        // `improve promote`, `fleet install`): `--dry-run` answers with a payload and exit 0,
+        // reporting whether the id resolves rather than throwing. Without it the registry
+        // invariant, which probes every command with a placeholder argument, cannot reach this one.
+        if (ctx.dryRun) {
+          return {
+            data: { dryRun: true, command: "fleet show", seat, defined: isSeatRole(seat), roster: Object.keys(SEAT_CAPABILITIES) },
+          };
+        }
         const capability = seatCapability(seat);
         const config = ctx.config().loadConfig() as unknown as {
           provider: string;
@@ -91,6 +100,12 @@ export const fleetSpec: CommandSpec = {
         };
       },
       render(data, ctx) {
+        const dry = data as { dryRun?: boolean; seat?: string; defined?: boolean };
+        if (dry.dryRun === true) {
+          return [
+            `  ${ctx.theme.meta("would show seat")} ${ctx.theme.value(String(dry.seat))} ${dry.defined === true ? ctx.theme.success("(defined)") : ctx.theme.needsApproval("(not a seat)")}`,
+          ];
+        }
         const d = data as {
           seat: string;
           name: string;
