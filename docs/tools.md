@@ -4,6 +4,10 @@ Four things that are about how a seat uses its tools rather than about any one t
 large catalog out of the prompt, a task list that outlives compaction, a way to ask five questions
 in one interruption, and a way to read the profile's own past.
 
+A tool's **description** is not fixed at the code either: a tool whose arguments the model keeps
+getting wrong becomes a gated proposal to rewrite that one line, promoted by a human and applied
+at registration over the shipped adapter (docs/improve.md, "Tools improve too"; `trent improve tools`).
+
 Everything here is implemented in `packages/trent-core/src/tools/` and proved by
 `tools/tool_search/disclosure.test.ts`, `tools/todo/todo.test.ts`, `tools/clarify/clarify.test.ts`,
 `tools/session_search/session_search.test.ts` and `sessions/search.test.ts`.

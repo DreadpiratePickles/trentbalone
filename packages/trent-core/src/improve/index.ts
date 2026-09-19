@@ -199,6 +199,7 @@ export {
   type PromoteOptions,
   type RetirementOptions,
   type RetirementReport,
+  type RollbackOptions,
   type RollbackReport,
 } from "./lifecycle.js";
 export { DEFAULT_DISTILL_THRESHOLD, resolveSweepScope, type ResolveScopeInput, type SkippedSpecialist, type SweepScope } from "./scope.js";
@@ -214,5 +215,51 @@ export {
   type ReflectFn,
 } from "./gepa-pass.js";
 export { cleanTraces, runImprovementSweep, toTraceRecord, type AgentSweepReport, type SweepDeps, type SweepReport } from "./sweep.js";
+// [D5] tools improve too: the signal, the gated proposal, and the description a promotion serves.
+export {
+  DEFAULT_TOOL_HEALTH_MIN_CALLS,
+  DEFAULT_TOOL_HEALTH_THRESHOLD,
+  TOOL_HEALTH_EXAMPLES,
+  encodeToolCall,
+  isInvalidArgumentError,
+  parseToolCall,
+  toolHealth,
+  toolsOverThreshold,
+  type ToolCallInput,
+  type ToolCallObservation,
+  type ToolHealth,
+  type ToolHealthThresholds,
+} from "./tool-health.js";
+export {
+  TOOL_DRAFT_AGENT,
+  TOOL_HEALTH_TRIGGER,
+  TOOL_REVIEW_BLOCK,
+  decodeToolDraft,
+  encodeToolDraft,
+  offlineToolProposal,
+  proposeToolDrafts,
+  sweepToolProposals,
+  toolProposalPrompt,
+  type ProposeToolDraftsInput,
+  type SweepToolOptions,
+  type SweepToolRun,
+  type ToolDraftEvidence,
+  type ToolDraftPayload,
+  type ToolProposalReport,
+  type ToolProposalRow,
+  type ToolProposeFn,
+} from "./tool-drafts.js";
+export {
+  TOOL_OVERRIDES_FILE,
+  applyToolDescriptions,
+  overrideInstructions,
+  readToolOverrides,
+  removeToolOverride,
+  toolOverridesPath,
+  writeToolOverride,
+  writeToolOverrides,
+  type AppliedToolDescriptions,
+  type AppliedToolOverride,
+} from "./tool-overrides.js";
 export { ORG_TIER_AGENT, promoteOrgSkill, type PromoteOrgSkillInput, type PromoteOrgSkillResult } from "./org-tier.js";
 export { improveStatus, judgeAgreementOf, type FrontierBest, type ImproveStatus, type JudgeAgreement, type QuarantineEntry } from "./status.js";

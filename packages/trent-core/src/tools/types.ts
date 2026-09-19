@@ -42,10 +42,27 @@ export interface ToolAdapter {
   fallbackAdapterName?: string;
 }
 
+/**
+ * [D5] One tool description a promoted improvement draft replaced (`improve/tool-overrides.ts`).
+ * It carries the draft it came from, so a surface can say which improvement is talking. Only the
+ * description is ever overridden: never the schema, never the handler.
+ */
+export interface ToolDescriptionOverride {
+  readonly tool: string;
+  readonly description: string;
+  readonly draftId: string;
+  readonly promotedAt: string;
+}
+
 /** A Trent toolset adapter: one catalog entry per Hermes toolset, plus what the seat needs to use it. */
 export interface TrentToolAdapter extends ToolAdapter {
   /** Appended to the seat's `toolInstructions` so the model learns the `<tool> <json>` action shape. */
   readonly instructions: string;
+  /**
+   * [D5] The promoted descriptions this adapter is serving instead of its shipped ones. Absent on
+   * every adapter the profile has not overridden, which is all of them until a human promotes one.
+   */
+  readonly descriptionOverrides?: readonly ToolDescriptionOverride[];
   /** Read by the semantic router's catalog through the `registerExternalAdapters` seam. */
   readonly routingText: string;
   /** Releases sandboxes and background processes. */

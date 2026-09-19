@@ -9,6 +9,7 @@
  *   reject <draftId>       quarantine -> rejected
  *   rollback <iterationId> restore what an iteration replaced, byte-for-byte from the ledger
  *   history                iterations and ledger rows, newest first
+ *   tools                  [D5] tool health per tool, and the descriptions an improvement is serving
  *
  * Every subcommand goes through `defineCommand`, so `--json` and `--dry-run` come free. Handlers
  * return data and never print. The store is the profile's `trent.db` (bun:sqlite); under a runtime
@@ -84,6 +85,8 @@ export function createImproveRunDeps(input: ImproveRunDepsInput): ImproveRunDeps
   const underlying = (input.executeSeatModelFn ?? lazyAppSeatModel()) as (input: never) => Promise<unknown>;
   return { improve: hook, executeSeatModelFn: hook.seatModel(underlying) as unknown as (...args: never[]) => unknown };
 }
+// [D5] the tool side: tool health, the descriptions an improvement is serving, and where one is written.
+import { improveToolsSpec, toolOverrideTarget } from "./improve-tools.js";
 // [D1] the goldens that ARE a seat's suite, their human gate, and the reflection floor.
 import { goldensSpec, holdoutRecheck, rolesByRun, seatSuitesFor } from "./improve-goldens.js";
 // [D2.1] the one sweep builder every trigger shares, and the store plumbing it carries.
@@ -198,6 +201,8 @@ function draftCommand(name: "promote" | "reject"): CommandSpec {
           actor: "human",
           // [D0] gate 1: the promotion door is frozen too, whatever path the draft arrived by.
           frozen: frozenSurfaceFor(ctx, cfg),
+          // [D5] a promoted `tool` draft is a description on disk; every other kind ignores this.
+          toolOverrides: toolOverrideTarget(ctx),
           distill: { exemplars, ...(live === undefined ? {} : { rationalise: live.rationalise }) },
         });
         const goldens = await exemplars.list();
@@ -245,7 +250,8 @@ const rollbackSpec: CommandSpec = {
       const exists = (await opened.store.getIteration(iterationId)) !== null;
       if (ctx.dryRun) return { data: { dryRun: true, command: "improve rollback", iterationId, exists } };
       if (!exists) throw new TrentError({ code: EXIT.USAGE, operation: "improve.rollback", message: `no iteration ${iterationId}` });
-      return { data: { ...(await rollback(opened.store, iterationId, "human")) } };
+      // [D5] a rolled-back tool promotion puts the shipped description back at the same time.
+      return { data: { ...(await rollback(opened.store, iterationId, "human", undefined, toolOverrideTarget(ctx))) } };
     }),
   render: (data, ctx) => [`  ${ctx.theme.success("rolled back")} ${ctx.theme.value(String((data as { iterationId?: string }).iterationId ?? ""))}`],
 };
@@ -278,6 +284,8 @@ export const improveSpec: CommandSpec = {
     sweepSpec,
     // [D1] the human gate on what a seat is examined against.
     goldensSpec({ runsFor: (ctx) => withStore(ctx, async (opened, cfg) => rolesByRun(await opened.store.listTraces(cfg.companyId))) }),
+    // [D5] tools improve too: the health signal and the descriptions an improvement is serving.
+    improveToolsSpec,
     draftCommand("promote"),
     draftCommand("reject"),
     rollbackSpec,

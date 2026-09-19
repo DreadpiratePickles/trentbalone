@@ -237,6 +237,95 @@ curator makes is appended to `<profile>/skills/.ledger.ndjson` with content-addr
 after blobs, so any single one can be reversed with `trent curator undo <id>`. See
 [skills.md](skills.md), "Curator".
 
+## [D5] Tools improve too
+
+The best-evidenced improvement in production is not the agent rewriting itself. Anthropic's
+multi-agent research system measured a **40% reduction in task completion time** from an agent
+that rewrote failing tool descriptions, and their own SWE-bench work reports more engineering
+time spent on tools than on prompts (`01_discovery/output/agent-harness-sota-2026-09.md`, item D4
+and consensus principle 12). So the loop drafts tool descriptions as well as skills and prompts —
+under exactly the same gates, and with a human at the end.
+
+### The signal
+
+Every sweep measures, per tool, from the traces it already reads (`improve/tool-health.ts`):
+
+| rate | what it counts |
+|---|---|
+| `failureRate` | calls that ended `failed` or `blocked` |
+| `invalidArgumentRate` | calls refused because the ARGUMENTS were wrong, not the world |
+| `retryRate` | immediate re-calls of the same tool with corrected arguments |
+| `meanArgsBytes` | the size of the argument bag, in bytes of canonical JSON |
+
+A tool is proposed for when its **invalid-argument rate or its retry rate** exceeds
+`tool_health_threshold` (0.2) over at least `tool_health_min_calls` (20) calls. The failure rate
+is reported and never triggers on its own: a tool that fails because the world said no is not a
+tool whose description is wrong. A tool whose model keeps re-calling it with different arguments
+straight after a refusal is exactly that.
+
+Nothing is inferred from an entry that does not carry it. A trace entry is one of three shapes —
+a bare adapter name (`apps/web/lib/trace-store.ts` maps a `ToolCallRecord` down to that),
+`name:action` (the gate's `extractToolCalls`), or the whole record as JSON — and a bare name
+counts a call and no failure, so a profile whose traces carry only names never crosses a
+threshold by accident. The one exception is the application's own convention: the last call of a
+step that failed is the call that failed.
+
+### The proposal
+
+A tool over the threshold produces one draft of kind `tool` (`improve/tool-drafts.ts`) carrying
+the tool name, the shipped description, the evidence — the four rates, their counts, and three
+**redacted** example refusals — and a proposed description. Offline the proposal is a
+deterministic template that quotes the evidence and asks for a rewrite; it is the same bytes
+every sweep, which is what makes the veto work. Live it is the reflection model's answer, metered
+through the sweep's meter and stopped by the same cap.
+
+The draft is a draft like any other. It lands in quarantine, the frozen surface (gate 1) and the
+content-hash veto (gate 5) refuse it before it is scored, a re-proposal of rejected bytes is
+refused with a ledger row under `gate:content_vetoed`, and the only door out is
+`trent improve promote <draftId>` — a human command. Tool drafts are held under the pseudo-agent
+`__tools__` with the tool name as their task type, because a tool belongs to the profile rather
+than to whichever seat called it most, and one tool has one live description. A tool description
+that ships in code is still proposable: the frozen surface covers the suites, the goldens, the
+judge prompt and the gate code, not the tools being graded.
+
+There is deliberately no executing gate on a tool draft. A tool's evidence is its measured call
+history; scoring a description against a seat's goldens would measure the seat. The iteration
+therefore sits `quarantined` with `human_review`.
+
+### What a promotion does
+
+A promoted `tool` draft is written to `<profile>/tool-overrides.json` — owner-only, by rename —
+as one description keyed by tool name with the draft id that proposed it. `buildTrentTools` reads
+that file at registration and replaces **one line**: the description in the tool's instruction
+block. Never the schema, never the handler. The adapter is served through a proxy over the
+shipped one, so `execute` is the shipped function and every wrapper — autonomy, the hardline
+blocklist, `approvals.deny`, the approval floors, the policy rules, idempotency, the user hooks,
+provenance and disclosure — is the same chain in the same order. An improvement may change what
+the model is told a tool does; it may not change what the tool does.
+
+`trent improve rollback <iterationId>` takes the override back off and the shipped description is
+what the next build serves.
+
+**The limit, recorded.** The rewrite matches the block shape `renderToolInstructions` emits
+(`"<name>: <description>"` as a block's first line), which is the same shape the disclosure layer
+parses. An adapter that hand-writes its instruction prose instead — `file_ops` is one — has no
+such line, so an override for its tools is reported as applied to nothing rather than guessed at.
+
+### What a human sees
+
+```
+trent improve tools            calls, failure / invalid-argument / re-call rates and mean args size
+                               per tool, which are over the threshold, the drafts waiting on a
+                               decision, and "description from improvement <draftId>" for each
+                               description the seats are reading from the loop rather than the code
+trent improve tools --json     the same, machine-readable; --tool <name> narrows to one
+```
+
+The thresholds ship as constants in `improve/tool-health.ts` (`DEFAULT_TOOL_HEALTH_THRESHOLD`,
+`DEFAULT_TOOL_HEALTH_MIN_CALLS`) and are overridable per sweep through `SweepDeps.toolHealth`.
+They are deliberately **not** config keys yet: nothing that builds a sweep would read them, and a
+config key nothing reads is the defect this repository already records twice.
+
 ## What is deliberately not here
 
 - **Automatic promotion.** Promotion is a human command and stays one (`improve/lifecycle.ts`),

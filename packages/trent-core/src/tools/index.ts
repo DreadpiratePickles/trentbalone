@@ -36,9 +36,11 @@ import { createWebToolsAdapter } from "./web/index.js";
 import { createBrowserAdapter } from "./browser/index.js";
 import { askVision, createVisionAdapter, type VisionGateway } from "./vision/index.js";
 import { seatCapability } from "../fleet/seat-capabilities.js";
-import type { ToolContext, TrentToolAdapter } from "./types.js";
+// [D5] tool descriptions: what a promoted improvement draft replaced, read at registration.
+import { applyToolDescriptions, readToolOverrides, type AppliedToolOverride } from "../improve/tool-overrides.js";
+import type { ToolContext, ToolDescriptionOverride, TrentToolAdapter } from "./types.js";
 
-export type { Provenance, ToolAdapter, ToolCallRecord, ToolContext, TrentToolAdapter } from "./types.js";
+export type { Provenance, ToolAdapter, ToolCallRecord, ToolContext, ToolDescriptionOverride, TrentToolAdapter } from "./types.js";
 // [C5] provenance: the tag, the per-step ledger and the hold path a held memory write waits on.
 export {
   DEFAULT_PROVENANCE_POLICY, SHARED_WRITE_TOOLS, SKILL_WRITE_TOOLS, UNTRUSTED_ADAPTERS,
@@ -156,6 +158,12 @@ export interface ToolBuildDeps {
    * their own to assert what a step accumulated.
    */
   readonly provenance?: ProvenanceLedger;
+  /**
+   * [D5] The tool descriptions a human promoted (`improve/tool-overrides.ts`). Defaults to what
+   * `<profileDir>/tool-overrides.json` holds, which is nothing until a `tool` draft is promoted;
+   * a caller passes its own to build without reading the profile.
+   */
+  readonly toolOverrides?: readonly ToolDescriptionOverride[];
 }
 
 /** One toolset that was enabled in config but could not be built here, and why the seat cannot use it. */
@@ -179,6 +187,13 @@ export interface TrentToolBuild {
    * visible without a line per tool call. Empty when every configured hook is consented.
    */
   readonly hookNotices: readonly string[];
+  /**
+   * [D5] Which tool descriptions this build is serving from an improvement rather than from the
+   * code, each with the draft id a surface names. Empty on every build with no promoted override,
+   * and absent on the legacy adapters-only seam (`apps/cli/src/repl/tools.ts`), which registers a
+   * hand-built list and reads no profile.
+   */
+  readonly descriptionOverrides?: readonly AppliedToolOverride[];
 }
 
 /**
@@ -279,6 +294,11 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
   adapters.push(createClarifyAdapter(deps.humanAnswers ? { answers: deps.humanAnswers } : {}));
   adapters.push(createSessionSearchAdapter({ profileDir: deps.profileDir }));
   if (deps.extraAdapters?.length) adapters.push(...deps.extraAdapters);
+  // [D5] Descriptions a human promoted, applied BEFORE the wrapper chain so every gate below sees
+  // the same adapter list it always saw. Only the description line moves: the schema stays the
+  // shipped one and `execute` is the shipped function, because an improvement may change what the
+  // model is told a tool does and never what the tool does.
+  const described = applyToolDescriptions(adapters, deps.toolOverrides ?? readToolOverrides(deps.profileDir));
   const idempotency = deps.idempotency ?? new IdempotencyManager({ dir: deps.profileDir });
   const policy = deps.policy ?? new PolicyDispatcher(undefined, config.policy?.rules ?? []);
   // A2.2. The autonomy wrapper goes OUTSIDE the policy and idempotency wrappers, so a hardline
@@ -290,7 +310,7 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
     (config.hooks === undefined
       ? undefined
       : createToolHookRunner({ profileDir: deps.profileDir, hooks: config.hooks, ...(deps.seat === undefined ? {} : { seat: deps.seat }) }));
-  const guarded = autonomyAdapters(policy.wrap(idempotentAdapters(adapters, idempotency)), {
+  const guarded = autonomyAdapters(policy.wrap(idempotentAdapters(described.adapters, idempotency)), {
     level: config.autonomy ?? DEFAULT_AUTONOMY,
     deny: config.approvals?.deny ?? [],
     hardline: { home: deps.home ?? os.homedir(), profileDir: deps.profileDir },
@@ -328,6 +348,7 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
     adapters: disclosed,
     skipped,
     provenance: ledger,
+    descriptionOverrides: described.applied,
     // A getter, not a snapshot: a hook is skipped when a CALL is made, which is always after the
     // build returned. Reading this field at the end of a run is what makes the notice reachable.
     get hookNotices(): readonly string[] {

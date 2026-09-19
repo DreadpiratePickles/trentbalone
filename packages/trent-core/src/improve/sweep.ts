@@ -40,6 +40,7 @@ import { isBudgetExhausted, SweepMeter, type PhaseReport } from "./meter.js";
 import { isRepetitiveLoopTag } from "./repetitive-loop.js";
 import { resolveSweepScope, type SkippedSpecialist } from "./scope.js";
 import { assessHealth } from "./sweep-health.js";
+import { sweepToolProposals, type SweepToolOptions, type ToolProposalReport } from "./tool-drafts.js";
 import { defaultSeatPromptProvider, type SeatPromptProvider } from "./seat-prompt.js";
 import type { SuiteProvider } from "./suites.js";
 
@@ -74,6 +75,7 @@ export interface SweepDeps {
   readonly frozenSurface?: FrozenSurface;
   /** [D0] gate 6: the calibration floors below which the judge is advisory. */
   readonly judgeFloors?: JudgeFloors;
+  readonly toolProposals?: SweepToolOptions;
   readonly now?: () => string;
 }
 
@@ -103,6 +105,7 @@ export interface SweepReport {
   agents: AgentSweepReport[];
   skippedSpecialists: SkippedSpecialist[];
   retirement: RetirementReport;
+  tools?: ToolProposalReport;
   /** Integer cents: the sum of every phase below, from the gateway's real usage. */
   costCents: number;
   /** Where the calls went: baseline, skill candidates, GEPA (reflection + proposal), and the judge. */
@@ -485,6 +488,7 @@ export async function runImprovementSweep(companyId: string, input: SweepDeps): 
         report.errors.push(`agent[${agentId}]: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    report.tools = await sweepToolProposals(companyId, [...rowsByAgent.values()].flat(), run);
     report.retirement = await retireSkills(deps.store, companyId, { now, listed: deps.listedSkills ?? new Set(), ...deps.retirement });
   } catch (error) {
     report.errors.push(`sweep: ${error instanceof Error ? error.message : String(error)}`);

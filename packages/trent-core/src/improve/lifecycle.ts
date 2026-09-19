@@ -16,6 +16,9 @@ import { contentHash, judgeAgreementFor, newId, nowIso, recordLedger } from "./l
 import { SweepMeter } from "./meter.js";
 import { ProtectedPromptError } from "./protected-prompt.js";
 import { rationaliseGolden, type ExemplarStore, type RationaleFn } from "./rationalise.js";
+// [D5] a promoted tool draft is a description on disk; a rollback takes it back off.
+import { decodeToolDraft } from "./tool-drafts.js";
+import { TOOL_OVERRIDES_FILE, removeToolOverride, writeToolOverride } from "./tool-overrides.js";
 
 /** Tasks I.13 and I.14: where a promotion's clean exemplars go, and the model that explains them. */
 export interface DistillOnPromote {
@@ -39,6 +42,26 @@ export interface PromoteOptions {
   readonly iterationId?: string;
   readonly now?: string;
   readonly distill?: DistillOnPromote;
+  /**
+   * [D5] Where a promoted `tool` draft's description is written (`<profileDir>/tool-overrides.json`).
+   * Required for that kind and ignored for every other: a tool promotion that only changed a row
+   * in the database would leave the seats reading the shipped description for ever.
+   */
+  readonly toolOverrides?: { readonly profileDir: string };
+}
+
+/**
+ * [D5] The description a promoted tool draft puts in front of every later `buildTrentTools`. The
+ * draft's own bytes are the source; nothing is re-derived from the traces at promotion time.
+ */
+function applyToolPromotion(draft: SkillDraftRow, options: PromoteOptions, now: string): void {
+  const profileDir = options.toolOverrides?.profileDir;
+  if (profileDir === undefined) {
+    throw new ProtectedPromptError(`refusing to promote tool draft ${draft.id}: no profile directory was given to write ${TOOL_OVERRIDES_FILE} in`);
+  }
+  const payload = decodeToolDraft(draft.content);
+  if (!payload) throw new Error(`tool draft ${draft.id} does not carry a description to promote`);
+  writeToolOverride(profileDir, { tool: payload.tool, description: payload.proposedDescription, draftId: draft.id, promotedAt: now });
 }
 
 export interface DistillReport {
@@ -114,6 +137,9 @@ export async function promoteDraft(store: ImproveStorePort, draftId: string, opt
       throw new ProtectedPromptError(`refusing to promote ${draft.kind} draft ${draftId}: ${frozenRefusalMessage(violations)}`);
     }
   }
+  // [D5] The disk write goes first, like the memory rollback's: a refused write leaves the draft
+  // in quarantine and the ledger untouched, rather than a live row nothing serves.
+  if (draft.kind === "tool") applyToolPromotion(draft, options, now);
   const iterationId = options.iterationId ?? (await iterationFor(store, draft));
   const prior = await currentLive(store, draft);
   if (prior) {
@@ -235,7 +261,29 @@ export interface RollbackReport {
  * bytes — into the archived row when it is still there, or into a fresh row when it is not —
  * and the restoration is itself a ledger row.
  */
-export async function rollback(store: ImproveStorePort, iterationId: string, actor: string, now = nowIso()): Promise<RollbackReport> {
+export interface RollbackOptions {
+  /** [D5] Where the tool-description overrides live; without it a `tool` row is reversed in the store only. */
+  readonly profileDir?: string;
+}
+
+/** [D5] The shipped description comes back: the prior promotion's bytes, or no override at all. */
+function rollbackToolOverride(before: string | null, profileDir: string | undefined, tool: string, now: string): void {
+  if (profileDir === undefined) return;
+  const prior = before === null ? undefined : decodeToolDraft(before);
+  if (prior === undefined) {
+    removeToolOverride(profileDir, tool);
+    return;
+  }
+  writeToolOverride(profileDir, { tool: prior.tool, description: prior.proposedDescription, draftId: `restored:${prior.tool}`, promotedAt: now });
+}
+
+export async function rollback(
+  store: ImproveStorePort,
+  iterationId: string,
+  actor: string,
+  now = nowIso(),
+  options: RollbackOptions = {},
+): Promise<RollbackReport> {
   const iteration = await store.getIteration(iterationId);
   if (!iteration) throw new Error(`iteration ${iterationId} not found`);
   const rows = (await store.listLedger(iteration.companyId, { iterationId })).filter((row) => row.action === "promote" || row.action === "fix");
@@ -269,6 +317,9 @@ export async function rollback(store: ImproveStorePort, iterationId: string, act
       const prior = decodeMemoryDraft(row.before);
       applyMemoryBytes(prior.profileDir, prior);
     }
+    // [D5] Same order for a tool: the file first, so the seats stop reading a reverted description
+    // even if the store update below fails. `taskType` is the tool name.
+    if (row.artifactKind === "tool") rollbackToolOverride(row.before, options.profileDir, row.taskType, now);
     const candidate = await store.getDraft(row.artifactId);
     if (candidate && candidate.status !== "rejected") {
       await store.updateDraft(candidate.id, { status: "rejected", retiredAt: now });

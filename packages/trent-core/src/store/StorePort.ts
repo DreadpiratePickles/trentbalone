@@ -240,8 +240,11 @@ export type ImproveDraftStatus = "quarantine" | "live" | "rejected" | "stale" | 
  * `memory`: a consolidated rewrite of MEMORY.md + USER.md (`../fleet-memory/consolidate.ts`).
  * `agent`: a versioned agent definition (`../fleet/AgentVersions.ts`); its ledger rows carry
  * version ids, not bytes, and never touch the SkillDraft table.
+ * [D5] `tool`: a proposed rewrite of one TOOL's description (`../improve/tool-drafts.ts`). Its
+ * `taskType` is the tool name, its content is the evidence and the proposal, and a promotion
+ * writes `<profileDir>/tool-overrides.json` — never the tool's schema and never its handler.
  */
-export type ImproveArtifactKind = "skill" | "prompt" | "memory" | "agent";
+export type ImproveArtifactKind = "skill" | "prompt" | "memory" | "agent" | "tool";
 export type ImproveLedgerAction = "stage" | "promote" | "fix" | "reject" | "retire" | "archive" | "recover" | "rollback";
 
 export interface AgentTraceRow {
