@@ -253,8 +253,10 @@ describe("reviseOrchestrationPlanTail", () => {
     expect(plan.reasoning).toBe("near-valid tail revision");
     expect(plan.successCriteria).toEqual(["Produce a revised grounded priority brief"]);
     expect(plan.blockers).toEqual([]);
+    // "data analyst" resolves to the analyst seat again: the 2026-07-01 shrink that folded it
+    // into ceo was reverted on 2026-09-18 (orchestrator-runtime.ts, ACTIVE_SEATS).
     expect(plan.steps.find((step) => step.id === "s4")).toMatchObject({
-      agentRole: "ceo",
+      agentRole: "analyst",
       dependsOn: ["s1"],
       riskLevel: "medium",
       needsApproval: false,

@@ -74,35 +74,28 @@ export const agentRoles = [
   "finance", "analyst", "escalation", "sales",
 ] as const;
 
-// SHRINK: the 5 main seats. The Operator (ceo) absorbs analyst + finance +
-// escalation; Growth absorbs sales. Shelved roles are remapped here so the
-// planner can never assign an inactive seat, while the AgentRole enum keeps
-// every value so historical OrchestratorStep rows remain valid.
-export const ACTIVE_SEATS = ["ceo", "engineer", "growth", "content", "support"] as const;
-const SHELVED_SEAT_ROUTING: Record<string, (typeof ACTIVE_SEATS)[number]> = {
-  analyst: "ceo",
-  finance: "ceo",
-  escalation: "ceo",
-  sales: "growth",
-};
-export function toActiveSeat(role: string): AgentRole {
-  return (SHELVED_SEAT_ROUTING[role] ?? role) as AgentRole;
-}
+// UNSHELVED 2026-09-18: every AgentRole is an active seat again. Between ff6002f
+// (2026-07-01) and today this list held five seats and `toActiveSeat` folded
+// analyst/finance/escalation into ceo and sales into growth at the plan chokepoint,
+// so four seats carried prompts, tools, budgets and manifests they could never reach.
+// The remap is gone: the seat the planner names is the seat that runs.
+export const ACTIVE_SEATS = agentRoles;
 
 export function normalizePlannerAgentRole(value: unknown): unknown {
   if (typeof value !== "string") return value;
   const normalized = value.toLowerCase().replace(/[^a-z]+/g, " ").trim();
   for (const role of agentRoles) {
-    if (normalized === role || normalized.split(" ").includes(role)) return toActiveSeat(role);
+    if (normalized === role || normalized.split(" ").includes(role)) return role;
   }
   if (/\b(project manager|program manager|operator|operations lead|team lead|team leader|lead)\b/.test(normalized)) return "ceo";
-  if (/\bresearch\b|\banalysis\b|\banalyst\b|\bdata\b|\bstrategy\b|\bstrategist\b/.test(normalized)) return "ceo";
+  if (/\bresearch\b|\banalysis\b|\banalyst\b|\bdata\b|\bstrategy\b|\bstrategist\b/.test(normalized)) return "analyst";
   if (/\bengineering\b|\bdeveloper\b|\btechnical\b|\bcode\b/.test(normalized)) return "engineer";
-  if (/\bmarketing\b|\bmarketer\b|\bacquisition\b|\bgo to market\b|\bgtm\b|\bsales\w*|\bprospect\w*|\bpipeline\b/.test(normalized)) return "growth";
+  if (/\bmarketing\b|\bmarketer\b|\bacquisition\b|\bgo to market\b|\bgtm\b/.test(normalized)) return "growth";
+  if (/\bsales\w*|\bprospect\w*|\bpipeline\b/.test(normalized)) return "sales";
   if (/\bcopy\b|\bcreative\b|\bwriting\b|\bwriter\b/.test(normalized)) return "content";
   if (/\bcustomer\b|\bsuccess\b|\bfaq\b|\bticket\b/.test(normalized)) return "support";
-  if (/\bescalate\b|\bapproval\b|\brisk\b|\blegal\b|\bfounder\b/.test(normalized)) return "ceo";
-  return normalized ? "ceo" : value;
+  if (/\bescalate\b|\bapproval\b|\brisk\b|\blegal\b|\bfounder\b/.test(normalized)) return "escalation";
+  return normalized ? "analyst" : value;
 }
 
 export function normalizePlannerRiskLevel(value: unknown): unknown {
@@ -408,10 +401,6 @@ export function normalizePlan(plan: RawOrchestrationPlan): OrchestrationPlan {
     blockers: plan.blockers ?? [],
     steps: plan.steps.map((step) => ({
       ...step,
-      // SHRINK: single chokepoint — any shelved seat (analyst/finance/sales/
-      // escalation) produced by the model or a deterministic fallback is
-      // remapped to its active owner here, so no plan ever runs a shelved seat.
-      agentRole: toActiveSeat(step.agentRole),
       dependsOn: step.dependsOn ?? [],
       needsApproval: step.needsApproval ?? false,
       spec: step.spec ?? buildStepSpec(step),
@@ -587,12 +576,11 @@ async function callTextWithFallback(
 }
 
 /** Specialist seats engaged on a full autonomous company run (CEO bookends). */
-// SHRINK: the active specialist roster is 4 (ceo bookends the full-team plan
-// = 5 mains). analyst/finance/sales are shelved; their work folds into an
-// active seat via toActiveSeat(). The AgentRole enum keeps all values so
-// historical rows stay valid.
+// UNSHELVED 2026-09-18: back to the seven specialists this fallback covered before the
+// 2026-07-01 shrink narrowed it to four. Escalation stays out by design — it gates
+// irreversible work inside a plan rather than owning a workstream of its own.
 const FULL_TEAM_SEATS: AgentRole[] = [
-  "engineer", "growth", "content", "support",
+  "engineer", "growth", "content", "support", "analyst", "finance", "sales",
 ];
 
 /**
@@ -881,9 +869,9 @@ export function buildOrchestrationPlanningPrompts(
   // relevant specialist seats into the plan for cross-functional objectives.
   const broadPlanning = isBroadPlanningObjective(objective);
   const teamRule = fullTeam
-    ? "  4. FULL AUTONOMOUS COMPANY RUN: engage EVERY relevant specialist seat (engineer, growth, content, support) with at least one substantive step doing real work in its domain, then a final ceo step that consolidates everything. Use up to 12 steps."
+    ? "  4. FULL AUTONOMOUS COMPANY RUN: engage EVERY relevant specialist seat (engineer, growth, content, support, analyst, finance, sales) with at least one substantive step doing real work in its domain, then a final ceo step that consolidates everything. Use up to 12 steps."
     : broadPlanning
-    ? "  4. BROAD PLANNING/AUDIT OBJECTIVE: this objective spans multiple functions. Engage at least three specialist seats (e.g. engineer, growth, content, support — whichever domains the objective touches) with one substantive step each, then a final ceo step that consolidates. Never plan only ceo steps for an objective like this. Use 4–10 steps."
+    ? "  4. BROAD PLANNING/AUDIT OBJECTIVE: this objective spans multiple functions. Engage at least three specialist seats (e.g. analyst, engineer, growth, finance — whichever domains the objective touches) with one substantive step each, then a final ceo step that consolidates. Never plan only ceo/escalation steps for an objective like this. Use 4–10 steps."
     : "  4. Keep step count tight: 3–8 for most objectives, max 12.";
   const system = [
     "You are Trent's chief orchestrator — the long-horizon planner that decomposes an objective into a multi-agent task graph.",
