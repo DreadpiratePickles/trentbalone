@@ -52,6 +52,11 @@ export interface SweepDeps {
   readonly skipLLM?: boolean;
   readonly seatPrompt?: SeatPromptProvider;
   readonly suiteFor?: SuiteProvider;
+  /**
+   * [D1] why an agent has no suite, in the agent's own words. The gate's `no_suite` said nothing
+   * about WHICH seat or what it would take; a seat's refusal now names it and its golden counts.
+   */
+  readonly noSuiteReason?: (agentId: string) => Promise<string | undefined> | string | undefined;
   /** The executing gate's model access. Without it no draft can be gated (it stays quarantined). */
   readonly actuals?: ActualsRunner;
   readonly judge?: JudgeFn;
@@ -93,6 +98,8 @@ export interface SweepReport {
   passK: number;
   /** [D0] gate 6: whether the judge was below its floor, so its verdicts could not pass a fixture. */
   judgeAdvisory: boolean;
+  /** [D1] whether a model proposed anything this sweep, or the deterministic fallbacks ran alone. */
+  reflected: boolean;
   agents: AgentSweepReport[];
   skippedSpecialists: SkippedSpecialist[];
   retirement: RetirementReport;
@@ -197,7 +204,10 @@ async function gateDraft(ctx: AgentContext, draft: SkillDraftRow): Promise<Pick<
     return refused;
   }
   const actuals = deps.actuals;
-  if (!suite) return { decision: "quarantined", score: null, delta: null, blockedBy: "no_suite", verdicts: null };
+  if (!suite) {
+    const reason = await deps.noSuiteReason?.(ctx.agentId);
+    return { decision: "quarantined", score: null, delta: null, blockedBy: reason ?? "no_suite", verdicts: null };
+  }
   if (!actuals) return { decision: "quarantined", score: null, delta: null, blockedBy: "no_gateway", verdicts: null };
   let verdict: GateVerdict;
   try {
@@ -426,6 +436,7 @@ export async function runImprovementSweep(companyId: string, input: SweepDeps): 
     at: now,
     passK,
     judgeAdvisory,
+    reflected: !(deps.skipLLM ?? true),
     agents: [],
     skippedSpecialists: [],
     retirement: { stale: [], archived: [], kept: [] },

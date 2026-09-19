@@ -20,11 +20,8 @@
  */
 
 import path from "node:path";
-import { getCatalogAgent } from "@trent/core/agents/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
-import { BUNDLED_SKILLS_DIR } from "@trent/core/fleet/index.js";
 import {
-  BUNDLED_MECHANICAL_OVERLAYS_DIR,
   InMemoryImproveStore,
   createFileExemplarStore,
   createFrozenSurface,
@@ -32,10 +29,12 @@ import {
   createGatewayJudge,
   createGatewayRationale,
   createImproveHook,
-  fileSuiteProvider,
+  goldenActuals,
   improveStatus,
+  resolveJudgeModel,
   promoteDraft,
   rejectDraft,
+  resolveSweepScope,
   rollback,
   runImprovementSweep,
   verifyPromotion,
@@ -44,6 +43,7 @@ import {
   type ImproveStatus,
   type JudgeFn,
   type RationaleFn,
+  type SeatSuites,
   type SweepReport,
   type VerifyPromotionReport,
 } from "@trent/core/improve/index.js";
@@ -92,10 +92,24 @@ export function createImproveRunDeps(input: ImproveRunDepsInput): ImproveRunDeps
   const underlying = (input.executeSeatModelFn ?? lazyAppSeatModel()) as (input: never) => Promise<unknown>;
   return { improve: hook, executeSeatModelFn: hook.seatModel(underlying) as unknown as (...args: never[]) => unknown };
 }
+// [D1] the goldens that ARE a seat's suite, their human gate, and the reflection floor.
+import {
+  goldenDirFor,
+  holdoutRecheck,
+  goldensSpec,
+  loadGoldenIndex,
+  reflectionFloor,
+  reflectionRefusal,
+  rolesByRun,
+  seatSuitesFor,
+  type GoldenIndex,
+} from "./improve-goldens.js";
 import type { CommandContext } from "./context.js";
 import type { CommandSpec } from "./registry.js";
 
 const DEFAULT_COMPANY_ID = "trent-local";
+/** Mirrors `improve.min_goldens`; used only when a profile predates the key. */
+const DEFAULT_MIN_GOLDENS = 5;
 
 /** Test seam: an injected store replaces the profile database for the life of the process. */
 let injectedStore: ImproveStorePort | undefined;
@@ -124,9 +138,14 @@ interface LoopConfig {
   installedAgents: string[];
   provider: string;
   model: string;
+  /** [D1] `models.planner`, when the profile configures model tiers; the judge prefers it. */
+  plannerModel?: string;
   /** [D0] improvement gates, from `config.improve` (docs/improve.md). */
   gates: {
     sweepCapCents: number;
+    /** [D1] the judge's model id, empty when it is resolved at run time, and the reflection floor. */
+    judgeModel: string;
+    minGoldens: number;
     passK: number;
     holdoutRatio: number;
     minTpr: number;
@@ -144,16 +163,21 @@ function loopConfig(ctx: CommandContext): LoopConfig {
     fleet: { installed_agents?: string[]; active_agents?: string[] };
     budget: { per_run_cap: number };
     memory: { blocks: LoopConfig["gates"]["blocks"] };
-    improve: { sweep_cap_cents: number; pass_k: number; holdout_ratio: number; judge_min_tpr: number; judge_min_tnr: number; frozen_paths: string[] };
+    models?: { planner?: string };
+    improve: { sweep_cap_cents: number; pass_k: number; holdout_ratio: number; judge_min_tpr: number; judge_min_tnr: number; frozen_paths: string[]; judge_model?: string; min_goldens?: number };
   };
+  const planner = config.models?.planner;
   return {
     companyId: String(config.company?.id ?? DEFAULT_COMPANY_ID),
     installedAgents: [...(config.fleet.installed_agents ?? config.fleet.active_agents ?? [])],
     provider: config.provider,
     model: config.model,
+    ...(planner === undefined ? {} : { plannerModel: planner }),
     gates: {
       // Decision 8: an unset cap is one run's cap, never "no cap".
       sweepCapCents: config.improve.sweep_cap_cents ?? config.budget.per_run_cap,
+      judgeModel: config.improve.judge_model ?? "",
+      minGoldens: config.improve.min_goldens ?? DEFAULT_MIN_GOLDENS,
       passK: config.improve.pass_k,
       holdoutRatio: config.improve.holdout_ratio,
       minTpr: config.improve.judge_min_tpr,
@@ -200,18 +224,31 @@ function storeInfo(opened: OpenedStore): { durable: boolean; reason?: string } {
   return opened.reason === undefined ? { durable: opened.durable } : { durable: opened.durable, reason: opened.reason };
 }
 
-/** The loop's model access for `--live`: the configured provider through the real gateway, executor, evidence-cited judge and rationale. */
-async function liveModel(ctx: CommandContext, cfg: LoopConfig): Promise<{ actuals: ActualsRunner; judge: JudgeFn; rationalise: RationaleFn }> {
+/**
+ * The loop's model access for `--live`: the configured provider through the real gateway for the
+ * executor, and [D1] a SECOND gateway pinned to a different model for the judge — a judge that is
+ * the executor grades its own output with its own blind spots (plan decision 6, `judge-model.ts`).
+ */
+async function liveModel(ctx: CommandContext, cfg: LoopConfig): Promise<{ actuals: ActualsRunner; judge: JudgeFn; rationalise: RationaleFn; judgeModel: string }> {
   ctx.config().loadSecrets();
   const { createModelGateway } = await import("@trent/core/model-gateway/index.js");
-  const gateway = await createModelGateway({
-    preferredProvider: cfg.provider as ModelProvider,
-    models: { executor: cfg.model },
-  });
+  const preferredProvider = cfg.provider as ModelProvider;
+  const gateway = await createModelGateway({ preferredProvider, models: { executor: cfg.model } });
   if (gateway.configuredProviders().length === 0) {
     throw new TrentError({ code: EXIT.AUTH, operation: "improve.sweep", message: `no API key configured for provider ${cfg.provider}` });
   }
-  return { actuals: createGatewayActuals(gateway), judge: createGatewayJudge(gateway), rationalise: createGatewayRationale(gateway) };
+  const judge = resolveJudgeModel({
+    configured: cfg.gates.judgeModel,
+    executor: cfg.model,
+    ...(cfg.plannerModel === undefined ? {} : { planner: cfg.plannerModel }),
+  });
+  const judgeGateway = await createModelGateway({ preferredProvider, models: { executor: judge.model } });
+  return {
+    actuals: createGatewayActuals(gateway),
+    judge: createGatewayJudge(judgeGateway),
+    rationalise: createGatewayRationale(gateway),
+    judgeModel: judge.model,
+  };
 }
 
 /** [D0] gate 1: the paths this profile's loop may never write. */
@@ -219,9 +256,12 @@ function frozenSurfaceFor(ctx: CommandContext, cfg: LoopConfig) {
   return createFrozenSurface({ profileDir: ctx.config().getProfileDir(), blocks: cfg.gates.blocks, extraPaths: cfg.gates.frozenPaths });
 }
 
-/** The suites the CLI gates against: a skill's `evals/evals.json` plus the wrapper's mechanical overlay. */
-function suiteProvider() {
-  return fileSuiteProvider(BUNDLED_SKILLS_DIR, (agentId) => getCatalogAgent(agentId)?.skills ?? [], { overlayRoot: BUNDLED_MECHANICAL_OVERLAYS_DIR });
+/**
+ * [D1] the golden index for this profile: every capture under `<profile>/goldens`, attributed to
+ * the seats whose traces show they ran it. Read once per command, from the durable store.
+ */
+async function goldenIndexFor(ctx: CommandContext, cfg: LoopConfig, store: ImproveStorePort): Promise<GoldenIndex> {
+  return loadGoldenIndex(goldenDirFor(ctx), await store.listTraces(cfg.companyId));
 }
 
 /** Where a promotion's clean exemplars go: one JSON per golden under the profile. */
@@ -271,29 +311,44 @@ const sweepSpec: CommandSpec = {
   run: (ctx, opts) =>
     withStore(ctx, async (opened, cfg) => {
       const agentFilter = typeof opts.agent === "string" ? opts.agent : undefined;
+      const live = opts.live === true;
+      // [D1] the suites are the seats' promoted goldens plus their skills, so both are read first.
+      const index = await goldenIndexFor(ctx, cfg, opened.store);
+      const suites = seatSuitesFor(index);
+      const scope = resolveSweepScope({
+        installedAgents: cfg.installedAgents,
+        traceCounts: await opened.store.countTracesByAgent(cfg.companyId),
+        ...(agentFilter === undefined ? {} : { agentFilter }),
+      });
+      const reflection = reflectionFloor(index, scope.agents, cfg.gates.minGoldens);
       if (ctx.dryRun) {
-        return { data: { dryRun: true, command: "improve sweep", companyId: cfg.companyId, installedAgents: cfg.installedAgents, agentFilter: agentFilter ?? null, live: opts.live === true } };
+        return { data: { dryRun: true, command: "improve sweep", companyId: cfg.companyId, installedAgents: cfg.installedAgents, agentFilter: agentFilter ?? null, live, reflection } };
       }
-      const live = opts.live === true ? await liveModel(ctx, cfg) : undefined;
+      // The floor is checked BEFORE model access, so a refusal never costs a call.
+      if (live && reflection.blocked !== null) throw reflectionRefusal(reflection);
+      const model = live ? await liveModel(ctx, cfg) : undefined;
       const report = await runImprovementSweep(cfg.companyId, {
         store: opened.store,
         installedAgents: cfg.installedAgents,
         ...(agentFilter === undefined ? {} : { agentFilter }),
-        ...(live === undefined ? {} : { actuals: live.actuals, judge: live.judge }),
-        suiteFor: suiteProvider(),
+        // [D1] the runner is wrapped so a golden's failure-tag grader has the tags to read.
+        ...(model === undefined ? {} : { actuals: goldenActuals(model.actuals, index.goldens), judge: model.judge }),
+        suiteFor: suites.suiteFor,
+        noSuiteReason: suites.noSuiteReason,
         // [D0]: the cap (decision 8), pass^k, the partition, the frozen surface and the floors.
         budgetCents: cfg.gates.sweepCapCents,
         passK: cfg.gates.passK,
         holdoutRatio: cfg.gates.holdoutRatio,
         frozenSurface: frozenSurfaceFor(ctx, cfg),
         judgeFloors: { minTpr: cfg.gates.minTpr, minTnr: cfg.gates.minTnr },
-        // Reflection stays OFF: no model rewrites a prompt until D1 turns it on (docs/improve.md).
-        skipLLM: true,
+        // [D1] reflection follows `--live` and nothing else: offline the Foundry and GEPA keep
+        // their deterministic fallbacks, which is the literal-marker path and costs no call.
+        skipLLM: !live,
       });
-      return { data: { ...report, store: storeInfo(opened) } };
+      return { data: { ...report, judgeModel: model?.judgeModel ?? null, reflection, store: storeInfo(opened) } };
     }),
   render(data, ctx) {
-    const d = data as unknown as SweepReport & { dryRun?: boolean };
+    const d = data as unknown as SweepReport & { dryRun?: boolean; judgeModel?: string | null; reflection?: { minGoldens: number } };
     if (d.dryRun === true) return [`  ${ctx.theme.meta("would sweep")} ${ctx.theme.value(String((d as { companyId: string }).companyId))}`];
     const lines = d.agents.map(
       (a) => `  ${ctx.theme.value(a.agentId.padEnd(18))} traces=${a.traces} distilled=${a.skillsDistilled} gated=${a.skillsGated} rejected=${a.skillsRejected} gepa=${a.gepaPasses}${a.skipped.length ? `  skipped: ${a.skipped.join(", ")}` : ""}`,
@@ -302,6 +357,10 @@ const sweepSpec: CommandSpec = {
     // [D0] gate 7: what this sweep was allowed to spend, what it spent, and whether it stopped there.
     lines.push(
       `  ${ctx.theme.meta("cap")} ${d.budget.limitCents === null ? "none" : `${d.budget.limitCents} cents`}   ${ctx.theme.meta("spent")} ${d.costCents} cents   ${d.budget.exhausted ? ctx.theme.needsApproval("stopped at the cap") : ctx.theme.success("under the cap")}   ${ctx.theme.meta("pass^k")} ${d.passK}${d.judgeAdvisory ? `   ${ctx.theme.needsApproval("judge advisory")}` : ""}`,
+    );
+    // [D1] what reflected, and who graded it. A sweep that reflected on nothing says so.
+    lines.push(
+      `  ${ctx.theme.meta("reflection")} ${d.reflected ? ctx.theme.success("on") : "off"}   ${ctx.theme.meta("judge model")} ${d.judgeModel ?? "not resolved (offline)"}   ${ctx.theme.meta("min goldens")} ${d.reflection?.minGoldens ?? 0}`,
     );
     for (const e of d.errors) lines.push(`  ${ctx.theme.needsApproval("error")} ${e}`);
     return lines;
@@ -324,6 +383,7 @@ function draftCommand(name: "promote" | "reject"): CommandSpec {
           return { data: { draftId: rejected.id, agentId: rejected.agentId, taskType: rejected.taskType, kind: rejected.kind, status: rejected.status } };
         }
         const live = opts.live === true ? await liveModel(ctx, cfg) : undefined;
+        const goldens0 = await goldenIndexFor(ctx, cfg, opened.store);
         const exemplars = createFileExemplarStore(exemplarDir(ctx));
         const before = (await exemplars.list()).length;
         const result = await promoteDraft(opened.store, draftId, {
@@ -336,7 +396,10 @@ function draftCommand(name: "promote" | "reject"): CommandSpec {
         // [D0] gate 4: the holdout is re-run against what is now live, under the sweep cap, and a
         // regression rolls the promotion straight back. Without model access there is nothing to
         // re-run, so the check is reported as not run rather than silently skipped.
-        const holdoutCheck = live === undefined ? null : await runHoldoutCheck(ctx, cfg, opened.store, result.id, live.actuals, live.judge);
+        const holdoutCheck =
+          live === undefined
+            ? null
+            : await holdoutRecheck(cfg.gates, opened.store, cfg.companyId, result.id, goldenActuals(live.actuals, goldens0.goldens), live.judge, seatSuitesFor(goldens0));
         return {
           data: {
             draftId: result.id,
@@ -363,39 +426,6 @@ function draftCommand(name: "promote" | "reject"): CommandSpec {
       return lines;
     },
   };
-}
-
-/**
- * [D0] gate 4: re-run the promoted artifact's holdout under the sweep cap. Returns null when the
- * agent has no suite to re-run, which is the honest answer until a seat has one (plan task D1).
- */
-async function runHoldoutCheck(
-  ctx: CommandContext,
-  cfg: LoopConfig,
-  store: ImproveStorePort,
-  draftId: string,
-  actuals: ActualsRunner,
-  judge: JudgeFn,
-): Promise<VerifyPromotionReport | null> {
-  const draft = await store.getDraft(draftId);
-  if (!draft) return null;
-  const suite = await suiteProvider()(draft.agentId);
-  if (!suite) return null;
-  const { defaultSeatPromptProvider } = await import("@trent/core/improve/index.js");
-  // The seat a specialist is plugged into comes from its own traces, as the sweep resolves it.
-  const traces = await store.listTraces(cfg.companyId, { agentId: draft.agentId });
-  const seatPrompt = await defaultSeatPromptProvider(store, cfg.companyId, () => traces[0]?.agentRole)(draft.agentId);
-  return verifyPromotion({
-    store,
-    draftId,
-    suite,
-    seatPrompt,
-    actuals,
-    judge,
-    passK: cfg.gates.passK,
-    holdoutRatio: cfg.gates.holdoutRatio,
-    budgetCents: cfg.gates.sweepCapCents,
-  });
 }
 
 const rollbackSpec: CommandSpec = {
@@ -435,5 +465,14 @@ const historySpec: CommandSpec = {
 export const improveSpec: CommandSpec = {
   name: "improve",
   description: "The self-improvement loop: traces, sweeps, gated promotion, rollback",
-  subcommands: [statusSpec, sweepSpec, draftCommand("promote"), draftCommand("reject"), rollbackSpec, historySpec],
+  subcommands: [
+    statusSpec,
+    sweepSpec,
+    // [D1] the human gate on what a seat is examined against.
+    goldensSpec({ runsFor: (ctx) => withStore(ctx, async (opened, cfg) => rolesByRun(await opened.store.listTraces(cfg.companyId))) }),
+    draftCommand("promote"),
+    draftCommand("reject"),
+    rollbackSpec,
+    historySpec,
+  ],
 };

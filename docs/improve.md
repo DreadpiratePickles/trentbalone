@@ -5,9 +5,10 @@ page is about what stops it from grading itself. Everything here is task D0 of t
 plan, built **before** reflection is switched on, because a loop that can rewrite its own exam is
 not a loop that improves.
 
-**Reflection is off.** `trent improve sweep` passes `skipLLM: true`, so no model proposes a prompt
-or a skill today; the Foundry and GEPA use their deterministic fallbacks. Turning reflection on is
-task D1, and it is gated on these seven checks being real.
+**Reflection is switchable, and off by default.** `trent improve sweep` passes `skipLLM: true`
+unless it is given `--live`, so no model proposes a prompt or a skill on an ordinary sweep; the
+Foundry and GEPA use their deterministic fallbacks. What `--live` costs, what it refuses to do,
+and who grades it are task D1, below the seven gates.
 
 ## The seven gates
 
@@ -104,6 +105,8 @@ improve:
   judge_min_tnr: 0.8
   sweep_cap_cents: 100    # integer cents; defaults to budget.per_run_cap
   frozen_paths: []        # extra paths the loop may never write
+  judge_model: ""         # [D1] empty: resolved at run time, and never the executor's model
+  min_goldens: 5          # [D1] promoted goldens a seat needs before `--live` reflects for it
 ```
 
 ## What a human sees
@@ -112,15 +115,115 @@ improve:
   whether the judge is advisory, and the counters for holdout regressions, frozen refusals and
   content vetoes.
 - `trent improve sweep` — per agent what was distilled, gated and rejected, then the cap, the spend,
-  whether the cap stopped the sweep, the pass^k in force, and whether the judge was advisory.
+  whether the cap stopped the sweep, the pass^k in force, whether the judge was advisory, and
+  [D1] whether reflection ran and which model graded it.
+- `trent improve goldens list` — every captured failure, its review state and the seats it gates.
 - `trent improve promote <id> --live` — the promotion, then the holdout re-run and, if it regressed,
   the rollback that already happened.
 - `trent improve history` — every refusal as a ledger row: `gate:frozen_surface`,
   `gate:content_vetoed`, `gate:repetitive_loop`, `gate:holdout_regression`.
 
+## [D1] Goldens are the suites
+
+A seat had no suite at all, so every seat's draft came back `no_suite` and no seat could ever
+promote an improvement: the CLI resolved suites through `getCatalogAgent(agentId)?.skills`, and the
+catalog holds 164 specialist ids and not one seat id. A seat now resolves its suite **by seat id**,
+from two sources (`improve/seat-suite.ts`):
+
+- its **promoted goldens** — the only growth path plan decision 4 allows;
+- its **own skills**, which live in the application's `SLOT_ENVIRONMENTS`, for the few that ship an
+  `evals/evals.json` and for the wrapper's mechanical overlays.
+
+A catalog specialist keeps the path it always had. A seat with neither is still refused, but the
+refusal now names the seat and both golden counts rather than saying `no_suite` nine times.
+
+### What a golden becomes
+
+A capture under `<profile>/goldens` is a failing run, sanitised by the app's own redaction
+(`improve/golden-capture.ts` over `apps/web/lib/orchestration-golden-capture.ts`). As a fixture
+(`improve/golden-suite.ts`) it carries:
+
+| part | from |
+|---|---|
+| the prompt | the sanitised objective, re-run under the candidate |
+| a `state_check` grader | the captured `trajectory_*` failure tags must not come back |
+| `contains` / `tool_call` | any mechanical assertion the capture already carries |
+| one `llm_rubric` per assertion | assertions a reviewer added to the file |
+| one `llm_rubric` for the failure | the captured reason, carried to the judge |
+
+The failure-tag grader is only as strong as the runner's observation, and that is deliberate:
+`goldenActuals` intersects the tags the runner **reports** (`state.failureTags`) with the tags the
+capture holds. An orchestrator-backed runner fills those; the one-completion runner `--live` uses
+cannot, so it reports no reproduced tag and the rubric carries the fixture. What is never inferred
+is a pass from an absent check: without the wrapper there is no state to read and the fixture fails
+deterministically.
+
+Goldens are attributed to the seats whose traces show they ran the captured run (`runId`), unless
+the file names its own `seats`. The suite honours the [D0] holdout split and pass^k like any other:
+a golden suite splits by the same fixture-id hash, and each fixture is run `improve.pass_k` times.
+
+### The human gate
+
+```
+trent improve goldens list            what was captured, its review state, the seats it gates
+trent improve goldens show <id>       the golden, and the fixture it becomes
+trent improve goldens promote <id>    quarantined -> promoted; now part of the seat's suite
+trent improve goldens reject <id>     it never enters a suite
+```
+
+Every golden starts quarantined. Only a promoted golden enters a suite, and promotion is a human
+command — as is every other promotion in this loop. The loop itself may not write the directory:
+`<profile>/goldens` is frozen, class `golden` (gate 1), so the thing being graded cannot edit the
+exam.
+
+## [D1] The judge model
+
+`improve.judge_model` is the model the eval judge runs on. **Empty is not "no judge"**: it means
+resolve one at run time (`improve/judge-model.ts`), in this order:
+
+1. `improve.judge_model`, when an operator set one;
+2. the configured planner-tier model (`models.planner`), when it differs from the executor;
+3. otherwise the strongest model in the wrapper's own price table (`model-gateway/pricing.ts`)
+   whose id differs from the executor's.
+
+The judge and the executor may never be the same id: equal models are a configuration error that
+names both, because a judge that is the executor shares its blind spots and its idea of a good
+answer, and the rate that would expose that (TNR, gate 6) is exactly the one a self-grading judge
+inflates. The sweep builds a second gateway pinned to the judge's model and prints which model
+graded.
+
+**The limit, recorded.** On one provider key the judge is a different model of the **same family**
+as the executor (plan decision 6). A same-family judge is weaker than an independent one and is
+accepted only until a second provider key exists; `trent improve status` keeps reporting TPR and
+TNR so the weakness is measured rather than assumed.
+
+## [D1] `--live`: reflection, metered
+
+`trent improve sweep --live` turns reflection on — the Foundry and GEPA propose through the model
+instead of their deterministic fallbacks — and it is held to three things:
+
+- **model access.** Without a configured key the sweep fails with the provider named; nothing is
+  half-run.
+- **the sweep cap.** The same `improve.sweep_cap_cents` as an offline sweep (gate 7). A draft the
+  meter could not afford stays in quarantine as `budget_exhausted`.
+- **`improve.min_goldens` (default 5).** No agent in scope with that many **promoted** goldens and
+  the sweep refuses, before a single model call, printing the promoted/quarantined count per agent.
+  A reflection measured on one or two fixtures is noise with a bill attached.
+
+Without `--live`, `skipLLM: true` stands and GEPA's evolved prompt is the literal marker it has
+always been offline.
+
+```yaml
+improve:
+  judge_model: ""    # empty: resolved at run time, and never the executor's model
+  min_goldens: 5     # promoted goldens a seat needs before --live will reflect for it
+```
+
 ## What is deliberately not here
 
-- **Reflection.** No model proposes anything yet (task D1).
-- **A suite per seat.** Suites come from goldens captured on real runs (plan decision 4); until a
-  seat has one, its drafts are `no_suite` and cannot be promoted at all.
-- **Automatic promotion.** Promotion is a human command and stays one (`improve/lifecycle.ts`).
+- **Automatic promotion.** Promotion is a human command and stays one (`improve/lifecycle.ts`),
+  for a draft (`trent improve promote`) and for a golden (`trent improve goldens promote`).
+- **Authored suites.** No agent and no founder writes a fixture: a suite grows only from a failure
+  a real run produced (plan decision 4).
+- **An independent judge.** The judge is a different model on the same key and the same family
+  until a second provider key exists (decision 6, above).

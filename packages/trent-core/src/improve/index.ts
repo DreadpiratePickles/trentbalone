@@ -29,6 +29,41 @@ export {
   type GoldenCaptureOptions,
 } from "./golden-capture.js";
 export { createImproveHook, type ImproveHook, type ImproveHookOptions } from "./hook.js";
+// [D1] goldens as suites (plan decision 4): the review store, the fixture, and suite lookup by seat id.
+export {
+  PROMOTED_ON_DISK,
+  getGolden,
+  goldensDir,
+  listGoldens,
+  promotedGoldens,
+  quarantinedGoldens,
+  reviewOf,
+  setGoldenStatus,
+  type GoldenReview,
+  type StoredGolden,
+} from "./golden-store.js";
+export {
+  GOLDEN_FIXTURE_PREFIX,
+  REPRODUCED_TAGS_STATE_KEY,
+  goldenActuals,
+  goldenCounts,
+  goldenFixture,
+  goldenFixtureId,
+  goldenRubric,
+  goldenSeats,
+  goldensByAgent,
+  suiteFromGoldens,
+  type GoldenCounts,
+} from "./golden-suite.js";
+export { createSeatSuites, seatSkills, type SeatSuiteOptions, type SeatSuites } from "./seat-suite.js";
+export {
+  pricedGeminiModels,
+  resolveJudgeModel,
+  strongestPricedGemini,
+  type JudgeModelInput,
+  type JudgeModelSource,
+  type ResolvedJudgeModel,
+} from "./judge-model.js";
 export { SKILL_PRELUDE_MARKER, createSkillInjector, type SeatCallLike, type SkillInjector, type SkillInjectorOptions } from "./skill-injection.js";
 export * from "./suites.js";
 export {
@@ -139,7 +174,7 @@ export {
   mechanicalOverlayPath,
   type MechanicalOverlayJson,
 } from "./mechanical-overlay.js";
-export { contentHash, judgeAgreementFor, newId, recordLedger, setHash, type LedgerEntry } from "./ledger.js";
+export { contentHash, judgeAgreementFor, newId, nowIso, recordLedger, setHash, type LedgerEntry } from "./ledger.js";
 export { BASELINE_CACHE_SCHEMA, baselineCacheKey, createMemoryGateCache, judgeCacheKey, storeGateCache, type GateCache } from "./gate-cache.js";
 export { BudgetExhaustedError, SweepMeter, emptyPhases, isBudgetExhausted, type PhaseReport, type PhaseTally, type SweepPhase } from "./meter.js";
 export {

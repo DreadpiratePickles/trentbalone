@@ -63,7 +63,9 @@ describe("resolveSweepScope", () => {
       traceCounts: { engineer: 0, "eng-ai-engineer": 5, "spec-thin": 2, "spec-ghost": 40 },
       threshold: 3,
     });
-    expect(scope.agents).toEqual(["ceo", "engineer", "growth", "content", "support", "analyst", "finance", "browser", "escalation", "eng-ai-engineer"]);
+    // [D1] the roster is the execution union the fleet exports, so `sales` sweeps and the
+    // `browser` toolset no longer appears here as a seat (`roster.test.ts`).
+    expect(scope.agents).toEqual(["ceo", "engineer", "growth", "content", "support", "analyst", "finance", "escalation", "sales", "eng-ai-engineer"]);
     expect(scope.skipped).toEqual([{ agentId: "spec-thin", reason: "below_threshold", traces: 2, threshold: 3 }]);
   });
 });

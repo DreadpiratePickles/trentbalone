@@ -11,16 +11,24 @@
  * costs a row.
  */
 
+import { CORE_ROLE_IDS } from "../fleet/AgentInstaller.js";
 import type { OrcEvent, TraceSink } from "../orchestrator/types.js";
 import type { AgentTraceRow, ImproveStorePort } from "../store/StorePort.js";
 import { deriveTrace, type OrchestratorStepLike } from "../traces/trace-store.js";
 import { detectRepetitiveLoops } from "./repetitive-loop.js";
 
-/** The nine resident seats (design doc section 12). */
-export const CORE_SEATS = ["ceo", "engineer", "growth", "content", "support", "analyst", "finance", "browser", "escalation"] as const;
+/**
+ * The nine resident seats (design doc section 12), [D1]: DERIVED from the roster the fleet
+ * exports, which reads the application's own seats (`fleet/AgentInstaller.ts` `CORE_ROLE_IDS`).
+ * The literal that used to live here was a third roster: it listed `browser`, which is a toolset
+ * and not a role any plan step can be assigned to, and left out `sales`, so every sweep evolved a
+ * phantom agent and never touched the sales seat. `roster.test.ts` is the join that keeps the
+ * improve loop, the fleet and the application on one list.
+ */
+export const CORE_SEATS: readonly string[] = [...CORE_ROLE_IDS];
 
-/** Every role the orchestrator can schedule a step under: the nine seats plus the app's `sales`. */
-export const SEAT_ROLES: readonly string[] = [...CORE_SEATS, "sales"];
+/** Every role the orchestrator can schedule a step under. The seats ARE the execution union. */
+export const SEAT_ROLES: readonly string[] = [...CORE_SEATS];
 
 /** A hook on the run's event stream: a synchronous sink plus a flush the run awaits before it settles. */
 export interface BusHook {

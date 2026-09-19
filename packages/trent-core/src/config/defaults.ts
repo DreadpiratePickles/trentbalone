@@ -113,6 +113,15 @@ export const DEFAULT_CONFIG: TrentConfig = {
     judge_min_tnr: 0.8,
     sweep_cap_cents: DEFAULT_BUDGET_PER_RUN_CAP,
     frozen_paths: [],
+    // [D1] judge
+    // Reflection is switchable on now (`trent improve sweep --live`), so two things are configured
+    // here. An EMPTY `judge_model` means "resolve one at run time" rather than "no judge": the
+    // planner tier when it differs from the executor, else the strongest priced Gemini model that
+    // does (`improve/judge-model.ts`), because a judge equal to the executor grades its own
+    // output. `min_goldens` of 5 is the floor a seat's golden suite must clear before a live sweep
+    // will pay for a reflection on it.
+    judge_model: "",
+    min_goldens: 5,
   },
 };
 
