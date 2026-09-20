@@ -132,3 +132,26 @@ vitest exit=0
   (CI red; brain-import commit was green), W2 business toolset (Stripe, Calendar, Square, outbound
   SMS), W3 retrieval golden gate, W4 image generation, W5 Hermes + Codex renderers + A2A retag,
   W6 social toolset over the app adapters + Bluesky + Buffer + post queue.
+- W1 landed (doctor app-memory check no longer loads Prisma; Linux binary doctor exit 3). Found: trent run from the binary on Linux with a file: DATABASE_URL hits the unshipped Postgres engine; follow-up W1.1.
+- W4 landed (media_image; live proof hit 429: no image quota on the Gemini plan; Bobby's step). 
+- W5 landed (Hermes + Codex renderers; live Hermes import proof passed on v0.21.2; A2A tags = toolsets).
+
+## PAUSED by Bobby (2026-09-20)
+- Landed and pushed: wave 1 complete (U1 363cf10, U2 53796c6, U3 60ca092, U6 f403127, U4+U5
+  ff036d4); wave 2 so far W1 5d4c4a5 (doctor Prisma), W4 bf98635 (media_image), W5 d635d69
+  (Hermes + Codex export, A2A retag). HEAD is pushed; CI to be checked on resume.
+- Still running when paused (four Opus agents; their files are uncommitted in the working tree
+  when they finish, nothing is staged): W2 business toolset (tools/business/**, doctor/checks/
+  business.ts, docs/business.md), W3 retrieval golden gate (improve/**, fleet-memory/retrieval-
+  eval.ts, orchestrator-hook.ts recall note, config [W3] block), W6 social toolset (tools/social/**,
+  doctor/checks/social.ts, docs/social.md), W1.1 binary run on Linux with a file: DATABASE_URL
+  (app-source/app-tiers/app-writes predicate, headless wiring).
+- On resume: read each agent's final report (task notifications), verify each with
+  scripts/dev/isolate.sh on a clean worktree of HEAD, commit with explicit paths and the marked
+  config blocks cut by marker, regenerate schema-split.snapshot.json for any new key, push, then
+  sync the working tree to HEAD and run the full clean-HEAD suite. Then wave 3 (importers, post
+  queue polish, Google Business Profile reviews when access is granted, docs sync) and the
+  deferred-decisions reminder fires 2026-09-21 09:03.
+- Not to forget: Bobby's Gemini plan has no image-generation quota (W4 live proof 429); the
+  platform applications (Meta App Review, TikTok audit, YouTube audit, Google Business Profile
+  Basic Access, Twilio 10DLC) are Bobby's steps; Buffer accepted, X skipped.
