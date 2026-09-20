@@ -204,3 +204,24 @@ vitest exit=0
   findings (init.sql embed, .claude/skills ENOENT, pino lines on --json, .env.local auto-load);
   X3 trent usage; X4 cron incidents + quota hold + queue editing; X5 session_search windows +
   auto-recovery cycles; X6 Codex/Hermes/Claude importers.
+- Wave 3 landing: X3 8d4897a (trent usage), X1 659ec6e (sandbox build --media, creator clipping), X4 80a5bc6 (cron incidents, quota hold, queue editing), X2 824560d + 0d9f3ca (web skills ENOENT fix; binary durable, --json single doc, no .env.local autoload). Remaining: X5, X6.
+- Wave 3 closed: X6 f898d0b (Claude/Codex/Hermes importers, quarantined unpromoted versions),
+  X5 9a71a99 (session_search after/before/24h|7d|2w + exclude_session_ids; auto-recovery cycles,
+  `agent.auto_recovery_cycles` default 1), b6965b4 (the --json single-document regression tests
+  that 0d9f3ca left out). Tree synced to HEAD. Clean-HEAD evidence (isolate.sh, whole suite):
+tsc exit=0
+core build exit=0
+repo-scan exit=0
+      Tests  3584 passed | 1 skipped (3585)
+ Test Files  368 passed (368)
+vitest exit=0
+  CI green through f898d0b; 9a71a99 and b6965b4 in progress at 23:16Z.
+
+## Upgrade round: open items after wave 3
+- Google Business Profile reviews: after Bobby's platform application (his step, "last").
+- Hermes live A2A discovery proof: only the Hermes import proof exists.
+- RAG reranker / query prefixes: deferred until a recall@8 measurement on real documents.
+- `docs/doctor.md` rows for checks 19-20 (brain import, media) noted missing by W2.
+- `quote` / `appointment` idempotency tokens (governance follow-up).
+- `trent budget status` adopting the shared spend reader.
+- Live image proof once Bobby's Gemini plan has image quota (429 today).
