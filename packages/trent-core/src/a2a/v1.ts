@@ -211,3 +211,26 @@ export function toV1StreamEvent(event: A2AStreamEvent): Record<string, unknown> 
 function isTask(value: unknown): value is A2ATask {
   return typeof value === "object" && value !== null && (value as { kind?: unknown }).kind === "task";
 }
+
+// --------------------------------------------------------------------------- errors
+
+/** 0.3.0 method names, longest first so no name is rewritten inside a longer one. */
+const SPEC_METHODS: readonly (readonly [spec: string, v1: string])[] = Object.entries(V1_METHODS)
+  .map(([v1, spec]) => [spec, v1] as const)
+  .sort((a, b) => b[0].length - a[0].length);
+
+/** The lifecycle states a task's refusal names, as `is <state>` (`TaskLifecycle.ts`). */
+const SPEC_STATE_PHRASE = new RegExp(`\\bis (${Object.keys(V1_STATE).join("|")})\\b`, "g");
+
+/**
+ * A 0.3.0 error as the v1.0 client should read it: the same code (the codes did not change), the
+ * same `data`, and a message in which each 0.3.0 method name (`tasks/get`) is the v1.0 name
+ * (`GetTask`) and each `TaskState` (`is completed`) is the v1.0 enum (`is TASK_STATE_COMPLETED`).
+ * A text naming neither comes back untouched.
+ */
+export function toV1Error(error: A2AJsonRpcError): A2AJsonRpcError {
+  let message = error.message;
+  for (const [spec, v1] of SPEC_METHODS) message = message.split(spec).join(v1);
+  message = message.replace(SPEC_STATE_PHRASE, (_phrase, state: A2ATaskState) => `is ${V1_STATE[state]}`);
+  return message === error.message ? error : { ...error, message };
+}

@@ -8,14 +8,15 @@
  *
  * Two dialects arrive here: the 0.3.0 names this file was written for, and the v1.0 names
  * (`SendMessage`, `GetTask`, ...) that `v1.ts` maps onto them at the edge. A v1.0 request is
- * translated in, answered by the same switch, and translated out; a 0.3.0 request never touches
- * the translation.
+ * translated in, answered by the same switch, and translated out — its result AND its error text,
+ * so a v1.0 client reads `GetTask` and `TASK_STATE_COMPLETED`, never the 0.3.0 spellings; a 0.3.0
+ * request never touches the translation.
  *
  * Source: https://a2a-protocol.org/latest/specification/
  */
 
 import type { A2ATaskEngine, A2ATaskOutcome } from "./TaskLifecycle.js";
-import { a2aDialect, toSpecRequest, toV1Result, v1Unsupported } from "./v1.js";
+import { a2aDialect, toSpecRequest, toV1Error, toV1Result, v1Unsupported } from "./v1.js";
 import {
   A2A_ERROR_PUSH_NOT_SUPPORTED,
   A2A_ERROR_TASK_NOT_FOUND,
@@ -107,7 +108,7 @@ export async function dispatchA2A(engine: A2ATaskEngine, request: A2AJsonRpcRequ
   const refused = v1Unsupported(method);
   if (refused !== undefined) return jsonRpcError(id, refused);
   const response = await dispatchSpec(engine, toSpecRequest(request));
-  return response.error !== undefined ? response : jsonRpcResult(id, toV1Result(method, response.result));
+  return response.error !== undefined ? jsonRpcError(id, toV1Error(response.error)) : jsonRpcResult(id, toV1Result(method, response.result));
 }
 
 /** The 0.3.0 method surface. Every v1.0 request arrives here already translated. */

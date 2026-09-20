@@ -18,7 +18,7 @@ import { buildAgentCard } from "./card.js";
 import { A2ATaskEngine } from "./TaskLifecycle.js";
 import { a2aLegacyMetadata, a2aLegacyParams, a2aLegacyTask, A2A_DEPRECATION_HEADERS, type A2ATaskPayload } from "./legacy.js";
 import { A2A_STREAM_METHOD, beginStream, dispatchA2A, invalidRequest, jsonRpcError, jsonRpcResult, requestId } from "./rpc.js";
-import { A2A_V1_PROTOCOL_VERSION, A2A_VERSION_HEADER, a2aDialect, toSpecRequest, toV1StreamEvent, type A2ADialect } from "./v1.js";
+import { A2A_V1_PROTOCOL_VERSION, A2A_VERSION_HEADER, a2aDialect, toSpecRequest, toV1Error, toV1StreamEvent, type A2ADialect } from "./v1.js";
 import {
   A2A_LEGACY_WELL_KNOWN_PATH,
   A2A_WELL_KNOWN_PATH,
@@ -244,7 +244,8 @@ export class A2AServer {
     const id = requestId(request);
     const begun = beginStream(this.engine, request);
     if (!begun.ok) {
-      send(res, 200, begun.response);
+      const { error } = begun.response;
+      send(res, 200, dialect === "1.0" && error !== undefined ? jsonRpcError(id, toV1Error(error)) : begun.response);
       return;
     }
 

@@ -68,10 +68,20 @@ Both directions of the handshake now work, proven live with no model call
   same task lifecycle the 0.3.0 methods use; `ListTasks` and `SubscribeToTask` answer `-32004`,
   the push-config methods `-32003`. A 0.3.0 request gets exactly the response it got before:
   `message/send` with v1.0 parts is still `-32005`, and no 0.3.0 answer carries the version header.
-- **Known gap.** Hermes answers an `input-required` task by calling `a2a_call` again with the same
-  `context_id` and no `taskId`, so that second message starts a NEW task in the same context rather
-  than continuing the parked one; the gate's question is therefore not answerable from Hermes yet.
-  A v1.0 client that names `taskId` continues the task as the specification describes.
+- **Error texts follow the dialect.** A v1.0-named request that is refused reads v1.0 names in the
+  error text (`GetTask requires a string "id"`, `task "…" is TASK_STATE_COMPLETED`); the same
+  refusal to a 0.3.0-named request reads `tasks/get` and `completed`, exactly as before. The codes
+  are identical in both.
+- **Known gap, on the Hermes side.** Hermes answers an `input-required` task by calling `a2a_call`
+  again with the same `context_id` and no `taskId`. By the specification (§3.4.3, quoted below)
+  that message starts a NEW task in the context, which is what Trent does, so the gate's question
+  is not answerable from Hermes v0.21.3: its client never reads or resends the task id
+  (`tools.py::_send_task`), and its own inbound adapter also creates a new task per message
+  (`adapter.py::_prepare_task`). Closing it means Hermes sending the task id back as `taskId`
+  (or accepting a `task_id` argument); Trent will not reinterpret a `taskId`-less message as a
+  continuation, because that would swallow a spec-conforming client's new request whenever
+  another task in the same context happened to be waiting. See
+  `docs/sessions/2026-09-20-a2a-context-continuation.md`.
 
 `trent a2a card` prints that exact object; `trent a2a card engineer` prints it with `skills`
 narrowed to one seat. `--endpoint <url>` sets the advertised `url` when Trent sits behind a proxy.
@@ -96,6 +106,19 @@ States are the specification's `TaskState`: `submitted` -> `working` -> `complet
 `canceled`, or `input-required` (v1.0: `TASK_STATE_SUBMITTED` and so on). A run that parks on an approval gate (`ask_human`, `clarify`)
 settles `input-required` and carries the gate's **own question** as the `status.message`; answer it
 with a second `message/send` naming the same `taskId`.
+
+### Continuation by `contextId`
+
+A `contextId` groups tasks; a `taskId` continues one. A message that carries a `contextId` and no
+`taskId` starts a **new task** in that context, in both dialects — including while another task in
+the same context is `input-required`, which keeps waiting for the message that names it. This is
+the specification's rule, not a Trent choice: A2A v1.0 §3.4.3 says clients "MAY use contextId
+without taskId to start a new task within an existing conversation context" and that an
+input-required task is continued "by sending a new message with the same taskId and contextId".
+Trent does not keep conversational state per context: each task's run takes the text of the
+message that began or continued it, so a `taskId`-less follow-up runs as its own objective. The
+rule is pinned by `packages/trent-core/src/a2a/context-continuation.test.ts`, which also shows a
+context holding several waiting tasks at once, each continued only by its own `taskId`.
 
 ### Errors
 
