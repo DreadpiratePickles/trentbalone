@@ -128,3 +128,7 @@ repo-scan exit=0
       Tests  3257 passed | 1 skipped (3258)
  Test Files  327 passed (327)
 vitest exit=0
+- Wave 2 launched (six Opus agents): W1 Linux-binary doctor Prisma-engine failure on f403127
+  (CI red; brain-import commit was green), W2 business toolset (Stripe, Calendar, Square, outbound
+  SMS), W3 retrieval golden gate, W4 image generation, W5 Hermes + Codex renderers + A2A retag,
+  W6 social toolset over the app adapters + Bluesky + Buffer + post queue.
