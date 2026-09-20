@@ -72,7 +72,7 @@ trent jobs failed           # failed job runs, newest first; trent jobs retry <i
 trent workspace trust       # let this project's AGENTS.md, CLAUDE.md and .trent/*.md reach the prompt
 trent hooks list            # hooks configured for this profile; trent hooks consent allows one to run
 trent connect <provider>    # stripe, google, square, twilio, buffer, meta, bluesky: tokens to the 0600 secrets file
-trent --help                # 33 commands, 137 with their subcommands
+trent --help                # 34 commands, 138 with their subcommands
 ```
 
 Add a model key with `trent config set GEMINI_API_KEY <key>` (or `ANTHROPIC_API_KEY`,

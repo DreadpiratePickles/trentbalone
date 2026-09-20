@@ -654,6 +654,8 @@ ledger has already reached the daily cap does not start a run at all, and a run 
 `per_run_cap` mid-flight is stopped. Both print the cap and the spend in integer cents and name the
 key to raise. `--continue` seeds the ledger from the resumed session's `total_cost_cents`, so the
 cap survives a restart rather than resetting with the process.
+`trent budget status` reads today's ledger against the cap by surface; `trent usage` reads the same
+ledger over a period (`--since 7d|30d|YYYY-MM-DD`, month to date by default) grouped `--by surface|seat|model|provider|tool`.
 
 ### Money is integer cents
 

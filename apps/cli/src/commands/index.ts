@@ -41,6 +41,7 @@ import { heartbeatSpec } from "./groups/heartbeat.js";
 import { auditSpec } from "./groups/audit.js";
 import { approvalsSpec } from "./groups/approvals.js";
 import { budgetSpec } from "./groups/budget.js";
+import { usageSpec } from "./groups/usage.js";
 import { jobsSpec } from "./groups/jobs.js";
 import { hooksSpec } from "./groups/hooks.js";
 import { workspaceSpec } from "./groups/workspace.js";
@@ -74,6 +75,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   auditSpec,
   approvalsSpec,
   budgetSpec,
+  usageSpec,
   jobsSpec,
   hooksSpec,
   securitySpec,

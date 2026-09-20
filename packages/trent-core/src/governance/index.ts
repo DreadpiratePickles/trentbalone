@@ -10,6 +10,8 @@ export * from "./deny-globs.js";
 export * from "./autonomy.js";
 export * from "./autonomy-dispatch.js";
 export * from "./spend-ledger.js";
+// [X3] the ledger windowed and grouped: what `trent usage` and `trent budget status` read
+export * from "./spend-report.js";
 // [U1] the side-effect gate: the class floor and the per-call approval binding
 export * from "./gate-config-schema.js";
 export * from "./bound-approvals.js";
