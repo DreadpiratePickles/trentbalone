@@ -313,6 +313,94 @@ describe("trent run --json", () => {
   });
 });
 
+/**
+ * The app writes to stdout on its own while a run happens: `console.log` in `apps/web/lib/queue.ts`
+ * ("[Worker] Starting job ...") and its pino logger (`apps/web/lib/logger.ts`, debug level under
+ * Bun, straight to fd 1). Measured on the compiled binary: `trent run --json` printed two
+ * `[Worker]` lines, two `{"level":20,...}` lines and THEN the result. A machine-readable stdout
+ * is one document, so while the run happens the app's console goes to stderr and its logger's
+ * level (read once, when its module is first evaluated inside the runtime build) is silent.
+ */
+describe("trent run keeps a machine-readable stdout to one document", () => {
+  /** Wraps the fake runtime so building it records LOG_LEVEL and running it logs like the app does. */
+  function noisy(f: Fakes): { levelAtBuild: () => string | undefined } {
+    let level: string | undefined;
+    const factory = f.overrides.gatewayRuntime!;
+    f.overrides.gatewayRuntime = async (deps) => {
+      level = process.env.LOG_LEVEL;
+      const runtime = await factory(deps);
+      return {
+        ...runtime,
+        run: (objective: string, options: Parameters<HeadlessRuntime["run"]>[1]) => {
+          console.log("[Worker] Starting job job_1 of type orchestration_step");
+          console.info("[Queue Fallback] Enqueuing orchestration_step inline/async");
+          return runtime.run(objective, options);
+        },
+      } as HeadlessRuntime;
+    };
+    return { levelAtBuild: () => level };
+  }
+
+  const originalConsole = { log: console.log, info: console.info, debug: console.debug };
+  let stderr: string[];
+  let previousLevel: string | undefined;
+
+  beforeEach(() => {
+    stderr = [];
+    previousLevel = process.env.LOG_LEVEL;
+    vi.spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      stderr.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (previousLevel === undefined) delete process.env.LOG_LEVEL;
+    else process.env.LOG_LEVEL = previousLevel;
+  });
+
+  it("--json: the app's console lines reach stderr, its logger is silent, and stdout parses", async () => {
+    const f = fakes();
+    const { levelAtBuild } = noisy(f);
+    const result = await runCli(["run", OBJECTIVE, "--json"], { overrides: f.overrides });
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(JSON.parse(result.stdout)).toMatchObject({ type: "result", status: "completed" });
+    expect(levelAtBuild()).toBe("silent");
+    expect(stderr.join("")).toContain("[Worker] Starting job job_1");
+    expect(stderr.join("")).toContain("[Queue Fallback] Enqueuing");
+  });
+
+  it("--format stream-json: the same, and every stdout line is JSON", async () => {
+    const f = fakes();
+    const { levelAtBuild } = noisy(f);
+    const result = await runCli(["run", OBJECTIVE, "--format", "stream-json"], { overrides: f.overrides });
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(() => jsonl(result.stdout)).not.toThrow();
+    expect(levelAtBuild()).toBe("silent");
+    expect(stderr.join("")).toContain("[Worker] Starting job job_1");
+  });
+
+  it("restores the console and LOG_LEVEL once the run has settled", async () => {
+    process.env.LOG_LEVEL = "warn";
+    const f = fakes();
+    noisy(f);
+    await runCli(["run", OBJECTIVE, "--json"], { overrides: f.overrides });
+    expect(console.log).toBe(originalConsole.log);
+    expect(console.info).toBe(originalConsole.info);
+    expect(console.debug).toBe(originalConsole.debug);
+    expect(process.env.LOG_LEVEL).toBe("warn");
+  });
+
+  it("text mode leaves the console alone: the transcript is for a person", async () => {
+    const f = fakes();
+    const { levelAtBuild } = noisy(f);
+    await runCli(["run", OBJECTIVE, "--no-color"], { overrides: f.overrides });
+    expect(levelAtBuild()).toBe(previousLevel);
+    expect(stderr.join("")).not.toContain("[Worker]");
+  });
+});
+
 describe("trent run gates and limits", () => {
   it("pauses on an approval, persists it, prints how to decide it and never answers it itself", async () => {
     const f = fakes(GATED);
