@@ -202,6 +202,10 @@
     "retrieval": {
       "min_recall": 0.9
     },
+    "cron": {
+      "failure_alert_after": 3,
+      "quota_hold_minutes": 30
+    },
     "personality": "default",
     "theme": "dark",
     "improve": {
@@ -528,6 +532,10 @@
     },
     "retrieval": {
       "min_recall": 0.75
+    },
+    "cron": {
+      "failure_alert_after": 5,
+      "quota_hold_minutes": 45
     },
     "personality": "fixture-personality",
     "theme": "light",

@@ -1,6 +1,7 @@
 /**
  * The `cron` group: `trent cron list|add|pause|resume|remove|run|runs|start` over the same
- * `<profile>/cron/jobs.json` the `cronjob_manage` tool writes.
+ * `<profile>/cron/jobs.json` the `cronjob_manage` tool writes, plus `incidents` and `queue`
+ * (`./cron-queue.ts`).
  *
  * Every read and write goes through the toolset's own helpers (`readCronJobs`, `writeCronJobs`,
  * `newCronJob`), so the file format has one owner. `add` runs the same cron validation and
@@ -8,6 +9,9 @@
  * prompt may carry a credential. `run` and `start` execute through the headless runtime — the
  * same object graph the REPL and the gateway run on — via `CronRunner`, and a job's `deliver`
  * target (`slack:#channel`, `telegram:<chatId>`) goes through the gateway manager's `send`.
+ * [X4] So does the one `[CRON_FAILURE]` alert an incident sends, to `gateway.owner`, the path
+ * the heartbeat's replies take; `cron.failure_alert_after` and `cron.quota_hold_minutes` come
+ * from config.
  */
 import process from "node:process";
 import { CronRunner, DEFAULT_TICK_MS, readCronRuns, type CronRunRow } from "@trent/core/cron/index.js";
@@ -24,6 +28,7 @@ import {
 } from "@trent/core/tools/cron/index.js";
 import type { CommandSpec } from "../registry.js";
 import type { CommandContext } from "../context.js";
+import { cronIncidentsSpec, cronQueueSpec } from "./cron-queue.js";
 import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime, type HeadlessRuntime } from "../../runtime/headless.js";
 import { releaseOnSignal, type SignalTarget } from "../../signals.js";
@@ -99,6 +104,14 @@ async function openRunner(ctx: CommandContext): Promise<{ runner: CronRunner; ru
   const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config: config as unknown as ReplConfig });
   const buildManager = ctx.overrides.gatewayManager ?? ((cm, options) => new GatewayManager(cm, options));
   let manager: GatewayManager | undefined;
+  const owner = config.gateway.owner;
+  const send = async (platform: string, channelId: string, text: string, subject: string, operation: string): Promise<void> => {
+    manager ??= buildManager(configManager, {});
+    const receipt = await manager.send(platform, { channelId, text, metadata: { subject } });
+    if (!receipt.sent) {
+      throw new TrentError({ code: EXIT.PROVIDER, operation, message: `queued as ${receipt.queued} but not sent; the gateway will retry when ${platform} is reachable`, target: `${platform}:${channelId}` });
+    }
+  };
   const runner = new CronRunner({
     profileDir: configManager.getProfileDir(),
     // [G3.1] A scheduled job's cost is cron's, even when it rides the gateway's runtime.
@@ -108,13 +121,16 @@ async function openRunner(ctx: CommandContext): Promise<{ runner: CronRunner; ru
     handlers: { [SOCIAL_PUBLISH_HANDLER]: createSocialPublishHandler({ profileDir: configManager.getProfileDir(), social: { manager: configManager } }) },
     now: ctx.overrides.now,
     log: (line) => ctx.err(line),
+    failureAlertAfter: config.cron.failure_alert_after,
+    quotaHoldMinutes: config.cron.quota_hold_minutes,
     deliver: async (target, text, job) => {
       const { platform, channelId } = parseDeliverTarget(target);
-      manager ??= buildManager(configManager, {});
-      const receipt = await manager.send(platform, { channelId, text, metadata: { subject: `Trent cron: ${job.name}` } });
-      if (!receipt.sent) {
-        throw new TrentError({ code: EXIT.PROVIDER, operation: "cron.deliver", message: `queued as ${receipt.queued} but not sent; the gateway will retry when ${platform} is reachable`, target });
-      }
+      await send(platform, channelId, text, `Trent cron: ${job.name}`, "cron.deliver");
+    },
+    // [X4] The incident alert goes to the owner, as a heartbeat reply does; without one there is no path.
+    alert: async (text) => {
+      if (owner === undefined) throw new TrentError({ code: EXIT.CONFIG, operation: "cron.alert", message: "gateway.owner is not configured; set gateway.owner { platform, channelId } in config.yaml" });
+      await send(owner.platform, owner.channelId, text, "Trent cron: failure incident", "cron.alert");
     },
   });
   return {
@@ -295,8 +311,8 @@ export const cronSpec: CommandSpec = {
         const { runner, close } = await openRunner(ctx);
         if (opts.once === true) {
           try {
-            const { launched } = await runner.tick();
-            return { data: { once: true, launched, jobs } };
+            const { launched, held } = await runner.tick();
+            return { data: { once: true, launched, jobs, ...(held === undefined ? {} : { held }) } };
           } finally {
             await close();
           }
@@ -311,11 +327,15 @@ export const cronSpec: CommandSpec = {
         return { data: { started: true, pid: process.pid, intervalMs: DEFAULT_TICK_MS, jobs }, keepAlive: true };
       },
       render(data, ctx) {
-        const d = data as { dryRun?: boolean; once?: boolean; launched?: string[]; started?: boolean; jobs: number; intervalMs?: number };
+        const d = data as { dryRun?: boolean; once?: boolean; launched?: string[]; held?: string[]; started?: boolean; jobs: number; intervalMs?: number };
         if (d.dryRun === true) return [`  ${ctx.theme.meta("would start the runner over")} ${ctx.theme.value(`${d.jobs} enabled job(s)`)}`];
         if (d.once === true) {
           const launched = d.launched ?? [];
-          return [`  ${ctx.theme.success("ticked")} ${ctx.theme.value(launched.length > 0 ? launched.join(", ") : "nothing due")}`];
+          const held = d.held ?? [];
+          return [
+            `  ${ctx.theme.success("ticked")} ${ctx.theme.value(launched.length > 0 ? launched.join(", ") : "nothing due")}`,
+            ...(held.length > 0 ? [`  ${ctx.theme.meta("held by the quota hold:")} ${ctx.theme.value(held.join(", "))}`] : []),
+          ];
         }
         return [
           `  ${ctx.theme.success("runner started")} ${ctx.theme.meta(`pid ${process.pid}, every ${Math.round((d.intervalMs ?? DEFAULT_TICK_MS) / 1000)}s over ${d.jobs} enabled job(s)`)}`,
@@ -323,5 +343,7 @@ export const cronSpec: CommandSpec = {
         ];
       },
     },
+    cronIncidentsSpec,
+    cronQueueSpec,
   ],
 };

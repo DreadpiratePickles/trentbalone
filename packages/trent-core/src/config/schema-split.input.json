@@ -89,6 +89,7 @@
   "media": { "backend": "host", "hosted_transcription": true, "whisper_model": "/models/ggml-base.en.bin", "image_provider": "openai", "image_model": "fixture-image-model", "image_price_cents": 5, "image_auto_approve_under_cents": 10 },
   "gate": { "ask_classes": ["deploy"] },
   "retrieval": { "min_recall": 0.75 },
+  "cron": { "failure_alert_after": 5, "quota_hold_minutes": 45 },
   "personality": "fixture-personality",
   "theme": "light",
   "improve": {

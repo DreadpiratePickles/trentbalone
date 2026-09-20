@@ -173,6 +173,10 @@ gate:
 retrieval:
   min_recall: 0.9             # recall@8 over the promoted retrieval goldens the ranker must reach
 
+cron:
+  failure_alert_after: 3      # consecutive scheduled failures of one job before its one [CRON_FAILURE] alert
+  quota_hold_minutes: 30      # how long a provider 429 holds prompt-driven jobs when no Retry-After is given
+
 goals:
   verify_on_stop: true        # a turn that edited code needs fresh test or build evidence to finish
   verify_commands:            # what counts as that evidence

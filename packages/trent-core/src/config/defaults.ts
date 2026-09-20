@@ -191,6 +191,11 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // retrieval` exits non-zero. 0.9 is the trigger design decision E recorded for the deferred
   // reranker and contextual prefixes: under it retrieval is the problem to work on.
   retrieval: { min_recall: 0.9 },
+  // [X4] cron incidents
+  // Three scheduled failures in a row is one alert; a 429 with no Retry-After holds prompt jobs
+  // for half an hour. Both must stay equal to the runner's constants (`cron/incidents.ts`),
+  // which `config/cron-schema.test.ts` asserts. See docs/cron.md, "Incidents".
+  cron: { failure_alert_after: 3, quota_hold_minutes: 30 },
   personality: "default",
   theme: "dark",
   // [D0] improvement gates
