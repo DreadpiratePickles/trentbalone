@@ -155,3 +155,28 @@ vitest exit=0
 - Not to forget: Bobby's Gemini plan has no image-generation quota (W4 live proof 429); the
   platform applications (Meta App Review, TikTok audit, YouTube audit, Google Business Profile
   Basic Access, Twilio 10DLC) are Bobby's steps; Buffer accepted, X skipped.
+
+## Paused state update (all wave-2 agents finished; nothing staged)
+- W2 business toolset done: Stripe invoices/quotes/payment links (a Price per line), Google
+  Calendar (appointment tools), Square bookings + invoices, Twilio outbound SMS (from number is an
+  argument; spend = ceil(segments x 0.83c)); every write gated, previewed, idempotent; reads tag
+  customer text untrusted. Tool names chosen to fit the classifier: customer_search,
+  calendar_appointment_*. quote/appointment are not scope tokens (governance owner).
+- W3 retrieval gate done: retrieval golden kind (founder + captured from brain_read after recall),
+  recall@8 evaluator, deterministic gate (retrieval.min_recall 0.9, top-level key), frozen
+  ranking surface, trent improve retrieval, sweep leaves a recall breach quarantined.
+- W6 social toolset done: platforms/post/reply/inbox/insights/schedule over the app adapter +
+  Bluesky direct + Buffer (text-only); queue publishes via a cron handler under the queue-time
+  approval key; read tools named *_list/*_read; X/LinkedIn/TikTok direct need connect providers.
+- W1.1 done: app-store predicate (usable only for postgres URLs) + guardAppDatabase fills the
+  app's __prisma seam so the Postgres client is never built without Postgres; headless never
+  hands the core store's file: URL to the orchestrator; Linux binary run reaches the gateway
+  (stderr 0). NEW FINDINGS: (a) W6's tools/social/{publish,matrix,types}.ts import the app's
+  social adapter at top level -> @/lib/store -> db.ts at CLI start-up, which re-breaks the Linux
+  binary; those imports must become lazy before W6 lands; (b) the compiled binary is never
+  durable (prisma/init.sql not embedded); (c) a cwd without .claude/skills makes the first seat
+  step fail with ENOENT; (d) --json stdout carries two pino debug lines; (e) one accidental
+  15-cent live call from a repo-root run because Bun auto-loads .env.local.
+- On resume, landing order: W1.1 first, then W6 with its imports made lazy (re-verify the
+  static-graph test), W2, W3; then a clean-HEAD full run; then a follow-up agent for findings
+  (b), (c), (d) and the .env.local auto-load.
