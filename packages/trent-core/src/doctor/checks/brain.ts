@@ -63,6 +63,7 @@ export const checkBrain: DoctorCheck = {
       notes: status.counts.memory,
       decisions: status.counts.decisions,
       seats: status.counts.seats,
+      docs: status.counts.docs,
       head: status.head,
     };
 
@@ -79,8 +80,9 @@ export const checkBrain: DoctorCheck = {
       return result({
         status: "ok",
         message:
-          `The brain is versioned: ${String(status.counts.decisions)} decision(s), ${String(status.counts.memory)} day(s) of notes and ` +
-          `${String(status.counts.system)} always-loaded file(s) under ${status.root}, every write committed with the seat and the run that made it.`,
+          `The brain is versioned: ${String(status.counts.decisions)} decision(s), ${String(status.counts.memory)} day(s) of notes, ` +
+          `${String(status.counts.docs)} imported document(s) and ${String(status.counts.system)} always-loaded file(s) under ${status.root}, ` +
+          "every write committed with the seat and the run that made it.",
         details: counts,
       });
     }

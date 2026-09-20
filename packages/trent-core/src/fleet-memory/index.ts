@@ -69,6 +69,7 @@ export {
 export {
   BRAIN_DECISIONS_DIR,
   BRAIN_DIR,
+  BRAIN_DOCS_DIR,
   BRAIN_MEMORY_DIR,
   BRAIN_SEATS_DIR,
   BRAIN_SKILLS_INDEX,
@@ -96,6 +97,8 @@ export {
 export { brainSystemFileFor, migrateBlocksToBrain, type MigrateBlocksResult, type MigratedBlock } from "./brain-migrate.js";
 export { BRAIN_BLOCK_HEADING, BRAIN_TREE_MAX_ENTRIES, renderBrainBlock, type BrainBlockOptions } from "./brain-prompt.js";
 export {
+  BRAIN_DOCS_NOTE,
+  brainCitation,
   brainIndexDir,
   brainVersion,
   buildBrainIndex,
@@ -108,6 +111,27 @@ export {
   type BrainRecallItem,
   type BrainRecallResult,
 } from "./brain-index.js";
+// [E] `trent brain import`: documents in, chunks with citations out. See docs/brain.md.
+export {
+  DEFAULT_MAX_FILE_BYTES,
+  collectImportFiles,
+  docSlug,
+  forgetBrainDoc,
+  ingestDocuments,
+  listBrainDocs,
+  resolveDocReference,
+  type BrainDocSummary,
+  type ForgetResult,
+  type IngestFileResult,
+  type IngestOptions,
+  type IngestResult,
+  type IngestSkipped,
+  type IngestStatus,
+} from "./ingest/index.js";
+export { DEFAULT_CHUNK_CHARS, DEFAULT_CHUNK_OVERLAP, chunkMarkdown, chunkUnits, locationTag, parseChunkId, type ChunkOptions, type DocumentChunk, type DocumentUnit } from "./ingest/chunk.js";
+export { chunkBrainFile, chunkIdHead, pathForChunkHead, type ChunkedBrainFile } from "./ingest/brain-chunks.js";
+export { SUPPORTED_EXTENSIONS, extractDocument, extractorAvailability, formatOf, type DocumentFormat, type ExtractedDocument, type ExtractorAvailability } from "./ingest/extract.js";
+export { DOC_PROVENANCE, parseDocFile, renderDocFile, type DocMeta } from "./ingest/doc-file.js";
 export { BRAIN_READ_ADAPTER_NAME, BRAIN_READ_MAX_CHARS, BRAIN_READ_TOOL_SCHEMAS, createBrainReadAdapter } from "../tools/memory/brain-read.js";
 export { DEFAULT_MEMORY_BLOCKS, type MemoryBlock } from "../tools/memory/index.js";
 export { recallForObjective, type RecallInput, type RecallItem, type RecallKind, type RecallResult } from "./recall.js";

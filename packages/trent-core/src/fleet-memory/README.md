@@ -230,6 +230,7 @@ store becomes a control surface.
 | `memory/YYYY-MM-DD.md` | episodic notes, append-only per UTC day | a path in the tree; the body only through `brain_read` or brain recall |
 | `decisions/<date>-<slug>.md` | one standing decision each, ADR-like, dated | the same |
 | `seats/<seat>/notes.md` | that seat's private notes | the same, and only for that seat |
+| `docs/<slug>.md` | documents the founder imported (`trent brain import`), Markdown with `sha256`, pages or sheets and `provenance: founder-import` front matter | chunk recall lines with a citation (`[lease#7 #p3 \| Office lease]`) and `brain_read {"id": ...}`; never the stable tier |
 | `skills-index.md` | generated from the promoted skills | a path in the tree |
 
 **Writes.** One module, `brain.ts`. Write-then-rename at 0600 under the SAME `mkdir` lock the
@@ -256,15 +257,28 @@ fetches one with `brain_read {"path": "..."}` (`tools/memory/brain-read.ts`), wh
 and refuses any path that leaves the brain after resolution AND after the real path is taken, so a
 symlink planted in the brain cannot serve `config.yaml`.
 
-**Recall.** `brain-index.ts` ranks `memory/`, `decisions/` and this seat's own notes against the
-objective through the SAME seam as cross-agent recall — `scoreAgainst` with the optional embedder,
-so it is lexical alone without a key and the calibrated hybrid blend with one. The on-disk index
-under `<profile>/cache/brain-index/` is keyed on the brain's version: the git head when versioning
-is on (every write commits, so the head moves whenever the content does), a digest of the indexed
-files' sizes and modification times when it is off. Nothing here touches `store/**`.
+**Recall.** `brain-index.ts` ranks CHUNKS of `memory/`, `decisions/`, this seat's own notes and
+`docs/` against the objective through the SAME seam as cross-agent recall — `scoreAgainst` with
+the optional embedder, so it is lexical alone without a key and the calibrated hybrid blend with
+one. Chunks come from `ingest/chunk.ts`: heading- and page-aware, 1,200 characters with a
+150-character overlap, each with a stable id (`lease#7`, `decisions/<file>.md#1`) that the recall
+line carries as a citation and `brain_read` takes back to return the chunk with its neighbours.
+The on-disk index under `<profile>/cache/brain-index/` is keyed on the brain's version: the git
+head when versioning is on (every write commits, so the head moves whenever the content does), a
+digest of the indexed files' sizes and modification times when it is off, plus the index format.
+Nothing here touches `store/**`.
+
+**Import.** `ingest/` is `trent brain import`: `extract.ts` turns md, txt, csv, docx, xlsx
+(`office.ts`, on `zip.ts` and `xml.ts`, no office dependency) and pdf (`extract-pdf.ts`,
+`pdftotext` then `pdfjs-dist`) into Markdown units; `doc-file.ts` is the on-disk shape with
+provenance front matter and page/sheet markers; `index.ts` writes `docs/<slug>.md` through the
+brain's one write path, treats an unchanged `sha256` as a no-op and a changed one as a replacement,
+and applies the app's own path blocklist so `.env` and keys are never imported. Full documentation:
+`docs/brain.md`, "Importing documents".
 
 Proof: `brain.test.ts`, `brain-migrate.test.ts`, `brain-prompt.test.ts`, `brain-index.test.ts`,
-`../tools/memory/brain-read.test.ts`, `../doctor/checks/brain.test.ts`,
+`ingest/{chunk,extract,ingest}.test.ts`, `../tools/memory/brain-read.test.ts`,
+`../doctor/checks/brain.test.ts`, `../doctor/checks/brain-import.test.ts`,
 `apps/cli/src/commands/__tests__/brain.test.ts`. Full documentation: `docs/brain.md`.
 
 ## Company memory in the app (C1)

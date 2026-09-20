@@ -53,7 +53,7 @@ TRENT DOCTOR
   ◆ App Memory Tiers           The app's company memory is reachable but ephemeral: with no
                                DATABASE_URL the app store is in-process.
 
-  total 18  passed 9  warnings 4  failed 1  skipped 4  in 7097ms
+  total 19  passed 9  warnings 4  failed 1  skipped 4  in 7097ms
   1 check(s) failed — exit 3
 ```
 

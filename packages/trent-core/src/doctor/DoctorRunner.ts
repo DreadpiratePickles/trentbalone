@@ -34,6 +34,7 @@ import { checkSelfImprovement } from "./checks/self-improvement.js";
 import { checkTelemetry } from "./checks/telemetry.js";
 import { checkEmbedder } from "./checks/embedder.js";
 import { checkBrain } from "./checks/brain.js";
+import { checkBrainImport } from "./checks/brain-import.js";
 // [C1] app memory
 import { checkAppMemory } from "./checks/app-memory.js";
 
@@ -74,6 +75,7 @@ export const DEFAULT_CHECKS: readonly DoctorCheck[] = [
   checkTelemetry,
   checkEmbedder,
   checkBrain,
+  checkBrainImport,
   // [C1] app memory
   checkAppMemory,
 ];

@@ -16,6 +16,9 @@
  *   memory/YYYY-MM-DD.md   episodic notes, append-only, one file per day
  *   decisions/         one ADR-like file per standing decision, dated
  *   seats/<seat>/notes.md  a seat's private notes
+ *   docs/<slug>.md     documents the founder imported (`trent brain import`): Markdown with
+ *                      provenance front matter, the truth for what was imported; chunked by the
+ *                      index, cited by chunk id, never in the stable tier
  *   skills-index.md    generated from the promoted skills; derived, never model-authored
  *
  * ── The write rules ──────────────────────────────────────────────────────────────────────────
@@ -27,6 +30,9 @@
  * remove, merge — validates the whole list before applying any of it, and lets code, not a model,
  * decide what the file becomes. ACE measured what the alternative costs: a context of 18,282
  * tokens at 66.7 percent accuracy became 122 tokens at 57.1 percent in one "rewrite this" step.
+ * `docs/` is the exception the rule allows, like the skills index: an imported document is the
+ * founder's bytes rendered by code, so a re-import replaces the file whole and `removeFile`
+ * (`trent brain forget`) withdraws it; no model authors either.
  *
  * ── Versioning ───────────────────────────────────────────────────────────────────────────────
  * git is used when it is on PATH and `brain.versioning` is `auto`. It is invoked through a
@@ -48,6 +54,7 @@ export const BRAIN_SYSTEM_DIR = "system";
 export const BRAIN_MEMORY_DIR = "memory";
 export const BRAIN_DECISIONS_DIR = "decisions";
 export const BRAIN_SEATS_DIR = "seats";
+export const BRAIN_DOCS_DIR = "docs";
 export const BRAIN_SKILLS_INDEX = "skills-index.md";
 
 /** The always-loaded files, created empty on first use so the tree is the same shape everywhere. */
@@ -125,7 +132,7 @@ export interface BrainStatus {
    */
   readonly versioningReason: "on" | "disabled" | "git-missing" | "not-initialised";
   readonly head: string | null;
-  readonly counts: { readonly system: number; readonly memory: number; readonly decisions: number; readonly seats: number };
+  readonly counts: { readonly system: number; readonly memory: number; readonly decisions: number; readonly seats: number; readonly docs: number };
 }
 
 export interface BrainTreeOptions {
@@ -151,6 +158,12 @@ export interface Brain {
   log(limit: number): BrainCommit[];
   /** Writes a file the caller has already rendered, atomically and under the lock. */
   writeFile(relativePath: string, contents: string, author: BrainAuthor): BrainWriteResult;
+  /**
+   * Removes one file, under the lock, and commits the removal. The only deletion path, and it
+   * exists for `trent brain forget`: an imported document is the founder's to withdraw. `false`
+   * when there was no such file; the traversal guard throws for a path outside the brain.
+   */
+  removeFile(relativePath: string, author: BrainAuthor): { removed: boolean; committed: boolean };
 }
 
 export function brainRoot(profileDir: string): string {
@@ -412,6 +425,7 @@ export function createBrain(options: BrainOptions): Brain {
           memory: listFiles(path.join(root, BRAIN_MEMORY_DIR)).length,
           decisions: listFiles(path.join(root, BRAIN_DECISIONS_DIR)).length,
           seats: listDirs(path.join(root, BRAIN_SEATS_DIR)).length,
+          docs: listFiles(path.join(root, BRAIN_DOCS_DIR)).filter((name) => name.endsWith(".md")).length,
         },
       };
     },
@@ -433,6 +447,19 @@ export function createBrain(options: BrainOptions): Brain {
 
     writeFile(relativePath, contents, author) {
       return writeUnder(resolveBrainPath(options.profileDir, relativePath), contents, "write", author);
+    },
+
+    removeFile(relativePath, author) {
+      const absolute = resolveBrainPath(options.profileDir, relativePath);
+      const rel = brainRelativePath(options.profileDir, absolute);
+      const removed = withMemoryFileLock(absolute, () => {
+        if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) return false;
+        fs.rmSync(absolute);
+        return true;
+      });
+      if (!removed) return { removed: false, committed: false };
+      // `git add` on a deleted tracked path stages the removal; the commit is the same as a write's.
+      return { removed: true, committed: commit(rel, "forget", author) };
     },
   };
 }

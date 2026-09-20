@@ -55,11 +55,12 @@ trent run "<objective>"     # one shot, no terminal: streams the run, exits 0/1/
 trent run - --format stream-json   # objective on stdin, one JSON object per line
 trent --tui                 # full-screen Ink TUI on the same session engine
 trent --continue            # resume the last conversation
-trent doctor                # 18 health checks; exit 3 on a configuration failure
+trent doctor                # 19 health checks; exit 3 on a configuration failure
 trent fleet list            # 173 agents: 9 core seats plus 164 catalog specialists
 trent fleet install <id>    # install a specialist with its tools, skills and model
 trent goal create "<obj>" --gate "tests=npm test"   # a goal whose shell gates must exit 0
 trent brain status          # the company brain: identity, standing decisions, episodic notes
+trent brain import <path>   # md, txt, csv, pdf, docx, xlsx into the brain, chunked; seats cite chunk ids
 trent sessions search <q>   # full text over this profile's past transcripts
 trent curator status        # skill ages, quarantines and the append-only mutation ledger
 trent improve status        # traces, quarantined drafts, last sweep
@@ -71,7 +72,7 @@ trent jobs failed           # failed job runs, newest first; trent jobs retry <i
 trent workspace trust       # let this project's AGENTS.md, CLAUDE.md and .trent/*.md reach the prompt
 trent hooks list            # hooks configured for this profile; trent hooks consent allows one to run
 trent connect <provider>    # stripe, google, square, twilio, buffer, meta, bluesky: tokens to the 0600 secrets file
-trent --help                # 33 commands, 130 with their subcommands
+trent --help                # 33 commands, 133 with their subcommands
 ```
 
 Add a model key with `trent config set GEMINI_API_KEY <key>` (or `ANTHROPIC_API_KEY`,
@@ -111,7 +112,7 @@ it for its own runs; the doctor checks the raw environment. Details in
   process alive. A session is a conversation: turns are appended under `~/.trent/sessions/`, the
   last few travel with the next run, `trent --continue` resumes the most recent one with its spend,
   and `trent sessions search <query>` runs full text over every past transcript of the profile.
-- **A doctor that fails honestly.** 18 checks; the credentials check makes one cheap authenticated
+- **A doctor that fails honestly.** 19 checks; the credentials check makes one cheap authenticated
   call rather than testing for presence. Exit codes are documented in
   [docs/doctor.md](docs/doctor.md).
 - **A company brain, and an undo for what an agent wrote.** `<profile>/brain/` holds identity,
@@ -308,7 +309,7 @@ comes first; nothing is "done" without executable evidence. Session logs live in
 |---|---|
 | [getting-started.md](docs/getting-started.md) | Clone to first real conversation |
 | [configuration.md](docs/configuration.md) | Config schema, the yaml/env split, profiles, the env contract |
-| [doctor.md](docs/doctor.md) | The 18 checks, exit codes, `--json`, `--fix` |
+| [doctor.md](docs/doctor.md) | The 19 checks, exit codes, `--json`, `--fix` |
 | [fleet.md](docs/fleet.md) | The catalog, core seats, packs, agent versions with promote and rollback, export and import |
 | [skills.md](docs/skills.md) | The skills hub, the pre-install scanner and the curator |
 | [tools.md](docs/tools.md) | The toolsets, progressive disclosure, and the todo, clarify and session-search tools |
