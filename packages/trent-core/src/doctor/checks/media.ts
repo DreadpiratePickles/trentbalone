@@ -28,7 +28,7 @@ export function mediaInstallHint(missing: readonly string[]): string {
   if (missing.includes("whisper-cli")) lines.push("whisper.cpp: macOS `brew install whisper-cpp`; elsewhere build https://github.com/ggml-org/whisper.cpp and put whisper-cli on PATH. Then download a ggml model (ggml-base.en.bin from huggingface.co/ggerganov/whisper.cpp) into <profile>/models/ or set media.whisper_model. Alternative: `pip install faster-whisper`.");
   if (missing.includes("scenedetect")) lines.push("PySceneDetect: `pip install scenedetect[opencv]` (optional; ffmpeg's scene filter is the fallback).");
   if (missing.includes("python3")) lines.push("python3: macOS `brew install python`; Debian/Ubuntu `sudo apt install python3`; needed for faster-whisper, scenedetect and MediaPipe face tracking (`pip install mediapipe`).");
-  lines.push(`Or build the media image once with \`${mediaBuildCommand()}\` (${MEDIA_IMAGE}: ffmpeg, whisper.cpp with a base model, scenedetect, mediapipe) and every tool runs in a container with no network.`);
+  lines.push(`Or build the media image once with \`trent sandbox build --media\` (\`${mediaBuildCommand()}\` from the repository root; ${MEDIA_IMAGE}: ffmpeg, whisper.cpp with a base model, scenedetect, mediapipe) and every tool runs in a container with no network.`);
   return lines.join(" ");
 }
 

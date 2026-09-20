@@ -1,6 +1,6 @@
 ---
 name: caption-and-chapters
-description: From a transcript with timestamps, write the YouTube chapters, the description whose first 150 characters carry the promise, three titles, the short-form caption, a pinned comment and subtitle cues cut to two lines. Use when a video is edited and needs its words. Needs a transcript; does not transcribe.
+description: From a transcript with timestamps, write the YouTube chapters, the description whose first 150 characters carry the promise, three titles, the short-form caption, a pinned comment and subtitle cues cut to two lines. Use when a video is edited and needs its words. Needs a transcript with timestamps, from media_transcribe when the media backend is installed or from the owner's editor; burns the cues into a cut with media_clip.
 category: creator
 trust: official
 version: 1.0.0
@@ -27,8 +27,24 @@ the search engine deciding whether to show it. Write for the viewer; the engine 
 4. Two or three phrases the audience would search for, from the creator, not invented.
 5. Any links the description should carry, from the creator.
 
-This skill does not transcribe. When the media toolset lands, transcription with word
-timestamps will feed it; until then the owner supplies the transcript from their editor.
+## With the media tools
+
+When the media backend is installed (the Media Pipeline line of `trent doctor` says so, and
+names `trent sandbox build --media` or the binaries to install when it is not):
+
+1. `media_probe` with `{"input": "videos/<file>.mp4"}` for the exact length; the last chapter
+   and the description's length claim come from it, not from the owner's memory.
+2. `media_transcribe` with `{"input": "videos/<file>.mp4", "language": "en"}` when there is no
+   transcript with timestamps. It saves `media-out/<file>.transcript.json` with segments in
+   seconds; chapters and cues are written from those segments.
+3. To burn the cues into a Short: `media_clip` with
+   `{"input": "videos/<file>.mp4", "start": <in>, "end": <out>, "crop": "face", "captions": true}`.
+   The captions come from the saved transcript (`"transcript"` names another file); the MP4
+   lands under `media-out/`. The SRT block in the output stays the source of truth for a
+   platform upload, which the owner does.
+
+Without a backend the owner supplies the transcript from their editor and the skill writes
+the words only; say so in the file.
 
 ## Rules of the trade
 
@@ -173,7 +189,8 @@ you get to the point.
 
 ## Approval
 
-Text only. Nothing is uploaded or published; the owner pastes the words into the platform.
-When the media toolset lands, the SRT can be burned into a cut; publishing stays with the
-owner and the platform's own rules (a YouTube upload through the API is private until the
-project is audited).
+Nothing is uploaded or published; the owner pastes the words into the platform. The transcript
+and a captioned cut are files under the workspace, made when the media backend is installed
+and never sent anywhere; hosted transcription stays off unless the owner set it. Publishing
+stays with the owner and the platform's own rules (a YouTube upload through the API is private
+until the project is audited).

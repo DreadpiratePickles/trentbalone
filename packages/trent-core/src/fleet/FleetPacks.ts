@@ -146,8 +146,9 @@ export const FLEET_PACKS: Record<string, FleetPack> = {
   // ---------------------------------------------------------------------------------------
   // The three market packs (upgrade round, decision A3). Each is a crew over existing seats
   // plus the trade skills in `packages/trent-core/skills/`; the persona in `pack-personas.ts`
-  // is written to `brain/system/` on install. The `state` line is the honest one: the CLI
-  // executes none of the side effects these trades need until a toolset lands.
+  // is written to `brain/system/` on install. The `state` line is the honest one: what the
+  // CLI executes today (the creator crew's media tools, when a backend is installed) and what
+  // stays a draft until a toolset lands or the owner acts.
   "small-business": {
     id: "small-business",
     name: "Small Business Crew",
@@ -172,11 +173,11 @@ export const FLEET_PACKS: Record<string, FleetPack> = {
     id: "creator",
     name: "Creator Crew",
     description:
-      "Hooks, captions, chapters, repurposing plans and thumbnail briefs from a transcript: content with the short-video coach, the video optimisation specialist and the image prompt engineer.",
+      "Hooks, captions, chapters, a repurposing plan, a ranked clip plan and thumbnails from a long recording: content with the short-video coach, the video optimisation specialist and the image prompt engineer.",
     state:
-      "Text only: hooks, captions, chapters, repurposing plans and thumbnail briefs from a transcript or notes the owner supplies. No clipping, transcription or image rendering until the media toolset lands (in progress); the plans name the cuts and the owner makes them.",
+      "Clipping, transcription and thumbnails work when a media backend is installed (ffmpeg on PATH, or the image from `trent sandbox build --media`; the Media Pipeline line of `trent doctor` says which) and the media toolset is on (quick setup turns it on when it finds a backend): the crew probes, transcribes, finds the cuts, clips to 9:16 with burned captions and extracts frames into the workspace; a generated thumbnail image costs cents and asks first. Without a backend it works in text from a transcript the owner supplies. Nothing is uploaded or published; the owner posts.",
     agents: ["content", "mkt-short-video-editing-coach", "mkt-video-optimization-specialist", "design-image-prompt-engineer"],
-    skills: ["hook-lab", "caption-and-chapters", "repurpose-plan", "thumbnail-brief"],
+    skills: ["hook-lab", "caption-and-chapters", "repurpose-plan", "clip-plan", "thumbnail-brief"],
   },
 };
 

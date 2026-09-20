@@ -1,6 +1,6 @@
 ---
 name: repurpose-plan
-description: From one long-form transcript, name five to eight clip candidates with in and out timestamps, a hook and a platform each, plus the text derivatives (a thread, a LinkedIn post, a newsletter section) and a publishing order. Use when a long video or a podcast episode is done. Names the cuts; does not make them.
+description: From one long-form transcript, name five to eight clip candidates with in and out timestamps, a hook and a platform each, plus the text derivatives (a thread, a LinkedIn post, a newsletter section) and a publishing order. Use when a long video or a podcast episode is done. Names the cuts and, when the media backend is installed, makes them with media_clip through the clip-plan skill; the owner posts.
 category: creator
 trust: official
 version: 1.0.0
@@ -10,8 +10,9 @@ tags: creator, repurposing, clips, shorts, podcast, long-form, thread, newslette
 # Repurpose Plan
 
 One hour of talking holds five to eight clips and three written pieces. The plan finds them,
-names the exact seconds, and says what goes out first. It does not cut: until the media
-toolset lands, the owner cuts in their editor from the timestamps here.
+names the exact seconds, and says what goes out first. When the media backend is installed the
+cuts are made from this plan (the `media_clip` calls below, or `clip-plan` for the ranked
+cutting list); without one the owner cuts in their editor from the timestamps here.
 
 ## When to use
 
@@ -20,10 +21,30 @@ toolset lands, the owner cuts in their editor from the timestamps here.
 
 ## What you need before you write
 
-1. The transcript with timestamps (from the owner's editor or transcription tool).
+1. The transcript with timestamps: `media-out/<file>.transcript.json` from `media_transcribe`
+   when the media backend is installed, or the owner's editor.
 2. The platforms in play and their cadence (from the calendar if one exists).
 3. Which moments the creator already liked, if any.
 4. The voice file and the hook rules (`brand/voice.md`, `hook-lab`).
+
+## With the media tools
+
+When the media backend is installed (the Media Pipeline line of `trent doctor`; it names
+`trent sandbox build --media` or the binaries to install when it is not), run these before
+the table and put the outputs in it:
+
+1. `media_probe` with `{"input": "recordings/<file>.mp4"}`: duration and frame size for the
+   header and the frame column.
+2. `media_transcribe` with `{"input": "recordings/<file>.mp4", "language": "en"}` unless the
+   owner's transcript has timestamps; it saves `media-out/<file>.transcript.json`.
+3. `media_scenes` with `{"input": "recordings/<file>.mp4", "threshold": 0.3}`: the cut times
+   in `media-out/<file>.scenes.json`; an out point on a scene change looks deliberate.
+4. One `media_clip` per row after the owner approves the plan:
+   `{"input": "recordings/<file>.mp4", "start": <in seconds>, "end": <out seconds>, "crop": "face", "captions": true}`
+   (`center` for a two-shot or a screen, `none` for LinkedIn at 16:9). The MP4 lands at
+   `media-out/<file>.clip-<start>-<end>.mp4`. The `clip-plan` skill ranks and cuts in one pass.
+
+Without a backend, write the calls into the table anyway and mark them "written for later".
 
 ## What makes a clip
 
@@ -49,8 +70,8 @@ toolset lands, the owner cuts in their editor from the timestamps here.
 - Publishing order: the strongest clip first on the platform where the creator has the most
   audience; never two clips from the same recording on the same platform on the same day; keep
   one clip back for the slow week.
-- Say what needs the media toolset (cutting, reframing, burned captions) and what is ready
-  now (the words).
+- Say which cuts were made and which are written for later (no backend, or the owner has not
+  approved the plan yet), and what is ready now (the words).
 
 ## Output format
 
@@ -82,8 +103,10 @@ Source: <file or link the owner named>, transcript <file>
 |-----|-------|----------|------|
 | 1 | clip 1 | ... | ... |
 
-## Needs the media toolset
-- <cutting, reframing, captions burned in: which clips>
+## Cuts
+| # | media_clip call | Output | Status |
+|---|-----------------|--------|--------|
+| 1 | {"input": "...", "start": <s>, "end": <s>, "crop": "face", "captions": true} | media-out/<file>.clip-<s>-<s>.mp4 | cut | written for later |
 
 ## Ready now
 - <the text pieces>
@@ -142,8 +165,15 @@ with the timestamps for each, one link to the episode)
 | 9 | clip 5 | Shorts | |
 | held | clip 4, clip 6 | - | the slow week |
 
-## Needs the media toolset
-- Cutting and 9:16 reframing for clips 1 to 6; captions burned in from the transcript
+## Cuts
+| # | media_clip call | Output | Status |
+|---|-----------------|--------|--------|
+| 1 | {"input": "episode-14.mp4", "start": 372, "end": 411, "crop": "face", "captions": true} | media-out/episode-14.clip-372-411.mp4 | cut |
+| 2 | {"input": "episode-14.mp4", "start": 700, "end": 738, "crop": "face", "captions": true} | media-out/episode-14.clip-700-738.mp4 | cut |
+| 3 | {"input": "episode-14.mp4", "start": 1145, "end": 1198, "crop": "center", "captions": true} | media-out/episode-14.clip-1145-1198.mp4 | cut |
+| 4 | {"input": "episode-14.mp4", "start": 1470, "end": 1502, "crop": "face", "captions": true} | media-out/episode-14.clip-1470-1502.mp4 | held: the slow week |
+| 5 | {"input": "episode-14.mp4", "start": 1875, "end": 1919, "crop": "face", "captions": true} | media-out/episode-14.clip-1875-1919.mp4 | cut |
+| 6 | {"input": "episode-14.mp4", "start": 2268, "end": 2300, "crop": "none", "captions": true} | media-out/episode-14.clip-2268-2300.mp4 | held: the slow week |
 
 ## Ready now
 - The thread, the LinkedIn post, the newsletter section
@@ -151,6 +181,7 @@ with the timestamps for each, one link to the episode)
 
 ## Approval
 
-A plan, in a file. Nothing is cut, uploaded or posted. The owner cuts from the timestamps in
-their editor until the media toolset lands, and posts each piece; publishing keeps the owner's
-approval per piece after it.
+A plan, in a file, and the cuts as files under the workspace once the owner approves the plan
+and the media backend is installed; nothing leaves the machine. Without a backend the owner
+cuts from the timestamps in their editor. Nothing is uploaded or posted; the owner posts each
+piece.

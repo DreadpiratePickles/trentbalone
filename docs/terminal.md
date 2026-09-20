@@ -82,8 +82,13 @@ bump the version: the doctor then reports the old build as absent instead of run
 ```
 trent sandbox build              # docker build -t trent-sandbox:1 -f scripts/sandbox/Dockerfile scripts/sandbox
 trent sandbox build --dry-run    # print the argv, run nothing
-trent sandbox build --json       # {"image":"trent-sandbox:1","dockerfile":"...","built":true,...}
+trent sandbox build --json       # {"image":"trent-sandbox:1","dockerfile":"...","built":true,"sizeBytes":...,"size":"...",...}
+trent sandbox build --media      # the media image instead, trent-sandbox-media:1 from scripts/sandbox/media/Dockerfile (docs/media.md)
 ```
+
+After a build the command asks `docker image inspect --format {{.Size}}` for the image's size
+and reports it (`size`, as docker prints it; `sizeBytes`); a daemon that gives no number leaves
+both null and the build still counts.
 
 The build ran in about 3 seconds on the dev machine once `alpine:3.20` was local. It is not
 `--pull`: BuildKit's registry lookup hit its deadline behind Docker Desktop's proxy there, while a

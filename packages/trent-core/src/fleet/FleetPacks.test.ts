@@ -89,7 +89,7 @@ describe("the small-business, social and creator packs", () => {
       "local-business-post",
     ]);
     expect(FLEET_PACKS.social?.skills).toEqual(["content-calendar", "brand-voice-capture", "crosspost-adapt", "comment-triage"]);
-    expect(FLEET_PACKS.creator?.skills).toEqual(["hook-lab", "caption-and-chapters", "repurpose-plan", "thumbnail-brief"]);
+    expect(FLEET_PACKS.creator?.skills).toEqual(["hook-lab", "caption-and-chapters", "repurpose-plan", "clip-plan", "thumbnail-brief"]);
     for (const pack of Object.values(FLEET_PACKS)) {
       for (const skill of pack.skills) {
         expect(sourceNames.has(skill), `${pack.id} names skill ${skill}, which no source carries`).toBe(true);
@@ -107,9 +107,28 @@ describe("the small-business, social and creator packs", () => {
     const social = FLEET_PACKS.social?.state.toLowerCase() ?? "";
     expect(social).toContain("published");
     expect(social).toContain("toolset");
+    // Decision 4 (2026-09-20): the creator pack clips when a media backend is installed, and
+    // says which doctor line proves it; without one it still works in text, and it never uploads.
     const creator = FLEET_PACKS.creator?.state.toLowerCase() ?? "";
-    for (const effect of ["clipping", "transcription"]) expect(creator).toContain(effect);
+    for (const effect of ["clipping", "transcription", "thumbnails"]) expect(creator).toContain(effect);
+    expect(creator).toContain("when a media backend is installed");
+    expect(creator).toContain("media pipeline");
+    expect(creator).toContain("trent doctor");
     expect(creator).toContain("text");
+    expect(creator).not.toContain("text only");
+    expect(creator).not.toContain("until the media toolset lands");
+    expect(creator).toMatch(/nothing is (uploaded|published)/);
+  });
+
+  it("the creator persona says the cutting happens when the media backend is installed, and names the tools", () => {
+    const persona = packPersona(FLEET_PACKS.creator!)!;
+    expect(persona).toContain("when the media backend is installed");
+    expect(persona).toContain("Media Pipeline");
+    for (const tool of ["media_transcribe", "media_scenes", "media_clip", "media_thumbnail", "media_image"]) expect(persona).toContain(tool);
+    expect(persona).not.toContain("waits for the media toolset");
+    expect(persona).not.toContain("arrive with the media toolset");
+    // The Thumbnail Hand spends money on media_image and says so.
+    expect(persona.toLowerCase()).toMatch(/cents|costs|approval/);
   });
 
   it("carry a persona that names every member, fits the stable tier, and is the same bytes every read", () => {

@@ -61,6 +61,41 @@ describe("the core skill source", () => {
     }
   });
 
+  /**
+   * Decision 4 (2026-09-20): the creator skills call the media tools by name with the arguments
+   * a seat must pass, and each still carries an output section and passes the scan. `clip-plan`
+   * turns a long recording into a ranked list of clip candidates, each with its `media_clip` call.
+   */
+  it("the creator skills name the media tools they call, with the arguments, and clip-plan lists every candidate's media_clip call", () => {
+    const core = new Map(listSourceSkills([CORE_SKILLS_DIR]).map((entry) => [entry.name, entry]));
+    const expected: Record<string, readonly string[]> = {
+      "hook-lab": ["media_probe", "media_transcribe", "media_thumbnail", "media_clip"],
+      "caption-and-chapters": ["media_probe", "media_transcribe", "media_clip"],
+      "repurpose-plan": ["media_probe", "media_transcribe", "media_scenes", "media_clip"],
+      "clip-plan": ["media_probe", "media_transcribe", "media_scenes", "media_clip", "media_thumbnail", "media_image"],
+      "thumbnail-brief": ["media_thumbnail", "media_image"],
+    };
+    for (const [name, tools] of Object.entries(expected)) {
+      const entry = core.get(name);
+      expect(entry, `${name} is not in the core source`).toBeDefined();
+      const text = fs.readFileSync(entry!.file, "utf8");
+      const { body } = parseFrontmatter(text);
+      for (const tool of tools) expect(body, `${name} never calls ${tool}`).toContain(tool);
+      expect(body, `${name} has no output format section`).toMatch(/^## Output format$/m);
+      expect(body, `${name} does not say the backend condition`).toContain("when the media backend is installed");
+      expect(body, `${name} does not name the doctor line`).toContain("Media Pipeline");
+      expect(body, `${name} still defers to a toolset that has landed`).not.toMatch(/until the media toolset lands|when the media toolset lands/i);
+      expect(SecurityScan.scan(text).safe, name).toBe(true);
+    }
+    // The arguments a seat must pass, spelled as the schema names them.
+    const clipPlan = parseFrontmatter(fs.readFileSync(core.get("clip-plan")!.file, "utf8")).body;
+    for (const arg of ['"input"', '"start"', '"end"', '"crop"', '"captions"']) expect(clipPlan).toContain(arg);
+    expect(clipPlan).toMatch(/approv/i);
+    expect(clipPlan).toMatch(/cents/);
+    const thumbnail = parseFrontmatter(fs.readFileSync(core.get("thumbnail-brief")!.file, "utf8")).body;
+    for (const arg of ['"brief"', '"variant"', '"aspect"', '"at"', '"width"']) expect(thumbnail).toContain(arg);
+  });
+
   it("never shadows an app skill: a core skill with the same name is listed and read from the app", () => {
     const app = listSourceSkills([BUNDLED_SKILLS_DIR]).map((entry) => entry.name);
     const core = listSourceSkills([CORE_SKILLS_DIR]).map((entry) => entry.name);

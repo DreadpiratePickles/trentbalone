@@ -240,7 +240,7 @@ never change between runs.
 |---|---|---|---|
 | `small-business` | `support`, `sales`, `finance`, `content` | `quote-estimate`, `invoice-draft`, `booking-followup`, `review-response`, `local-business-post` | Drafts only. Quotes, invoices, follow-ups, review replies and posts are written as files for the owner to send. Nothing is sent, booked, invoiced or posted until the business toolset (Stripe, Google Calendar, Square, Twilio) lands; each of those will then need the owner's approval. |
 | `social` | `content`, `growth`, `analyst`, `mkt-social-media-strategist`, `mkt-content-creator` | `content-calendar`, `brand-voice-capture`, `crosspost-adapt`, `comment-triage` | Drafts and plans only. No account is connected and nothing is published or replied to until the social toolset lands, after the business and media toolsets; publishing will need approval per post. |
-| `creator` | `content`, `mkt-short-video-editing-coach`, `mkt-video-optimization-specialist`, `design-image-prompt-engineer` | `hook-lab`, `caption-and-chapters`, `repurpose-plan`, `thumbnail-brief` | Text only, from a transcript or notes the owner supplies. No clipping, transcription or image rendering until the media toolset lands; the plans name the cuts and the owner makes them. |
+| `creator` | `content`, `mkt-short-video-editing-coach`, `mkt-video-optimization-specialist`, `design-image-prompt-engineer` | `hook-lab`, `caption-and-chapters`, `repurpose-plan`, `clip-plan`, `thumbnail-brief` | Clipping, transcription and thumbnails work when a media backend is installed (ffmpeg on PATH or `trent sandbox build --media`; the Media Pipeline line of `trent doctor` says which) and the `media` toolset is on: the skills call `media_probe`, `media_transcribe`, `media_scenes`, `media_clip`, `media_thumbnail` and `media_image` with the arguments spelled out, and `clip-plan` ranks a long recording into clip candidates with the exact `media_clip` call each. A `media_image` render costs cents and asks. Without a backend the crew works in text from a transcript the owner supplies. Nothing is uploaded or published. |
 
 The personas ("The Counter Crew", "The Signal Crew", "The Cutting Room") give each member a voice,
 a signature move, a refusal and a handoff, all within what the seats can do today: they draft,
@@ -252,10 +252,11 @@ Skills come from two directories in a fixed order: the app bundle `apps/web/.age
 (read-only) and the core source `packages/trent-core/skills/`, both in the Agent Skills layout
 (`<name>/SKILL.md` with `name`, `description`, `category`, `trust`, `version`, `author` and `tags`
 in the frontmatter, `references/` beside it). The app is read first, so on a name collision its
-copy wins and nothing in core can shadow a catalog skill. The thirteen pack skills live in the
+copy wins and nothing in core can shadow a catalog skill. The fourteen pack skills live in the
 core source; each one says when to use it, what it needs, the exact output format, a worked
 example, and, wherever money, publishing or customer contact is involved, that the seat drafts
-and a human sends.
+and a human sends. The five creator skills name the media tool calls they make when the media
+backend is installed (docs/media.md) and say what they do without one.
 
 ## Custom agents
 

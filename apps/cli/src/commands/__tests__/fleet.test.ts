@@ -110,7 +110,8 @@ describe("trent fleet packs and pack installs", () => {
     expect(human.stdout).toContain("Small Business Crew");
     expect(human.stdout).toContain("support, sales, finance, content");
     expect(human.stdout).toContain("Drafts only");
-    expect(human.stdout).toContain("Text only");
+    expect(human.stdout).toContain("when a media backend is installed");
+    expect(human.stdout).not.toContain("Text only");
   });
 
   it("--dry-run on a pack names the members, skills and persona it would install and writes nothing", async () => {
@@ -145,7 +146,7 @@ describe("trent fleet packs and pack installs", () => {
     };
     expect(data.pack).toBe("creator");
     expect(data.installed).toEqual(["content", "mkt-short-video-editing-coach", "mkt-video-optimization-specialist", "design-image-prompt-engineer"]);
-    expect(data.skills.installed).toEqual(["caption-and-chapters", "hook-lab", "repurpose-plan", "thumbnail-brief"]);
+    expect(data.skills.installed).toEqual(["caption-and-chapters", "clip-plan", "hook-lab", "repurpose-plan", "thumbnail-brief"]);
     expect(data.skills.unresolved).toEqual([]);
     expect(data.persona).toMatchObject({ status: "written", relativePath: "system/persona-creator.md" });
     expect(fs.readFileSync(path.join(home, "brain", "system", "persona-creator.md"), "utf8")).toContain("The Cutting Room");

@@ -1,6 +1,6 @@
 ---
 name: hook-lab
-description: Ten opening lines for a short video, across five patterns, each speakable in three seconds and paired with on-screen text, then the three to shoot and the re-hook for the middle. Use when a clip, a short or a video needs its first three seconds. Text only; no views are predicted.
+description: Ten opening lines for a short video, across five patterns, each speakable in three seconds and paired with on-screen text, then the three to shoot and the re-hook for the middle. Use when a clip, a short or a video needs its first three seconds. When the media backend is installed the chosen opening is cut with media_clip for review; no views are predicted.
 category: creator
 trust: official
 version: 1.0.0
@@ -26,6 +26,25 @@ five patterns, then pick three and shoot.
 3. The platform (Shorts, Reels, TikTok, LinkedIn video) and the length.
 4. The transcript or the moment the clip is cut from, so the hook is honest about what follows.
 5. The creator's voice: how they actually talk (a transcript beats a description).
+
+## With the media tools
+
+These steps run when the media backend is installed (the Media Pipeline line of `trent doctor`
+says whether it is, and how to install one or run `trent sandbox build --media`). Without a
+backend, skip them and work from the transcript the owner supplies; say which you did.
+
+1. `media_probe` with `{"input": "recordings/<file>.mp4"}` to confirm the file, its duration
+   and its frame size; a hook for a 45-second Short cannot open a 4-minute window.
+2. When the owner gave a recording and no transcript: `media_transcribe` with
+   `{"input": "recordings/<file>.mp4", "language": "en"}`; it saves
+   `media-out/<file>.transcript.json`, and the hooks quote it, not a paraphrase.
+3. Check the first frame: `media_thumbnail` with `{"input": "recordings/<file>.mp4", "at": <second the clip starts>, "width": 640}`.
+   The rule says the first frame shows the subject, not a title card; look before writing
+   "First frame" in the table.
+4. After the owner picks one of the three: cut its opening for review with `media_clip` and
+   `{"input": "recordings/<file>.mp4", "start": <in>, "end": <in + 8>, "crop": "face", "captions": true}`
+   so the spoken hook is heard against the frame it opens on. The MP4 lands under `media-out/`.
+   The on-screen text is not burned in by the tool; it is written in the table for the editor.
 
 ## The first-three-seconds rule
 
@@ -121,5 +140,6 @@ And the second place people leave is one you have never looked at.
 
 ## Approval
 
-Text only. Nothing is posted, cut or uploaded. When the media toolset lands, the chosen hook
-can be handed to the cut as on-screen text; publishing stays with the owner.
+Nothing is posted or uploaded. The probe, the transcript, the frame and the review cut read
+and write files under the workspace only, when the media backend is installed; without one the
+skill is text and the owner cuts in their editor. Publishing stays with the owner.

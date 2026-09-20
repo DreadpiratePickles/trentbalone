@@ -57,13 +57,23 @@ media:
 The media image is the one-line route: everything, pinned, no network at run time.
 
 ```
-docker build -f scripts/sandbox/media/Dockerfile -t trent-sandbox-media:1 scripts/sandbox/media
+trent sandbox build --media              # docker build -t trent-sandbox-media:1 -f scripts/sandbox/media/Dockerfile scripts/sandbox/media
+trent sandbox build --media --dry-run    # print the argv, run nothing
+trent sandbox build --media --json       # {"image":"trent-sandbox-media:1","dockerfile":"...","built":true,"sizeBytes":...,"size":"1.74 GB",...}
 ```
+
+The command runs `docker build` as an argument array (no shell, no `--pull`, nothing pulled
+from a registry: the image is not published) and then `docker image inspect --format {{.Size}}`
+so the report names the image and its size. The compiled binary has no source tree, so
+`TRENT_MEDIA_DOCKERFILE=<path>` (or `--dockerfile <path>`) names the file to build from. The
+doctor's Media Pipeline line names this command whenever no backend is found. The same argv,
+spelled out, is `docker build -f scripts/sandbox/media/Dockerfile -t trent-sandbox-media:1
+scripts/sandbox/media` from the repository root.
 
 It builds whisper.cpp from a pinned tag, installs ffmpeg, PySceneDetect and MediaPipe, bundles
 `ggml-base.en.bin` and the BlazeFace short-range model under `/opt/trent/models/`, removes apt
 and pip afterwards, and runs as the non-root `sandbox` user. Measured 2026-09-20 on an arm64
-host: 1.74 GB.
+host: 1.74 GB, the figure `--json` reports as `size`.
 
 On the host instead:
 

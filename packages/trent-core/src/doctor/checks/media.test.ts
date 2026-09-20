@@ -43,6 +43,8 @@ describe("checkMedia", () => {
     expect(result.message).toMatch(/no media backend/i);
     expect(result.fixHint).toContain("brew install ffmpeg");
     expect(result.fixHint).toContain("apt install ffmpeg");
+    // The image route is the CLI's own command; the raw docker line stays for a host without the CLI on PATH.
+    expect(result.fixHint).toContain("trent sandbox build --media");
     expect(result.fixHint).toContain(`docker build -f scripts/sandbox/media/Dockerfile -t ${MEDIA_IMAGE} scripts/sandbox/media`);
     expect(result.details).toMatchObject({ backend: "none", image: MEDIA_IMAGE, imagePresent: false });
   });

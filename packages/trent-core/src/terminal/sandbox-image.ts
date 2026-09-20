@@ -25,9 +25,33 @@ export type SandboxExec = (command: string, args: readonly string[]) => Promise<
 
 const BUILD_TIMEOUT_MS = 10 * 60_000;
 
-/** The repository root when running from source: this file is `packages/trent-core/src/terminal/`. */
-function repoRootFromSource(): string {
+/**
+ * The repository root when running from source: this file is `packages/trent-core/src/terminal/`.
+ * Exported for the other image built from this tree (`scripts/sandbox/media/Dockerfile`, whose
+ * relative path lives in `tools/media/backend.ts`), so both builds resolve the root one way.
+ */
+export function repoRootFromSource(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+}
+
+/**
+ * `docker image inspect --format {{.Size}} <image>` after a build: the bytes docker reports, or
+ * null when docker did not answer with a number (an old daemon, a fake in a test). A build is
+ * reported either way; the size is information, never a gate.
+ */
+export async function imageSizeBytes(exec: SandboxExec, image: string): Promise<number | null> {
+  const result = await exec("docker", ["image", "inspect", "--format", "{{.Size}}", image]);
+  if (result.code !== 0) return null;
+  const bytes = Number.parseInt(result.stdout.trim(), 10);
+  return Number.isFinite(bytes) && bytes >= 0 ? bytes : null;
+}
+
+/** `1.74 GB`, `812 MB`, `3 KB`: two decimals from a gigabyte up, whole units below, powers of ten as docker prints them. */
+export function formatImageSize(bytes: number): string {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  if (bytes >= 1e3) return `${Math.round(bytes / 1e3)} KB`;
+  return `${bytes} B`;
 }
 
 /** `TRENT_SANDBOX_DOCKERFILE` wins (the compiled binary has no source tree); otherwise the repo's file. */

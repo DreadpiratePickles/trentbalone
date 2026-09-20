@@ -1,6 +1,6 @@
 ---
 name: thumbnail-brief
-description: Three thumbnail briefs for one video: composition, three words or fewer of text, the emotion on the face, the colours by name from the creator's palette, a shoot list for a real photo and a prompt for later image generation. Use when a video needs its thumbnail. Describes; does not render.
+description: Three thumbnail briefs for one video: composition, three words or fewer of text, the emotion on the face, the colours by name from the creator's palette, a shoot list for a real photo and a prompt for later image generation. Use when a video needs its thumbnail. Pulls the real frame with media_thumbnail and, after the owner approves the cents, renders one variant with media_image when the media backend and an image key are configured.
 category: creator
 trust: official
 version: 1.0.0
@@ -23,11 +23,31 @@ survives being tiny. Three briefs, so the creator can test rather than guess.
 1. The title and the hook the video opens with. The thumbnail must not repeat the title's
    words; it adds the picture the title lacks.
 2. What the creator can shoot: their face, a screen, an object, a location; whether a photo
-   from the video exists.
+   from the video exists. When the media backend is installed, pull the candidate frames
+   yourself (below) instead of asking.
 3. The creator's palette, by name, from `brand/voice.md` or the creator's own description. If
    there is none, describe colours in words; do not invent a palette.
 4. Two or three competitor thumbnails the creator has seen for the same topic, described, so
    the brief can look different from them.
+
+## With the media tools
+
+1. Frames from the video, when the media backend is installed (the Media Pipeline line of
+   `trent doctor` says so, and names `trent sandbox build --media` when it is not):
+   `media_thumbnail` with `{"input": "videos/<file>.mp4", "at": 12.5, "width": 1280}` for
+   each second the brief points at (the reaction, the object, the graph). It writes
+   `media-out/<file>.thumb-12.5.png`; name that path in the variant's shoot list so the creator
+   can use the real frame instead of a reshoot.
+2. Rendering, after the brief is written and the owner approves the spend: `media_image` with
+   `{"brief": "thumbnails/<slug>.md", "variant": "A", "aspect": "16:9"}` (`9:16` for a Short's
+   cover, `1:1` or `4:5` for a feed post). It reads the variant's "Generation prompt (for
+   later)" paragraph, costs cents per image (the tool names the price before the call), writes
+   the spend to the ledger and asks for approval with the prompt and the price unless the
+   profile auto-approves under a threshold. The doctor's Media Pipeline line says which image
+   provider and key are configured; with none, the tool says so and the prompt stays in the
+   brief for the creator to paste elsewhere. The file lands under `media-out/`.
+3. Render one variant, not three, unless the owner asks: the test plan compares real
+   thumbnails, and each one is a charge.
 
 ## Rules of the trade
 
@@ -44,9 +64,10 @@ survives being tiny. Three briefs, so the creator can test rather than guess.
 - Three variants: A face plus text, B the object or the result, C the before-and-after or the
   contrast. Then a test plan: which two to compare first and what would decide it.
 - Alt text for each: one plain sentence.
-- The generation prompt is for later, when the image router is connected; it is written now
-  so the creator can paste it into any tool, and it never asks for a real person's likeness
-  other than the creator's own photo as input.
+- The generation prompt is what `media_image` renders from the brief (its "Generation prompt
+  (for later)" line under the variant heading) once the owner approves the cents; it is written
+  so the creator can also paste it into any tool, and it never asks for a real person's
+  likeness other than the creator's own photo as input.
 
 ## Output format
 
@@ -143,7 +164,7 @@ impressions, whichever is first. Then test the winner against B.
 
 ## Approval
 
-This skill describes; it renders nothing and uploads nothing. The creator shoots or builds the
-thumbnail from the brief and sets it on the platform. When the media toolset and the image
-router are connected, the generation prompt can be run, and the result still goes to the
-creator to choose and upload.
+Frames from the video are extracted without asking when the media backend is installed; they
+are files under the workspace. A `media_image` render costs money and asks for approval per
+image with the prompt and the price; none is rendered until the owner says yes. Nothing is
+uploaded: the creator chooses the thumbnail and sets it on the platform.
