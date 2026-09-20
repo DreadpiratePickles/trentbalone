@@ -108,3 +108,12 @@ first vs hold; 8 RAG scope (cut E-final vs full); 9 platform applications and pa
   9 Buffer accepted (5 USD/channel), X API skipped, platform applications (Meta App Review,
   TikTok audit, YouTube audit, Google Business Profile Basic Access, Twilio 10DLC) listed as
   Bobby's steps in the final report. Wave 1 launched.
+- Scheduled (durable, ~/.claude/scheduled-tasks/): `trent-daily-hermes-parity` every day 02:07
+  (progress summary, Hermes releases research by one Opus agent, up to five testable proposals,
+  daily log committed and pushed); `trent-deferred-decisions-reminder` once on 2026-09-21 09:03
+  (five deferred questions, one at a time). Session-only mirrors also set (d61aee29, afecd40c).
+- Wave 1 in flight (six Opus agents): U1 safety gate (class floor, per-call binding, idempotency
+  tokens, inbound provenance, external spend), U2 `trent connect`, U3 `trent brain import`,
+  U4 packs + personas ("band of mismatched bandits") + core skill source, U5 `trent mcp serve`
+  over toolsets + `fleet export --target claude`, U6 media host backend + transcription +
+  `orchestrator.resume`.
