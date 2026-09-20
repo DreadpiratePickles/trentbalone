@@ -90,3 +90,16 @@ Bobby's gate, then waves.
   text, external spend, `trent connect`, seven-place toolset registration, MCP bearer + needs_approval),
   executors reordered B3-core > B2 > B1, MCP over toolsets + Claude renderer in wave 1, RAG cut,
   nine gate questions.
+
+## Gate decisions taken (2026-09-20, one question at a time)
+1. Packaging: fleet packs with a persona block and `trent fleet packs` (A3). Bobby: make the
+   personas "really cool, incredibly interesting", "like a band of mismatched bandits": each
+   agent a distinct voice and edge, working as a crew.
+2. Skill source: a second skill source under `packages/trent-core/skills/` (no apps/web edits).
+3. Executor order: business and media in parallel, then social.
+4. Inbound SMS/voice: outbound only this round.
+5. Media binaries: both, docker preferred (host backend now with an allowlist; a media sandbox
+   image as a follow-up the doctor prefers when present).
+6. Portability: `trent mcp serve` over toolsets plus the Claude file renderer in wave 1.
+Pending (Bobby dismissed the next question; waiting for instruction): 7 creator pack text-only
+first vs hold; 8 RAG scope (cut E-final vs full); 9 platform applications and paid services.
