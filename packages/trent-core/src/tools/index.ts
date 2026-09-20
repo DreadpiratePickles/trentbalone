@@ -39,6 +39,8 @@ import { createWebToolsAdapter } from "./web/index.js";
 import { createBrowserAdapter } from "./browser/index.js";
 import { askVision, createVisionAdapter, type VisionGateway } from "./vision/index.js";
 import { createMediaAdapter } from "./media/index.js";
+import { buildBusinessToolset, type BusinessBuildSeams } from "./business/build.js";
+import { createSocialAdapter, type SocialAdapterOptions } from "./social/index.js";
 import { seatCapability } from "../fleet/seat-capabilities.js";
 // [D5] tool descriptions: what a promoted improvement draft replaced, read at registration.
 import { applyToolDescriptions, readToolOverrides, type AppliedToolOverride } from "../improve/tool-overrides.js";
@@ -84,6 +86,12 @@ export { createVisionAdapter, askVision, VISION_ADAPTER_NAME, VISION_TOOL_SCHEMA
 // [B2] media: the local clip pipeline over allowlisted binaries (docs/media.md).
 export { createMediaAdapter, MEDIA_ADAPTER_NAME, MEDIA_IMAGE, MEDIA_SCOPES, MEDIA_TOOL_SCHEMAS, mediaBackendPresent, reportMediaInstall, selectMediaBackend } from "./media/index.js";
 export type { MediaBackend, MediaInstallReport } from "./media/index.js";
+// [B3] business: Stripe, Google Calendar, Square and Twilio behind the gate (docs/business.md).
+export { createBusinessAdapter, formatMoney, smsCents, smsSegments, BUSINESS_ADAPTER_NAME, BUSINESS_HOSTS, BUSINESS_PROVIDERS, BUSINESS_SCOPES, BUSINESS_TOOL_NAMES, BUSINESS_TOOL_SCHEMAS, ProviderRequestError } from "./business/index.js";
+export type { BusinessAdapterOptions, BusinessProviderId, BusinessToolName, TokenLookup } from "./business/index.js";
+// [B1] social: the app's adapter for what it really does, Bluesky direct, Buffer as the publisher, the post queue (docs/social.md).
+export { createSocialAdapter, createSocialPorts, createSocialPublishHandler, platformEntry, postRouteFor, publishSocialPost, SOCIAL_ADAPTER_NAME, SOCIAL_CAVEATS, SOCIAL_PUBLISH_HANDLER, SOCIAL_REVIEW, SOCIAL_SCOPES, SOCIAL_TOOL_NAMES, SOCIAL_TOOL_PLATFORMS, SOCIAL_TOOL_SCHEMAS, SocialToolError } from "./social/index.js";
+export type { PlatformEntry, SocialAdapterOptions, SocialFetch, SocialPorts, SocialToolName, SocialToolPlatform } from "./social/index.js";
 export { createHumanAdapter, questionFromEvent, renderQuestion, renderQuestions, HumanAnswers, sharedHumanAnswers, CARD_ADAPTER_NAMES, HUMAN_ADAPTER_NAME, HUMAN_SCOPES, HUMAN_TOOL_SCHEMAS } from "./human/index.js";
 export type { HumanAdapter, HumanCallerContext, QuestionDetails, QuestionEntry, QuestionRecord, QuestionsDetails } from "./human/index.js";
 // A3: progressive disclosure and the three tools the catalog was missing.
@@ -200,6 +208,10 @@ export interface ToolBuildDeps {
    * adapter calling `requireBoundApproval` inside `execute` binds against the same rows.
    */
   readonly bindings?: BoundApprovalStore;
+  /** [B1] `social` seams (fetch, connected providers, token resolvers); absent means the profile's `trent connect` state and the real network. */
+  readonly social?: SocialAdapterOptions;
+  /** [B3] Test seams for `business` (a direct transport, fake endpoints, a token stub); absent means the egress proxy and `tokenResolver`. */
+  readonly business?: BusinessBuildSeams;
 }
 
 /** One toolset that was enabled in config but could not be built here, and why the seat cannot use it. */
@@ -247,7 +259,7 @@ export interface TrentToolBuild {
  */
 export const ALWAYS_ON_ADAPTERS: readonly string[] = ["todo", "clarify", "session_search"];
 
-export const IMPLEMENTED_TOOLSETS = ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp", "human", "media"] as const satisfies readonly Toolset[];
+export const IMPLEMENTED_TOOLSETS = ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp", "human", "media", "social", "business"] as const satisfies readonly Toolset[];
 
 /** Enum values this builder does NOT produce, each with the reason a seat will see. */
 export const NOT_YET_IMPLEMENTED: readonly { readonly toolset: Toolset; readonly reason: string }[] = [
@@ -311,9 +323,17 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
       // [B2] Docker when the media image exists, the host's own binaries otherwise; the hosted
       // transcription path exists only with a gateway AND `media.hosted_transcription`.
       adapters.push(createMediaAdapter(ctx, { env: deps.env ?? process.env, ...(config.media ? { media: config.media } : {}), ...(deps.gateway ? { gateway: deps.gateway } : {}) }));
+    } else if (toolset === "social") {
+      // [B1] Tokens from `trent connect` through the profile; every write is bound inside `execute` and by the chain below.
+      adapters.push(createSocialAdapter(ctx, { ...(deps.social ?? {}), ...(deps.seat === undefined ? {} : { seat: deps.seat }) }));
     } else if (toolset === "vision") {
       // Without a gateway the adapter is built `unavailable`: every call says not_available, never a stub.
       adapters.push(createVisionAdapter({ workspace: deps.workspace, profileDir: deps.profileDir, ...(deps.gateway ? { gateway: deps.gateway } : {}), ...(egress ? { egress } : {}) }));
+    } else if (toolset === "business") {
+      // [B3] Through the egress proxy, tokens from `trent connect`, every write bound in `execute` (docs/business.md).
+      const business = buildBusinessToolset(deps.business, egress, egressReason, deps.seat, deps.profileDir);
+      if (business.adapter !== undefined) adapters.push(business.adapter);
+      else skipped.push({ toolset, reason: business.reason });
     } else if (toolset === "web" || toolset === "browser") {
       // web and browser only ever go out through the egress proxy: no proxy, no network.
       if (!egress) {
@@ -441,6 +461,8 @@ export const TOOLSET_BY_ADAPTER: Readonly<Record<string, Toolset>> = {
   mcp: "mcp",
   human: "human",
   media: "media",
+  social: "social",
+  business: "business",
   memory: "memory",
   fleet_search: "memory",
   // A3. `clarify` is the founder card, so it follows `human`; `session_search` reads this profile's

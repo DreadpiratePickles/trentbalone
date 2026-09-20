@@ -25,3 +25,7 @@ export * from "./checks/brain-import.js";
 export * from "./checks/app-memory.js";
 // [B2] media
 export * from "./checks/media.js";
+// [B3] business providers
+export * from "./checks/business.js";
+// [B1] social
+export * from "./checks/social.js";

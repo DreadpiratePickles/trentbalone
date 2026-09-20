@@ -26,6 +26,8 @@ export class SetupWizard {
       env: context.env ?? process.env,
       ...(context.runDoctor ? { runDoctor: context.runDoctor } : {}),
       ...(context.mediaBackendPresent ? { mediaBackendPresent: context.mediaBackendPresent } : {}),
+      ...(context.socialProviderConnected ? { socialProviderConnected: context.socialProviderConnected } : {}),
+      ...(context.businessProviderConnected ? { businessProviderConnected: context.businessProviderConnected } : {}),
     };
   }
 

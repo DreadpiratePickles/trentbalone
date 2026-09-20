@@ -55,8 +55,10 @@ describe("seat capabilities are read from the app manifests", () => {
       expect(seat.unavailable.map((entry) => entry.capability).sort(), role).toEqual([...unmapped].sort());
       for (const entry of seat.unavailable) expect(entry.reason.length).toBeGreaterThan(0);
     }
-    // The two the brief names by hand.
-    expect(seatCapability("sales").unavailable.map((entry) => entry.capability)).toEqual(expect.arrayContaining(["crm:read", "Email"]));
+    // The brief named `crm:read` and `Email` by hand; [B3] the business toolset now executes the
+    // CRM read (a Stripe customer lookup), so only the hosted email stays unavailable on sales.
+    expect(seatCapability("sales").unavailable.map((entry) => entry.capability)).toEqual(expect.arrayContaining(["Email"]));
+    expect(seatCapability("sales").unavailable.map((entry) => entry.capability)).not.toContain("crm:read");
   });
 
   it("carries the manifest budget in integer cents and the manifest model tier", () => {

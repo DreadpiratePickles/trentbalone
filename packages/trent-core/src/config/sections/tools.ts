@@ -20,6 +20,8 @@ export const ToolsetSchema = z.enum([
   "mcp",
   "human",
   "media",
+  "social",
+  "business",
 ]);
 
 export type Toolset = z.infer<typeof ToolsetSchema>;

@@ -61,6 +61,14 @@ export interface CronJob {
   last_run_at?: string;
   /** The next slot the runner will fire; computed from the schedule when absent. */
   next_run_at?: string;
+  /**
+   * [B1] A job the runner hands to a registered handler (`cron/CronRunner.ts` `handlers`)
+   * instead of running `prompt` through the orchestrator; `prompt` is then the job's label.
+   * The social post queue is the one writer today (`tools/social/queue.ts`).
+   */
+  handler?: string;
+  /** What the handler receives: the queued call, exactly as it was approved. */
+  payload?: Record<string, unknown>;
 }
 
 export const CRON_TOOL_SCHEMAS: ToolSchema[] = [

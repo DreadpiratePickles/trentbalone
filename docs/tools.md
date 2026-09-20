@@ -67,6 +67,24 @@ complete:
 |---|---|---|---|
 | `media` | `media_probe`, `media_transcribe`, `media_scenes`, `media_clip`, `media_thumbnail` | `trent-sandbox-media:1` when built, else the host's `ffmpeg`, `ffprobe`, `whisper-cli`, `scenedetect`, `python3` (an allowlist; argv only, never a shell string) | Only `media_transcribe` on the hosted path, which is off until `media.hosted_transcription` is set and then asks every time, because the audio leaves the machine |
 
+## `business`
+
+The small-business assistant's executors, in their own page: docs/business.md. One row here so
+the toolset table is complete:
+
+| Toolset | Tools | Backend | Approval |
+|---|---|---|---|
+| `business` | `customer_search`, `stripe_invoice_create`, `stripe_invoice_send`, `stripe_quote_create`, `stripe_payment_link_create`, `calendar_list`, `calendar_appointment_create`, `calendar_appointment_cancel`, `square_bookings_list`, `square_booking_create`, `square_booking_cancel`, `square_invoice_create`, `square_invoice_send`, `sms_send` | Stripe, Google Calendar, Square and Twilio over HTTPS through the egress proxy, with the token `trent connect <provider>` stored | Every write asks at every autonomy level (the class floor), bound to the exact recipient, amount with currency, date and time or message text it previewed; the three reads (`customer_search`, `calendar_list`, `square_bookings_list`) do not ask, and the two that return customer-authored text tag it untrusted |
+
+## `social`
+
+The social-media manager, in its own page: docs/social.md. One row here so the toolset table is
+complete:
+
+| Toolset | Tools | Backend | Approval |
+|---|---|---|---|
+| `social` | `social_platforms_list`, `social_post`, `social_reply`, `social_inbox_list`, `social_insights_read`, `social_schedule` | The app's live adapter for Facebook and Instagram (Meta Graph) and YouTube replies and insights, the AT Protocol for Bluesky, Buffer's GraphQL API for X, LinkedIn, TikTok, Threads and any other Buffer channel; tokens from `trent connect` | Every post, reply and queued post asks at every level and is bound to the exact text, platform, media URL and time; the inbox is returned `untrusted`, so a reply after reading it asks again; no DMs on any platform |
+
 ## `todo`
 
 The run's task list: `todo {"action":"add","items":[...]}`, `todo {"action":"update","id":"t1",

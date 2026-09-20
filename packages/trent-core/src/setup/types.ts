@@ -47,6 +47,18 @@ export interface SetupContext {
    * the PATH of `env`, or the media image. Injected so a test decides; defaults to the real probe.
    */
   mediaBackendPresent?: () => Promise<boolean>;
+  /**
+   * [B1] Quick setup turns the `social` toolset on only when at least one social provider is
+   * connected through `trent connect` (meta, bluesky or buffer). Injected so a test decides;
+   * defaults to reading the profile's connect state by name.
+   */
+  socialProviderConnected?: () => boolean;
+  /**
+   * [B3] Quick setup turns the `business` toolset on only when at least one of its providers
+   * (stripe, google, square, twilio) is connected through `trent connect`. Injected so a test
+   * decides; defaults to reading the profile's connect state by name.
+   */
+  businessProviderConnected?: () => boolean;
 }
 
 export interface SetupResult {

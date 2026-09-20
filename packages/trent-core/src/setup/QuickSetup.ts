@@ -6,9 +6,12 @@ import {
 } from "./detect.js";
 import { ALL_TOOLSETS, STARTER_AGENTS, applyToolsets, withFleet } from "./steps.js";
 import { mediaBackendPresent } from "../tools/media/backend.js";
+import { ConnectStore } from "../connect/store.js";
+import { BUSINESS_PROVIDERS } from "../tools/business/http.js";
 import { SetupRun } from "./SetupRun.js";
 import type { SetupOptions, SetupResult } from "./types.js";
 import type { Provider } from "../config/schema.js";
+import type { ConfigManager } from "../config/ConfigManager.js";
 
 /**
  * Quick: use what is already here.
@@ -57,12 +60,22 @@ export class QuickSetup extends SetupRun {
     // [B2] `media` needs ffmpeg and ffprobe on PATH or the media image; without one it is written
     // off explicitly, so a later `trent update` cannot switch it on unasked (docs/media.md).
     const media = await (this.ctx.mediaBackendPresent ?? (() => mediaBackendPresent(env)))();
-    const toolsets = media ? ALL_TOOLSETS : ALL_TOOLSETS.filter((t) => t !== "media");
+    // [B1] `social` executes nothing without a connected provider, so it is on only when
+    // `trent connect meta|bluesky|buffer` has been run; the check reads names, never a value.
+    const social = (this.ctx.socialProviderConnected ?? (() => socialProviderConnected(configManager)))();
+    // [B3] `business` likewise: on only when `trent connect stripe|google|square|twilio` holds one.
+    const business = (this.ctx.businessProviderConnected ?? (() => businessProviderConnected(configManager)))();
+    const toolsets = ALL_TOOLSETS.filter((t) => (t !== "media" || media) && (t !== "social" || social) && (t !== "business" || business));
+    const off = [
+      ...(media ? [] : ["media is off because no ffmpeg/ffprobe or media image was found (docs/media.md)"]),
+      ...(social ? [] : ["social is off because no social provider is connected; run trent connect meta, bluesky or buffer, then enable it (docs/social.md)"]),
+      ...(business ? [] : ["business is off because no business provider is connected; run trent connect stripe, google, square or twilio, then enable it (docs/business.md)"]),
+    ];
 
     this.blank();
     this.say(`Provider: ${provider}`);
     this.say(`Model: ${model}`);
-    this.say(media ? `Toolsets: all ${ALL_TOOLSETS.length} enabled` : `Toolsets: ${toolsets.length} of ${ALL_TOOLSETS.length} enabled; media is off because no ffmpeg/ffprobe or media image was found (docs/media.md)`);
+    this.say(off.length === 0 ? `Toolsets: all ${ALL_TOOLSETS.length} enabled` : `Toolsets: ${toolsets.length} of ${ALL_TOOLSETS.length} enabled; ${off.join("; ")}`);
     this.say(`Starter agents: ${STARTER_AGENTS.join(", ")}`);
 
     const proceed = await prompts.confirm({
@@ -89,3 +102,14 @@ export class QuickSetup extends SetupRun {
   }
 }
 
+/** True when any provider the social toolset publishes through is connected. Names only; no value is read. */
+function socialProviderConnected(configManager: ConfigManager): boolean {
+  const store = new ConnectStore(configManager);
+  return (["meta", "bluesky", "buffer"] as const).some((id) => store.read(id).connected);
+}
+
+/** True when any provider the business toolset executes against is connected. Names only; no value is read. */
+function businessProviderConnected(configManager: ConfigManager): boolean {
+  const store = new ConnectStore(configManager);
+  return BUSINESS_PROVIDERS.some((id) => store.read(id).connected);
+}

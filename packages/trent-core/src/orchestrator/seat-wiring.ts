@@ -25,6 +25,10 @@ export const TOOLSET_APPROVAL_GATES: Readonly<Record<string, string>> = {
   web: "web.egress",
   // [B2] the one media path that leaves the machine: hosted transcription, an explicit opt-in.
   media: "media.egress",
+  // [B1] the app's own gate name for a social publish (`agent-catalog.ts` SLOT_ENVIRONMENTS).
+  social: "social.publish",
+  // [B3] every business write leaves the machine (an invoice, a booking, an SMS) and is bound per call.
+  business: "business.write",
 };
 
 function unique(values: readonly string[]): string[] {

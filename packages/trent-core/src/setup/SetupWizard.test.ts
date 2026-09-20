@@ -91,6 +91,21 @@ describe("SetupWizard", () => {
       expect(configOnDisk().disabled_toolsets).not.toContain("media");
     });
 
+    it("enables social only when a social provider is connected: off with none, on with an injected probe", async () => {
+      const { wizard } = wizardWith({ confirm: true }, { ANTHROPIC_API_KEY: "sk-ant-live" });
+      const res = await wizard.run({ mode: "quick" });
+      expect(res.success).toBe(true);
+      expect(configOnDisk().toolsets).not.toContain("social");
+      expect(configOnDisk().disabled_toolsets).toContain("social");
+      expect(output.lines.join("\n")).toMatch(/social/);
+
+      const connected = new SetupWizard({ configManager, prompts: new ScriptedPrompts({ confirm: true }), output, env: { ANTHROPIC_API_KEY: "sk-ant-live" }, socialProviderConnected: () => true });
+      const again = await connected.run({ mode: "quick" });
+      expect(again.success).toBe(true);
+      expect(configOnDisk().toolsets).toContain("social");
+      expect(configOnDisk().disabled_toolsets).not.toContain("social");
+    });
+
     it("detects a key stored in the profile .env file", async () => {
       configManager.saveSecrets({ OPENAI_API_KEY: "sk-from-file" });
       const { wizard } = wizardWith({ confirm: true }, {});
@@ -264,13 +279,15 @@ describe("SetupWizard", () => {
         "mcp",
         "human",
         "media",
+        "social",
+        "business",
       ]);
       expect(onDisk.disabled_toolsets).toEqual(onDisk.agent.disabled_toolsets);
 
       // A later load must still carry both lists, so `trent update` cannot silently re-enable.
       const reloaded = new ConfigManager({ baseDir: tempDir }).loadConfig() as Record<string, any>;
       expect(reloaded.platform_toolsets.cli).toEqual(["file_ops", "terminal"]);
-      expect(reloaded.agent.disabled_toolsets).toHaveLength(12);
+      expect(reloaded.agent.disabled_toolsets).toHaveLength(14);
     });
 
     it("offers the walkthrough as an opt-in and runs it when accepted", async () => {

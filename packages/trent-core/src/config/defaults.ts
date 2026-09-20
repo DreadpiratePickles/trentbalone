@@ -234,6 +234,8 @@ export const BLANK_SLATE_CONFIG: TrentConfig = {
     "mcp",
     "human",
     "media",
+    "social",
+    "business",
   ],
   egress: {
     ...DEFAULT_CONFIG.egress,

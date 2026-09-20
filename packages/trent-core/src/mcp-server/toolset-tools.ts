@@ -21,6 +21,8 @@ import { MEMORY_TOOL_SCHEMAS } from "../tools/memory/index.js";
 import { PLUGINS_LIST_TOOL } from "../tools/plugins/index.js";
 import { SESSION_SEARCH_TOOL_SCHEMAS } from "../tools/session_search/index.js";
 import { SKILL_TOOL_SCHEMAS } from "../tools/skills/index.js";
+import { SOCIAL_TOOL_SCHEMAS } from "../tools/social/schemas.js";
+import { BUSINESS_TOOL_SCHEMAS } from "../tools/business/schemas.js";
 import { TODO_TOOL_SCHEMAS } from "../tools/todo/index.js";
 import { VISION_TOOL_SCHEMAS } from "../tools/vision/index.js";
 import { WEB_TOOL_SCHEMAS } from "../tools/web/schemas.js";
@@ -44,6 +46,10 @@ export const MCP_TOOLS_BY_TOOLSET: Readonly<Record<Toolset, readonly string[]>> 
   mcp: [MCP_STATUS_TOOL],
   human: [],
   media: names(MEDIA_TOOL_SCHEMAS),
+  // [B1] the social toolset; its writes come back as `needs_approval` results like every floored call.
+  social: names(SOCIAL_TOOL_SCHEMAS),
+  // [B3] the business toolset; its writes come back as `needs_approval` results like every floored call.
+  business: names(BUSINESS_TOOL_SCHEMAS),
   memory: [...names(MEMORY_TOOL_SCHEMAS), ...names(FLEET_SEARCH_TOOL_SCHEMAS), ...names(BRAIN_READ_TOOL_SCHEMAS)],
 };
 

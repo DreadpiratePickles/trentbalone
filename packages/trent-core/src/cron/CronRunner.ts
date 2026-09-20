@@ -50,10 +50,24 @@ export interface CronRunOptions {
   readonly signal?: AbortSignal;
 }
 
+/** [B1] What a handler answers for a job that names it; the row records it as a run would be. */
+export interface CronHandlerResult {
+  readonly summary: string;
+  readonly failed?: boolean;
+  readonly costCents?: number;
+}
+
+export type CronJobHandler = (job: CronJob, options: { readonly now: Date; readonly trigger: CronRunRow["trigger"] }) => Promise<CronHandlerResult>;
+
 export interface CronRunnerDeps {
   readonly profileDir: string;
   /** One orchestrated run in a fresh session; the headless runtime's `run`. */
   readonly run: (prompt: string, options: CronRunOptions) => AsyncIterable<OrcEvent>;
+  /**
+   * [B1] Handlers for jobs that carry `handler`: the job never runs as a prompt, the handler
+   * runs with the job's `payload`. A job naming a handler nobody registered records a failed row.
+   */
+  readonly handlers?: Readonly<Record<string, CronJobHandler>>;
   /** Sends `text` to a job's `deliver` target (`telegram:<chatId>`, `slack:#channel`); `job` names the sender. */
   readonly deliver?: (target: string, text: string, job: CronJob) => Promise<void>;
   readonly now?: () => Date;
@@ -189,7 +203,15 @@ export class CronRunner {
     let folded: Folded = { summary: null, failed: false, costCents: 0 };
     let threw: string | undefined;
     try {
-      for await (const event of this.deps.run(job.prompt, { trigger: "scheduled" })) folded = fold(folded, event);
+      if (job.handler !== undefined) {
+        // [B1] A handled job: no prompt, no model; the handler's answer is the row.
+        const handler = this.deps.handlers?.[job.handler];
+        if (handler === undefined) throw new Error(`no handler named ${job.handler} is registered with this runner`);
+        const answer = await handler(job, { now: startedAt, trigger });
+        folded = { summary: answer.summary, failed: answer.failed === true, costCents: answer.costCents ?? 0 };
+      } else {
+        for await (const event of this.deps.run(job.prompt, { trigger: "scheduled" })) folded = fold(folded, event);
+      }
     } catch (error) {
       threw = error instanceof Error ? error.message : String(error);
     }

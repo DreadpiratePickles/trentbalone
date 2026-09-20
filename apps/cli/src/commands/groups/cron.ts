@@ -11,6 +11,7 @@
  */
 import process from "node:process";
 import { CronRunner, DEFAULT_TICK_MS, readCronRuns, type CronRunRow } from "@trent/core/cron/index.js";
+import { SOCIAL_PUBLISH_HANDLER, createSocialPublishHandler } from "@trent/core/tools/social/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { GatewayManager } from "@trent/core/gateway/index.js";
 import {
@@ -102,6 +103,9 @@ async function openRunner(ctx: CommandContext): Promise<{ runner: CronRunner; ru
     profileDir: configManager.getProfileDir(),
     // [G3.1] A scheduled job's cost is cron's, even when it rides the gateway's runtime.
     run: (prompt, options) => runtime.run(prompt, { ...options, surface: "cron" }),
+    // [B1] A queued social post is a handled job: the approval bound at queue time is re-read
+    // from this profile's rows and the post leaves once through the idempotent path; no prompt.
+    handlers: { [SOCIAL_PUBLISH_HANDLER]: createSocialPublishHandler({ profileDir: configManager.getProfileDir(), social: { manager: configManager } }) },
     now: ctx.overrides.now,
     log: (line) => ctx.err(line),
     deliver: async (target, text, job) => {

@@ -95,7 +95,9 @@ describe("seatEnvironment", () => {
     expect(finance.tools).not.toContain("terminal");
     expect(finance.tools).not.toContain("process_manage");
     expect(finance.tools).not.toContain("code_execution");
-    expect(finance.tools).not.toContain("Stripe");
+    // Stripe is executable since the business toolset (W2): the finance manifest names it and the
+    // gate asks before every invoice, quote and payment link, so the seat carries it on purpose.
+    expect(finance.tools).toContain("Stripe");
     expect(finance.tools).toContain("web");
     expect(finance.approvalRequiredFor).not.toContain("terminal.dangerous");
     expect(finance.approvalRequiredFor).toEqual(expect.arrayContaining(["payout", "refund"]));

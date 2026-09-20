@@ -47,8 +47,8 @@ model: gpt-5.6-terra
 personality: default
 theme: dark                   # dark | light
 
-toolsets:                     # file_ops terminal web browser code vision memory
-  - file_ops                  # delegation cron skills plugins mcp human
+toolsets:                     # file_ops terminal web browser code vision memory delegation
+  - file_ops                  # cron skills plugins mcp human media social (social.md)
   - terminal
   - human                     # ask_human: the seat asks you and waits (REPL prompt, or a chat reply via the gateway)
 disabled_toolsets: []

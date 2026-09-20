@@ -57,6 +57,18 @@ export const CAPABILITY_TOOLSETS: Readonly<Record<string, Toolset>> = {
   "steel:scrape": "web",
   "steel:pdf": "web",
   "prospects:research": "web",
+  // [B1] The social manager: the app names a social draft capability and the X integration on the
+  // growth and content seats; the `social` toolset executes both, gated per call.
+  "social:draft": "social",
+  X: "social",
+  // [B3] The business assistant: the app names Stripe on the ceo, analyst and finance seats, the
+  // CRM on sales and the customer inbox on support; the `business` toolset (invoices, quotes,
+  // payment links, calendar, bookings, SMS) executes those jobs, every write gated per call.
+  Stripe: "business",
+  "billing:read": "business",
+  "crm:read": "business",
+  "crm:update_draft": "business",
+  "support:inbound_email": "business",
   // Asking the founder.
   "approvals:request": "human",
   "approvals:create": "human",
@@ -73,7 +85,7 @@ export const CAPABILITY_TOOLSETS: Readonly<Record<string, Toolset>> = {
 export const SHARED_SEAT_TOOLSETS: readonly Toolset[] = ["skills", "delegation", "cron", "plugins", "mcp", "vision", "human", "memory", "media"];
 
 /** The toolsets a seat gets ONLY when its manifest names a capability that maps to one. */
-export const GATED_TOOLSETS: readonly Toolset[] = ["file_ops", "terminal", "code", "web", "browser"];
+export const GATED_TOOLSETS: readonly Toolset[] = ["file_ops", "terminal", "code", "web", "browser", "social", "business"];
 
 /** One capability the seat's manifest names that this install cannot execute. */
 export interface UnavailableCapability {
