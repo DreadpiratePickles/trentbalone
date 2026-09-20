@@ -181,3 +181,12 @@ vitest exit=0
   static-graph test), W2, W3; then a clean-HEAD full run; then a follow-up agent for findings
   (b), (c), (d) and the .env.local auto-load.
 - Daily check 2026-09-20 02:50: clean-HEAD full suite 3296 passed / 1 skipped after regenerating the Prisma client in the isolation worktree (the prune step had removed it; isolate.sh now regenerates after pruning). No HEAD defect.
+
+## Deferred decisions (Bobby, 2026-09-20, resumed: "get back to work")
+1. Inbound SMS/voice: outbound-only stays; no webhook surface this round.
+2. Media image: wire `trent sandbox build --media` now; no registry publishing.
+3. Platform applications (Meta, YouTube, TikTok, Google Business Profile): Bobby will do them
+   last; social runs on Bluesky + Buffer until then.
+4. Creator pack: enable clipping now (state line, persona, skills call the media tools).
+5. RAG deferred items: wait for a real measurement on real documents; no reranker yet.
+Pause lifted. Landing order: W1.1, W6 (with lazy adapter imports), W2, W3.
