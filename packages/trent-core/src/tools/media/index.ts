@@ -1,11 +1,13 @@
 /**
- * The `media` toolset (design B2, gate G8): the local clip pipeline over allowlisted binaries.
+ * The `media` toolset (design B2, gate G8): the local clip pipeline over allowlisted binaries,
+ * plus one metered call out.
  *
  *   media_probe       ffprobe
  *   media_transcribe  ffmpeg -> whisper.cpp | faster-whisper | (opt-in, approved) hosted provider
  *   media_scenes      PySceneDetect | ffmpeg scene filter
  *   media_clip        ffmpeg cut, 9:16 crop (MediaPipe face track or centre), burned captions
  *   media_thumbnail   ffmpeg frame extraction
+ *   media_image       the configured image provider (`image.ts`), approved per call, on the ledger
  *
  * The backend (`backend.ts`) is docker when `trent-sandbox-media:<v>` exists and the host's own
  * binaries otherwise; it is chosen on the first call. Every path the model names is declared a
@@ -19,11 +21,14 @@ import { fitSummary } from "../spillover.js";
 import type { ToolCallRecord, ToolContext, TrentToolAdapter } from "../types.js";
 import { renderToolInstructions } from "../web/schemas.js";
 import { findOnPath, selectMediaBackend, type MediaBackend, type MediaExec } from "./backend.js";
+import { createImageTool, IMAGE_TOOL } from "./image-tool.js";
+import type { ImageRouteConfig } from "./image.js";
 import {
   clipArgs, faceTrackArgs, parseProbe, parseSceneCsv, parseSceneFilterTimes, portraitCrop, probeArgs, renderSegments, sceneDetectArgs, sceneFilterArgs,
   seconds, srtForWindow, thumbnailArgs, type CropBox, type MediaProbe, type TranscriptSegment,
 } from "./commands.js";
 import { MEDIA_OUTPUT_DIR, resolveInputPath, resolveOutputPath, stemOf, type PathResolution, type ResolvedPath } from "./paths.js";
+import type { FetchLike } from "../web/proxied-fetch.js";
 import { MEDIA_ADAPTER_NAME, MEDIA_ROUTING_TEXT, MEDIA_SPECS, MEDIA_TOOL_NAMES, MEDIA_TOOL_SCHEMAS } from "./schemas.js";
 import { findWhisperModel, transcribeMedia, type Transcript, type TranscriptionGateway } from "./transcribe.js";
 
@@ -31,6 +36,12 @@ export { MEDIA_ADAPTER_NAME, MEDIA_ROUTING_TEXT, MEDIA_TOOL_NAMES, MEDIA_TOOL_SC
 export * from "./backend.js";
 export { MEDIA_OUTPUT_DIR, resolveInputPath, resolveOutputPath } from "./paths.js";
 export { findWhisperModel, planEngine, transcribeMedia, MEDIA_IMAGE_MODEL } from "./transcribe.js";
+export {
+  briefPrompt, generateImage, geminiKeyEnv, imageFileName, resolveImageRoute,
+  DEFAULT_GEMINI_IMAGE_MODEL, GEMINI_IMAGE_PRICE_CENTS, GEMINI_IMAGE_PRICING_DATE, GEMINI_IMAGE_PRICING_SOURCE, GEMINI_KEY_ENVS, IMAGE_ASPECTS,
+} from "./image.js";
+export type { ImageAspect, ImageRoute, ImageRouteConfig } from "./image.js";
+export { IMAGE_TOOL } from "./image-tool.js";
 export type { Transcript, TranscriptEngine, TranscribeResult } from "./transcribe.js";
 export type { TranscriptSegment } from "./commands.js";
 
@@ -43,13 +54,17 @@ const MAX_CLIP_SECONDS = 60 * 60;
 
 export interface MediaAdapterOptions {
   /** `config.media`. */
-  readonly media?: { readonly backend?: "auto" | "host" | "docker"; readonly hosted_transcription?: boolean; readonly whisper_model?: string };
+  readonly media?: { readonly backend?: "auto" | "host" | "docker"; readonly hosted_transcription?: boolean; readonly whisper_model?: string } & Partial<ImageRouteConfig>;
   /** The gateway hosted transcription would use; absent means the hosted path is never available. */
   readonly gateway?: TranscriptionGateway;
-  /** The environment for PATH lookup and the child processes; defaults to `process.env`. */
+  /** The environment for PATH lookup, the child processes and the image provider's key; defaults to `process.env`. */
   readonly env?: NodeJS.ProcessEnv;
   /** Test seam for the docker CLI and the binaries. */
   readonly exec?: MediaExec;
+  /** Direct transport for `media_image`, for tests; defaults to `fetch`. */
+  readonly fetchImpl?: FetchLike;
+  /** The seat making the calls, named on the bound approval and the ledger row. */
+  readonly seat?: string;
 }
 
 function numberArg(args: Record<string, unknown>, key: string): number | undefined {
@@ -72,6 +87,7 @@ export function createMediaAdapter(ctx: ToolContext, options: MediaAdapterOption
     backendPromise ??= selectMediaBackend({ workspace: ctx.workspace, env, backend: options.media?.backend ?? "auto", ...(options.exec ? { exec: options.exec } : {}) });
     return backendPromise;
   };
+  const image = createImageTool(ctx, { env, ...(options.media ? { media: options.media } : {}), ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}), ...(options.seat ? { seat: options.seat } : {}) });
 
   function input(action: string, tool: string, args: Record<string, unknown>): { ok: true; path: ResolvedPath } | { ok: false; record: ToolCallRecord } {
     const raw = stringArg(args, "input");
@@ -252,16 +268,22 @@ export function createMediaAdapter(ctx: ToolContext, options: MediaAdapterOption
     estimateCost: () => 0,
     requiresApproval(action) {
       const parsed = parseAction(action, MEDIA_SPECS);
-      return !parsed.error && parsed.tool === "media_transcribe" && hostedWouldRun();
+      if (parsed.error) return false;
+      if (parsed.tool === IMAGE_TOOL) return image.requiresApproval(parsed.args);
+      return parsed.tool === "media_transcribe" && hostedWouldRun();
     },
-    /** What leaves the machine when the hosted path is approved: named for the human, never sent before the yes. */
+    /** What leaves the machine, or what is spent, when the call is approved: named for the human, never sent before the yes. */
     preview(action) {
       const parsed = parseAction(action, MEDIA_SPECS);
-      if (parsed.error || parsed.tool !== "media_transcribe" || !hostedWouldRun()) return undefined;
+      if (parsed.error) return undefined;
+      if (parsed.tool === IMAGE_TOOL) return image.preview(parsed.args);
+      if (parsed.tool !== "media_transcribe" || !hostedWouldRun()) return undefined;
       const provider = options.gateway?.resolveRoute("executor").providers[0] ?? "the configured provider";
       return `send the audio track of ${stringArg(parsed.args, "input") ?? "(no input)"} to ${String(provider)} for transcription; the file's audio leaves this machine`;
     },
     async dryRun(action) {
+      const parsed = parseAction(action, MEDIA_SPECS);
+      if (!parsed.error && parsed.tool === IMAGE_TOOL) return image.dryRun(action, parsed.args);
       return record(MEDIA_ADAPTER_NAME, action, "needs_approval", "media_transcribe would send this file's audio to the configured model provider (media.hosted_transcription is on and no local whisper engine was found). Approve to let the audio leave this machine.");
     },
     async execute(action) {
@@ -274,6 +296,7 @@ export function createMediaAdapter(ctx: ToolContext, options: MediaAdapterOption
           case "media_scenes": return await scenes(action, parsed.args);
           case "media_clip": return await clip(action, parsed.args);
           case "media_thumbnail": return await thumbnail(action, parsed.args);
+          case IMAGE_TOOL: return await image.execute(action, parsed.args);
           default: return fail(action, `unknown media tool ${parsed.tool}`);
         }
       } catch (error) {

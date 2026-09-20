@@ -63,12 +63,33 @@ describe("checkMedia", () => {
   it("names hosted transcription as egress of private audio when the profile opts in", async () => {
     fake(bin, "ffmpeg", "exit 0");
     fake(bin, "ffprobe", "exit 0");
-    configManager.saveConfig({ ...configManager.loadConfig(), media: { backend: "auto", hosted_transcription: true, whisper_model: "" } });
+    configManager.saveConfig({ ...configManager.loadConfig(), media: { ...configManager.loadConfig().media, hosted_transcription: true } });
     const result = await checkMedia.run(context({ PATH: bin }));
     expect(result.status).toBe("warn");
     expect(result.message).toMatch(/hosted transcription is ON/);
     expect(result.message).toMatch(/audio.*leaves this machine/i);
     expect(result.details).toMatchObject({ hostedTranscription: true });
+  });
+
+  it("names the image provider, its model and its price per image, or the configuration that stops media_image", async () => {
+    fake(bin, "ffmpeg", "exit 0");
+    fake(bin, "ffprobe", "exit 0");
+    fake(bin, "docker", 'if [ "$1" = "inspect" ]; then echo "No such image" >&2; exit 1; fi\nexit 0');
+    const none = await checkMedia.run(context({ PATH: bin }));
+    expect(none.message).toMatch(/media_image.*not configured/);
+    expect(none.message).toMatch(/GEMINI_API_KEY/);
+    expect(none.details).toMatchObject({ imageGeneration: { provider: null } });
+
+    const key = "AIzaDoctorFixtureKeyNeverPrinted00000000000";
+    const gemini = await checkMedia.run(context({ PATH: bin, GEMINI_API_KEY: key }));
+    expect(gemini.message).toMatch(/media_image.*google gemini-3\.1-flash-image at 7 cents per image on GEMINI_API_KEY, asks for approval on every call/);
+    expect(gemini.message).not.toContain(key);
+    expect(JSON.stringify(gemini.details)).not.toContain(key);
+    expect(gemini.details).toMatchObject({ imageGeneration: { provider: "google", model: "gemini-3.1-flash-image", priceCents: 7, keyEnv: "GEMINI_API_KEY", autoApproveUnderCents: 0 } });
+
+    configManager.saveConfig({ ...configManager.loadConfig(), media: { ...configManager.loadConfig().media, image_auto_approve_under_cents: 10 } });
+    const lifted = await checkMedia.run(context({ PATH: bin, GEMINI_API_KEY: key }));
+    expect(lifted.message).toMatch(/runs without asking \(under media\.image_auto_approve_under_cents 10\)/);
   });
 
   it("prefers the docker backend when the media image exists", async () => {

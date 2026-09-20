@@ -86,7 +86,7 @@
   "tools": { "disclosure_threshold": 40 },
   "brain": { "enabled": false, "versioning": "off" },
   "checkpoints": { "enabled": false, "max_bytes_per_run": 123456 },
-  "media": { "backend": "host", "hosted_transcription": true, "whisper_model": "/models/ggml-base.en.bin" },
+  "media": { "backend": "host", "hosted_transcription": true, "whisper_model": "/models/ggml-base.en.bin", "image_provider": "openai", "image_model": "fixture-image-model", "image_price_cents": 5, "image_auto_approve_under_cents": 10 },
   "gate": { "ask_classes": ["deploy"] },
   "personality": "fixture-personality",
   "theme": "light",

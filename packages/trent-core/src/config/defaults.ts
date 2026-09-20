@@ -174,11 +174,17 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // names it here; no key lowers the floor. See docs/security.md, "Side-effecting tools: the gate".
   gate: { ask_classes: [] },
   // [B2] media: docker when the media image exists, else the host's binaries; no audio leaves
-  // the machine until `hosted_transcription` is set by hand (docs/media.md).
+  // the machine until `hosted_transcription` is set by hand (docs/media.md). [W4] Image
+  // generation is metered spend: `auto` picks Gemini on its key, the model and the price come
+  // from the shipped table, and every image asks until `image_auto_approve_under_cents` lifts it.
   media: {
     backend: "auto",
     hosted_transcription: false,
     whisper_model: "",
+    image_provider: "auto",
+    image_model: "",
+    image_price_cents: 0,
+    image_auto_approve_under_cents: 0,
   },
   personality: "default",
   theme: "dark",

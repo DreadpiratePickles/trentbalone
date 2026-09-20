@@ -23,7 +23,7 @@ export const BUILTIN_TOOLS_BY_TOOLSET: Readonly<Record<string, readonly string[]
   vision: ["vision", "vision_analyze"],
   mcp: ["mcp", "mcp_status"],
   human: ["human", "ask_human"],
-  media: ["media", "media_probe", "media_transcribe", "media_scenes", "media_clip", "media_thumbnail"],
+  media: ["media", "media_probe", "media_transcribe", "media_scenes", "media_clip", "media_thumbnail", "media_image"],
   // A3. The disclosure bridges and the three tools the catalog was missing. `tools` is the bridge
   // adapter's own name; a plugin that tried to claim it would be claiming the way out of the
   // deferred set, which is exactly what the reservation is for.

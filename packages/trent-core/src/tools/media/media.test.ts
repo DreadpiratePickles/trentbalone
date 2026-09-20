@@ -94,12 +94,13 @@ describe("media toolset over fake binaries", () => {
     );
   }
 
-  it("declares the five tools with every path argument named as a path", () => {
+  it("declares the six tools with every path argument named as a path", () => {
     const names = MEDIA_TOOL_SCHEMAS.map((s) => s.name);
-    expect(names).toEqual(["media_probe", "media_transcribe", "media_scenes", "media_clip", "media_thumbnail"]);
+    expect(names).toEqual(["media_probe", "media_transcribe", "media_scenes", "media_clip", "media_thumbnail", "media_image"]);
     for (const schema of MEDIA_TOOL_SCHEMAS) {
       const props = schema.parameters.properties as Record<string, { description?: string }>;
-      expect(props.input?.description ?? "").toMatch(/path/i);
+      // The clip tools read `input`; `media_image` reads a `brief` file. Both are declared as paths.
+      expect((props.input ?? props.brief)?.description ?? "").toMatch(/path/i);
       expect(Object.keys(props).some((k) => /^(command|cmd|script|code|shell)$/i.test(k))).toBe(false);
     }
     const a = adapter();

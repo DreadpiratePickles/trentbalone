@@ -3,9 +3,13 @@
  * binaries are present, how to install the rest on this OS, and, when the profile opted in,
  * that hosted transcription sends a file's audio to the model provider. The probe is the same
  * one the toolset uses to choose its backend (`tools/media/backend.ts`), so the doctor reports
- * what a call would do, not what a YAML file claims.
+ * what a call would do, not what a YAML file claims. [W4] One more sentence names where
+ * `media_image` would send a prompt, what one image costs and whether it asks, resolved by the
+ * same `resolveImageRoute` the tool uses; the key's value is never read here.
  */
+import { isTrentError } from "../../errors/TrentError.js";
 import { MEDIA_BINARIES, MEDIA_IMAGE, mediaBuildCommand, reportMediaInstall, type MediaExec } from "../../tools/media/backend.js";
+import { resolveImageRoute, type ImageRouteConfig } from "../../tools/media/image.js";
 import { findWhisperModel } from "../../tools/media/transcribe.js";
 import { DEFAULT_PROBE_TIMEOUT_MS, runCommand } from "../probe.js";
 import type { CheckResult, DoctorCheck, DoctorContext } from "../types.js";
@@ -28,13 +32,28 @@ export function mediaInstallHint(missing: readonly string[]): string {
   return lines.join(" ");
 }
 
+/** The image sentence and its details: the route, or the configuration error that stops it. */
+export function describeImageRoute(media: ImageRouteConfig, env: NodeJS.ProcessEnv): { line: string; details: Record<string, unknown> } {
+  try {
+    const route = resolveImageRoute(media, env);
+    const asks = media.image_auto_approve_under_cents > 0 && route.priceCents < media.image_auto_approve_under_cents ? `runs without asking (under media.image_auto_approve_under_cents ${media.image_auto_approve_under_cents})` : "asks for approval on every call";
+    return {
+      line: ` Image generation (media_image): ${route.provider} ${route.model} at ${route.priceCents} cents per image on ${route.keyEnv}, ${asks}.`,
+      details: { provider: route.provider, model: route.model, priceCents: route.priceCents, keyEnv: route.keyEnv, autoApproveUnderCents: media.image_auto_approve_under_cents },
+    };
+  } catch (error) {
+    if (!isTrentError(error)) throw error;
+    return { line: ` Image generation (media_image) is not configured: ${error.message}.`, details: { provider: null, error: error.message } };
+  }
+}
+
 export const checkMedia: DoctorCheck = {
   id: "check_media",
   name: NAME,
   category: CATEGORY,
   async run(ctx: DoctorContext): Promise<CheckResult> {
     const config = ctx.configManager.loadConfig();
-    const media = config.media ?? { backend: "auto", hosted_transcription: false, whisper_model: "" };
+    const media = config.media ?? { backend: "auto", hosted_transcription: false, whisper_model: "", image_provider: "auto", image_model: "", image_price_cents: 0, image_auto_approve_under_cents: 0 };
     const env = ctx.env ?? process.env;
     const timeoutMs = ctx.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
     const exec: MediaExec = async (command, args) => {
@@ -48,6 +67,7 @@ export const checkMedia: DoctorCheck = {
     const forced = media.backend !== "auto" ? media.backend : undefined;
     const backend = forced ?? report.backend;
     const hosted = media.hosted_transcription === true;
+    const imageRoute = describeImageRoute(media, env);
     const details = {
       backend,
       configured: media.backend,
@@ -57,10 +77,12 @@ export const checkMedia: DoctorCheck = {
       missing,
       whisperModel: model ?? null,
       hostedTranscription: hosted,
+      imageGeneration: imageRoute.details,
     };
-    const hostedLine = hosted
-      ? " hosted transcription is ON (media.hosted_transcription): when no local whisper engine answers, media_transcribe sends the file's audio to the configured model provider after an approval; that audio leaves this machine."
-      : " Hosted transcription is off; no audio leaves this machine.";
+    const hostedLine =
+      (hosted
+        ? " hosted transcription is ON (media.hosted_transcription): when no local whisper engine answers, media_transcribe sends the file's audio to the configured model provider after an approval; that audio leaves this machine."
+        : " Hosted transcription is off; no audio leaves this machine.") + imageRoute.line;
 
     if (backend === "none") {
       return result({

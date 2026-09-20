@@ -193,7 +193,11 @@
     "media": {
       "backend": "auto",
       "hosted_transcription": false,
-      "whisper_model": ""
+      "whisper_model": "",
+      "image_provider": "auto",
+      "image_model": "",
+      "image_price_cents": 0,
+      "image_auto_approve_under_cents": 0
     },
     "personality": "default",
     "theme": "dark",
@@ -513,7 +517,11 @@
     "media": {
       "backend": "host",
       "hosted_transcription": true,
-      "whisper_model": "/models/ggml-base.en.bin"
+      "whisper_model": "/models/ggml-base.en.bin",
+      "image_provider": "openai",
+      "image_model": "fixture-image-model",
+      "image_price_cents": 5,
+      "image_auto_approve_under_cents": 10
     },
     "personality": "fixture-personality",
     "theme": "light",

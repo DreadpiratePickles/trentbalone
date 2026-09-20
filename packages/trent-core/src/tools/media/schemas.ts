@@ -1,21 +1,21 @@
 /**
- * The five media tools as the seat sees them. Every argument that names a file is declared as a
- * path (`input`, `output`, `transcript`) and described as one, so the hardline path rules in
- * `governance/autonomy-dispatch.ts` (`subjectsOfAction`) inspect it; no argument is named
- * `command`, `cmd`, `script`, `code` or `shell`, because nothing a model passes here is ever
- * run as one.
+ * The six media tools as the seat sees them. Every argument that names a file is declared as a
+ * path (`input`, `output`, `transcript`, `brief`) and described as one, so the hardline path
+ * rules in `governance/autonomy-dispatch.ts` (`subjectsOfAction`) inspect it; no argument is
+ * named `command`, `cmd`, `script`, `code` or `shell`, because nothing a model passes here is
+ * ever run as one.
  */
 import type { ToolSchema } from "../web/schemas.js";
 import type { ToolSpec } from "../action.js";
 
 export const MEDIA_ADAPTER_NAME = "media";
-export const MEDIA_TOOL_NAMES = ["media_probe", "media_transcribe", "media_scenes", "media_clip", "media_thumbnail"] as const;
+export const MEDIA_TOOL_NAMES = ["media_probe", "media_transcribe", "media_scenes", "media_clip", "media_thumbnail", "media_image"] as const;
 export type MediaToolName = (typeof MEDIA_TOOL_NAMES)[number];
 
 export const MEDIA_ROUTING_TEXT =
-  "media video audio: probe a video file, get its duration and streams, transcribe speech to text with timestamps, " +
+  "media video audio image: probe a video file, get its duration and streams, transcribe speech to text with timestamps, " +
   "detect scene changes and cut points, cut a clip, crop to 9:16 vertical for shorts and reels, burn captions, " +
-  "extract a thumbnail frame from a video";
+  "extract a thumbnail frame from a video, generate an image from a prompt, render a thumbnail or a post image, run a thumbnail brief";
 
 const INPUT = { type: "string", description: "Path of the media file, relative to the workspace root (or absolute under it). Files outside the workspace are refused." };
 const OUTPUT_DESC = "Output path under the workspace. Defaults to media-out/<input name>.<suffix>.";
@@ -77,7 +77,7 @@ export const MEDIA_TOOL_SCHEMAS: ToolSchema[] = [
   },
   {
     name: "media_thumbnail",
-    description: "Extract one frame of a video at a given second as a PNG under the workspace, optionally scaled to a width. Image generation is a different tool.",
+    description: "Extract one frame of a video at a given second as a PNG under the workspace, optionally scaled to a width. Image generation is media_image.",
     parameters: {
       type: "object",
       properties: {
@@ -89,6 +89,26 @@ export const MEDIA_TOOL_SCHEMAS: ToolSchema[] = [
       required: ["input"],
     },
   },
+  {
+    name: "media_image",
+    description:
+      "Generate one image (a thumbnail, a post image) from a prompt with the configured image provider (the Gemini image model on the " +
+      "Gemini key, or an OpenAI-compatible images endpoint) and save it under the workspace as media-out/<content hash>.<ext>. " +
+      "Each image costs money (about 4 to 14 cents on Gemini; the exact price is named before the call), is written to the spend " +
+      "ledger, and asks for approval with the prompt and the price unless the profile's media.image_auto_approve_under_cents covers it. " +
+      "Give a prompt, or a brief file the thumbnail-brief skill wrote and the variant to render.",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "What to render, one paragraph. Never a real person's likeness other than the creator's own photo as input." },
+        brief: { type: "string", description: "Path of a thumbnails/<slug>.md file the thumbnail-brief skill wrote, relative to the workspace root; its \"Generation prompt (for later)\" paragraph for the chosen variant is the prompt. Files outside the workspace are refused." },
+        variant: { type: "string", enum: ["A", "B", "C"], description: "Which section of the brief to render. Default A." },
+        aspect: { type: "string", enum: ["1:1", "16:9", "9:16", "4:3", "3:4", "4:5"], description: "Framing: 16:9 for a YouTube thumbnail (default), 1:1 or 4:5 for a feed post, 9:16 for a story or short." },
+        output: { type: "string", description: `${OUTPUT_DESC} The image file; defaults to a content-hash name.` },
+      },
+      required: [],
+    },
+  },
 ];
 
 export const MEDIA_SPECS: readonly ToolSpec[] = [
@@ -97,4 +117,5 @@ export const MEDIA_SPECS: readonly ToolSpec[] = [
   { name: "media_scenes", primary: "input", signature: ["input", "threshold"] },
   { name: "media_clip", primary: "input", signature: ["input", "start", "end"] },
   { name: "media_thumbnail", primary: "input", signature: ["input", "at"] },
+  { name: "media_image", primary: "prompt", signature: ["prompt", "aspect"] },
 ];
