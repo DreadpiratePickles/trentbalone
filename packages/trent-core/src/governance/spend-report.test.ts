@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { buildSpendReport, resolveSpendWindow, SPEND_GROUP_KEYS, UNATTRIBUTED } from "./spend-report.js";
+import { buildSpendReport, resolveSpendWindow, SPEND_GROUP_KEYS, spendDayWindow, UNATTRIBUTED } from "./spend-report.js";
 import type { SpendRow } from "./spend-ledger.js";
 
 const now = new Date("2026-09-18T12:00:00.000Z");
@@ -51,6 +51,29 @@ describe("resolveSpendWindow", () => {
   it("refuses a window it cannot read", () => {
     expect(() => resolveSpendWindow("yesterday", now, "UTC")).toThrow(/7d|YYYY-MM-DD/);
     expect(() => resolveSpendWindow("0d", now, "UTC")).toThrow();
+  });
+});
+
+describe("spendDayWindow", () => {
+  it("is the one calendar day, so today and the period are the same day", () => {
+    expect(spendDayWindow("2026-09-16")).toEqual({ requested: "2026-09-16", from: "2026-09-16", to: "2026-09-16", days: 1 });
+    const report = buildSpendReport(rows, { now, tz: "UTC", window: spendDayWindow("2026-09-16"), by: "surface" });
+    expect(report.today).toEqual(report.period);
+    expect(report.today).toMatchObject({ cents: 8, tokens: 0, rows: 1 });
+  });
+
+  it("reaches a day in the past that resolveSpendWindow cannot name alone", () => {
+    // `--since 2026-09-02` is the 2nd to today; the day window is the 2nd only.
+    const since = buildSpendReport(rows, { now, tz: "UTC", window: resolveSpendWindow("2026-09-02", now, "UTC"), by: "surface" });
+    const day = buildSpendReport(rows, { now, tz: "UTC", window: spendDayWindow("2026-09-02"), by: "surface" });
+    expect(since.period.cents).toBe(903);
+    expect(day.period).toMatchObject({ cents: 700, tokens: 5000, rows: 1 });
+    expect(day.today).toEqual(day.period);
+  });
+
+  it("refuses a value that is not a calendar day", () => {
+    expect(() => spendDayWindow("yesterday")).toThrow(/YYYY-MM-DD/);
+    expect(() => spendDayWindow("7d")).toThrow(/YYYY-MM-DD/);
   });
 });
 

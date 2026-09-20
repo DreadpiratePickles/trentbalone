@@ -673,6 +673,7 @@ key to raise. `--continue` seeds the ledger from the resumed session's `total_co
 cap survives a restart rather than resetting with the process.
 `trent budget status` reads today's ledger against the cap by surface; `trent usage` reads the same
 ledger over a period (`--since 7d|30d|YYYY-MM-DD`, month to date by default) grouped `--by surface|seat|model|provider|tool`.
+Both go through the one spend report (`packages/trent-core/src/governance/spend-report.ts`), so the two never disagree about a number.
 
 ### Money is integer cents
 

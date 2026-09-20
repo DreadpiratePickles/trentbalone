@@ -6,9 +6,13 @@
  * answer "what has this cost me today, and who spent it". The caps are read from config and named
  * by their keys, because the next thing anyone asks is which key to raise.
  *
+ * The day's total and its surfaces come from the spend report
+ * (`@trent/core/governance/spend-report.ts`), windowed to the one day, which is what `trent usage`
+ * reads through as well: one reader, so the two commands never disagree about a number.
+ *
  * The command reads; it writes nothing, so `--dry-run` reports exactly what a normal run does.
  */
-import { openSpendLedger } from "@trent/core/governance/index.js";
+import { buildSpendReport, openSpendLedger, spendDayWindow } from "@trent/core/governance/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import type { CommandSpec } from "../registry.js";
 import type { CommandContext } from "../context.js";
@@ -68,11 +72,10 @@ export const budgetSpec: CommandSpec = {
         const now = (ctx.overrides.now ?? ((): Date => new Date()))();
         const date = dayOf(opts.date, now, tz, (value) => ledger.dayKeyOf(value));
 
-        const spentCents = ledger.dailyTotalCents(date);
+        const day = buildSpendReport(ledger.rows(), { now, tz, window: spendDayWindow(date), by: "surface" }).today;
+        const spentCents = day.cents;
         const dailyCapCents = config.budget.daily_cap;
-        const bySurface = Object.entries(ledger.dailyBySurfaceCents(date))
-          .map(([surface, cents]) => ({ surface, cents }))
-          .sort((a, b) => b.cents - a.cents || a.surface.localeCompare(b.surface));
+        const bySurface = day.groups.map((group) => ({ surface: group.key, cents: group.cents }));
         const data: BudgetStatusData = {
           date,
           tz,

@@ -32,7 +32,7 @@ export interface SpendWindow {
   readonly requested: string;
   /** First day in the window, inclusive, as YYYY-MM-DD on the report's zone. */
   readonly from: string;
-  /** Today on the report's zone; the window never reaches past it. */
+  /** Last day in the window, inclusive. `resolveSpendWindow` ends at today and never reaches past it; `spendDayWindow` ends on its day. */
   readonly to: string;
   /** Calendar days the window covers. */
   readonly days: number;
@@ -95,6 +95,19 @@ export function resolveSpendWindow(since: string | undefined, now: Date, tz: str
     return { requested: since, from: since, to, days: daysBetween(since, to) };
   }
   throw new TrentError({ code: EXIT.CONFIG, operation: "usage.since", message: WINDOW_SHAPE, target: since });
+}
+
+/**
+ * The window that is one calendar day, `day` on the report's zone, so `today` and `period` are
+ * that day. `trent budget status --date` reads through this: `resolveSpendWindow` always ends at
+ * today, and a day the founder names may be well before it. The shape check is the same one the
+ * command makes; it is repeated here so a caller cannot hand the report a window it cannot key.
+ */
+export function spendDayWindow(day: string): SpendWindow {
+  if (!DAY.test(day)) {
+    throw new TrentError({ code: EXIT.CONFIG, operation: "spend.day", message: "a spend day must be a calendar day as YYYY-MM-DD", target: day });
+  }
+  return { requested: day, from: day, to: day, days: 1 };
 }
 
 /** The grouping `--by` names, or a config error listing what it may be. */

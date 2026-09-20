@@ -134,4 +134,40 @@ describe("trent budget status", () => {
     expect(data.bySurface).toEqual([]);
     expect(data.remainingCents).toBe(1000);
   });
+
+  /**
+   * [G3/X3] `budget status` and `usage` read one ledger through one report, so they never disagree
+   * about a number. One ledger, two days, several surfaces, and one row whose surface is the empty
+   * string (a surface the ledger accepts and the report files as `unattributed`): the day's total
+   * and every per-surface figure `budget status --date <day>` prints must be, cent for cent, what
+   * `usage --since <day> --by surface` prints for that day as today.
+   */
+  it("agrees with trent usage, cent for cent, on the total and every surface of a day", async () => {
+    const yesterday = "2026-09-17";
+    const today = "2026-09-18";
+    charge("repl", 120);
+    charge("gateway", 45);
+    charge("tool", 8);
+    charge("", 3);
+    charge("cron", 900, `${yesterday}T12:00:00.000Z`);
+    charge("repl", 60, `${yesterday}T23:30:00.000Z`);
+    charge("", 5, `${yesterday}T01:00:00.000Z`);
+
+    for (const day of [today, yesterday]) {
+      // `usage` windows to today, so the day under test is made today for it; `budget` names the day.
+      const usageNow = new Date(`${day}T12:00:00.000Z`);
+      const usage = await runCli(["usage", "--since", day, "--by", "surface", "--json"], { overrides: { now: () => usageNow } });
+      expect(usage.exitCode, usage.stdout).toBe(EXIT.OK);
+      const report = JSON.parse(usage.stdout) as { today: { cents: number; groups: { key: string; cents: number }[] } };
+
+      const budget = await runCli(["budget", "status", "--date", day, "--json"], { overrides: { now: () => at } });
+      expect(budget.exitCode, budget.stdout).toBe(EXIT.OK);
+      const status = JSON.parse(budget.stdout) as BudgetStatusJson;
+
+      expect(status.date).toBe(day);
+      expect(status.spentCents).toBe(report.today.cents);
+      expect(status.bySurface).toEqual(report.today.groups.map((group) => ({ surface: group.key, cents: group.cents })));
+      expect(status.bySurface.reduce((sum, row) => sum + row.cents, 0)).toBe(status.spentCents);
+    }
+  });
 });

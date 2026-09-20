@@ -54,7 +54,7 @@ export interface SpendRow {
 /** A row as a caller hands it over: `at` defaults to now. */
 export type SpendCharge = Omit<SpendRow, "at"> & { at?: string };
 
-/** What a reader needs. The REPL ledger, the sweep meter and `trent budget status` take this. */
+/** What a reader needs. The REPL ledger and the sweep meter take this; `trent budget status` and `trent usage` read the rows through `spend-report.ts`. */
 export interface SpendLedgerReader {
   dailyTotalCents(date: Date | string): number;
   runTotalCents(runId: string): number;
