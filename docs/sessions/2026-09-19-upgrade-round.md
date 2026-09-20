@@ -225,3 +225,18 @@ vitest exit=0
 - `quote` / `appointment` idempotency tokens (governance follow-up).
 - `trent budget status` adopting the shared spend reader.
 - Live image proof once Bobby's Gemini plan has image quota (429 today).
+
+## Follow-up wave (2026-09-20 evening, after wave 3)
+- Y1 docs/doctor.md rows 19-20 landed 2355bc3 (doc only; docs-truth + DoctorRunner green in isolation).
+- Three Opus agents launched (no subagents, no commits): Y2 `trent budget status` reads through
+  `buildSpendReport` so usage.ts's claim is true; Y3 `quote`/`appointment` join
+  SIDE_EFFECT_SCOPE_TOKENS with a replay test; Y4 Hermes A2A discovery live proof with no model
+  call and no writes under ~/.hermes (proof file docs/sessions/2026-09-20-hermes-a2a-discovery-proof.md).
+- CI: green through b6965b4; 2bf5df2 and 2355bc3 queued at 23:30Z.
+- Y2 landed 99a3ffe (budget status through buildSpendReport; guard test found the "" vs
+  "unattributed" surface divergence). Y3 landed a21554b (quote/appointment tokens; five red tests
+  first). Y4 landed a0fc407: Hermes v0.21.3 a2a_discover parsed Trent's card live with no spend;
+  its a2a_call speaks A2A v1.0 (SendMessage, ROLE_USER, parts without kind) and Trent's 0.3.0 server
+  answers -32601/-32005; docs claimed orchestrate fans out by tags, it reads capabilities (fixed).
+- Y5 launched: A2A v1.0 wire translation at the RPC edge so Hermes calls land in the task
+  lifecycle; live probe from the Hermes venv, no model call. CI: 2bf5df2 run 35544291702 success.
