@@ -38,6 +38,70 @@ export interface SessionSearchOptions {
   readonly limit?: number;
   /** Only this session's messages. */
   readonly sessionId?: string;
+  /**
+   * [X5] Only messages at or after this instant: an ISO date, or a window back from `now`
+   * (`24h`, `7d`, `2w`). A bound that reads as neither is refused, never ignored.
+   */
+  readonly after?: string;
+  /** Only messages before this instant; the same forms as `after`. */
+  readonly before?: string;
+  /** Sessions left out of the search entirely (the current one, typically). */
+  readonly excludeSessionIds?: readonly string[];
+  /** The instant the shorthand windows count back from; defaults to the clock. Tests pass it. */
+  readonly now?: string;
+}
+
+/** The shorthand units: hours, days and weeks, as a founder writes them (`24h`, `7d`, `2w`). */
+const WINDOW_UNIT_MS: Readonly<Record<string, number>> = {
+  h: 60 * 60 * 1000,
+  d: 24 * 60 * 60 * 1000,
+  w: 7 * 24 * 60 * 60 * 1000,
+};
+
+/**
+ * [X5] An instant from either form a bound takes: an ISO date (`Date.parse` accepts it), or a
+ * whole number of hours, days or weeks back from `nowMs`. Anything else is `undefined`, so the
+ * caller can refuse it by name instead of searching everything.
+ */
+export function parseSearchInstant(raw: string | undefined, nowMs: number = Date.now()): number | undefined {
+  const text = raw?.trim() ?? "";
+  if (text === "") return undefined;
+  const window = /^(\d+)\s*([hdw])$/i.exec(text);
+  if (window) return nowMs - Number(window[1]) * WINDOW_UNIT_MS[window[2]!.toLowerCase()]!;
+  const parsed = Date.parse(text);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+interface TimeWindow {
+  readonly afterMs?: number;
+  readonly beforeMs?: number;
+}
+
+/** The two bounds as milliseconds. Throws for a bound that reads as neither a date nor a window. */
+function windowOf(options: SessionSearchOptions): TimeWindow {
+  const nowMs = options.now === undefined ? Date.now() : Date.parse(options.now);
+  const bound = (name: "after" | "before"): number | undefined => {
+    const raw = options[name];
+    if (raw === undefined || raw.trim() === "") return undefined;
+    const parsed = parseSearchInstant(raw, nowMs);
+    if (parsed === undefined) {
+      throw new Error(`session search: "${name}" must be an ISO date or a window such as 24h, 7d or 2w; got "${raw}"`);
+    }
+    return parsed;
+  };
+  const afterMs = bound("after");
+  const beforeMs = bound("before");
+  return { ...(afterMs === undefined ? {} : { afterMs }), ...(beforeMs === undefined ? {} : { beforeMs }) };
+}
+
+function inWindow(timestamp: string, window: TimeWindow): boolean {
+  if (window.afterMs === undefined && window.beforeMs === undefined) return true;
+  const at = Date.parse(timestamp);
+  // A message with no readable timestamp cannot be shown to lie inside a window, so it is left out.
+  if (Number.isNaN(at)) return false;
+  if (window.afterMs !== undefined && at < window.afterMs) return false;
+  if (window.beforeMs !== undefined && at >= window.beforeMs) return false;
+  return true;
 }
 
 export const SESSION_SEARCH_DEFAULT_LIMIT = 10;
@@ -50,13 +114,18 @@ interface Located extends FtsDocument {
   readonly timestamp: string;
 }
 
-function documentsOf(sessions: readonly SessionData[], sessionId: string | undefined): Located[] {
+function documentsOf(sessions: readonly SessionData[], options: SessionSearchOptions): Located[] {
+  const window = windowOf(options);
+  const excluded = new Set(options.excludeSessionIds ?? []);
   const out: Located[] = [];
   for (const session of sessions) {
-    if (sessionId !== undefined && session.id !== sessionId) continue;
+    if (options.sessionId !== undefined && session.id !== options.sessionId) continue;
+    if (excluded.has(session.id)) continue;
     session.messages.forEach((message, index) => {
       const content = message.content?.trim() ?? "";
       if (content === "") return;
+      // Filtered before ranking, on both backends: a row outside the window never exists to rank.
+      if (!inWindow(message.timestamp, window)) return;
       out.push({
         sessionId: session.id,
         messageIndex: index,
@@ -132,11 +201,14 @@ function snippetMisses(content: string, query: string): boolean {
     .some((term) => haystack.includes(term));
 }
 
-/** Searches the records the caller supplies. An empty query returns nothing rather than everything. */
+/**
+ * Searches the records the caller supplies. An empty query returns nothing rather than everything;
+ * a bound that cannot be read throws rather than widening the search.
+ */
 export function searchSessions(sessions: readonly SessionData[], query: string, options: SessionSearchOptions = {}): SessionSearchResult {
   const limit = boundedLimit(options.limit);
   const trimmed = query.trim();
-  const documents = documentsOf(sessions, options.sessionId);
+  const documents = documentsOf(sessions, options);
   if (trimmed === "") return { query: trimmed, backend: options.backend ?? "lexical", hits: [] };
 
   const wanted: SessionSearchBackend = options.backend ?? (sessionFtsAvailable() ? "fts5" : "lexical");

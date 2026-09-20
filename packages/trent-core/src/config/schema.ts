@@ -49,6 +49,8 @@ import { MediaConfigSchema } from "./sections/media.js";
 import { RetrievalGateConfigSchema } from "../improve/retrieval-config-schema.js";
 // [X4] cron incidents
 import { CronConfigSchema } from "../cron/config-schema.js";
+// [X5] auto recovery
+import { RecoveryConfigSchema } from "../orchestrator/recovery-config-schema.js";
 
 /** Every name this module exported before the sections moved out; importers are unaffected. */
 export {
@@ -205,6 +207,9 @@ export const TrentConfigSchema = z.object({
   // [X4] cron incidents
   /** The runner's incident threshold and quota hold (`cron/config-schema.ts`, docs/cron.md "Incidents"). */
   cron: CronConfigSchema.default({}),
+  // [X5] auto recovery
+  /** Re-runs of a step that failed on a transient provider or tool error (`orchestrator/recovery-config-schema.ts`, docs/jobs.md). */
+  agent: RecoveryConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   improve: ImproveConfigSchema.default({}),

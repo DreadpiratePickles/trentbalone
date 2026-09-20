@@ -57,6 +57,38 @@ kills a two-step run after its `write_file` completed, deletes the file, resumes
 orchestrator, and shows step two ran once, the run ended `completed`, and the file was not
 rewritten.
 
+## Auto-recovery cycles
+
+A run used to die on one flaky call: the gateway retries a 429, a 5xx, a 408 or a dropped socket
+a bounded number of times per call (`model-gateway/retry.ts`), and when those attempts were spent
+the step failed and the run went on without it. `agent.auto_recovery_cycles` (default 1; 0 turns
+it off) is the layer above that: a step that failed on a TRANSIENT provider or tool error is run
+again, once per cycle, with the previous error appended to its prompt as a plain sentence, and
+then it stops (`packages/trent-core/src/orchestrator/auto-recovery.ts`).
+
+What counts as transient is the gateway's own classification, read from the error object when
+the seat port threw one and from its message otherwise, because the app's seat executor keeps
+only `error.message`: HTTP 429, 408 and 5xx, the transport codes (`ECONNRESET`, `ETIMEDOUT` and
+the rest), and undici's `fetch failed`. A tool result opts in by starting its summary with
+`[transient]`. What is never re-run: an approval park (it is a question, not a failure), a budget
+stop (the wrapper ended that seat on purpose), a dependency skip, a hardline refusal or a gated
+result (neither classifies as transient), and any other non-transient error such as a 401 or a
+missing key.
+
+How a cycle works: the app emits the failed `step_end` before it schedules what follows, and the
+bus delivers it synchronously, so the wrapper resets the step to `pending` inside that event and
+writes the row; the app's own scheduler then re-enqueues the step. The step's earlier tool calls
+are keyed by `{runId, stepId, tool, args}` in the idempotency store, so a write or a send the
+failed cycle already made is answered from the store on the re-run, not repeated, exactly as a
+resume's replay is. Every cycle is one `step_note` on the run
+(`auto recovery cycle 1 of 1 for step s1 (...): re-running after a transient dependency error: ...`),
+a surface can show it, and the failed cycle's spend is carried onto the step that finally
+completes (the app drops a cycle's cost when the seat loop throws; the wrapper's port metered it).
+A step that exhausts its cycles ends `failed` with every error it saw, in order, and the run ends
+`failed` naming the step and those errors; the stream's `run_done` becomes `run_failed`.
+`orchestrator/orchestrator.recovery.test.ts` proves the recovered write is not repeated, the
+second failure is reported with both errors, and a park is left alone.
+
 ## `trent jobs failed [--last N]`
 
 Lists the failed `JobRun` rows of this profile's store, newest first, with `id`, `type`,

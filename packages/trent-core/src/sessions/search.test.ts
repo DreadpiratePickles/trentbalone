@@ -84,3 +84,63 @@ describe("searchSessions backend selection", () => {
     expect(auto.hits[0]?.snippet).toContain("metadata endpoint");
   });
 });
+
+/**
+ * [X5] Time windows and exclusions. "What did we decide last week" is a question about WHEN as
+ * much as WHAT: the same phrase in a session a week earlier must not answer it. `after`/`before`
+ * take an ISO instant or a shorthand window (`24h`, `7d`, `2w`) measured back from `now`, which
+ * the caller passes so the tests never depend on the clock.
+ */
+describe("[X5] searchSessions time windows and exclusions", () => {
+  const NOW = "2026-09-20T12:00:00.000Z";
+  const PHRASE = "we decided to ship the founding price";
+
+  function seedTwoWeeks(): { store: SessionStore; recent: string; old: string } {
+    const store = new SessionStore(sessionsDir);
+    const old = store.createNew("ceo", "scripted-model", "scripted");
+    old.title = "Pricing, two weeks ago";
+    old.messages = [{ id: "m1", role: "assistant", content: `${PHRASE} at 49.`, timestamp: "2026-09-08T09:00:00.000Z" }];
+    store.save(old, { touch: false });
+    const recent = store.createNew("ceo", "scripted-model", "scripted");
+    recent.title = "Pricing, this week";
+    recent.messages = [{ id: "m1", role: "assistant", content: `${PHRASE} at 59.`, timestamp: "2026-09-17T09:00:00.000Z" }];
+    store.save(recent, { touch: false });
+    return { store, recent: recent.id, old: old.id };
+  }
+
+  it("parses ISO instants and the shorthand windows relative to now", async () => {
+    const { parseSearchInstant } = await import("./search.js");
+    const nowMs = Date.parse(NOW);
+    expect(parseSearchInstant("2026-09-13T00:00:00.000Z", nowMs)).toBe(Date.parse("2026-09-13T00:00:00.000Z"));
+    expect(parseSearchInstant("24h", nowMs)).toBe(nowMs - 24 * 60 * 60 * 1000);
+    expect(parseSearchInstant("7d", nowMs)).toBe(nowMs - 7 * 24 * 60 * 60 * 1000);
+    expect(parseSearchInstant("2w", nowMs)).toBe(nowMs - 14 * 24 * 60 * 60 * 1000);
+    expect(parseSearchInstant("last tuesday", nowMs)).toBeUndefined();
+    expect(parseSearchInstant("", nowMs)).toBeUndefined();
+  });
+
+  it("finds the phrase only in the window asked for", () => {
+    const { store, recent, old } = seedTwoWeeks();
+    const thisWeek = searchSessions(store.list(), PHRASE, { after: "7d", now: NOW });
+    expect(thisWeek.hits.map((hit) => hit.sessionId)).toEqual([recent]);
+    const earlier = searchSessions(store.list(), PHRASE, { before: "7d", now: NOW });
+    expect(earlier.hits.map((hit) => hit.sessionId)).toEqual([old]);
+    const both = searchSessions(store.list(), PHRASE, { after: "2w", now: NOW });
+    expect(new Set(both.hits.map((hit) => hit.sessionId))).toEqual(new Set([recent, old]));
+    const none = searchSessions(store.list(), PHRASE, { after: "24h", now: NOW });
+    expect(none.hits).toEqual([]);
+  });
+
+  it("takes ISO bounds and leaves out excluded sessions", () => {
+    const { store, recent, old } = seedTwoWeeks();
+    const iso = searchSessions(store.list(), PHRASE, { after: "2026-09-10T00:00:00.000Z", before: "2026-09-18T00:00:00.000Z", now: NOW });
+    expect(iso.hits.map((hit) => hit.sessionId)).toEqual([recent]);
+    const excluded = searchSessions(store.list(), PHRASE, { excludeSessionIds: [recent], now: NOW });
+    expect(excluded.hits.map((hit) => hit.sessionId)).toEqual([old]);
+  });
+
+  it("refuses a bound it cannot read rather than silently searching everything", () => {
+    const { store } = seedTwoWeeks();
+    expect(() => searchSessions(store.list(), PHRASE, { after: "last tuesday", now: NOW })).toThrow(/after/);
+  });
+});

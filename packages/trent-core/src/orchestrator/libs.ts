@@ -111,6 +111,8 @@ export interface HydratedRun {
 /** `apps/web/lib/orchestrator-run-persist.ts`: the run rebuilt from its rows, and cached live. */
 export interface RunPersistModule {
   hydrateOrchestrationRun(runId: string): Promise<HydratedRun | undefined>;
+  /** [X5] Writes one live step's row as the phases do, so the next job's hydrate reads it. */
+  persistStep(run: LiveRun, step: LiveRun["steps"][number]): Promise<void>;
 }
 
 /** `apps/web/lib/orchestrator-run-queue.ts`: the job rows the drain loop consumes. */

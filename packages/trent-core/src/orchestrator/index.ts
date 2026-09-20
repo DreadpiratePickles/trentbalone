@@ -34,7 +34,9 @@
  *     silently substituting the canned plan (`provider-ports.ts`);
  *   - the consolidator has no seam at all (`callText` takes no options), so the wrapper detects
  *     the literal fallback summary on `consolidate_end` and writes the real brief through the
- *     gateway, replacing it in the snapshot, the store and the emitted events.
+ *     gateway, replacing it in the snapshot, the store and the emitted events;
+ *   - [X5] auto-recovery cycles (`auto-recovery.ts`): a step that failed on a transient provider
+ *     or tool error is reset to pending inside its own `step_end`, so the app re-enqueues it.
  */
 
 import { createCompletionPort } from "../model-gateway/completion-port.js";
@@ -50,6 +52,7 @@ import { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots, type ReleaseSlot } from "./run-s
 import { closeRunScope, createContextNoticeBus, openRunScope } from "./run-hooks.js";
 import { applyConsolidation, finishRunVerification, type RunVerificationPort } from "./run-verification.js";
 import { SeatTally, applyStepFailures, shapeEvent, type SeatModelFn } from "./seat-guard.js";
+import { AutoRecovery, DEFAULT_AUTO_RECOVERY_CYCLES } from "./auto-recovery.js";
 import { guardedSeatModel } from "./seat-guard-budget.js";
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
 import { drainRun } from "./drain.js";
@@ -128,6 +131,8 @@ export type OrchestratorDepsWithImprove = OrchestratorDeps & {
   readonly maxConcurrentRuns?: number;
   /** [D4] The run-end hook: goal gates before the judge, and `verify_on_stop` (`run-verification.ts`). */
   readonly verification?: RunVerificationPort;
+  /** [X5] `agent.auto_recovery_cycles`: re-runs of a step that failed on a transient error; default 1, 0 turns it off. */
+  readonly autoRecoveryCycles?: number;
 };
 
 // --- Public factory -----------------------------------------------------------------------------
@@ -192,10 +197,11 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
 
   const seatInstructions = toolInstructions(allTools);
 
-  function installPorts(libs: Libs, gateway: ModelGateway, tally: SeatTally, ports: PortTally, emit: (event: OrcEvent) => void): void {
+  function installPorts(libs: Libs, gateway: ModelGateway, tally: SeatTally, ports: PortTally, recovery: AutoRecovery, emit: (event: OrcEvent) => void): void {
     const underlying = (deps.executeSeatModelFn as SeatModelFn | undefined) ?? libs.gateway.executeSeatModel;
     const chat = deps.executeSeatModelFn ? undefined : deps.createChatCompletion;
-    const seat = guardedSeatModel({ underlying, chat, tally, instructions: seatInstructions, emit }); // B2: provider guard inside, spend cap outside
+    // B2: provider guard inside, spend cap outside; [X5] the recovery wrapper outside both, so a thrown transient error is seen and a budget refusal is not retried.
+    const seat = recovery.wrapSeatModel(guardedSeatModel({ underlying, chat, tally, instructions: seatInstructions, emit }));
     libs.overrides.setRuntimeEvalOverrides({
       orchestration: {
         // Default, not test-only: the planner and the critic reach the configured provider.
@@ -268,6 +274,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
     const tally = new SeatTally();
     const ports = new PortTally();
     let shaper: PortShaper | undefined;
+    let recovery: AutoRecovery | undefined;
     let runId: string | undefined;
     let scope: { companyId: string; objective: string } | undefined;
     let cancelRequested = false;
@@ -302,7 +309,8 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       assertStandaloneEnv();
       const prepared = await prepare(libs);
       scope = { companyId: prepared.companyId, objective: prepared.objective };
-      installPorts(libs, gateway, tally, ports, (event) => deliver({ ...event, runId: runId ?? event.runId }));
+      recovery = new AutoRecovery({ cycles: deps.autoRecoveryCycles ?? DEFAULT_AUTO_RECOVERY_CYCLES, tally, persistStep: libs.runPersist.persistStep });
+      installPorts(libs, gateway, tally, ports, recovery, (event) => deliver({ ...event, runId: runId ?? event.runId }));
       // The seats' tools exist before the plan is made: registry, router catalog, seat environments.
       await wireSeatTools(libs, prepared.companyId, allTools);
       try {
@@ -353,13 +361,18 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
         });
         shaper = portShaper;
         // Subscribed before the first job is drained, so no phase event is lost.
-        unsubscribe = libs.events.subscribeOrcEvents(id, (event) => {
-          enqueue(async () => {
-            const withPorts = await portShaper.shape(event);
-            if (!withPorts) return;
-            const shaped = shapeEvent(withPorts, tally, portShaper.fallbackPlan);
-            if (shaped) deliver(shaped);
-          });
+        unsubscribe = libs.events.subscribeOrcEvents(id, (raw) => {
+          // [X5] Synchronous, inside the app's emit: a failed step is reset before the app schedules what follows it.
+          const observed = recovery!.onBusEvent(raw, libs.orchestrator.getOrchestrationRun(id));
+          if (observed.work) enqueue(observed.work);
+          for (const event of observed.events) {
+            enqueue(async () => {
+              const withPorts = await portShaper.shape(event);
+              if (!withPorts) return;
+              const shaped = shapeEvent(withPorts, tally, portShaper.fallbackPlan);
+              if (shaped) deliver(shaped);
+            });
+          }
         });
         await drainRun(libs, companyId, id, maxJobs, {
           isInterrupted,
@@ -374,6 +387,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
           await applyConsolidation(libs, id, portShaper.consolidated);
         }
         await applyFailureOverride(libs, id, tally);
+        await recovery!.finish(libs, id); // [X5] a step that exhausted its cycles fails the run, with every error named
         // [D4] Gates before judgment, then verify_on_stop; a refusal rides the bus as a step_note.
         await finishRunVerification(deps.verification, { runId: id, objective, deliver });
         // The loop's writes are part of the run: a caller that sweeps right after must see them.

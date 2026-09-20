@@ -322,6 +322,8 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     // `runtime.max_concurrent_runs` (T3.5): runs past the cap wait FIFO for a slot; absent, the
     // orchestrator's own default applies.
     const maxConcurrentRuns = (config as RuntimeSlice).runtime?.max_concurrent_runs;
+    // [X5] `agent.auto_recovery_cycles`: re-runs of a step that failed on a transient error; absent, the orchestrator's default (1).
+    const autoRecoveryCycles = (config as { agent?: { auto_recovery_cycles?: number } }).agent?.auto_recovery_cycles;
     // An empty map is the default, and passing it would write an empty bridge variable for nothing.
     const overrides = (config as ModelOverridesSlice).model_overrides;
     const modelOverrides = overrides && Object.keys(overrides).length > 0 ? { overrides } : {};
@@ -338,6 +340,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       // `DATABASE_URL` is cleared and its store stays in-process behind the guard above.
       ...(appStore.usable ? { databaseUrl: appStore.url } : {}),
       ...(maxConcurrentRuns === undefined ? {} : { maxConcurrentRuns }),
+      ...(autoRecoveryCycles === undefined ? {} : { autoRecoveryCycles }),
       model,
       tools: tools.adapters,
       fleetMemory,

@@ -177,6 +177,9 @@ cron:
   failure_alert_after: 3      # consecutive scheduled failures of one job before its one [CRON_FAILURE] alert
   quota_hold_minutes: 30      # how long a provider 429 holds prompt-driven jobs when no Retry-After is given
 
+agent:
+  auto_recovery_cycles: 1     # re-runs of a step that failed on a transient provider or tool error; 0 turns it off
+
 goals:
   verify_on_stop: true        # a turn that edited code needs fresh test or build evidence to finish
   verify_commands:            # what counts as that evidence
@@ -591,6 +594,16 @@ promoted retrieval goldens (`<profile>/goldens/retrieval/`, added with
 `trent improve retrieval` exits 1 and no draft promotes; a change to recall, the hybrid blend, the
 brain index or the ingest pipeline is a human change measured by that command. See
 [improve.md](improve.md), "Retrieval goldens and the recall gate".
+
+### Auto-recovery cycles
+
+`agent.auto_recovery_cycles` (1; a profile written before the key existed has none, and the
+orchestrator applies the same 1) is how many times a step that failed on a transient provider or
+tool error is run again, with the previous error appended to its prompt as a plain sentence,
+before the run reports the failure. It counts re-runs, not attempts, and sits above the gateway's
+own per-call retry, which has already been spent by the time a step fails. An approval park, a
+budget stop, a refusal, a gated result and any non-transient error are never re-run. 0 turns it
+off. See [jobs.md](jobs.md), "Auto-recovery cycles".
 
 ### Workspace context files
 

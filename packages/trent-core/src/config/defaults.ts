@@ -196,6 +196,10 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // for half an hour. Both must stay equal to the runner's constants (`cron/incidents.ts`),
   // which `config/cron-schema.test.ts` asserts. See docs/cron.md, "Incidents".
   cron: { failure_alert_after: 3, quota_hold_minutes: 30 },
+  // [X5] auto recovery
+  // One re-run of a step that failed on a transient provider or tool error, with the error in
+  // its prompt; never for an approval park, a budget stop or a refusal. 0 turns it off.
+  agent: { auto_recovery_cycles: 1 },
   personality: "default",
   theme: "dark",
   // [D0] improvement gates

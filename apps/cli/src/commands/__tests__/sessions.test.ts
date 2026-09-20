@@ -152,4 +152,44 @@ describe("trent sessions search", () => {
     expect(result.exitCode).toBe(EXIT.OK);
     expect((JSON.parse(result.stdout) as { hits: unknown[] }).hits).toEqual([]);
   });
+
+  // [X5] The same windows the `session_search` tool takes: `--after 7d` here and `"after":"7d"`
+  // there resolve through one parser, so a founder and a seat asking "last week" get one answer.
+  describe("time windows and exclusions", () => {
+    const PHRASE = "we decided to ship the founding price";
+    function seedTwoWeeks(): { recent: string; old: string } {
+      const manager = new SessionManager(new ConfigManager({ profile: "default" }));
+      const old = manager.startSession("ceo", "scripted-model", "scripted");
+      manager.appendMessage(old.id, { role: "assistant", content: `${PHRASE} at 49.` });
+      const recent = manager.startSession("ceo", "scripted-model", "scripted");
+      manager.appendMessage(recent.id, { role: "assistant", content: `${PHRASE} at 59.` });
+      // The store stamps the clock; the test needs one session a week older than the other.
+      const stored = manager.getSession(old.id)!;
+      stored.messages[0]!.timestamp = new Date(Date.now() - 12 * 24 * 60 * 60 * 1000).toISOString();
+      manager.getStore().save(stored, { touch: false });
+      return { recent: recent.id, old: old.id };
+    }
+
+    function ids(stdout: string): string[] {
+      return (JSON.parse(stdout) as { hits: { sessionId: string }[] }).hits.map((hit) => hit.sessionId);
+    }
+
+    it("--after 7d finds only this week's session, --before only the older one", async () => {
+      const { recent, old } = seedTwoWeeks();
+      const week = await runCli(["sessions", "search", PHRASE, "--after", "7d", "--json"]);
+      expect(week.exitCode).toBe(EXIT.OK);
+      expect(ids(week.stdout)).toEqual([recent]);
+      const earlier = await runCli(["sessions", "search", PHRASE, "--before", "7d", "--json"]);
+      expect(ids(earlier.stdout)).toEqual([old]);
+    });
+
+    it("--exclude leaves a session out; an unreadable bound is a usage error naming it", async () => {
+      const { recent, old } = seedTwoWeeks();
+      const excluded = await runCli(["sessions", "search", PHRASE, "--exclude", recent, "--json"]);
+      expect(ids(excluded.stdout)).toEqual([old]);
+      const bad = await runCli(["sessions", "search", PHRASE, "--after", "last tuesday", "--json"]);
+      expect(bad.exitCode).toBe(EXIT.USAGE);
+      expect(bad.stdout).toContain("after");
+    });
+  });
 });

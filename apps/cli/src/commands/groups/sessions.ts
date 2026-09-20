@@ -151,6 +151,10 @@ export const sessionsSpec: CommandSpec = {
       options: [
         { flags: "--limit <n>", description: "Maximum rows to return" },
         { flags: "--session <id>", description: "Search inside one session only" },
+        // [X5] The same bounds the `session_search` tool takes, through the same parser.
+        { flags: "--after <when>", description: "Only messages at or after an ISO date, or a window back from now: 24h, 7d, 2w" },
+        { flags: "--before <when>", description: "Only messages before an ISO date or a window back from now" },
+        { flags: "--exclude <ids>", description: "Comma-separated session ids to leave out" },
       ],
       run(ctx, opts, args) {
         const query = args.join(" ").trim();
@@ -158,12 +162,27 @@ export const sessionsSpec: CommandSpec = {
           throw new TrentError({ code: EXIT.USAGE, operation: "sessions.search", message: "a search needs a non-empty query" });
         }
         const limitRaw = typeof opts.limit === "string" ? Number(opts.limit) : Number.NaN;
-        const sessionId = typeof opts.session === "string" && opts.session.trim() !== "" ? opts.session.trim() : undefined;
-        const result = searchSessions(new SessionManager(ctx.config()).listSessions(), query, {
-          limit: Number.isFinite(limitRaw) ? limitRaw : SESSION_SEARCH_DEFAULT_LIMIT,
-          ...(sessionId === undefined ? {} : { sessionId }),
-        });
-        return { data: { query: result.query, backend: result.backend, count: result.hits.length, hits: result.hits } };
+        const text = (key: string): string | undefined => {
+          const value = opts[key];
+          return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+        };
+        const sessionId = text("session");
+        const after = text("after");
+        const before = text("before");
+        const excludeSessionIds = (text("exclude") ?? "").split(",").map((id) => id.trim()).filter((id) => id !== "");
+        try {
+          const result = searchSessions(new SessionManager(ctx.config()).listSessions(), query, {
+            limit: Number.isFinite(limitRaw) ? limitRaw : SESSION_SEARCH_DEFAULT_LIMIT,
+            ...(sessionId === undefined ? {} : { sessionId }),
+            ...(after === undefined ? {} : { after }),
+            ...(before === undefined ? {} : { before }),
+            ...(excludeSessionIds.length === 0 ? {} : { excludeSessionIds }),
+          });
+          return { data: { query: result.query, backend: result.backend, count: result.hits.length, hits: result.hits } };
+        } catch (error) {
+          // A bound that is neither a date nor a window is the caller's mistake, named as such.
+          throw new TrentError({ code: EXIT.USAGE, operation: "sessions.search", message: error instanceof Error ? error.message : String(error) });
+        }
       },
       render(data, ctx) {
         const d = data as { query: string; backend: string; count: number; hits: SessionSearchHit[] };

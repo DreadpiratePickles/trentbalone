@@ -55,6 +55,44 @@ describe("session_search", () => {
     expect(result.summary).toContain("no session");
   });
 
+  // [X5] Windows and exclusions ride the same action. The seed above is dated 2026-09-01; the
+  // second session here is a week later, and the tool is told what "now" is through the option
+  // the CLI and the tests share, so the shorthand windows are asserted against a fixed clock.
+  it("finds a phrase only inside the window asked for, and leaves excluded sessions out", async () => {
+    const store = new SessionStore(path.join(profileDir, "sessions"));
+    const later = store.createNew("engineer", "scripted-model", "scripted");
+    later.title = "Egress hardening, again";
+    later.messages = [
+      { id: "m1", role: "assistant", content: "The egress proxy refused the cloud metadata endpoint a second time.", timestamp: "2026-09-08T10:00:05.000Z" },
+    ];
+    store.save(later, { touch: false });
+    const adapter = createSessionSearchAdapter({ profileDir, now: () => "2026-09-10T00:00:00.000Z" });
+
+    const recent = await adapter.execute('session_search {"query":"cloud metadata endpoint","after":"7d"}', {});
+    expect(recent.status).toBe("completed");
+    expect(recent.summary).toContain(later.id);
+    expect(recent.summary).not.toContain("2026-09-01T10:00:05.000Z");
+
+    const earlier = await adapter.execute('session_search {"query":"cloud metadata endpoint","before":"2026-09-05T00:00:00.000Z"}', {});
+    expect(earlier.summary).toContain("2026-09-01T10:00:05.000Z");
+    expect(earlier.summary).not.toContain(later.id);
+
+    const excluded = await adapter.execute(`session_search {"query":"cloud metadata endpoint","exclude_session_ids":["${later.id}"]}`, {});
+    expect(excluded.summary).toContain("2026-09-01T10:00:05.000Z");
+    expect(excluded.summary).not.toContain(later.id);
+
+    const unreadable = await adapter.execute('session_search {"query":"cloud metadata endpoint","after":"last tuesday"}', {});
+    expect(unreadable.status).toBe("failed");
+    expect(unreadable.summary).toContain("after");
+  });
+
+  it("documents the window and exclusion parameters in its schema", async () => {
+    const { SESSION_SEARCH_TOOL_SCHEMAS } = await import("./index.js");
+    const properties = SESSION_SEARCH_TOOL_SCHEMAS[0]!.parameters.properties as Record<string, { description: string }>;
+    for (const key of ["after", "before", "exclude_session_ids"]) expect(properties[key]?.description).toBeTruthy();
+    expect(properties.after!.description).toMatch(/7d/);
+  });
+
   it("is a pure read: it never asks for approval", () => {
     const adapter = createSessionSearchAdapter({ profileDir });
     expect(adapter.requiresApproval('session_search {"query":"anything"}')).toBe(false);

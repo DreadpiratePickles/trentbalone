@@ -128,10 +128,19 @@ and a release with no text is a failure that says so.
 
 ## `session_search`
 
-`session_search {"query":"...", "session_id":"...", "limit":10}` searches this profile's past
-transcripts and returns the session id, the message index, the timestamp, the role and a snippet,
-best match first. `trent sessions search <query> [--limit n] [--session id] [--json]` is the same
-search from the command line.
+`session_search {"query":"...", "session_id":"...", "after":"7d", "before":"...", "exclude_session_ids":[...], "limit":10}`
+searches this profile's past transcripts and returns the session id, the message index, the
+timestamp, the role and a snippet, best match first.
+`trent sessions search <query> [--limit n] [--session id] [--after when] [--before when] [--exclude ids] [--json]`
+is the same search from the command line.
+
+Time windows (X5): `after` and `before` take an ISO date or a window counted back from now, `24h`,
+`7d` or `2w` (hours, days, weeks); a message outside the window is filtered out before ranking, on
+both backends, so it never appears. `exclude_session_ids` (`--exclude a,b` on the command line)
+leaves whole sessions out, typically the one the seat is in. A bound that reads as neither a date
+nor a window is refused by name (`failed` on the tool, exit code 2 on the command line) rather
+than widening the search to everything. The tool and the command share one parser
+(`sessions/search.ts`, `parseSearchInstant`), so `--after 7d` and `"after":"7d"` answer alike.
 
 Two backends, one row shape:
 
