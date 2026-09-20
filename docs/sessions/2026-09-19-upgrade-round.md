@@ -117,3 +117,14 @@ first vs hold; 8 RAG scope (cut E-final vs full); 9 platform applications and pa
   U4 packs + personas ("band of mismatched bandits") + core skill source, U5 `trent mcp serve`
   over toolsets + `fleet export --target claude`, U6 media host backend + transcription +
   `orchestrator.resume`.
+- U3 60ca092 (brain import) and U6 (media toolset + resume) landed. U4 (packs/personas) waits on
+  U5: their skill-store edits interleave (U4 frontmatter read in readFlat; U5 moved the parser to
+  skills/frontmatter.ts). Doctor is at 20 checks; docs-truth keeps the counts honest.
+- Wave 1 closed: U1 363cf10, U2 53796c6, U3 60ca092, U6 f403127, U4+U5 ff036d4. Working tree
+  synced to HEAD. Clean-HEAD evidence below.
+tsc exit=0
+core build exit=0
+repo-scan exit=0
+      Tests  3257 passed | 1 skipped (3258)
+ Test Files  327 passed (327)
+vitest exit=0
