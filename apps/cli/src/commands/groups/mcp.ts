@@ -13,6 +13,8 @@
  * itself as `flagged` (tool and categories, never the matched text) and a warning goes to stderr.
  * The entry also records `scanRan`, so a server that could not be reached at add time is visibly
  * unchecked; the result says so too.
+ *
+ * `serve` is the other direction, Trent AS an MCP server; it lives in `mcp-serve.ts` (U5).
  */
 import process from "node:process";
 import { MCP_CONNECTOR_GALLERY } from "@trent/core/mcp/index.js";
@@ -23,6 +25,7 @@ import { isBuiltinToolName } from "@trent/core/tools/tool-names.js";
 import { connectFailureReason, connectMcpServer, containsTemplate, mcpToolName, scanMcpTools, type McpScanFinding } from "@trent/core/tools/mcp/index.js";
 import type { CommandSpec } from "../registry.js";
 import type { CommandContext } from "../context.js";
+import { mcpServeSpec } from "./mcp-serve.js";
 
 export const MCP_CONFIG_KEY = "mcp_servers";
 const SECRET_HEADERS = new Set(["authorization", "proxy-authorization", "cookie", "x-api-key", "x-auth-token"]);
@@ -255,5 +258,6 @@ export const mcpSpec: CommandSpec = {
         return lines;
       },
     },
+    mcpServeSpec,
   ],
 };

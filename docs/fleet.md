@@ -205,16 +205,57 @@ promotes an installed agent onto active duty, which is what puts it in the orche
 ## Packs
 
 ```bash
+npm run cli -- fleet packs
+npm run cli -- fleet install small-business
 npm run cli -- fleet install engineering --pack
 npm run cli -- fleet install all --pack
 ```
 
-Available packs: `engineering`, `marketing`, `finance`, `support`, `executive`, `eng-trio`,
-`growth-engine`, `revops`, `security-audit`, `core-roles`, `all`.
+`fleet packs` lists every pack with its members, its skills, its persona path and a `state` line
+that says what executes today. `fleet install <id>` treats an exact pack id as a pack when no
+seat or specialist has that exact id; `--pack` forces it for the names a seat shares (`finance`,
+`support`). `--dry-run` names the members, skills and persona it would install and writes nothing.
+
+Grouping packs: `engineering`, `marketing`, `finance`, `support`, `executive`, `eng-trio`,
+`growth-engine`, `revops`, `security-audit`, `core-roles`, `all`. Their state line is derived from
+the membership: seats run in the planner; specialists install a profile and skills the seats can
+read and are never scheduled on their own.
 
 `all` installs the 164 specialists. It used to be labelled "164 specialists" and install nine core
 roles; the core roles are now their own pack, and a test asserts the `all` pack's agent list is
 exactly 164 long and that its name contains the number it promises.
+
+### The three market packs
+
+A market pack is a crew over existing seats, a set of trade skills, and a persona; it is not a
+new agent, and the planner still routes work to the nine seats. Installing one does three things:
+installs the members, installs the pack's skills into the profile store (every seat sees them
+through `skills_list`; uninstalling a member leaves them), and writes the persona to
+`brain/system/persona-<pack>.md` through the brain's own write path (committed when the brain is
+versioned, left alone when the bytes are unchanged, skipped when `brain.enabled` is false). The
+persona rides the stable tier of every prompt, so it is bounded at 1,800 characters and its bytes
+never change between runs.
+
+| Pack | Members | Skills | State today |
+|---|---|---|---|
+| `small-business` | `support`, `sales`, `finance`, `content` | `quote-estimate`, `invoice-draft`, `booking-followup`, `review-response`, `local-business-post` | Drafts only. Quotes, invoices, follow-ups, review replies and posts are written as files for the owner to send. Nothing is sent, booked, invoiced or posted until the business toolset (Stripe, Google Calendar, Square, Twilio) lands; each of those will then need the owner's approval. |
+| `social` | `content`, `growth`, `analyst`, `mkt-social-media-strategist`, `mkt-content-creator` | `content-calendar`, `brand-voice-capture`, `crosspost-adapt`, `comment-triage` | Drafts and plans only. No account is connected and nothing is published or replied to until the social toolset lands, after the business and media toolsets; publishing will need approval per post. |
+| `creator` | `content`, `mkt-short-video-editing-coach`, `mkt-video-optimization-specialist`, `design-image-prompt-engineer` | `hook-lab`, `caption-and-chapters`, `repurpose-plan`, `thumbnail-brief` | Text only, from a transcript or notes the owner supplies. No clipping, transcription or image rendering until the media toolset lands; the plans name the cuts and the owner makes them. |
+
+The personas ("The Counter Crew", "The Signal Crew", "The Cutting Room") give each member a voice,
+a signature move, a refusal and a handoff, all within what the seats can do today: they draft,
+the owner sends. Read one with `trent brain show system/persona-small-business.md`.
+
+### Skill sources
+
+Skills come from two directories in a fixed order: the app bundle `apps/web/.agents/skills/`
+(read-only) and the core source `packages/trent-core/skills/`, both in the Agent Skills layout
+(`<name>/SKILL.md` with `name`, `description`, `category`, `trust`, `version`, `author` and `tags`
+in the frontmatter, `references/` beside it). The app is read first, so on a name collision its
+copy wins and nothing in core can shadow a catalog skill. The thirteen pack skills live in the
+core source; each one says when to use it, what it needs, the exact output format, a worked
+example, and, wherever money, publishing or customer contact is involved, that the seat drafts
+and a human sends.
 
 ## Custom agents
 
@@ -268,9 +309,17 @@ never versioned) as a directory:
 
 ```
 engineer-v2/
-  agent.json                 schema, agentId, version, prompt, model, toolsets, hashes, skill slugs
+  agent.json                 schema, agentId, version, prompt, model, toolsets, hashes, skill slugs,
+                             and the seat record: name, toolsets, denied, approvalGates, budgetCents,
+                             modelTier, evalSuiteId (from the application's manifest for a seat;
+                             from the installed record for a custom agent; never invented)
   skills/<slug>/SKILL.md     one file per skill the version carries
+  skills/<slug>/<bundle>/    the skill's references/ scripts/ assets/ tools/ when the profile holds them
 ```
+
+`import` restores the seat record onto the agent's record (`agents/<id>.json`, `seat` block) and
+takes the per-run cap from it, in integer cents; a bundle written before the block existed still
+imports, with the profile's default cap.
 
 `import` reads the whole bundle, runs the [pre-install scan](skills.md#the-pre-install-scan) over the prompt in
 `agent.json` and over every `SKILL.md`, and refuses on any finding before a single write. The error
@@ -278,6 +327,44 @@ names the file and the scanner's category, never the offending text. What passes
 candidate version — never live; `fleet promote` is the human step — and the agent's record and its
 skill files land in the profile so `fleet deploy` can seat it. Exporting the imported agent from the
 fresh profile reproduces `agent.json` byte for byte.
+
+## Exporting to Claude Code and Grok Build
+
+```bash
+npm run cli -- fleet export engineer --target claude --out ./engineer-claude
+npm run cli -- fleet export executive --target claude --out ./exec-crew     # a pack
+```
+
+Implemented in `packages/trent-core/src/fleet/export-claude.ts`. The output is a directory a
+Claude Code user copies into a project; Grok Build reads the same files
+(`[compat.claude]`, research 1d), so one export serves both:
+
+```
+engineer-claude/
+  .claude/agents/engineer.md   the subagent: frontmatter name, description, tools; body below
+  .mcp.json                    the `trent` server: trent mcp serve --stdio --profile <profile>
+  skills/<slug>/SKILL.md       every skill the seat carries, in the Agent Skills layout, Trent's
+  skills/<slug>/<bundle>/      own fields (trust, status, created_by, ...) under metadata.trent,
+                               references/ scripts/ assets/ tools/ copied
+  agent.json + skills/         the plain bundle too, so `fleet import` reads it back
+```
+
+The subagent file's `tools:` line names only MCP tools the `trent` server exposes for the seat's
+toolsets, as Claude Code names them (`mcp__trent__read_file`, `mcp__trent__terminal`, ...); a
+seat whose manifest has no `terminal` (finance) gets no terminal tool. `model` is left out: the
+host chooses. The body carries, in order, the pack persona (when a pack is exported and
+`brain/system/persona-<pack>.md` exists in the profile), the seat prompt of the exported version,
+"What Trent asks before doing" (the `needs_approval` result and `trent approvals approve <id>`,
+the hardline rules, the approval floors, the seat's manifest gates and per-run cap, all read from
+the code, and the sentence that says the cap, floors, evals and pins are enforced by the running
+Trent, not by the file), and the skills as a bulleted index.
+
+A pack id exports one subagent per member that is a seat of the application or an agent installed
+in this profile; members that are neither are listed as skipped, never invented. Each member's
+plain bundle lands under `agents/<id>/`, the project's `skills/` is the union. Every file is text
+the profile already holds; nothing in it is a canned answer, and the tools only do anything while
+`trent mcp serve` is running with the gates behind it ([mcp.md](mcp.md#trent-as-an-mcp-server)).
+`--target codex` and `--target hermes` are not rendered yet (design v2 waves 2 and 3).
 
 ## Colour
 

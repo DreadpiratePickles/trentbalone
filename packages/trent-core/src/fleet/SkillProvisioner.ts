@@ -5,6 +5,11 @@
  * has to pass `SecurityScan` first. The two-phase `plan` / `commit` split exists so that a
  * refused install writes nothing at all: the scan runs over the whole set before the first file
  * is created, so an agent with one poisoned skill cannot leave the other fourteen behind.
+ *
+ * Two sources feed it, in a fixed order. The app bundle (`apps/web/.agents/skills`) is read-only
+ * and carries the skills the catalog refers to; the core source (`packages/trent-core/skills`) is
+ * where a skill the app cannot carry lives, in the same Agent Skills layout. The app is read
+ * first, so on a name collision its copy wins and nothing in core can shadow a catalog skill.
  */
 
 import fs from "node:fs";
@@ -46,7 +51,13 @@ export const BUNDLED_SKILLS_DIR = path.resolve(
   "apps/web/.agents/skills",
 );
 
-/** Reads `apps/web/.agents/skills/<slug>/SKILL.md`, the source the catalog's slugs refer to. */
+/** `packages/trent-core/skills`: the second source, for skills the read-only app bundle cannot carry. */
+export const CORE_SKILLS_DIR = path.resolve(MODULE_DIR, "../..", "skills");
+
+/** The lookup order. The app bundle is first, so on a name collision it wins. */
+export const DEFAULT_SKILL_SOURCE_DIRS: readonly string[] = [BUNDLED_SKILLS_DIR, CORE_SKILLS_DIR];
+
+/** Reads `<rootDir>/<slug>/SKILL.md`. */
 export function createDirectorySkillSource(rootDir: string = BUNDLED_SKILLS_DIR): SkillSource {
   return {
     read(slug: string): string | null {
@@ -62,13 +73,70 @@ export function createDirectorySkillSource(rootDir: string = BUNDLED_SKILLS_DIR)
   };
 }
 
+/** The roots in order; the first that carries the slug answers. The default is app, then core. */
+export function createLayeredSkillSource(rootDirs: readonly string[] = DEFAULT_SKILL_SOURCE_DIRS): SkillSource {
+  const sources = rootDirs.map((dir) => createDirectorySkillSource(dir));
+  return {
+    read(slug: string): string | null {
+      for (const source of sources) {
+        const content = source.read(slug);
+        if (content !== null) return content;
+      }
+      return null;
+    },
+  };
+}
+
+export interface SourceSkill {
+  /** The slug: the directory name. */
+  name: string;
+  /** The SKILL.md that answers for it. */
+  file: string;
+  /** The root it came from, which is the first root in order that carries the name. */
+  root: string;
+}
+
+/** Every skill the roots carry, one entry per name (first root wins), sorted by name. */
+export function listSourceSkills(rootDirs: readonly string[] = DEFAULT_SKILL_SOURCE_DIRS): SourceSkill[] {
+  const seen = new Map<string, SourceSkill>();
+  for (const root of rootDirs) {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (seen.has(name) || !SAFE_SLUG.test(name)) continue;
+      const file = path.join(root, name, "SKILL.md");
+      if (!fs.existsSync(file)) continue;
+      seen.set(name, { name, file, root });
+    }
+  }
+  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** `<skills>/<slug>/SKILL.md` or `<skills>/<category>/<slug>/SKILL.md`, without reading the store. */
+function hasCanonicalSkill(skillsDir: string, slug: string): boolean {
+  if (fs.existsSync(path.join(skillsDir, slug, "SKILL.md"))) return true;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  return entries.some(
+    (entry) => entry.isDirectory() && !entry.name.startsWith(".") && fs.existsSync(path.join(skillsDir, entry.name, slug, "SKILL.md")),
+  );
+}
+
 export class SkillProvisioner {
   private skillsDir: string;
   private source: SkillSource;
 
   constructor(skillsDir: string, source?: SkillSource) {
     this.skillsDir = skillsDir;
-    this.source = source ?? createDirectorySkillSource();
+    this.source = source ?? createLayeredSkillSource();
   }
 
   public fileFor(slug: string): string {
@@ -94,8 +162,10 @@ export class SkillProvisioner {
         continue;
       }
 
+      // Present in either form: the flat file this class writes, or the canonical
+      // `[<category>/]<slug>/SKILL.md` the store migrates it into on first read.
       const file = this.fileFor(slug);
-      if (fs.existsSync(file)) {
+      if (fs.existsSync(file) || hasCanonicalSkill(this.skillsDir, slug)) {
         present.push(slug);
         continue;
       }

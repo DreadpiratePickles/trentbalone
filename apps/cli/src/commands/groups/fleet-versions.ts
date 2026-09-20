@@ -5,7 +5,10 @@
  *                                current definition as the next candidate
  *   promote <id> <version>       candidate -> live; the previous live is archived, the ledger records it
  *   rollback <id>                reverse the latest promotion through the improve ledger
- *   export <id> <dir>            agent.json + skills/<slug>/SKILL.md
+ *   export <id> [dir]            agent.json + skills/<slug>/SKILL.md (with the seat record and bundle dirs)
+ *     --target claude --out DIR  [U5] the droppable Claude Code / Grok Build layout on top of it:
+ *                                `.claude/agents/<id>.md`, `.mcp.json`, skills in the Agent Skills shape;
+ *                                a pack id exports every seat member with the pack's persona
  *   import <dir>                 scan every file, then file the bundle as a new candidate (never live)
  *
  * The store is the profile's `trent.db` through the same opener `trent improve` uses; the seat
@@ -16,7 +19,7 @@
 import path from "node:path";
 
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
-import { createAgentVersions, createProfileDefinitionSource, exportAgent, importAgent, type AgentVersions } from "@trent/core/fleet/index.js";
+import { createAgentVersions, createProfileDefinitionSource, exportAgent, exportClaudeAgents, importAgent, type AgentVersions } from "@trent/core/fleet/index.js";
 import { defaultSeatPromptProvider } from "@trent/core/improve/index.js";
 import type { AgentVersionRow, ImproveStorePort } from "@trent/core/store/index.js";
 
@@ -171,21 +174,70 @@ const rollbackSpec: CommandSpec = {
   },
 };
 
+/** The renderers `--target` knows. `trent` is the plain bundle; `claude` is read by Claude Code and Grok Build. */
+const EXPORT_TARGETS: readonly string[] = ["trent", "claude"];
+
+function exportTarget(opts: Record<string, unknown>, agentId: string): string {
+  const target = typeof opts.target === "string" && opts.target !== "" ? opts.target : "trent";
+  if (!EXPORT_TARGETS.includes(target)) {
+    throw new TrentError({ code: EXIT.USAGE, operation: "fleet.export", message: `unknown --target "${target}"; one of ${EXPORT_TARGETS.join(", ")}`, target: agentId });
+  }
+  return target;
+}
+
+/** The positional dir, else `--out`; one of them is required. */
+function exportDir(opts: Record<string, unknown>, args: readonly string[], agentId: string): string {
+  const positional = typeof args[1] === "string" && args[1] !== "" ? args[1] : undefined;
+  const out = typeof opts.out === "string" && opts.out !== "" ? opts.out : undefined;
+  const chosen = positional ?? out;
+  if (chosen === undefined) {
+    throw new TrentError({ code: EXIT.USAGE, operation: "fleet.export", message: "give the output directory as the second argument or with --out <dir>", target: agentId });
+  }
+  return path.resolve(chosen);
+}
+
 const exportSpec: CommandSpec = {
-  name: "export <agentId> <dir>",
-  description: "Write an agent's live version as <dir>/agent.json plus <dir>/skills/<slug>/SKILL.md",
-  run: (ctx, _opts, args) =>
-    withVersions(ctx, async ({ versions }) => {
+  name: "export <agentId> [dir]",
+  description: "Write an agent's live version as <dir>/agent.json plus <dir>/skills/<slug>/SKILL.md; --target claude adds the Claude Code layout",
+  options: [
+    { flags: "--target <format>", description: `Output layout: ${EXPORT_TARGETS.join(" | ")} (default trent)` },
+    { flags: "--out <dir>", description: "Output directory, instead of the positional one" },
+  ],
+  run: (ctx, opts, args) =>
+    withVersions(ctx, async ({ versions, agentsDir, skillsDir }) => {
       const agentId = String(args[0] ?? "");
-      const dir = path.resolve(String(args[1] ?? ""));
-      if (ctx.dryRun) return { data: { dryRun: true, command: "fleet export", agentId, dir } };
-      const result = await exportAgent({ versions, agentId, dir });
-      return { data: { agentId: result.agentId, version: result.version, dir, files: result.files.map((f) => path.relative(dir, f)) } };
+      const target = exportTarget(opts, agentId);
+      if (ctx.dryRun) return { data: { dryRun: true, command: "fleet export", agentId, target, dir: typeof args[1] === "string" ? path.resolve(args[1]) : typeof opts.out === "string" ? path.resolve(opts.out) : null } };
+      const dir = exportDir(opts, args, agentId);
+      if (target === "claude") {
+        const result = await exportClaudeAgents({ versions, target: agentId, dir, profileDir: ctx.config().getProfileDir(), skillsDir, agentsDir, profile: ctx.profile });
+        return {
+          data: {
+            agentId,
+            target,
+            dir,
+            agents: result.agents,
+            skipped: result.skipped,
+            ...(result.pack === undefined ? {} : { pack: result.pack }),
+            persona: result.persona,
+            files: result.files.map((f) => path.relative(dir, f)),
+          },
+        };
+      }
+      const result = await exportAgent({ versions, agentId, dir, skillsDir, agentsDir });
+      return { data: { agentId, target, version: result.version, dir, files: result.files.map((f) => path.relative(dir, f)) } };
     }),
   render: (data, ctx) => {
-    const d = data as { agentId: string; dir: string; version?: number; files?: string[]; dryRun?: boolean };
-    if (d.dryRun === true) return [`  ${ctx.theme.meta("would export")} ${d.agentId} -> ${d.dir}`];
-    return [`  ${ctx.theme.success("exported")} ${ctx.theme.value(`${d.agentId} v${String(d.version)}`)} -> ${d.dir}`, ...(d.files ?? []).map((f) => `    ${ctx.theme.meta(f)}`)];
+    const d = data as { agentId: string; dir: string | null; target?: string; version?: number; files?: string[]; dryRun?: boolean; agents?: string[]; skipped?: Array<{ agentId: string; reason: string }>; persona?: boolean };
+    if (d.dryRun === true) return [`  ${ctx.theme.meta("would export")} ${d.agentId} ${ctx.theme.meta(`(${String(d.target)})`)} -> ${String(d.dir)}`];
+    if (d.target === "claude") {
+      return [
+        `  ${ctx.theme.success("exported")} ${ctx.theme.value(d.agents?.join(", ") ?? d.agentId)} ${ctx.theme.meta(`for Claude Code${d.persona === true ? ", with the pack persona" : ""}`)} -> ${String(d.dir)}`,
+        ...(d.skipped ?? []).map((s) => `  ${ctx.theme.meta(`skipped ${s.agentId}: ${s.reason}`)}`),
+        ...(d.files ?? []).map((f) => `    ${ctx.theme.meta(f)}`),
+      ];
+    }
+    return [`  ${ctx.theme.success("exported")} ${ctx.theme.value(`${d.agentId} v${String(d.version)}`)} -> ${String(d.dir)}`, ...(d.files ?? []).map((f) => `    ${ctx.theme.meta(f)}`)];
   },
 };
 

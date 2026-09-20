@@ -324,6 +324,22 @@ export class AgentInstaller {
     return agent;
   }
 
+  /**
+   * Materialise skills that belong to the profile rather than to one agent: a pack's trade skills.
+   * Same two phases as an agent install: the whole set is scanned before the first write, and
+   * `owner` names who asked in the refusal (`pack:small-business`).
+   */
+  public provisionSkills(slugs: readonly string[], owner: string): { installed: string[]; present: string[]; unresolved: string[] } {
+    this.configManager.ensureDirs();
+    const plan = this.provisioner.plan(slugs, owner);
+    this.provisioner.commit(plan);
+    return {
+      installed: plan.writes.map((w) => w.slug).sort(),
+      present: [...plan.present].sort(),
+      unresolved: [...plan.unresolved],
+    };
+  }
+
   // -------------------------------------------------------------- uninstall
 
   /**

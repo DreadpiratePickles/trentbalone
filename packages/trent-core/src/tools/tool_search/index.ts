@@ -236,6 +236,12 @@ export interface UnknownToolRecord extends ToolCallRecord {
 export interface ToolBridgeAdapter extends TrentToolAdapter {
   /** The same bridge over a subset of the adapters: how `adaptersForSeat` keeps the per-seat gate. */
   restrict(keep: (adapter: TrentToolAdapter) => boolean): ToolBridgeAdapter;
+  /**
+   * U5. Every tool this bridge is hiding right now, with its owning adapter and schema block: the
+   * same rows `tool_search` ranks, unranked and unlimited. A surface that lists Trent's tools to
+   * a host (`trent mcp serve`) reads this; a seat still goes through `tool_search`.
+   */
+  deferred(): DeferredTool[];
 }
 
 export function isToolBridge(adapter: TrentToolAdapter): adapter is ToolBridgeAdapter {
@@ -365,6 +371,7 @@ function createBridge(adapters: readonly TrentToolAdapter[], disclosure: Disclos
       const kept = adapters.filter(keep);
       return createBridge(kept, disclosure.forAdapters(kept));
     },
+    deferred: () => disclosure.deferred(),
     async cleanup() {},
   };
   return bridge;

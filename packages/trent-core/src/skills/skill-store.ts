@@ -17,7 +17,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { NODE_IO, atomicWriteFileSync } from "../config/atomic-fs.js";
+import { parseFrontmatter, renderFrontmatter } from "./frontmatter.js";
 import { NO_USAGE, forgetSkillUsage, readSkillUsage } from "./usage.js";
+
+// [U5] The parser and renderer live in `./frontmatter.ts`; every reader keeps importing them here.
+export { parseFrontmatter, renderFrontmatter, type Frontmatter } from "./frontmatter.js";
 
 export type SkillTrust = "builtin" | "official" | "trusted" | "community";
 
@@ -115,29 +119,6 @@ export function isAdvertised(record: Pick<SkillRecord, "status">): boolean {
 /** [D3] The curator may age, archive and draft against declared agent skills, and nothing else. */
 export function isCuratable(record: Pick<SkillRecord, "createdBy">): boolean {
   return record.createdBy === "agent";
-}
-
-interface Frontmatter {
-  fields: Record<string, string>;
-  body: string;
-}
-
-export function parseFrontmatter(text: string): Frontmatter {
-  const m = /^---\n([\s\S]*?)\n---\n?/.exec(text);
-  if (!m) return { fields: {}, body: text };
-  const fields: Record<string, string> = {};
-  for (const line of m[1]!.split("\n")) {
-    const idx = line.indexOf(":");
-    if (idx > 0) fields[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-  }
-  return { fields, body: text.slice(m[0].length) };
-}
-
-export function renderFrontmatter(fields: Record<string, string>, body: string): string {
-  const head = Object.entries(fields)
-    .map(([k, v]) => `${k}: ${v.replace(/\n/g, " ")}`)
-    .join("\n");
-  return `---\n${head}\n---\n${body}`;
 }
 
 function headingMeta(body: string, fallbackTitle: string): { title: string; description: string } {
@@ -253,7 +234,13 @@ function readFlat(skillsDir: string, file: string): SkillRecord | null {
       instructions: str("instructions") || str("content"),
     };
   }
-  const meta = headingMeta(text, name);
+  // A flat `.md` the provisioner wrote is a bundled SKILL.md verbatim, Agent Skills frontmatter
+  // included. That frontmatter is the skill's own metadata and the body is its instructions; a
+  // flat file with no frontmatter is read from its heading and first quote, as it always was.
+  const { fields, body } = parseFrontmatter(text);
+  const meta = headingMeta(body, name);
+  const category = fields.category || DEFAULT_SKILL_CATEGORY;
+  const tags = splitTags(fields.tags);
   return {
     status: DEFAULT_SKILL_STATUS,
     createdBy: "import",
@@ -261,16 +248,16 @@ function readFlat(skillsDir: string, file: string): SkillRecord | null {
     quarantineReason: null,
     ...NO_USAGE,
     name,
-    title: meta.title,
-    description: meta.description || `Skill for ${meta.title}`,
-    category: DEFAULT_SKILL_CATEGORY,
-    trust: MIGRATED_SKILL_TRUST,
-    version: DEFAULT_SKILL_VERSION,
-    author: "community",
-    tags: [DEFAULT_SKILL_CATEGORY],
+    title: meta.title !== name ? meta.title : fields.name || name,
+    description: fields.description || meta.description || `Skill for ${meta.title}`,
+    category,
+    trust: SKILL_TRUST_TIERS.includes(fields.trust as SkillTrust) ? (fields.trust as SkillTrust) : MIGRATED_SKILL_TRUST,
+    version: fields.version || DEFAULT_SKILL_VERSION,
+    author: fields.author || "community",
+    tags: tags.length > 0 ? tags : [category],
     dir: null,
     file,
-    instructions: text,
+    instructions: body,
   };
 }
 

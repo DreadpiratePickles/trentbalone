@@ -1,13 +1,14 @@
 import { ConfigManager } from "../config/ConfigManager.js";
 import { AGENT_CATALOG, type CatalogAgent } from "../agents/index.js";
 import { TrentError, EXIT } from "../errors/index.js";
+import { createBrain, type Brain } from "../fleet-memory/brain.js";
 import {
   AgentInstaller,
   CORE_ROLES,
   CORE_ROLE_TOOLS,
   type InstalledAgentConfig,
 } from "./AgentInstaller.js";
-import { FLEET_PACKS, resolveFleetPack } from "./FleetPacks.js";
+import { FLEET_PACKS, PERSONA_LIMIT_CHARS, isFleetPackId, packPersona, personaPathFor, resolveFleetPack, type FleetPack } from "./FleetPacks.js";
 import { FleetUsage, type RecordSpendOptions, type SpendEntry } from "./FleetUsage.js";
 import type { SkillSource } from "./SkillProvisioner.js";
 
@@ -52,18 +53,54 @@ export interface FleetStatusReport {
 export interface FleetManagerOptions {
   skillSource?: SkillSource;
   usage?: FleetUsage;
+  /**
+   * The brain a pack persona is written through. Absent, one is built from the profile and the
+   * `brain` config block at install time; `brain.enabled: false` there means no persona is written.
+   */
+  brain?: Brain;
+}
+
+/** What a pack install did to the persona, so the CLI can say it truthfully. */
+export type PackPersonaOutcome =
+  | { status: "written" | "unchanged"; relativePath: string; bytes: number; committed: boolean }
+  /** The pack is a grouping with no persona. */
+  | { status: "none" }
+  /** `brain.enabled` is false in this profile. */
+  | { status: "disabled" };
+
+export interface PackInstallResult {
+  pack: FleetPack;
+  agents: InstalledAgentConfig[];
+  /** The pack's own skills: written now, already on disk, or carried by no source. */
+  skills: { installed: string[]; present: string[]; unresolved: string[] };
+  persona: PackPersonaOutcome;
+}
+
+export interface FleetPackSummary {
+  id: string;
+  name: string;
+  description: string;
+  state: string;
+  members: string[];
+  skills: string[];
+  /** True when every member is installed in this profile. */
+  installed: boolean;
+  /** The persona's path inside `brain/`, or null for a grouping. */
+  persona: string | null;
 }
 
 export class FleetManager {
   private configManager: ConfigManager;
   private installer: AgentInstaller;
   private usage: FleetUsage;
+  private brainOption: Brain | undefined;
 
   constructor(configManager?: ConfigManager, options?: FleetManagerOptions) {
     this.configManager = configManager || new ConfigManager();
     const installerOptions = options?.skillSource ? { skillSource: options.skillSource } : undefined;
     this.installer = new AgentInstaller(this.configManager, installerOptions);
     this.usage = options?.usage ?? new FleetUsage(this.configManager);
+    this.brainOption = options?.brain;
   }
 
   public listCatalog(): CatalogAgent[] {
@@ -136,11 +173,38 @@ export class FleetManager {
   }
 
   /**
-   * Install every agent a pack advertises. A pack that cannot install all of them throws with
-   * the failures named — a partial install reported as success is how "Full 164-Specialist
-   * Fleet" came to mean nine agents.
+   * True when `query` names a pack exactly and no seat or specialist exactly, so `fleet install
+   * social` can mean the pack without `--pack`. A substring that happens to match specialists does
+   * not count against the pack: an exact pack id outranks a fuzzy agent match.
    */
-  public installPack(packId: string): InstalledAgentConfig[] {
+  public isPackQuery(query: string): boolean {
+    const norm = query.toLowerCase().trim();
+    if (!isFleetPackId(norm)) return false;
+    if (CORE_ROLES[norm]) return false;
+    return !AGENT_CATALOG.some((agent) => agent.id.toLowerCase() === norm || agent.name.toLowerCase() === norm);
+  }
+
+  /** Every pack, with whether this profile has all of its members installed. */
+  public listPacks(): FleetPackSummary[] {
+    const installed = new Set(this.configManager.loadConfig().fleet?.installed_agents ?? []);
+    return Object.values(FLEET_PACKS).map((pack) => ({
+      id: pack.id,
+      name: pack.name,
+      description: pack.description,
+      state: pack.state,
+      members: [...pack.agents],
+      skills: [...pack.skills],
+      installed: pack.agents.every((id) => installed.has(id)),
+      persona: packPersona(pack) === null ? null : personaPathFor(pack),
+    }));
+  }
+
+  /**
+   * Install every agent a pack advertises, then its own skills, then its persona. A pack that
+   * cannot install all of its agents throws with the failures named — a partial install reported
+   * as success is how "Full 164-Specialist Fleet" came to mean nine agents.
+   */
+  public installPack(packId: string): PackInstallResult {
     const pack = resolveFleetPack(packId);
     if (!pack) {
       throw new TrentError({
@@ -152,12 +216,12 @@ export class FleetManager {
       });
     }
 
-    const results: InstalledAgentConfig[] = [];
+    const agents: InstalledAgentConfig[] = [];
     const failures: Array<{ agentId: string; reason: string }> = [];
 
     for (const agentId of pack.agents) {
       try {
-        results.push(this.installer.install(agentId));
+        agents.push(this.installer.install(agentId));
       } catch (err) {
         failures.push({ agentId, reason: err instanceof Error ? err.message : String(err) });
       }
@@ -171,11 +235,47 @@ export class FleetManager {
           `Pack "${pack.id}" advertises ${pack.agents.length} agents but ${failures.length} ` +
           `failed to install: ${failures.map((f) => f.agentId).join(", ")}`,
         target: pack.id,
-        context: { installed: results.length, failures },
+        context: { installed: agents.length, failures },
       });
     }
 
-    return results;
+    const skills = this.installer.provisionSkills(pack.skills, `pack:${pack.id}`);
+    return { pack, agents, skills, persona: this.writePersona(pack) };
+  }
+
+  /**
+   * The persona goes through the brain's own write path, so it is atomic, under the memory lock
+   * and committed when the brain is versioned. Identical bytes are left alone: a reinstall must
+   * not churn the brain's history or move the stable tier.
+   */
+  private writePersona(pack: FleetPack): PackPersonaOutcome {
+    const persona = packPersona(pack);
+    if (persona === null) return { status: "none" };
+    if (persona.length >= PERSONA_LIMIT_CHARS) {
+      throw new TrentError({
+        code: EXIT.CONFIG,
+        operation: "fleet.installPack.persona",
+        message: `The ${pack.id} persona is ${persona.length} characters; the limit is ${PERSONA_LIMIT_CHARS}.`,
+        target: pack.id,
+      });
+    }
+    const brain = this.brainFor();
+    if (brain === null) return { status: "disabled" };
+    brain.ensure();
+    const relativePath = personaPathFor(pack);
+    if (brain.readFile(relativePath) === persona) {
+      return { status: "unchanged", relativePath, bytes: persona.length, committed: false };
+    }
+    const written = brain.writeFile(relativePath, persona, { writer: "human" });
+    return { status: "written", relativePath, bytes: written.bytes, committed: written.committed };
+  }
+
+  /** The injected brain, or one built from config; null when the profile has the brain off. */
+  private brainFor(): Brain | null {
+    if (this.brainOption) return this.brainOption;
+    const settings = this.configManager.loadConfig().brain;
+    if (settings.enabled === false) return null;
+    return createBrain({ profileDir: this.configManager.getProfileDir(), versioning: settings.versioning });
   }
 
   public deploy(agentId: string): boolean {

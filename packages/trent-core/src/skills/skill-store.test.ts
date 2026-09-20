@@ -15,6 +15,7 @@ import {
   findSkillRecord,
   listSkillRecords,
   listAdvertisedSkillRecords,
+  parseFrontmatter,
   removeSkillRecord,
   writeSkillRecord,
 } from "./skill-store.js";
@@ -125,6 +126,68 @@ describe("skill store: migration of the flat form", () => {
     expect(second.map((r) => r.name)).toEqual(["repo-audit", "runway"]);
     expect(lines).toEqual([]);
     expect(fs.statSync(audit.file).mtimeMs).toBe(stamp);
+  });
+
+  // The provisioner writes a bundled SKILL.md verbatim as `<slug>.md`, Agent Skills frontmatter
+  // and all. That frontmatter is the skill's own metadata, so the migration has to read it: before
+  // this test the store took the description from a stray `> ` line of the body and wrapped the
+  // whole document, frontmatter included, inside a second frontmatter.
+  it("migrates a flat markdown skill that carries Agent Skills frontmatter with its own metadata and body, once", () => {
+    fs.writeFileSync(
+      path.join(skillsDir, "quote-estimate.md"),
+      [
+        "---",
+        "name: quote-estimate",
+        "description: Turn a site visit into a written quote.",
+        "category: small-business",
+        "trust: official",
+        "version: 1.2.0",
+        "author: trent",
+        "tags: quotes, pricing",
+        "---",
+        "# Quote and Estimate",
+        "",
+        "> A quoted line that is part of the body, not the description.",
+        "",
+        "Price the job line by line.",
+        "",
+      ].join("\n"),
+    );
+
+    const [record] = listSkillRecords(skillsDir, sink());
+    expect(record?.name).toBe("quote-estimate");
+    expect(record?.title).toBe("Quote and Estimate");
+    expect(record?.description).toBe("Turn a site visit into a written quote.");
+    expect(record?.category).toBe("small-business");
+    expect(record?.trust).toBe("official");
+    expect(record?.version).toBe("1.2.0");
+    expect(record?.author).toBe("trent");
+    expect(record?.tags).toEqual(["quotes", "pricing"]);
+    expect(record?.file).toBe(path.join(skillsDir, "small-business", "quote-estimate", SKILL_FILE));
+    expect(record?.instructions).toContain("Price the job line by line.");
+    expect(record?.instructions).not.toContain("description: Turn a site visit");
+
+    // Exactly one frontmatter block on disk, and the body starts with the heading.
+    const text = fs.readFileSync(record!.file, "utf8");
+    expect(text.split("\n---\n").length).toBe(2);
+    expect(text).toContain("\n---\n# Quote and Estimate");
+    expect(text).toContain("description: Turn a site visit into a written quote.");
+    expect(text).not.toContain("name: quote-estimate\n");
+
+    // A flat file that names no frontmatter keeps the heading-and-quote reading it always had.
+    const again = listSkillRecords(skillsDir, sink());
+    expect(again.map((r) => r.name)).toEqual(["quote-estimate"]);
+    expect(lines).toHaveLength(1);
+  });
+
+  // The app bundle quotes some descriptions the YAML way (`description: "When the user..."`); a
+  // quoted scalar is its content, not its quote marks.
+  it("reads a quoted frontmatter scalar without its quote marks", () => {
+    expect(parseFrontmatter('---\ndescription: "Paid ads, quoted."\nauthor: \'trent\'\n---\nBody.\n').fields).toEqual({
+      description: "Paid ads, quoted.",
+      author: "trent",
+    });
+    expect(parseFrontmatter("---\ndescription: unquoted: with a colon\n---\n").fields.description).toBe("unquoted: with a colon");
   });
 
   it("never overwrites an existing canonical skill and never drops a name it cannot migrate", () => {

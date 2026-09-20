@@ -25,6 +25,7 @@
     "./evals": "./src/evals/index.ts",
     "./readiness": "./src/readiness/index.ts",
     "./mcp": "./src/mcp/index.ts",
+    "./mcp-server": "./src/mcp-server/index.ts",
     "./agents": "./src/agents/index.ts",
     "./marketplace": "./src/marketplace/index.ts",
     "./gepa": "./src/gepa/index.ts",

@@ -8,3 +8,4 @@ export * from "./AgentVersions.js";
 export * from "./agent-definition.js";
 export * from "./version-pin-hook.js";
 export * from "./export.js";
+export * from "./export-claude.js";

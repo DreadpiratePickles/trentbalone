@@ -75,6 +75,33 @@ describe("SkillsHub & SecurityScan", () => {
     expect(fs.existsSync(path.dirname(file))).toBe(false);
   });
 
+  // The two bundled sources (the app's `.agents/skills`, then `packages/trent-core/skills`) are
+  // installable by slug through the same store the fleet installer writes, and searchable, so a
+  // pack skill can be installed on its own and found by a word from its description.
+  it("installs a bundled skill by slug from either source, with the frontmatter's own metadata", () => {
+    const core = hub.install("quote-estimate");
+    expect(core.slug).toBe("quote-estimate");
+    expect(core.description).toContain("written quote");
+    expect(core.instructions).toContain("## Output format");
+    expect(core.instructions).not.toContain("Custom skill");
+    const file = path.join(configManager.getSkillsDir(), "small-business", "quote-estimate", "SKILL.md");
+    expect(fs.existsSync(file)).toBe(true);
+    expect(fs.readFileSync(file, "utf8")).toContain("trust: official");
+
+    const app = hub.install("customer-escalation");
+    expect(app.instructions).toContain("escalation");
+    expect(app.instructions).not.toContain("Custom skill");
+    expect(hub.listInstalled().map((s) => s.slug)).toEqual(["customer-escalation", "quote-estimate"]);
+  });
+
+  it("search finds a bundled skill by a word in its description, after the built-in catalog", () => {
+    const found = hub.search("invoice");
+    expect(found.map((s) => s.slug)).toContain("invoice-draft");
+    expect(found.find((s) => s.slug === "invoice-draft")?.category).toBe("small-business");
+    // Built-in catalog entries still come first.
+    expect(hub.search("audit")[0]?.slug).toBe("repo-audit");
+  });
+
   it("lists a skill the agent authored through the skills toolset, and migrates a legacy flat file", () => {
     const skillsDir = configManager.getSkillsDir();
     fs.mkdirSync(path.join(skillsDir, "growth", "outreach"), { recursive: true });

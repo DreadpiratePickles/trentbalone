@@ -3,7 +3,14 @@
  * moved to `./skills.ts`, where it shares one store with the `skills` toolset.
  */
 
-import { FleetManager, SEAT_CAPABILITIES, isSeatRole, seatCapability } from "@trent/core/fleet/index.js";
+import {
+  FleetManager,
+  SEAT_CAPABILITIES,
+  isSeatRole,
+  resolveFleetPack,
+  seatCapability,
+  type PackPersonaOutcome,
+} from "@trent/core/fleet/index.js";
 import { resolveSeatModel } from "@trent/core/orchestrator/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import fs from "node:fs";
@@ -130,26 +137,104 @@ export const fleetSpec: CommandSpec = {
       },
     },
     {
+      name: "packs",
+      description: "List the fleet packs: members, skills and what each one executes today",
+      run(ctx) {
+        const packs = new FleetManager(ctx.config()).listPacks();
+        return { data: { count: packs.length, packs } };
+      },
+      render(data, ctx) {
+        const d = data as {
+          count: number;
+          packs: { id: string; name: string; state: string; members: string[]; skills: string[]; installed: boolean; persona: string | null }[];
+        };
+        const lines = [ctx.theme.emphasis(`FLEET PACKS (${d.count})`)];
+        for (const pack of d.packs) {
+          const mark = pack.installed ? ctx.theme.success("installed") : ctx.theme.meta("available");
+          lines.push(`  ${mark} ${ctx.theme.value(pack.id)} ${ctx.theme.body(pack.name)}`);
+          lines.push(`    ${ctx.theme.meta("members")} ${ctx.theme.body(pack.members.length > 12 ? `${pack.members.length} specialists` : pack.members.join(", "))}`);
+          if (pack.skills.length > 0) lines.push(`    ${ctx.theme.meta("skills")}  ${ctx.theme.body(pack.skills.join(", "))}`);
+          if (pack.persona !== null) lines.push(`    ${ctx.theme.meta("persona")} ${ctx.theme.body(`brain/${pack.persona}`)}`);
+          lines.push(`    ${ctx.theme.meta("state")}   ${ctx.theme.body(pack.state)}`);
+        }
+        return lines;
+      },
+    },
+    {
       name: "install <agentId>",
-      description: "Install an agent with its tools, skills and model policy",
-      options: [{ flags: "--pack", description: "Install a whole category pack" }],
+      description: "Install an agent, or a pack: its members, its skills and its persona",
+      options: [{ flags: "--pack", description: "Treat the id as a pack (needed when a seat has the same name)" }],
       run(ctx, opts, args) {
         const agentId = String(args[0]);
-        if (ctx.dryRun) {
-          return { data: { dryRun: true, command: "fleet install", agentId, pack: opts.pack === true } };
-        }
         const fleet = new FleetManager(ctx.config());
-        if (opts.pack === true) {
-          const installed = fleet.installPack(agentId);
-          return { data: { pack: agentId, installed: installed.map((a) => a.id) } };
+        // An exact pack id that names no seat or specialist is a pack without the flag; a name
+        // both share (`finance`, `support`) stays the seat unless `--pack` says otherwise.
+        const asPack = opts.pack === true || fleet.isPackQuery(agentId);
+        if (ctx.dryRun) {
+          const pack = asPack ? resolveFleetPack(agentId) : undefined;
+          if (pack) {
+            return {
+              data: {
+                dryRun: true,
+                command: "fleet install",
+                agentId,
+                pack: true,
+                members: [...pack.agents],
+                skills: [...pack.skills],
+                persona: fleet.listPacks().find((p) => p.id === pack.id)?.persona ?? null,
+              },
+            };
+          }
+          return { data: { dryRun: true, command: "fleet install", agentId, pack: asPack } };
+        }
+        if (asPack) {
+          const result = fleet.installPack(agentId);
+          return {
+            data: {
+              pack: result.pack.id,
+              installed: result.agents.map((a) => a.id),
+              skills: result.skills,
+              persona: result.persona,
+            },
+          };
         }
         const agent = fleet.install(agentId);
         return { data: { installed: [agent.id], agent: { id: agent.id, name: agent.name } } };
       },
       render(data, ctx) {
-        const d = data as { installed?: string[]; dryRun?: boolean; agentId?: string };
-        if (d.dryRun === true) return [`  ${ctx.theme.meta("would install")} ${String(d.agentId)}`];
-        return [`  ${ctx.theme.success("installed")} ${ctx.theme.value((d.installed ?? []).join(", "))}`];
+        const d = data as {
+          installed?: string[];
+          dryRun?: boolean;
+          agentId?: string;
+          pack?: boolean | string;
+          members?: string[];
+          skills?: string[] | { installed: string[]; present: string[]; unresolved: string[] };
+          persona?: string | null | PackPersonaOutcome;
+        };
+        if (d.dryRun === true) {
+          const lines = [`  ${ctx.theme.meta("would install")} ${String(d.agentId)}`];
+          if (d.members) lines.push(`  ${ctx.theme.meta("members")} ${ctx.theme.body(d.members.join(", "))}`);
+          if (Array.isArray(d.skills) && d.skills.length > 0) lines.push(`  ${ctx.theme.meta("skills")}  ${ctx.theme.body(d.skills.join(", "))}`);
+          if (typeof d.persona === "string") lines.push(`  ${ctx.theme.meta("persona")} ${ctx.theme.body(`brain/${d.persona}`)}`);
+          return lines;
+        }
+        const lines = [`  ${ctx.theme.success("installed")} ${ctx.theme.value((d.installed ?? []).join(", "))}`];
+        if (d.skills && !Array.isArray(d.skills)) {
+          const skills = d.skills;
+          if (skills.installed.length > 0) lines.push(`  ${ctx.theme.meta("skills")}  ${ctx.theme.body(skills.installed.join(", "))}`);
+          if (skills.present.length > 0) lines.push(`  ${ctx.theme.meta("present")} ${ctx.theme.body(skills.present.join(", "))}`);
+          if (skills.unresolved.length > 0) lines.push(`  ${ctx.theme.needsApproval("unresolved")} ${ctx.theme.body(skills.unresolved.join(", "))}`);
+        }
+        if (d.persona && typeof d.persona === "object") {
+          const persona = d.persona;
+          if (persona.status === "written" || persona.status === "unchanged") {
+            const commit = persona.committed ? ", committed" : "";
+            lines.push(`  ${ctx.theme.meta("persona")} ${ctx.theme.body(`brain/${persona.relativePath} (${persona.status}${commit})`)}`);
+          } else if (persona.status === "disabled") {
+            lines.push(`  ${ctx.theme.meta("persona")} ${ctx.theme.body("not written: brain.enabled is false in this profile")}`);
+          }
+        }
+        return lines;
       },
     },
     {

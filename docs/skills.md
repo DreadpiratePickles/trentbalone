@@ -97,6 +97,13 @@ improve; `skill_manage` writes `community`.
 
 Files are written with an atomic write-then-rename, `0600` inside a `0700` directory.
 
+`fleet install` materialises a bundled skill as a flat `<slug>.md` first; the store converts it to
+the directory form on the next read. A flat file that carries Agent Skills frontmatter keeps its
+own metadata through that conversion (name, description, category, trust, version, author, tags)
+and its body becomes the instructions; a flat file without frontmatter is read from its heading
+and first `> ` line, as before. The bundled sources are the app's `apps/web/.agents/skills/` and
+the core `packages/trent-core/skills/`, in that order (see [fleet.md](fleet.md), "Skill sources").
+
 Every skill gets a slash command derived from its slug: `repo-audit` becomes `/repo-audit`.
 
 ## Curator
@@ -231,11 +238,11 @@ is now one store, and the flat form is converted into it **on the first read** b
   supply; there is no network fetch and therefore no manifest hash to verify.
 - A `tools/` subdirectory beside a skill. The store reads `references/`, `scripts/` and `assets/`;
   `tools/` is not read and not carried.
-- Bundle carriage through export and import. `fleet export <id> <dir>` writes
-  `<dir>/skills/<slug>/SKILL.md` and `fleet import <dir>` reads it back, scanning every file first
-  (see [fleet.md](fleet.md), "Export and import"), but only that one file: a skill's bundle
-  directories do not travel with it. An import still writes the flat form, which the next read of
-  the store migrates.
+- Bundle carriage through import. `fleet export <id> <dir>` writes `<dir>/skills/<slug>/SKILL.md`
+  and, since U5, copies the skill's `references/ scripts/ assets/ tools/` beside it (see
+  [fleet.md](fleet.md), "Export and import"); `fleet import <dir>` reads only the SKILL.md back,
+  scanning every file first, so the bundle directories arrive with the export and stop there. An
+  import still writes the flat form, which the next read of the store migrates.
 - Removing an agent no longer removes a skill of its own that has been migrated: `fleet uninstall`
   deletes flat skill files, and a migrated skill is a directory. Re-provisioning is unaffected — a
   reinstall rewrites the flat file, and the canonical skill continues to shadow it, so nothing is

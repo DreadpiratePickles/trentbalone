@@ -80,6 +80,100 @@ describe("trent fleet list", () => {
   });
 });
 
+describe("trent fleet packs and pack installs", () => {
+  interface PackRow {
+    id: string;
+    name: string;
+    state: string;
+    members: string[];
+    skills: string[];
+    installed: boolean;
+    persona: string | null;
+  }
+
+  it("lists every pack with its members and its honest state, for machines and for people", async () => {
+    const result = await runCli(["fleet", "packs", "--json"]);
+    expect(result.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as { count: number; packs: PackRow[] };
+    expect(data.count).toBe(data.packs.length);
+    const business = data.packs.find((p) => p.id === "small-business");
+    expect(business?.members).toEqual(["support", "sales", "finance", "content"]);
+    expect(business?.skills).toContain("quote-estimate");
+    expect(business?.state).toContain("Nothing is sent, booked, invoiced or posted");
+    expect(business?.installed).toBe(false);
+    expect(business?.persona).toBe("system/persona-small-business.md");
+    expect(data.packs.find((p) => p.id === "engineering")?.persona).toBeNull();
+
+    const human = await runCli(["fleet", "packs"]);
+    expect(human.exitCode).toBe(EXIT.OK);
+    expect(human.stdout).toContain("small-business");
+    expect(human.stdout).toContain("Small Business Crew");
+    expect(human.stdout).toContain("support, sales, finance, content");
+    expect(human.stdout).toContain("Drafts only");
+    expect(human.stdout).toContain("Text only");
+  });
+
+  it("--dry-run on a pack names the members, skills and persona it would install and writes nothing", async () => {
+    const dry = await runCli(["fleet", "install", "small-business", "--dry-run", "--json"]);
+    expect(dry.exitCode).toBe(EXIT.OK);
+    expect(JSON.parse(dry.stdout)).toMatchObject({
+      dryRun: true,
+      command: "fleet install",
+      agentId: "small-business",
+      pack: true,
+      members: ["support", "sales", "finance", "content"],
+      persona: "system/persona-small-business.md",
+    });
+    expect((JSON.parse(dry.stdout) as { skills: string[] }).skills).toContain("invoice-draft");
+    expect(fs.existsSync(path.join(home, "agents"))).toBe(false);
+    expect(fs.existsSync(path.join(home, "brain"))).toBe(false);
+    expect(fs.existsSync(path.join(home, "skills"))).toBe(false);
+
+    const human = await runCli(["fleet", "install", "small-business", "--dry-run"]);
+    expect(human.stdout).toContain("small-business");
+    expect(human.stdout).toContain("persona-small-business");
+  });
+
+  it("installs a market pack by its id: members, the trade skills and the persona under brain/system", async () => {
+    const result = await runCli(["fleet", "install", "creator", "--json"]);
+    expect(result.exitCode, result.stderr).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as {
+      pack: string;
+      installed: string[];
+      skills: { installed: string[]; present: string[]; unresolved: string[] };
+      persona: { status: string; relativePath?: string };
+    };
+    expect(data.pack).toBe("creator");
+    expect(data.installed).toEqual(["content", "mkt-short-video-editing-coach", "mkt-video-optimization-specialist", "design-image-prompt-engineer"]);
+    expect(data.skills.installed).toEqual(["caption-and-chapters", "hook-lab", "repurpose-plan", "thumbnail-brief"]);
+    expect(data.skills.unresolved).toEqual([]);
+    expect(data.persona).toMatchObject({ status: "written", relativePath: "system/persona-creator.md" });
+    expect(fs.readFileSync(path.join(home, "brain", "system", "persona-creator.md"), "utf8")).toContain("The Cutting Room");
+
+    const listed = JSON.parse((await runCli(["fleet", "packs", "--json"])).stdout) as { packs: PackRow[] };
+    expect(listed.packs.find((p) => p.id === "creator")?.installed).toBe(true);
+
+    const human = await runCli(["fleet", "install", "creator"]);
+    expect(human.exitCode).toBe(EXIT.OK);
+    expect(human.stdout).toContain("persona-creator");
+    expect(human.stdout).toContain("unchanged");
+
+    const shown = await runCli(["brain", "show", "system/persona-creator.md"]);
+    expect(shown.exitCode).toBe(EXIT.OK);
+    expect(shown.stdout).toContain("mkt-short-video-editing-coach");
+  });
+
+  it("a seat that shares its name with a pack still installs as the seat unless --pack is given", async () => {
+    const seat = await runCli(["fleet", "install", "finance", "--json"]);
+    expect(seat.exitCode).toBe(EXIT.OK);
+    expect(JSON.parse(seat.stdout)).toMatchObject({ installed: ["finance"], agent: { id: "finance" } });
+
+    const pack = await runCli(["fleet", "install", "finance", "--pack", "--json"]);
+    expect(pack.exitCode).toBe(EXIT.OK);
+    expect((JSON.parse(pack.stdout) as { installed: string[] }).installed).toContain("fin-bookkeeper-controller");
+  });
+});
+
 describe("trent fleet show", () => {
   interface ShowData {
     seat: string;
