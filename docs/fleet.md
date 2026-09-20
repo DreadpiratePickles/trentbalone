@@ -456,6 +456,75 @@ What neither host can carry is the same as for Claude Code: the cap, the floors,
 the version pins are enforced by the running Trent the server entry points at, and every file
 says so.
 
+## Importing agents from other harnesses
+
+```bash
+npm run cli -- fleet import ./my-project --from claude          # .claude/agents/<name>.md
+npm run cli -- fleet import ./my-project/.codex/agents/x.toml   # --from codex, detected
+npm run cli -- fleet import ./night-owl.tar.gz                  # --from hermes, detected
+npm run cli -- fleet import ./night-owl --from hermes --allow-flagged
+```
+
+`fleet import` reads the three layouts the exporters write, whoever wrote them. `--from` names
+the format; without it the path says: `agent.json` is a Trent bundle (the plain path above),
+`.claude/agents/*.md` is a Claude Code subagent, `.codex/agents/*.toml` is a Codex agent,
+`distribution.yaml` or a `.tar.gz` is a Hermes profile distribution, and a path that is none of
+them is refused by name. A Trent bundle beside a host export wins, so the exporters' own output
+imports through `agent.json` with the full seat record; `--from` forces the host reader.
+
+What each reader carries onto the seat record:
+
+| | Claude Code | Codex | Hermes |
+|---|---|---|---|
+| Agent id | frontmatter `name` | `name` | manifest `name` (the seat id when the description is the exporter's) |
+| Prompt | the body (its `## Seat prompt` section when Trent wrote it) | `developer_instructions`, plus the sibling `AGENTS.md` as a `## Project guidance` section (skipped when Trent wrote it) | `SOUL.md` (its `## Seat prompt` section when Trent wrote it) |
+| Toolsets | `tools:` mapped by what each built-in does (`Read`, `Edit`, `Glob`... to `file_ops`; `Bash` to `terminal`; `WebFetch`, `WebSearch` to `web`; `Agent` to `delegation`; `Skill` to `skills`; `AskUserQuestion` to `human`); `mcp__trent__<tool>` back to the toolset that exposes it; any other `mcp__` name to `mcp` | `sandbox_mode` (`read-only`: `file_ops`; `workspace-write`: plus `terminal`; `danger-full-access`: plus `code`), `sandbox_workspace_write.network_access` and `web_search` to `web`, `[mcp_servers]` to `mcp`, and a `[permissions]` table in Claude's vocabulary when the file carries one | `config.yaml` toolsets by the shared names, the four Hermes spellings reversed (`file`, `code_execution`, `cronjob`, `clarify`); a Hermes toolset Trent lacks is named, not guessed |
+| Denied | `disallowedTools`, same mapping | `web_search = "disabled"`, `[permissions].deny` | `agent.disabled_toolsets` |
+| Skills | `skills/<slug>/` and `.claude/skills/<slug>/` beside the agent; the ones `skills:` names, else all | `.agents/skills/<slug>/` | `skills/` nested any depth |
+| MCP servers | `.mcp.json` | `[mcp_servers.<id>]` | `config.yaml` `mcp_servers` and `mcp.json` |
+
+A toolset is granted whole: when the host allows one of its tools and denies another, the
+stricter reading wins, the toolset is denied, and the report says so. Trent's own server entry
+(`trent mcp serve --stdio`) is never added back: the profile is that server. `human` does not
+survive a Claude round trip, because the founder prompt is not a tool the server exposes;
+`media`, `plugins` and `mcp` do not survive a Hermes one, because Hermes has no toolset of those
+names (the [table](#hermes-a-profile-distribution-per-seat) says which); Codex carries no
+toolsets at all unless the file sets a sandbox or permissions. Every such gap is a line in the
+report.
+
+An imported agent is untrusted content, so it lands the way any skill you did not write does:
+
+- The prompt goes through the [pre-install scan](skills.md#the-pre-install-scan); a finding
+  refuses the import, naming the file and the category, never the text.
+- Every skill goes through the same scan, and every text file under it. It lands in the profile's
+  store as `trust: community`, `created_by: import`, and, when the scan spoke, `status:
+  quarantined` with `quarantine_reason` naming the category, so no seat is told about it until a
+  person clears it; whatever trust the file claimed for itself is not honoured. A skill the
+  profile already holds under that name is left alone.
+- Every MCP server entry is normalised to the `mcp_servers` shape; a literal value under a
+  secret-looking env name is replaced by its `${NAME}` reference and reported without the value.
+  Then the [install-time scan](mcp.md#install-time-scan) runs, exactly as for `trent mcp add`: a
+  server that answers has its tool descriptions checked; a finding keeps it out of the profile
+  unless `--allow-flagged`, which stores it flagged; a server that does not answer is stored
+  `scanRan: false`, visibly unchecked; one the profile already has is kept as it was.
+- What passes becomes a NEW candidate version, never live; `fleet promote <id> <version>` is the
+  human step. The agent's record lands `active: false` with `imported_from` naming the format,
+  the files read, and the fields the host had no home for.
+
+Those fields are the same for all three hosts and are listed on every import, because none of
+them has a per-agent budget, a seat manifest with approval gates, a model tier, an eval suite or
+a brain: the per-run cap is the profile's default in integer cents, only the floors and deny
+globs gate the seat, the profile's configured model is used, no suite is attached, and the brain
+stays as it is. The host's own `model`, `effort`, `maxTurns`, `approval_policy` and the like are
+listed too, with the value, as not carried.
+
+The Codex TOML is read by a small reader covering the subset an agent file uses (basic and
+multi-line basic strings, arrays of scalars, booleans, numbers, `[a.b]` and `[a."quoted"]`
+tables); a line outside it is refused with its number rather than guessed at. A Hermes tarball is
+read by the mirror of the writer: regular files and directories under exactly one top-level
+directory, every path checked against escaping the extraction directory, extracted to a
+temporary directory that is removed when the import ends.
+
 ## Colour
 
 An agent line renders as `● [Name]`. The dot carries state colour, the name carries division colour,

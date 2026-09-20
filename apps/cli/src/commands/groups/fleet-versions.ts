@@ -12,7 +12,13 @@
  *     --target hermes            [W5] a Hermes profile distribution per seat: distribution.yaml,
  *                                SOUL.md, config.yaml, mcp.json, skills, and a `<name>.tar.gz`
  *     --target codex             [W5] `.codex/agents/<id>.toml` plus AGENTS.md and `.agents/skills/`
- *   import <dir>                 scan every file, then file the bundle as a new candidate (never live)
+ *   import <path>                scan every file, then file the bundle as a new candidate (never live)
+ *     --from claude|codex|hermes [X6] a Claude subagent, a Codex agent or a Hermes profile
+ *                                distribution (directory or tarball) instead of a Trent bundle;
+ *                                detected from the path when omitted; skills the scan flags land
+ *                                quarantined, MCP servers go through the install-time scan
+ *                                (`--allow-flagged` as in `trent mcp add`), and every field the
+ *                                host had no home for is listed
  *
  * The store is the profile's `trent.db` through the same opener `trent improve` uses; the seat
  * prompt comes from the improve loop's provider (the app's seat prompt, plus a specialist prompt,
@@ -23,6 +29,8 @@ import path from "node:path";
 
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { createAgentVersions, createProfileDefinitionSource, exportAgent, exportClaudeAgents, exportCodexAgents, exportHermesProfiles, importAgent, type AgentVersions } from "@trent/core/fleet/index.js";
+import { detectForeignFormat, FOREIGN_FORMATS, importForeignAgent, type ForeignFormat, type ImportForeignResult } from "@trent/core/fleet/import-foreign.js";
+import type { McpServerConfig } from "@trent/core/config/index.js";
 import { defaultSeatPromptProvider } from "@trent/core/improve/index.js";
 import type { AgentVersionRow, ImproveStorePort } from "@trent/core/store/index.js";
 
@@ -39,6 +47,8 @@ interface Opened {
   readonly agentsDir: string;
   readonly skillsDir: string;
   readonly budgetCapCents: number;
+  /** [X6] The profile's configured model: a foreign import has no tier and needs one. */
+  readonly model: { provider: string; model: string };
   close(): Promise<void>;
 }
 
@@ -74,7 +84,7 @@ async function open(ctx: CommandContext): Promise<Opened> {
     model: { provider: config.provider, model: config.model },
     prompt: defaultSeatPromptProvider(store, companyId, () => undefined),
   });
-  return { versions: createAgentVersions({ store, companyId, source }), store, companyId, agentsDir, skillsDir, budgetCapCents: config.budget.per_run_cap, close };
+  return { versions: createAgentVersions({ store, companyId, source }), store, companyId, agentsDir, skillsDir, budgetCapCents: config.budget.per_run_cap, model: { provider: config.provider, model: config.model }, close };
 }
 
 async function withVersions<T>(ctx: CommandContext, run: (opened: Opened) => Promise<T>): Promise<T> {
@@ -255,29 +265,74 @@ const exportSpec: CommandSpec = {
   },
 };
 
+const MCP_CONFIG_KEY = "mcp_servers";
+
+/** `--from`, validated; `undefined` means detect from the path. */
+function importFormat(opts: Record<string, unknown>, target: string): ForeignFormat | undefined {
+  if (typeof opts.from !== "string" || opts.from === "") return undefined;
+  const from = opts.from.toLowerCase();
+  if (!(FOREIGN_FORMATS as readonly string[]).includes(from)) {
+    throw new TrentError({ code: EXIT.USAGE, operation: "fleet.import", message: `unknown --from "${opts.from}"; one of ${FOREIGN_FORMATS.join(", ")}`, target });
+  }
+  return from as ForeignFormat;
+}
+
+function foreignSummary(result: ImportForeignResult): Record<string, unknown> {
+  return {
+    agentId: result.version.agentId,
+    version: result.version.version,
+    label: result.version.label,
+    format: result.format,
+    sources: result.sources,
+    skills: result.skills,
+    mcpServers: result.mcpServers,
+    notCarried: result.notCarried,
+    recordFile: result.recordFile,
+  };
+}
+
 const importSpec: CommandSpec = {
-  name: "import <dir>",
-  description: "Scan a bundle's agent.json and every SKILL.md, then file it as a new candidate version (never live)",
-  run: (ctx, _opts, args) =>
-    withVersions(ctx, async ({ versions, agentsDir, skillsDir, budgetCapCents }) => {
-      const dir = path.resolve(String(args[0] ?? ""));
-      if (ctx.dryRun) return { data: { dryRun: true, command: "fleet import", dir } };
-      const result = await importAgent({ versions, dir, profile: { agentsDir, skillsDir, budgetCapCents } });
-      return {
-        data: {
-          agentId: result.version.agentId,
-          version: result.version.version,
-          label: result.version.label,
-          inspected: result.inspected,
-          skillsWritten: result.skillsWritten,
-          recordFile: result.recordFile,
-        },
+  name: "import <path>",
+  description: "Scan a bundle's agent.json and every SKILL.md, then file it as a new candidate version (never live); --from claude|codex|hermes reads another harness's agent",
+  options: [
+    { flags: "--from <format>", description: `The host format to read: ${FOREIGN_FORMATS.join(" | ")} (detected from the path when omitted; a Trent bundle needs no flag)` },
+    { flags: "--allow-flagged", description: "Add an MCP server the install-time scan flagged, stored as flagged, as trent mcp add --allow-flagged does" },
+  ],
+  run: (ctx, opts, args) =>
+    withVersions(ctx, async ({ versions, agentsDir, skillsDir, budgetCapCents, model }) => {
+      const target = path.resolve(String(args[0] ?? ""));
+      const format = importFormat(opts, target) ?? detectForeignFormat(target);
+      if (ctx.dryRun) return { data: { dryRun: true, command: "fleet import", dir: target, format: format ?? null } };
+      if (format === "trent") {
+        const result = await importAgent({ versions, dir: target, profile: { agentsDir, skillsDir, budgetCapCents } });
+        return { data: { agentId: result.version.agentId, version: result.version.version, label: result.version.label, format: "trent", inspected: result.inspected, skillsWritten: result.skillsWritten, recordFile: result.recordFile } };
+      }
+      const manager = ctx.config();
+      const mcpServers = {
+        has: (name: string) => manager.get(`${MCP_CONFIG_KEY}.${name}`) !== undefined,
+        set: (name: string, entry: McpServerConfig) => manager.set(`${MCP_CONFIG_KEY}.${name}`, entry),
       };
+      // [X6] A path that is none of the four layouts is refused by the reader, naming all four.
+      const result = await importForeignAgent({ versions, target, ...(format === undefined ? {} : { format }), profile: { agentsDir, skillsDir, budgetCapCents }, model, mcpServers, allowFlagged: opts.allowFlagged === true });
+      for (const server of result.mcpServers) {
+        if (server.outcome === "added" && server.findings.length > 0) ctx.err(`warning: ${server.name} is installed flagged; the scan found ${server.findings.map((f) => `${f.tool} [${f.categories.join("; ")}]`).join(", ")}`);
+      }
+      return { data: foreignSummary(result) };
     }),
   render: (data, ctx) => {
-    const d = data as { agentId?: string; version?: number; inspected?: string[]; dir?: string; dryRun?: boolean };
-    if (d.dryRun === true) return [`  ${ctx.theme.meta("would import")} ${String(d.dir)}`];
-    return [`  ${ctx.theme.success("imported")} ${ctx.theme.value(`${String(d.agentId)} v${String(d.version)}`)} as candidate (${(d.inspected ?? []).length} files checked); promote with \`fleet promote\``];
+    const d = data as { agentId?: string; version?: number; format?: string; inspected?: string[]; dir?: string; dryRun?: boolean; skills?: ImportForeignResult["skills"]; mcpServers?: ImportForeignResult["mcpServers"]; notCarried?: string[] };
+    if (d.dryRun === true) return [`  ${ctx.theme.meta("would import")} ${String(d.dir)} ${ctx.theme.meta(`(${String(d.format)})`)}`];
+    if (d.format === undefined || d.format === "trent") {
+      return [`  ${ctx.theme.success("imported")} ${ctx.theme.value(`${String(d.agentId)} v${String(d.version)}`)} as candidate (${(d.inspected ?? []).length} files checked); promote with \`fleet promote\``];
+    }
+    const lines = [`  ${ctx.theme.success("imported")} ${ctx.theme.value(`${String(d.agentId)} v${String(d.version)}`)} ${ctx.theme.meta(`from ${d.format}`)} as candidate; promote with \`fleet promote\``];
+    for (const skill of d.skills ?? []) lines.push(`  ${skill.status === "quarantined" ? ctx.theme.needsApproval("quarantined") : ctx.theme.meta(skill.outcome === "kept" ? "kept      " : "skill     ")} ${ctx.theme.value(skill.slug)}${skill.findings.length > 0 ? ` ${ctx.theme.meta(skill.findings.join("; "))}` : ""}`);
+    for (const server of d.mcpServers ?? []) {
+      const scan = server.findings.length > 0 ? `flagged: ${server.findings.map((f) => f.tool).join(", ")}` : server.scanRan ? "scan clean" : `scan did not run: ${server.reason ?? "unreachable"}`;
+      lines.push(`  ${server.outcome === "refused" ? ctx.theme.needsApproval("refused   ") : ctx.theme.meta(`mcp ${server.outcome.padEnd(6)}`)} ${ctx.theme.value(server.name)} ${ctx.theme.meta(scan)}`);
+    }
+    if ((d.notCarried ?? []).length > 0) lines.push(`  ${ctx.theme.meta("not carried:")}`, ...(d.notCarried ?? []).map((line) => `    ${ctx.theme.meta(line)}`));
+    return lines;
   },
 };
 
