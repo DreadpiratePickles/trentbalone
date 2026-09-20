@@ -103,3 +103,8 @@ Bobby's gate, then waves.
 6. Portability: `trent mcp serve` over toolsets plus the Claude file renderer in wave 1.
 Pending (Bobby dismissed the next question; waiting for instruction): 7 creator pack text-only
 first vs hold; 8 RAG scope (cut E-final vs full); 9 platform applications and paid services.
+- Bobby: "enough questions now be autonomous". Remaining decisions taken with the recommended
+  options: 7 creator pack text-only first with an honest description; 8 RAG cut scope (E-final);
+  9 Buffer accepted (5 USD/channel), X API skipped, platform applications (Meta App Review,
+  TikTok audit, YouTube audit, Google Business Profile Basic Access, Twilio 10DLC) listed as
+  Bobby's steps in the final report. Wave 1 launched.
