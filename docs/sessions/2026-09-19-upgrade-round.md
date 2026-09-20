@@ -190,3 +190,5 @@ vitest exit=0
 4. Creator pack: enable clipping now (state line, persona, skills call the media tools).
 5. RAG deferred items: wait for a real measurement on real documents; no reranker yet.
 Pause lifted. Landing order: W1.1, W6 (with lazy adapter imports), W2, W3.
+- W1.1+W3 landed 928ca0f. W6.1 launched: make the social toolset's app-adapter imports lazy (static-graph test) before W6 lands; then W2.
+- W2 and W6 share the seven registration files line-for-line (enum, builder branch, TOOLSET_BY_ADAPTER, setup rosters, doctor lists, mcp toolset-tools); they land as ONE commit after W6.1's lazy imports pass the static-graph test.
