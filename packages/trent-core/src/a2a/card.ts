@@ -13,6 +13,7 @@
  */
 
 import { CORE_ROLES } from "../fleet/AgentInstaller.js";
+import { seatCapability } from "../fleet/seat-capabilities.js";
 import {
   A2A_PROTOCOL_VERSION,
   A2A_TEXT_MEDIA_TYPE,
@@ -39,13 +40,19 @@ export interface AgentCardOptions {
   readonly documentationUrl?: string;
 }
 
-/** One skill per seat, in roster order. The seat's own name and description, never a rewrite. */
+/**
+ * One skill per seat, in roster order. The seat's own name and description, never a rewrite.
+ * [W5] The tags are the seat's Trent toolsets, read from its capability record: a Hermes peer's
+ * `a2a_orchestrate(capability, ...)` fans out to the skills whose tags name that capability, so a
+ * tag has to be a name a peer can ask for (`terminal`, `web`, ...), not a category label or a
+ * model policy. A seat the manifests do not define is a configuration error here, as everywhere.
+ */
 export function agentCardSkills(): A2AAgentSkill[] {
   return Object.entries(CORE_ROLES).map(([id, seat]) => ({
     id,
     name: seat.name,
     description: seat.description,
-    tags: [seat.category, seat.modelPolicy],
+    tags: [...seatCapability(id).toolsets],
     inputModes: [A2A_TEXT_MEDIA_TYPE],
     outputModes: [A2A_TEXT_MEDIA_TYPE],
   }));

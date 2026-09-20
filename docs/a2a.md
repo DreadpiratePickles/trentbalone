@@ -31,6 +31,16 @@ server is listening on, and there is one `skill` per seat, taken from the seat r
 seat's own name and description. `/.well-known/agent.json` answers the same card, for a client
 pinned to the path used before A2A 0.3.
 
+### Tags are toolsets
+
+Each skill's `tags` are the seat's Trent toolsets, read from its capability record
+(`packages/trent-core/src/fleet/seat-capabilities.ts`): the engineer advertises `terminal`, the
+finance seat does not. Hermes's `a2a_orchestrate(capability, message)` fans a message out to the
+peers whose skills carry that capability as a tag, so a Hermes profile with `trent a2a serve` in
+its `a2a_agents` can ask for `terminal` or `web` and reach the seats that have it; a category
+label or a model policy was nothing a peer could ask for. `trent a2a card engineer` shows the
+tags for one seat.
+
 `trent a2a card` prints that exact object; `trent a2a card engineer` prints it with `skills`
 narrowed to one seat. `--endpoint <url>` sets the advertised `url` when Trent sits behind a proxy.
 

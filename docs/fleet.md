@@ -364,7 +364,96 @@ in this profile; members that are neither are listed as skipped, never invented.
 plain bundle lands under `agents/<id>/`, the project's `skills/` is the union. Every file is text
 the profile already holds; nothing in it is a canned answer, and the tools only do anything while
 `trent mcp serve` is running with the gates behind it ([mcp.md](mcp.md#trent-as-an-mcp-server)).
-`--target codex` and `--target hermes` are not rendered yet (design v2 waves 2 and 3).
+
+## Exporting to Hermes and Codex
+
+```bash
+npm run cli -- fleet export engineer --target hermes --out ./engineer-hermes
+npm run cli -- fleet export small-business --target hermes --out ./counter-crew   # a pack: one profile per member
+npm run cli -- fleet export engineer --target codex --out ./engineer-codex
+```
+
+Both renderers share `packages/trent-core/src/fleet/export-host.ts` (which agents a target names,
+the pack persona, the approval rules read from the code, the skills in the Agent Skills layout)
+and each is a pure function over the seat record (`renderHermesProfile`, `renderCodexAgent`), so
+the same version renders the same bytes twice.
+
+### Hermes: a profile distribution per seat
+
+Implemented in `packages/trent-core/src/fleet/export-hermes.ts` against the
+[profile distribution](https://hermes-agent.nousresearch.com/docs/user-guide/profile-distributions)
+format and the installed Hermes's own loader (`hermes_cli/profile_distribution.py`,
+`profiles.py`). A Hermes profile is one agent, so a pack exports one profile per seat member
+under `<dir>/<id>/`:
+
+```
+engineer-hermes/
+  distribution.yaml          name trent-engineer, version <seat version>.0.0, description,
+                             env_requires, distribution_owned (the files below and skills/)
+  SOUL.md                    the pack persona, the seat prompt, "What Trent asks before doing",
+                             the skills index
+  config.yaml                platform_toolsets.cli, agent.disabled_toolsets, mcp_servers.trent
+  mcp.json                   the same server in the Agent Plugins shape Hermes's plugin loader reads
+  README.md, .env.EXAMPLE
+  skills/<slug>/SKILL.md     the skills in the Agent Skills layout, Trent's fields under
+  skills/<slug>/<bundle>/    metadata.trent, references/ scripts/ assets/ tools/ copied
+  trent-engineer.tar.gz      the profile under one top-level directory
+  agent.json                 the plain bundle too, so `fleet import` reads it back
+```
+
+```bash
+hermes profile install ./engineer-hermes --name trent-engineer   # a directory with distribution.yaml at its root
+hermes profile import ./engineer-hermes/trent-engineer.tar.gz    # or the archive
+hermes -p trent-engineer chat
+```
+
+The toolsets are mapped by name: the names Hermes shares with Trent (`terminal`, `web`,
+`browser`, `vision`, `memory`, `delegation`, `skills`) pass through one to one; the four Hermes
+spells differently are translated by a table that is data (`file_ops` to `file`, `code` to
+`code_execution`, `cron` to `cronjob`, `human` to `clarify`); the ones Hermes has no toolset for
+(`plugins`, `mcp`, `media`, `business`, `social`) reach the profile only through the `trent`
+server, which `config.yaml` lists by its bare name so the seat's Trent tools stay on. A seat whose
+manifest has no `terminal` (finance) gets Hermes's `terminal` in `agent.disabled_toolsets`. No
+`model` is written: the host chooses. `env_requires` names the `trent connect` env names of the
+providers the seat's toolsets execute against (`business`: Stripe, Google, Square, Twilio;
+`social`: Buffer, Meta, Bluesky), every one optional, never a value: they live in the Trent
+profile's secrets, and Trent does not read the Hermes profile's `.env`. Memory never travels:
+Hermes hard-excludes `memories/`, and the brain stays with the running Trent.
+
+`hermes import-agent` is not the entry point: it reads Claude Code and Codex trees (instruction
+files, permission rules, MCP servers, skills) and not `.claude/agents/*.md`, `.codex/agents/*.toml`
+or a profile. The live proof (`export-hermes.live.test.ts`, `TRENT_TEST_LIVE=1`, skipped by
+name when no `hermes` is on the PATH) imports the archive and installs the directory into a real
+Hermes, lists both, reads the manifest back with `hermes profile info`, and deletes them.
+
+### Codex: a custom agent per seat
+
+Implemented in `packages/trent-core/src/fleet/export-codex.ts` against the
+[custom agents](https://learn.chatgpt.com/docs/agent-configuration/subagents.md) page and the
+[config reference](https://learn.chatgpt.com/docs/config-file/config-reference):
+
+```
+engineer-codex/
+  .codex/agents/engineer.toml   name, description, developer_instructions (persona, seat prompt,
+                                what Trent asks before doing, skills index), [mcp_servers.trent]
+  AGENTS.md                     every exported agent, the [mcp_servers.trent] snippet for
+                                ~/.codex/config.toml, the approval rules, the skills index
+  .agents/skills/<slug>/        the skills where Codex looks, in the Agent Skills layout
+  agent.json + skills/          the plain bundle too, so `fleet import` reads it back
+```
+
+An agent file is a config layer for the spawned session, which is why it may carry
+`mcp_servers`; the same table is repeated in `AGENTS.md` for the parent session. The TOML is
+written by a small emitter (basic strings, string arrays, a multi-line basic string for the
+instructions) and the test parses it back. **The caveat is OpenAI's own**: the custom-agent
+docs say "the format may evolve as authoring and sharing mature", so the keys written are
+exactly the ones the docs name today (`name`, `description`, `developer_instructions`,
+`mcp_servers`) and nothing else; regenerate from Trent rather than editing by hand. `model` is
+left out here too.
+
+What neither host can carry is the same as for Claude Code: the cap, the floors, the evals and
+the version pins are enforced by the running Trent the server entry points at, and every file
+says so.
 
 ## Colour
 

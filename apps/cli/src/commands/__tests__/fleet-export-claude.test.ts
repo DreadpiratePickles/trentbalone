@@ -106,9 +106,10 @@ describe("trent fleet export --target claude", () => {
 
   it("refuses a target it does not render, and --dry-run reports without writing", async () => {
     const out = outDir("refused");
-    const codex = await runCli(["fleet", "export", "engineer", "--target", "codex", "--out", out, "--json"]);
-    expect(codex.exitCode).toBe(EXIT.USAGE);
-    expect(`${codex.stdout}${codex.stderr}`).toContain("claude");
+    // [W5] codex and hermes are rendered now; Grok Build reads the Claude layout and has no target of its own.
+    const grok = await runCli(["fleet", "export", "engineer", "--target", "grok", "--out", out, "--json"]);
+    expect(grok.exitCode).toBe(EXIT.USAGE);
+    expect(`${grok.stdout}${grok.stderr}`).toContain("claude");
     const dry = await runCli(["fleet", "export", "engineer", "--target", "claude", "--out", out, "--json", "--dry-run"]);
     expect(dry.exitCode).toBe(EXIT.OK);
     expect(JSON.parse(dry.stdout)).toMatchObject({ dryRun: true, command: "fleet export", target: "claude", agentId: "engineer", dir: out });

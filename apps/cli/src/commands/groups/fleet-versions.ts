@@ -9,6 +9,9 @@
  *     --target claude --out DIR  [U5] the droppable Claude Code / Grok Build layout on top of it:
  *                                `.claude/agents/<id>.md`, `.mcp.json`, skills in the Agent Skills shape;
  *                                a pack id exports every seat member with the pack's persona
+ *     --target hermes            [W5] a Hermes profile distribution per seat: distribution.yaml,
+ *                                SOUL.md, config.yaml, mcp.json, skills, and a `<name>.tar.gz`
+ *     --target codex             [W5] `.codex/agents/<id>.toml` plus AGENTS.md and `.agents/skills/`
  *   import <dir>                 scan every file, then file the bundle as a new candidate (never live)
  *
  * The store is the profile's `trent.db` through the same opener `trent improve` uses; the seat
@@ -19,7 +22,7 @@
 import path from "node:path";
 
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
-import { createAgentVersions, createProfileDefinitionSource, exportAgent, exportClaudeAgents, importAgent, type AgentVersions } from "@trent/core/fleet/index.js";
+import { createAgentVersions, createProfileDefinitionSource, exportAgent, exportClaudeAgents, exportCodexAgents, exportHermesProfiles, importAgent, type AgentVersions } from "@trent/core/fleet/index.js";
 import { defaultSeatPromptProvider } from "@trent/core/improve/index.js";
 import type { AgentVersionRow, ImproveStorePort } from "@trent/core/store/index.js";
 
@@ -174,8 +177,12 @@ const rollbackSpec: CommandSpec = {
   },
 };
 
-/** The renderers `--target` knows. `trent` is the plain bundle; `claude` is read by Claude Code and Grok Build. */
-const EXPORT_TARGETS: readonly string[] = ["trent", "claude"];
+/**
+ * The renderers `--target` knows. `trent` is the plain bundle; `claude` is read by Claude Code and
+ * Grok Build; `hermes` is a profile distribution per seat; `codex` is a custom agent per seat.
+ */
+const EXPORT_TARGETS: readonly string[] = ["trent", "claude", "hermes", "codex"];
+const HOST_NAMES: Readonly<Record<string, string>> = { claude: "Claude Code", hermes: "Hermes", codex: "Codex" };
 
 function exportTarget(opts: Record<string, unknown>, agentId: string): string {
   const target = typeof opts.target === "string" && opts.target !== "" ? opts.target : "trent";
@@ -198,7 +205,7 @@ function exportDir(opts: Record<string, unknown>, args: readonly string[], agent
 
 const exportSpec: CommandSpec = {
   name: "export <agentId> [dir]",
-  description: "Write an agent's live version as <dir>/agent.json plus <dir>/skills/<slug>/SKILL.md; --target claude adds the Claude Code layout",
+  description: "Write an agent's live version as <dir>/agent.json plus <dir>/skills/<slug>/SKILL.md; --target claude|hermes|codex adds that host's layout",
   options: [
     { flags: "--target <format>", description: `Output layout: ${EXPORT_TARGETS.join(" | ")} (default trent)` },
     { flags: "--out <dir>", description: "Output directory, instead of the positional one" },
@@ -209,8 +216,12 @@ const exportSpec: CommandSpec = {
       const target = exportTarget(opts, agentId);
       if (ctx.dryRun) return { data: { dryRun: true, command: "fleet export", agentId, target, dir: typeof args[1] === "string" ? path.resolve(args[1]) : typeof opts.out === "string" ? path.resolve(opts.out) : null } };
       const dir = exportDir(opts, args, agentId);
-      if (target === "claude") {
-        const result = await exportClaudeAgents({ versions, target: agentId, dir, profileDir: ctx.config().getProfileDir(), skillsDir, agentsDir, profile: ctx.profile });
+      if (target !== "trent") {
+        const host = { versions, target: agentId, dir, profileDir: ctx.config().getProfileDir(), skillsDir, agentsDir, profile: ctx.profile };
+        const hermes = target === "hermes" ? await exportHermesProfiles(host) : undefined;
+        const result = hermes ?? (target === "claude" ? await exportClaudeAgents(host) : await exportCodexAgents(host));
+        // [W5] A Hermes export names each profile and its archive, for `hermes profile import`.
+        const profiles = hermes?.profiles.map((p) => ({ agentId: p.agentId, name: p.name, archive: path.relative(dir, p.archive) }));
         return {
           data: {
             agentId,
@@ -221,6 +232,7 @@ const exportSpec: CommandSpec = {
             ...(result.pack === undefined ? {} : { pack: result.pack }),
             persona: result.persona,
             files: result.files.map((f) => path.relative(dir, f)),
+            ...(profiles === undefined ? {} : { profiles }),
           },
         };
       }
@@ -228,12 +240,14 @@ const exportSpec: CommandSpec = {
       return { data: { agentId, target, version: result.version, dir, files: result.files.map((f) => path.relative(dir, f)) } };
     }),
   render: (data, ctx) => {
-    const d = data as { agentId: string; dir: string | null; target?: string; version?: number; files?: string[]; dryRun?: boolean; agents?: string[]; skipped?: Array<{ agentId: string; reason: string }>; persona?: boolean };
+    const d = data as { agentId: string; dir: string | null; target?: string; version?: number; files?: string[]; dryRun?: boolean; agents?: string[]; skipped?: Array<{ agentId: string; reason: string }>; persona?: boolean; profiles?: Array<{ name: string; archive: string }> };
     if (d.dryRun === true) return [`  ${ctx.theme.meta("would export")} ${d.agentId} ${ctx.theme.meta(`(${String(d.target)})`)} -> ${String(d.dir)}`];
-    if (d.target === "claude") {
+    const host = d.target === undefined ? undefined : HOST_NAMES[d.target];
+    if (host !== undefined) {
       return [
-        `  ${ctx.theme.success("exported")} ${ctx.theme.value(d.agents?.join(", ") ?? d.agentId)} ${ctx.theme.meta(`for Claude Code${d.persona === true ? ", with the pack persona" : ""}`)} -> ${String(d.dir)}`,
+        `  ${ctx.theme.success("exported")} ${ctx.theme.value(d.agents?.join(", ") ?? d.agentId)} ${ctx.theme.meta(`for ${host}${d.persona === true ? ", with the pack persona" : ""}`)} -> ${String(d.dir)}`,
         ...(d.skipped ?? []).map((s) => `  ${ctx.theme.meta(`skipped ${s.agentId}: ${s.reason}`)}`),
+        ...(d.profiles ?? []).map((p) => `  ${ctx.theme.meta(`hermes profile import ${p.archive}`)} ${ctx.theme.value(p.name)}`),
         ...(d.files ?? []).map((f) => `    ${ctx.theme.meta(f)}`),
       ];
     }
