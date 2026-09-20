@@ -5,11 +5,8 @@
  * single compiled binary with no Rust query engine and no native .node module.
  */
 
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { PrismaClient } from "./generated/client";
+import { DERIVED_DDL } from "./derived-ddl.js";
 import { PrismaBunSQLite, DEFAULT_BUSY_TIMEOUT_MS } from "./bun-sqlite-adapter.mjs";
 import { PrismaStore } from "./PrismaStore.js";
 import type { StorePort } from "./StorePort.js";
@@ -20,23 +17,24 @@ export interface CreateStoreOptions {
   /** Milliseconds a writer waits on a contended lock before SQLITE_BUSY. */
   busyTimeoutMs?: number;
   /**
-   * DDL to apply when the database is empty. Defaults to the derived prisma/init.sql.
-   * A compiled binary passes the embedded string instead, because `prisma migrate` needs
-   * the Rust schema engine and that is not shipped.
+   * DDL to apply when the database is empty. Defaults to the derived DDL embedded in the
+   * bundle (`derived-ddl.ts`), applied through the adapter because `prisma migrate` needs the
+   * Rust schema engine and that is not shipped.
    */
   initSql?: string;
 }
 
-const DDL_PATH = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../prisma/init.sql",
-);
-
 /** A table that only the derived schema creates, used as the "is this database set up" probe. */
 const PROBE_TABLE = "OrchestratorRun";
 
+/**
+ * The derived DDL. It is never read from disk: inside a compiled binary `import.meta.url`
+ * resolves into the compiled filesystem, where `../../prisma/init.sql` does not exist, and the
+ * ENOENT made every shipped binary fall back to the in-memory store. The generated module is
+ * written by `scripts/derive-sqlite-schema.mjs` from the same string as `prisma/init.sql`.
+ */
 export function readDerivedDdl(): string {
-  return readFileSync(DDL_PATH, "utf8");
+  return DERIVED_DDL;
 }
 
 async function ensureSchema(factory: PrismaBunSQLite, ddl: string): Promise<void> {

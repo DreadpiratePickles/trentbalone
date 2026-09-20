@@ -21,7 +21,7 @@ set -euo pipefail
 # derived SQLite client. Compiling without either bundles an uninitialised stub that compiles with
 # exit 0 and dies on launch. Refuse up front rather than ship a binary that only fails on a user's
 # machine. (Verified: a 41 MB binary that printed '@prisma/client did not initialize yet'.)
-for client in "node_modules/.prisma/client/index.js" "packages/trent-core/src/store/generated/client.ts"; do
+for client in "node_modules/.prisma/client/index.js" "packages/trent-core/src/store/generated/client.ts" "packages/trent-core/src/store/derived-ddl.ts"; do
   if [ ! -e "$client" ]; then
     echo "build-binary: FAIL - generated Prisma client missing: $client" >&2
     echo "  run: npx prisma generate --schema apps/web/prisma/schema.prisma" >&2
@@ -49,7 +49,14 @@ mkdir -p "$(dirname "$OUTFILE")"
 
 # The build command. No --external. Ever. If a dependency will not bundle, fix the
 # dependency; the guard below is a hard stop, not a warning.
-BUILD_CMD=(bun build --compile --target="$TARGET" --outfile "$OUTFILE" "$ENTRY")
+#
+# --no-compile-autoload-dotenv: a standalone Bun executable otherwise reads `.env`, `.env.local`
+# and friends from whatever directory it is launched in (https://bun.sh/docs/bundler/executables,
+# ".env and bunfig.toml loading is enabled"), so a `GEMINI_API_KEY` in a user's PROJECT `.env.local`
+# would silently become Trent's provider key. Trent's secrets come from `<profile>/.env` only.
+# Measured before this flag: `trent doctor` in a cwd holding `.env.local` with a fake key reported
+# that key as the active credential.
+BUILD_CMD=(bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target="$TARGET" --outfile "$OUTFILE" "$ENTRY")
 
 TRENT_BUILD_COMMAND="${BUILD_CMD[*]}" "$REPO_ROOT/scripts/ci/assert-no-external.sh"
 

@@ -68,6 +68,13 @@ describe("derive-sqlite-schema", () => {
     expect(ddl).toMatch(/ON DELETE CASCADE/);
   });
 
+  it("emits the same DDL as a TypeScript module, so a compiled binary carries it", () => {
+    const ddl = readFileSync(path.join(pkgRoot, "prisma/init.sql"), "utf8");
+    const module = readFileSync(path.join(pkgRoot, "src/store/derived-ddl.ts"), "utf8");
+    expect(module).toContain("GENERATED FILE - DO NOT EDIT");
+    expect(module).toContain(`export const DERIVED_DDL: string = ${JSON.stringify(ddl)};`);
+  });
+
   it("quotes Json column defaults, which prisma emits unquoted and sqlite rejects", () => {
     const ddl = readFileSync(path.join(pkgRoot, "prisma/init.sql"), "utf8");
     expect(ddl).not.toMatch(/DEFAULT (\{|\[)/);

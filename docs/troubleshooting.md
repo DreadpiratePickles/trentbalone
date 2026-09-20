@@ -159,6 +159,39 @@ If they fail alone, that is a real regression.
 
 The wrapped app's Postgres client (`apps/web/lib/db.ts`) was being constructed in a process with no Postgres, and its engine — not shipped in the binary — failed to load as an unhandled rejection; since W1.1 the runtime never hands its SQLite URL to the app and guards the app's client seam when `DATABASE_URL` is not a postgres URL, so if you still see it, `DATABASE_URL` in your shell is a postgres URL the binary cannot reach the engine for, or a wrapper module imports an `apps/web` store module at the top level (`apps/cli/src/runtime/headless.app-store.test.ts` names it).
 
+## The compiled binary never persists anything (`trent.db` is never created)
+
+Before X2 the store read its DDL from `prisma/init.sql` by a path that does not exist inside a
+compiled binary, so every binary silently fell back to the in-memory store. The DDL is now embedded
+(`packages/trent-core/src/store/derived-ddl.ts`, regenerated with `prisma/init.sql` by
+`node packages/trent-core/scripts/derive-sqlite-schema.mjs`); a first `trent run` from any directory
+creates `<TRENT_HOME>/trent.db` with the schema. If the file is still absent, the binary was built
+without the generated module (`scripts/ci/build-binary.sh` refuses to build without it).
+
+## `trent run` ends "without a verdict" from a directory that has no `.claude/skills`
+
+The app reads a seat's granted skills from `<cwd>/.claude/skills`. A workspace without that
+directory (or without a granted skill's `SKILL.md`) now loads zero skills for that seat instead of
+failing the first step with ENOENT; `trent doctor` (Skills Hub) says so in one line. Copy the skills
+you want the seats to have into the workspace's `.claude/skills` to give them back.
+
+## `--json` or `--format stream-json` stdout is not one document
+
+While a run happens the wrapped app writes its own `[Worker]` lines and its pino logger's debug
+records to stdout. Under `--json` and `--format stream-json` the `run` command sends the app's
+console output to stderr and sets the app's logger level to `silent` for the duration of the run
+(pino reads `LOG_LEVEL` once, when its module is evaluated); text mode is untouched. Read the app's
+lines on stderr, never on stdout.
+
+## A `.env.local` in my project changed which key Trent used
+
+A standalone Bun executable autoloads `.env`, `.env.local` and friends from its launch directory
+unless it is built with `--no-compile-autoload-dotenv` (https://bun.sh/docs/bundler/executables).
+The binaries are built with that flag (and `--no-compile-autoload-bunfig`), so Trent's provider
+keys come from `<profile>/.env` and the process environment only. Running from SOURCE with
+`bun apps/cli/src/index.ts` still autoloads the cwd's `.env*`: use `bun --no-env-file`, or run
+from a directory without one.
+
 ## `trent: command not found`
 
 No release has been published yet, so nothing has installed a binary on your PATH. Use

@@ -18,6 +18,16 @@
  *   5. `trent fleet list --json` and `trent improve status --json` each exit 0 with one JSON
  *      object on stdout. These exercise the fleet / self-improvement module graphs, which
  *      is where import-time side effects that only bite inside the compiled bundle live.
+ *   6. From an EMPTY scratch directory with an empty TRENT_HOME and no provider key anywhere:
+ *      `trent run "..." --json` prints ONE JSON result object (no `[Worker]` or pino preamble),
+ *      reaches a verdict (a workspace without `.claude/skills` is zero skills, not ENOENT), and
+ *      leaves a durable `trent.db` holding the derived schema (the DDL is embedded; before it
+ *      was read off a path that does not exist inside the binary, so no binary was ever durable).
+ *   7. From a scratch directory holding `.env.local` with `GEMINI_API_KEY=fake`: the doctor's
+ *      credentials check does NOT see that key. A standalone Bun executable autoloads `.env*`
+ *      from its cwd unless built with `--no-compile-autoload-dotenv`
+ *      (https://bun.sh/docs/bundler/executables); a user's project file must never become
+ *      Trent's provider key.
  *
  * On failure the FULL stderr of the command is printed, not a one-line excerpt. A compiled
  * bundle reports crashes as a source-context frame ("43761 |     if (t !== undefined)")
@@ -29,7 +39,8 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 const bin = process.argv[2];
@@ -84,12 +95,13 @@ function parseJsonObject(r, what) {
   return doc;
 }
 
-function run(args, timeoutMs = 120_000) {
+function run(args, timeoutMs = 120_000, options = {}) {
   const r = spawnSync(abs, args, {
     encoding: "utf8",
     timeout: timeoutMs,
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     env: {
-      ...process.env,
+      ...(options.env ?? process.env),
       // The standalone environment contract. Without the first line every job runs twice and
       // still reports success (~4x the model bill, silently) — see AGENTS.md.
       TRENT_QUEUE_FALLBACK: "disabled",
@@ -100,6 +112,43 @@ function run(args, timeoutMs = 120_000) {
   if (r.error) throw new Error(`spawn failed: ${r.error.message}`);
   if (r.signal) throw new Error(`killed by signal ${r.signal} (timeout ${timeoutMs}ms?)`);
   return r;
+}
+
+/** Looks like a provider credential: never let the CI host's own keys reach a scratch run. */
+const CREDENTIAL_RE = /(API_KEY|_TOKEN|_SECRET|PASSWORD)/i;
+
+/** A scratch home and cwd, with every credential-shaped variable stripped from the environment. */
+function scratch(label) {
+  const home = mkdtempSync(path.join(tmpdir(), `trent-verify-${label}-home-`));
+  const cwd = mkdtempSync(path.join(tmpdir(), `trent-verify-${label}-cwd-`));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !CREDENTIAL_RE.test(k)));
+  env.TRENT_HOME = home;
+  delete env.TRENT_PROFILE;
+  delete env.DATABASE_URL;
+  return { home, cwd, env, dispose: () => { rmSync(home, { recursive: true, force: true }); rmSync(cwd, { recursive: true, force: true }); } };
+}
+
+/** The table names of a SQLite file, through node:sqlite so no sqlite3 CLI is needed on the runner. */
+async function tableNames(file) {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    return db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((row) => row.name);
+  } finally {
+    db.close();
+  }
+}
+
+/** `check` for an assertion that needs to await. */
+async function checkAsync(name, fn) {
+  try {
+    const detail = await fn();
+    results.push(`PASS  ${name}${detail ? " - " + detail : ""}`);
+  } catch (err) {
+    failed++;
+    results.push(`FAIL  ${name} - ${err.message}`);
+    if (err instanceof CommandFailure) failures.push({ name, err });
+  }
 }
 
 check("artifact exists and is non-empty", () => {
@@ -156,6 +205,60 @@ if (failed === 0) {
     const doc = parseJsonObject(r, "improve status --json");
     if (typeof doc.companyId !== "string") throw new CommandFailure(`no companyId; keys: ${Object.keys(doc).join(",")}`, r);
     return `companyId ${doc.companyId}`;
+  });
+
+  await checkAsync("`trent run --json` from an empty directory: one JSON document, a verdict, a durable trent.db", async () => {
+    const s = scratch("run");
+    try {
+      // No key anywhere, so the run cannot reach a model; it must still reach the gateway and say so.
+      const r = run(["run", "say hi", "--json"], 120_000, { cwd: s.cwd, env: s.env });
+      const doc = parseJsonObject(r, "run --json");
+      if (doc.type !== "result") throw new CommandFailure(`stdout is not the result object; keys: ${Object.keys(doc).join(",")}`, r);
+      if (doc.error === "the run ended without a verdict") {
+        throw new CommandFailure("the run ended without a verdict: the first seat step died before the gateway (a missing .claude/skills used to do this)", r);
+      }
+      const db = path.join(s.home, "trent.db");
+      if (!existsSync(db)) throw new CommandFailure(`no durable store: ${db} was not created (the store fell back to memory)`, r);
+      const tables = await tableNames(db);
+      if (!tables.includes("OrchestratorRun")) throw new CommandFailure(`trent.db has no OrchestratorRun table; tables: ${tables.join(",") || "<none>"}`, r);
+      return `exit ${r.status}, status ${doc.status}, ${tables.length} tables, stderr ${Buffer.byteLength(r.stderr)} bytes`;
+    } finally {
+      s.dispose();
+    }
+  });
+
+  check("a project `.env.local` in the cwd never becomes Trent's provider key", () => {
+    const s = scratch("dotenv");
+    try {
+      writeFileSync(path.join(s.cwd, ".env.local"), "GEMINI_API_KEY=fake\n");
+      const r = run(["doctor", "--json"], 120_000, { cwd: s.cwd, env: s.env });
+      const doc = parseJsonObject(r, "doctor --json");
+      const checks = doc.checks ?? doc.results ?? [];
+      const cred = checks.find((c) => c && c.id === "check_credentials" || (c && c.name === "API Credentials"));
+      if (!cred) throw new CommandFailure("doctor did not report the credentials check", r);
+      const leaked = cred.details?.keyLength !== undefined || /not a usable/.test(String(cred.message));
+      if (leaked) throw new CommandFailure(`the cwd's .env.local reached the credentials check: ${cred.message}`, r);
+      return `credentials: ${cred.status} (${String(cred.message).slice(0, 80)})`;
+    } finally {
+      s.dispose();
+    }
+  });
+
+  check("a workspace without .claude/skills is reported by the doctor, not fatal", () => {
+    const s = scratch("skills");
+    try {
+      if (readdirSync(s.cwd).length !== 0) throw new Error("scratch cwd is not empty");
+      mkdirSync(path.join(s.cwd, "nothing-here"));
+      const r = run(["doctor", "--json"], 120_000, { cwd: s.cwd, env: s.env });
+      const doc = parseJsonObject(r, "doctor --json");
+      const checks = doc.checks ?? doc.results ?? [];
+      const skills = checks.find((c) => c && c.id === "check_skills" || (c && c.name === "Skills Hub"));
+      if (!skills) throw new CommandFailure("doctor did not report the skills check", r);
+      if (!/no \.claude\/skills/.test(String(skills.message))) throw new CommandFailure(`no workspace note: ${skills.message}`, r);
+      return String(skills.message).slice(0, 100);
+    } finally {
+      s.dispose();
+    }
   });
 }
 

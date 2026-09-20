@@ -17,6 +17,11 @@
 // It also writes prisma/init.sql — the full DDL — because `prisma migrate` needs the Rust
 // schema engine, which will not exist inside the compiled binary. The binary applies this
 // script through the adapter's executeScript instead.
+//
+// And it writes src/store/derived-ddl.ts, the SAME DDL as a TypeScript constant: a compiled
+// binary has no `prisma/init.sql` beside its code (`import.meta.url` resolves into the compiled
+// filesystem, where the file is absent), so the DDL must travel inside the bundle. The two files
+// are written from one string in one run; `createStore.test.ts` asserts they never drift.
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -30,6 +35,7 @@ const repoRoot = path.resolve(pkgRoot, "../..");
 const CANONICAL = path.join(repoRoot, "apps/web/prisma/schema.prisma");
 const OUT_SCHEMA = path.join(pkgRoot, "prisma/schema.sqlite.prisma");
 const OUT_DDL = path.join(pkgRoot, "prisma/init.sql");
+const OUT_DDL_MODULE = path.join(pkgRoot, "src/store/derived-ddl.ts");
 const PRISMA_CLI = path.join(repoRoot, "node_modules/prisma/build/index.js");
 
 const HEADER = [
@@ -99,6 +105,20 @@ function fixJsonDefaults(ddl) {
   return fixed;
 }
 
+/** The DDL as a TypeScript module, so the bundler embeds it in every artefact. */
+function ddlModule(ddl) {
+  return [
+    "// GENERATED FILE - DO NOT EDIT.",
+    "// Produced by packages/trent-core/scripts/derive-sqlite-schema.mjs, byte for byte the",
+    "// contents of packages/trent-core/prisma/init.sql. The compiled binary has no file system",
+    "// path to that file, so the DDL travels as this constant (see createStore.ts).",
+    "",
+    "/** The derived SQLite DDL that creates an empty Trent store. */",
+    `export const DERIVED_DDL: string = ${JSON.stringify(ddl)};`,
+    "",
+  ].join("\n");
+}
+
 function main() {
   const canonical = readFileSync(CANONICAL, "utf8");
   const derived = derive(canonical);
@@ -126,7 +146,9 @@ function main() {
     ],
     { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
   );
-  writeFileSync(OUT_DDL, fixJsonDefaults(ddl), "utf8");
+  const fixedDdl = fixJsonDefaults(ddl);
+  writeFileSync(OUT_DDL, fixedDdl, "utf8");
+  writeFileSync(OUT_DDL_MODULE, ddlModule(fixedDdl), "utf8");
 
   // Generate the client from the derived schema in the same breath, so the schema, the DDL
   // and the generated types can never be out of step with one another either.
@@ -139,7 +161,8 @@ function main() {
   const tables = (ddl.match(/^CREATE TABLE /gm) ?? []).length;
   process.stdout.write(
     `derived ${path.relative(repoRoot, OUT_SCHEMA)} (${models} models)\n` +
-      `derived ${path.relative(repoRoot, OUT_DDL)} (${tables} tables)\n`,
+      `derived ${path.relative(repoRoot, OUT_DDL)} (${tables} tables)\n` +
+      `derived ${path.relative(repoRoot, OUT_DDL_MODULE)} (embedded copy)\n`,
   );
 }
 

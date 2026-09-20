@@ -28,6 +28,7 @@
  * what the dead process owed and drains it through the same stream, gates and exit codes.
  */
 import process from "node:process";
+import { format as formatArgs } from "node:util";
 import { EXIT, TrentError, type ExitCode } from "@trent/core/errors/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { questionFromEvent } from "@trent/core/tools/human/index.js";
@@ -36,7 +37,7 @@ import { BudgetLedger, formatCents } from "../../repl/budget.js";
 import { ABORT_REASON } from "../../repl/interrupt.js";
 import { TranscriptRenderer } from "../../repl/render.js";
 import type { ReplConfig } from "../../repl/types.js";
-import { createHeadlessRuntime } from "../../runtime/headless.js";
+import { createHeadlessRuntime, type HeadlessRuntime } from "../../runtime/headless.js";
 import { releaseOnSignal } from "../../signals.js";
 import { GLYPHS } from "../../ui/index.js";
 import type { CommandContext } from "../context.js";
@@ -131,6 +132,37 @@ function approvalLines(ctx: CommandContext, id: string, action: string, reason: 
   ];
 }
 
+/**
+ * A machine-readable stdout is ONE document (`--json`) or one JSON object per line
+ * (`--format stream-json`). The app writes to stdout on its own while a run happens:
+ * `console.log` in `apps/web/lib/queue.ts` ("[Worker] Starting job ...") and its pino logger
+ * (`apps/web/lib/logger.ts`, at debug level under Bun because NODE_ENV defaults to development).
+ * Measured on the compiled binary: two `[Worker]` lines and two `{"level":20,...}` lines before
+ * the result object. So, for the run only: the console's stdout methods write to stderr, and the
+ * logger's level is `silent` — pino writes to fd 1 directly, so its level is the only handle, and
+ * it is read once, when the module is first evaluated inside `createHeadlessRuntime`. Both are
+ * put back when the run settles. Nothing a script needs is lost: the console lines still arrive
+ * on stderr, and the log lines are the app's own debug trace.
+ */
+function quietStdoutForMachines(): () => void {
+  const previousLevel = process.env.LOG_LEVEL;
+  process.env.LOG_LEVEL = "silent";
+  const original = { log: console.log, info: console.info, debug: console.debug };
+  const toStderr = (...args: unknown[]): void => {
+    process.stderr.write(`${formatArgs(...args)}\n`);
+  };
+  console.log = toStderr;
+  console.info = toStderr;
+  console.debug = toStderr;
+  return () => {
+    console.log = original.log;
+    console.info = original.info;
+    console.debug = original.debug;
+    if (previousLevel === undefined) delete process.env.LOG_LEVEL;
+    else process.env.LOG_LEVEL = previousLevel;
+  };
+}
+
 function exitFor(result: RunResult, stop: StopReason | undefined): ExitCode {
   if (result.status === "completed") return EXIT.OK;
   if (result.status === "paused") return EXIT.APPROVAL_REQUIRED;
@@ -156,14 +188,26 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
   const config = configManager.loadConfig() as unknown as ReplConfig;
   const now = ctx.overrides.now ?? (() => new Date());
   const startedAt = now().getTime();
-  // [G3.1] `surface` names who spends: this run's cost is `trent run`'s on the day's one ledger.
-  const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config, surface: "run" });
+  // Before the runtime is built: the app's logger fixes its level when its module is evaluated.
+  const restoreStdout = ctx.json || format === "stream-json" ? quietStdoutForMachines() : undefined;
+  let runtime: HeadlessRuntime;
+  try {
+    // [G3.1] `surface` names who spends: this run's cost is `trent run`'s on the day's one ledger.
+    runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config, surface: "run" });
+  } catch (caught) {
+    restoreStdout?.();
+    throw caught;
+  }
 
   let released = false;
   const release = async (): Promise<void> => {
     if (released) return;
     released = true;
-    await runtime.cleanup();
+    try {
+      await runtime.cleanup();
+    } finally {
+      restoreStdout?.();
+    }
   };
 
   const renderer = new TranscriptRenderer({ theme: ctx.theme });

@@ -119,7 +119,9 @@ npm run cli -- config set provider google
 ```
 
 `config set` routes any key the secrets schema recognises to `~/.trent/.env` rather than
-`config.yaml`, and `config get` on a secret reports `[set]`, never the value:
+`config.yaml`, and `config get` on a secret reports `[set]`, never the value. That file and the
+process environment are the only places a key is read from: the compiled binary is built with
+Bun's `.env` autoload off, so a `.env.local` in the project you launch it from is never consulted.
 
 ```
 $ npm run cli -- config get ANTHROPIC_API_KEY
@@ -207,7 +209,7 @@ quality gates ([goals.md](goals.md)); `/stop` interrupts a run that is in flight
 npm run cli -- run "Draft the launch email"            # the REPL transcript, without the prompt
 echo "Draft the launch email" | npm run cli -- run -   # objective on stdin
 npm run cli -- run "..." --format stream-json          # one JSON object per line
-npm run cli -- run "..." --json                        # the final result object only
+npm run cli -- run "..." --json                        # the final result object only; the app's own stdout lines go to stderr
 npm run cli -- run "..." --max-cost-cents 200          # stop the run once it passes $2.00
 ```
 
