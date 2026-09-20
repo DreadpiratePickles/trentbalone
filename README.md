@@ -72,7 +72,7 @@ trent jobs failed           # failed job runs, newest first; trent jobs retry <i
 trent workspace trust       # let this project's AGENTS.md, CLAUDE.md and .trent/*.md reach the prompt
 trent hooks list            # hooks configured for this profile; trent hooks consent allows one to run
 trent connect <provider>    # stripe, google, square, twilio, buffer, meta, bluesky: tokens to the 0600 secrets file
-trent --help                # 33 commands, 135 with their subcommands
+trent --help                # 33 commands, 137 with their subcommands
 ```
 
 Add a model key with `trent config set GEMINI_API_KEY <key>` (or `ANTHROPIC_API_KEY`,
@@ -209,7 +209,11 @@ hours, and only while the day's ledger still holds `improve.sweep_cap_cents` und
 `budget.daily_cap`; `trent heartbeat sweep` runs the same builder once by hand. Nothing it produces
 is promoted: drafts land in quarantine and `trent improve promote` is still the only way out.
 Tool descriptions improve on the same path: tool-health signals become gated proposals that
-`trent improve tools` lists and the same promote gate decides.
+`trent improve tools` lists and the same promote gate decides. Retrieval has a number too:
+`trent improve retrieval` prints recall@8 of the shipped ranker over the promoted retrieval goldens
+(added with `trent improve goldens add --retrieval`, or captured when a seat reads a ranked chunk)
+and exits 1 under `retrieval.min_recall`; the sweep grades the same number first, and the ranking
+files are frozen against its drafts ([docs/improve.md](docs/improve.md)).
 
 The judge is no longer the executor. `improve.judge_model` resolves a planner-tier model and a judge
 equal to the executor is a configuration error naming both; on a single provider key the two still

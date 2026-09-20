@@ -30,6 +30,7 @@
  * block can grow to, so this tier cannot push the assembled injection past `context.ceiling_chars`.
  */
 
+import { AppStoreUnusedError, describeAppStore, type AppStoreEnv } from "./app-store.js";
 import type { FleetMemoryEntry } from "./source.js";
 
 /** The six app surfaces, in the order they are collected and budgeted. */
@@ -350,13 +351,21 @@ export interface AppMemoryReaderOptions {
   /** The app modules; the real lazy imports when omitted. Memoised by the reader, loaded once. */
   readonly modules?: () => Promise<AppMemoryModules>;
   readonly atIso?: () => string;
+  /** Where `DATABASE_URL` is read for the predicate when the real modules are used; `process.env` when omitted. */
+  readonly env?: AppStoreEnv;
 }
 
 /**
  * The real `apps/web` modules, imported lazily and only when a seat actually recalls — the same
  * rule `app-source.ts` follows, so nothing here is evaluated before `applyStandaloneEnv` has run.
+ *
+ * Consults `describeAppStore` FIRST and refuses with `AppStoreUnusedError` when the app's store is
+ * not usable in this process (`DATABASE_URL` unset, empty, a `file:` URL or a non-postgres scheme):
+ * the import itself is what constructs the app's Postgres client, so it is never attempted.
  */
-export async function loadAppMemoryModules(): Promise<AppMemoryModules> {
+export async function loadAppMemoryModules(env: AppStoreEnv = process.env): Promise<AppMemoryModules> {
+  const state = describeAppStore(env);
+  if (!state.usable) throw new AppStoreUnusedError(state);
   const [store, documents, capability, registries, wiki] = await Promise.all([
     import("@/lib/store") as unknown as Promise<{ store: { listDocuments(companyId: string): Promise<AppDocument[]> } }>,
     import("@/lib/active-documents") as unknown as Promise<{ filterActiveDocuments: ActiveFilter }>,
@@ -377,16 +386,20 @@ export async function loadAppMemoryModules(): Promise<AppMemoryModules> {
 /**
  * One seat's view of the app's company memory.
  *
- * Every failure resolves empty. The app store singleton is Prisma whenever `DATABASE_URL` is set
- * (`apps/web/lib/store.ts:11`) against a POSTGRESQL client, so the standalone durable profile —
- * which points that variable at `<profile>/trent.db` — makes every app store call throw. Fleet
- * recall must degrade to the run-derived candidates there, never fail the seat.
+ * With the real modules (no `modules` injected) the predicate is consulted up front, before any
+ * import: a profile whose app store is not usable (`app-store.ts`) gets an empty answer and loads
+ * nothing, and the doctor's `App Memory Tiers` line carries the reason. Every other failure — a
+ * configured database that does not answer — resolves empty too: fleet recall degrades to the
+ * run-derived candidates, it never fails the seat.
  */
 export function createAppMemoryReader(options: AppMemoryReaderOptions = {}): AppMemoryReader {
   const budgets = options.budgets ?? DEFAULT_APP_MEMORY_BUDGETS;
-  const load = options.modules ?? loadAppMemoryModules;
+  const real = options.modules === undefined;
+  const env = options.env ?? process.env;
+  const load = options.modules ?? (() => loadAppMemoryModules(env));
   let modules: Promise<AppMemoryModules> | undefined;
   return async (companyId, seat) => {
+    if (real && !describeAppStore(env).usable) return [];
     try {
       modules ??= load();
       const app = await modules;

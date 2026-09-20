@@ -186,6 +186,11 @@ export const DEFAULT_CONFIG: TrentConfig = {
     image_price_cents: 0,
     image_auto_approve_under_cents: 0,
   },
+  // [W3] retrieval gate
+  // recall@8 over the promoted retrieval goldens below which no draft promotes and `trent improve
+  // retrieval` exits non-zero. 0.9 is the trigger design decision E recorded for the deferred
+  // reranker and contextual prefixes: under it retrieval is the problem to work on.
+  retrieval: { min_recall: 0.9 },
   personality: "default",
   theme: "dark",
   // [D0] improvement gates

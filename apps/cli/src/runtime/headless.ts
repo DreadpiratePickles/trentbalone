@@ -8,6 +8,18 @@
  * real model gateway. There is no canned reply path in this file or in any file it imports.
  *
  * Nothing terminal-specific lives here: no theme, no `writeLine`, no exit, no degraded banner.
+ *
+ * Two stores, two URLs, and they are never confused. The CORE store is this profile's SQLite file,
+ * `<profile>/trent.db`, opened through `openStore` with its own generated client. The APP's store
+ * is whatever `DATABASE_URL` names for the wrapped application — a postgres database, or nothing
+ * (its in-process store). The runtime used to hand the core store's `file:` URL to the orchestrator,
+ * which exported it as the app's `DATABASE_URL`; the app's postgresql client then failed every
+ * call from source under Bun, and from the compiled binary — where the variable stays unset — the
+ * client was still constructed and its engine load killed `trent run` on any machine without the
+ * engine (docs/sessions/2026-09-20-w1.1-run-prisma-app-store.md). Now `guardAppDatabase` decides
+ * once, from the app's own variable, before anything in `apps/web` is imported: a usable postgres
+ * URL is handed on unchanged, anything else hands on nothing and fills the app's singleton seam so
+ * the Postgres client is never built. `headless.app-store.test.ts` holds the line.
  */
 
 import process from "node:process";
@@ -24,7 +36,7 @@ import {
   type OrchestrationTrigger,
   type Orchestrator,
 } from "@trent/core/orchestrator/index.js";
-import type { FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
+import { guardAppDatabase, type AppStoreState, type FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
 import { runSessionHooks } from "@trent/core/hooks/index.js";
 import { loadWorkspaceContext, type WorkspaceContext } from "@trent/core/workspace-context/index.js";
 import { createVersionPinHook, type VersionPinHook } from "@trent/core/fleet/index.js";
@@ -156,6 +168,11 @@ export interface HeadlessRuntime {
   readonly workspace: WorkspaceContext;
   readonly store: ReplStore;
   readonly durable: boolean;
+  /**
+   * The app's store as this process decided it (`fleet-memory/app-store.ts`): used only for a
+   * postgres `DATABASE_URL`; otherwise the tiers are skipped and `trent doctor` says why.
+   */
+  readonly appStore: AppStoreState;
   readonly tools: ToolWiring;
   readonly fleetMemory: FleetMemoryHook;
   readonly improve: ImproveRunDeps;
@@ -206,6 +223,11 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
   const config = deps.config ?? (deps.configManager.loadConfig() as unknown as ReplConfig);
   const profileDir = deps.configManager.getProfileDir();
   const workspace = deps.workspace ?? process.cwd();
+  // First, before any wiring can import a module from `apps/web`: is the APP's database usable in
+  // this process? The answer decides what the orchestrator is told below and, when it is no, fills
+  // the app's `globalThis.__prisma` seam so `apps/web/lib/db.ts` never constructs a Postgres
+  // client — no engine load, no unhandled rejection on a machine that does not ship the engine.
+  const appStore = guardAppDatabase(process.env);
   // A2.1. Trust is checked, the files are scanned and the caps are applied inside this call; an
   // untrusted workspace yields no blocks and one instruction line. Nothing here opens a file.
   const workspaceContext = loadWorkspaceContext({ cwd: workspace, profileDir, config: config as WorkspaceSlice });
@@ -246,8 +268,8 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
   tools.adapters.splice(0, tools.adapters.length, ...watchVerification(tools.adapters, goals.evidence));
 
   try {
-    const databaseUrl = `file:${profileDir}/trent.db`;
-    const { store, durable } = await (deps.openStore ?? openStore)(databaseUrl);
+    // The CORE store: this profile's own SQLite file. Its URL goes to `openStore` and nowhere else.
+    const { store, durable } = await (deps.openStore ?? openStore)(`file:${profileDir}/trent.db`);
 
     // The company memory every seat shares: MEMORY.md / USER.md under the profile, recall over
     // this company's runs, and the shared skills index when the store carries the improve tables.
@@ -311,7 +333,10 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     // reads it, through a dep type that declares provider, model and prices only.
     const model = { provider: config.provider, model: config.model, ...modelOverrides, ...modelTiers };
     const orchestrator = createOrchestrator({
-      ...(durable ? { databaseUrl } : {}),
+      // The APP's database, never the core store's: a usable postgres URL is handed on unchanged
+      // and `applyStandaloneEnv` keeps it; anything else hands on nothing, so the app's
+      // `DATABASE_URL` is cleared and its store stays in-process behind the guard above.
+      ...(appStore.usable ? { databaseUrl: appStore.url } : {}),
       ...(maxConcurrentRuns === undefined ? {} : { maxConcurrentRuns }),
       model,
       tools: tools.adapters,
@@ -352,6 +377,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       workspace: workspaceContext,
       store,
       durable,
+      appStore,
       tools,
       fleetMemory,
       improve,

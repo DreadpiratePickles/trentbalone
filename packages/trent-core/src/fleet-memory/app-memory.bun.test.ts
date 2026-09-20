@@ -3,10 +3,10 @@
  *
  * Why a Bun child and not a plain vitest suite: `apps/web/lib/store.ts` chooses its store once, at
  * module evaluation, from `DATABASE_URL`. The two things worth proving — that a fact seat A wrote
- * in run 1 reaches seat B in run 2, and that the standalone DURABLE profile cannot reach the app
- * store at all — are two different values of that variable, so they are two processes. Bun is the
- * runtime because it is the one the compiled CLI runs under and the only one whose profile is
- * durable (`apps/cli/src/runtime/headless.ts:110-119`).
+ * in run 1 reaches seat B in run 2, and that a `file:` URL (the wrapper's SQLite store, never the
+ * app's) keeps the app's store out of the module registry altogether — are two different values of
+ * that variable, so they are two processes. Bun is the runtime because it is the one the compiled
+ * CLI runs under.
  *
  * Under Node with no bun on the machine the whole suite skips with the reason printed, rather than
  * passing on a runtime that cannot answer the question.
@@ -85,12 +85,16 @@ describe.skipIf(bun === null)(`company memory across runs, under Bun${why}`, () 
   });
 });
 
-describe.skipIf(bun === null)(`the standalone durable profile, under Bun${why}`, () => {
-  it("degrades to no app memory and says why, instead of failing the seat", () => {
+describe.skipIf(bun === null)(`a file: DATABASE_URL, under Bun${why}`, () => {
+  it("skips the app tiers up front — nothing recalled, nothing written, no failure, the app's store never loaded", () => {
     const result = runScenario<SqliteProfileResult>("sqlite");
     expect(result.entries).toBe(0);
-    // `apps/web/lib/db.ts` is a postgresql client; `<profile>/trent.db` is a SQLite file.
-    expect(result.writeReason).toContain("postgresql");
+    // A deliberate skip is not a failure: the doctor's App Memory Tiers line carries the reason.
+    expect(result.writeReason).toBeNull();
+    // `apps/web/lib/db.ts` is a postgresql client; the file: URL is the wrapper's own SQLite store.
+    expect(result.loaderRefusal).toContain("SQLite");
+    expect(result.loaderRefusal).toContain("postgresql");
+    expect(result.appStoreLoaded).toBe(false);
   });
 });
 

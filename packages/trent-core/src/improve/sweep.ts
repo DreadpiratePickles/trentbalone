@@ -1,25 +1,21 @@
 /**
  * Item 2 of the loop — the sweep on real stores.
  *
- * `heartbeat.ts:335` built fresh in-memory stores for every sweep, so production learned nothing.
- * This sweep reads the durable trace store, runs the Skill Foundry per (agent, taskType), gates
- * every draft by EXECUTING it (`gate.ts`), evolves each agent's prompt on its own persisted Pareto
- * frontier (`gepa-pass.ts`), and retires what nobody uses. It is idempotent: an (agent, taskType)
- * whose trace set has not changed since its last iteration is skipped, so a second sweep over the
- * same traces produces nothing new.
+ * `heartbeat.ts:335` built fresh in-memory stores for every sweep, so production learned nothing. This sweep
+ * reads the durable trace store, runs the Skill Foundry per (agent, taskType), gates every draft by EXECUTING it
+ * (`gate.ts`), evolves each agent's prompt on its own persisted Pareto frontier (`gepa-pass.ts`), and retires what
+ * nobody uses. It is idempotent: an (agent, taskType) whose trace set has not changed since its last iteration is skipped, so a second sweep over the same traces produces nothing new.
  *
  * Triggers stay deterministic (`shouldDistillSkill`): no "be ACTIVE" bias is adopted.
  *
- * Cost honesty (CS329A analysis, sections 3.1 and 4): every provider call goes through the
- * `SweepMeter`, so `report.costCents` is the sum of what the gateway charged, per phase, and an
- * optional `budgetCents` stops the sweep. The baseline is content-addressed in the store's
- * GateCache, so a seat prompt is executed once per suite version, not once per sweep.
+ * Cost honesty (CS329A analysis, sections 3.1 and 4): every provider call goes through the `SweepMeter`, so
+ * `report.costCents` is the sum of what the gateway charged, per phase, and an optional `budgetCents` stops the
+ * sweep. The baseline is content-addressed in the store's GateCache, so a seat prompt is executed once per suite version, not once per sweep.
  *
- * Imitation reads clean data only (task I.13): the distill TRIGGERS are decided on the whole
- * trace group, so `error_recovery` still fires, but the Foundry is handed the process-clean
- * traces alone (completed, critic pass, no repetitive loop); a group with nothing clean distils
- * nothing. A draft the gate blocks for a repetitive loop or a private regression is rejected
- * with a ledger row under actor `gate:<reason>`, so the decision is visible in `history`.
+ * Imitation reads clean data only (task I.13): the distill TRIGGERS are decided on the whole trace group, so
+ * `error_recovery` still fires, but the Foundry is handed the process-clean traces alone (completed, critic
+ * pass, no repetitive loop); a group with nothing clean distils nothing. A draft the gate blocks for a
+ * repetitive loop or a private regression is rejected with a ledger row under actor `gate:<reason>`, so the decision is visible in `history`.
  */
 
 import type { AgentTraceRow, ImproveStorePort, IterationRow, JsonValue, SkillDraftRow } from "../store/StorePort.js";
@@ -38,6 +34,7 @@ import { retireSkills, type RetirementReport } from "./lifecycle.js";
 import { cachedOrMeasuredBaseline } from "./sweep-baseline.js";
 import { isBudgetExhausted, SweepMeter, type PhaseReport } from "./meter.js";
 import { isRepetitiveLoopTag } from "./repetitive-loop.js";
+import type { RetrievalGateInput } from "./retrieval-gate.js";
 import { resolveSweepScope, type SkippedSpecialist } from "./scope.js";
 import { assessHealth } from "./sweep-health.js";
 import { sweepToolProposals, type SweepToolOptions, type ToolProposalReport } from "./tool-drafts.js";
@@ -54,8 +51,8 @@ export interface SweepDeps {
   readonly seatPrompt?: SeatPromptProvider;
   readonly suiteFor?: SuiteProvider;
   /**
-   * [D1] why an agent has no suite, in the agent's own words. The gate's `no_suite` said nothing
-   * about WHICH seat or what it would take; a seat's refusal now names it and its golden counts.
+   * [D1] why an agent has no suite, in the agent's own words. The gate's `no_suite` said nothing about WHICH
+   * seat or what it would take; a seat's refusal now names it and its golden counts.
    */
   readonly noSuiteReason?: (agentId: string) => Promise<string | undefined> | string | undefined;
   /** The executing gate's model access. Without it no draft can be gated (it stays quarantined). */
@@ -75,6 +72,8 @@ export interface SweepDeps {
   readonly frozenSurface?: FrozenSurface;
   /** [D0] gate 6: the calibration floors below which the judge is advisory. */
   readonly judgeFloors?: JudgeFloors;
+  /** [W3] recall@8 over the promoted retrieval goldens, bound to the profile's brain; every gated draft is held to the floor first. Omitted, nothing about retrieval is measured. */
+  readonly retrieval?: RetrievalGateInput;
   readonly toolProposals?: SweepToolOptions;
   readonly now?: () => string;
 }
@@ -140,11 +139,11 @@ export function toTraceRecord(row: AgentTraceRow): TraceRecord {
 const LEDGERED_BLOCKS = new Set<string>(["repetitive_loop"]);
 
 /**
- * [D0] gate 2: a holdout regression does not condemn the candidate, it fails to clear it. The
- * draft stays in QUARANTINE with the reason on its iteration, so a human still sees it in
- * `trent improve status` and a later sweep with more holdout evidence can decide again.
+ * [D0] gate 2: a holdout regression does not condemn the candidate, it fails to clear it. The draft stays in
+ * QUARANTINE with the reason on its iteration, so a human still sees it in `trent improve status` and a later sweep
+ * with more holdout evidence can decide again. [W3] a recall breach is the same case from the other side: the ranker is under the floor, the draft was never measured, and a sweep after the ranker is fixed decides it.
  */
-const QUARANTINE_BLOCKS = new Set<string>(["holdout_regression"]);
+const QUARANTINE_BLOCKS = new Set<string>(["holdout_regression", "retrieval_recall"]);
 
 /** I.13: process-clean traces only: completed, critic pass (or none), no repetitive-loop tag. */
 export function cleanTraces(rows: readonly AgentTraceRow[]): AgentTraceRow[] {
@@ -229,6 +228,7 @@ async function gateDraft(ctx: AgentContext, draft: SkillDraftRow): Promise<Pick<
         judgeAdvisory: ctx.judgeAdvisory,
         ...(deps.holdoutRatio === undefined ? {} : { holdoutRatio: deps.holdoutRatio }),
         ...(deps.judge === undefined ? {} : { judge: deps.judge }),
+        ...(deps.retrieval === undefined ? {} : { retrieval: deps.retrieval }),
       }),
     );
   } catch (error) {

@@ -188,7 +188,10 @@ describe("createHeadlessRuntime", () => {
     expect(deps?.improve).toBe(runtime.improve.improve);
     expect(deps?.delegate).toBeDefined();
     expect(deps?.model).toEqual({ provider: f.deps.configManager.loadConfig().provider, model: f.deps.configManager.loadConfig().model });
-    expect(deps?.databaseUrl).toBe(`file:${f.deps.configManager.getProfileDir()}/trent.db`);
+    // The core store's SQLite URL is the wrapper's, never the app's: with no postgres DATABASE_URL
+    // the orchestrator is told nothing, so the app keeps its in-process store rather than being
+    // handed a `file:` URL its postgresql client cannot take (`headless.app-store.test.ts`).
+    expect(deps?.databaseUrl).toBeUndefined();
   });
 
   it("carries model_overrides from config to the orchestrator, and on to the gateway's env bridge", async () => {

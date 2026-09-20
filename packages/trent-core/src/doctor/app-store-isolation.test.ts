@@ -71,12 +71,13 @@ afterEach(() => {
 });
 
 describe("check_app_memory on an empty profile", () => {
-  it("reports the in-process store without loading the app's store or its Prisma client", async () => {
+  it("reports the app tiers as not used without loading the app's store or its Prisma client", async () => {
     vi.stubEnv("DATABASE_URL", undefined);
     const result = await checkAppMemory.run(context());
     expect(result.status).toBe("warn");
-    expect(result.message).toContain("ephemeral");
-    expect(result.details).toMatchObject({ reachable: true, store: "memory", durable: false });
+    expect(result.message).toContain("not used");
+    expect(result.message).toContain("in-process");
+    expect(result.details).toMatchObject({ used: false, reachable: false, store: "memory", durable: false });
     expect(loaded).toEqual([]);
     expect(listDocuments).not.toHaveBeenCalled();
   });
@@ -86,8 +87,24 @@ describe("check_app_memory on an empty profile", () => {
     vi.stubEnv("DATABASE_URL", "");
     const result = await checkAppMemory.run(context());
     expect(result.status).toBe("warn");
-    expect(result.details).toMatchObject({ store: "memory" });
+    expect(result.details).toMatchObject({ used: false, store: "memory" });
     expect(loaded).toEqual([]);
+  });
+});
+
+describe("check_app_memory on the standalone durable profile", () => {
+  it("says the file: URL is the wrapper's store and not the app's, and loads nothing to say it", async () => {
+    // The same predicate every reader and writer consults (`fleet-memory/app-store.ts`): the
+    // answer is known from the URL alone, so probing — which would construct the postgres client
+    // — is exactly what must not happen here.
+    vi.stubEnv("DATABASE_URL", "file:/tmp/trent.db");
+    const result = await checkAppMemory.run(context());
+    expect(result.status).toBe("warn");
+    expect(result.message).toContain("not used");
+    expect(result.message).toContain("SQLite");
+    expect(result.details).toMatchObject({ used: false, reachable: false, store: "sqlite", durable: false });
+    expect(loaded).toEqual([]);
+    expect(listDocuments).not.toHaveBeenCalled();
   });
 });
 
@@ -97,17 +114,19 @@ describe("check_app_memory with a database configured", () => {
     const result = await checkAppMemory.run(context());
     expect(result.status).toBe("ok");
     expect(result.message).toContain("durable");
+    expect(result.details).toMatchObject({ used: true, reachable: true, store: "server", durable: true });
     expect(loaded).toEqual(["@/lib/store"]);
     expect(listDocuments).toHaveBeenCalledTimes(1);
     expect(listDocuments).toHaveBeenCalledWith("co_doctor_probe");
   });
 
   it("reports the store's own error when the read fails", async () => {
-    vi.stubEnv("DATABASE_URL", "file:/tmp/trent.db");
-    listDocuments.mockRejectedValueOnce(new Error("the URL must start with the protocol `postgresql://`"));
+    vi.stubEnv("DATABASE_URL", "postgresql://db.internal/trent");
+    listDocuments.mockRejectedValueOnce(new Error("Can't reach database server at `db.internal:5432`"));
     const result = await checkAppMemory.run(context());
     expect(result.status).toBe("warn");
-    expect(result.details).toMatchObject({ reachable: false, store: "sqlite" });
+    expect(result.message).toContain("db.internal:5432");
+    expect(result.details).toMatchObject({ used: true, reachable: false, store: "server", durable: false });
     expect(loaded).toEqual(["@/lib/store"]);
   });
 });

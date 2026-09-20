@@ -24,6 +24,7 @@ A do-not-modify list, enforced by path, not by intent (`improve/frozen-surface.t
 | `gate_code` | `improve/`, `evals/` and `gepa/` — what executes, scores and selects |
 | `read_only_memory` | every configured block with `read_only: true` |
 | `judge_input_memory` | every other configured block: the judge's inputs are outputs of prompts those blocks are rendered into, so a memory delta moves the grader |
+| `ranking` | [W3] `fleet-memory/recall.ts`, `hybrid.ts`, `brain-index.ts` and `fleet-memory/ingest/`: what the recall gate measures |
 | `configured` | anything in `improve.frozen_paths` |
 
 A draft whose write would land on one is **rejected before it is scored**, the path is named in the
@@ -117,7 +118,10 @@ improve:
 - `trent improve sweep` — per agent what was distilled, gated and rejected, then the cap, the spend,
   whether the cap stopped the sweep, the pass^k in force, whether the judge was advisory, and
   [D1] whether reflection ran and which model graded it.
-- `trent improve goldens list` — every captured failure, its review state and the seats it gates.
+- `trent improve goldens list` — every captured failure, its review state and the seats it gates,
+  and [W3] every retrieval golden with its source.
+- `trent improve retrieval` — [W3] recall@8 over the promoted retrieval goldens, per query, against
+  `retrieval.min_recall`; exit 1 under the floor.
 - `trent improve promote <id> --live` — the promotion, then the holdout re-run and, if it regressed,
   the rollback that already happened.
 - `trent improve history` — every refusal as a ledger row: `gate:frozen_surface`,
@@ -326,11 +330,77 @@ The thresholds ship as constants in `improve/tool-health.ts` (`DEFAULT_TOOL_HEAL
 They are deliberately **not** config keys yet: nothing that builds a sweep would read them, and a
 config key nothing reads is the defect this repository already records twice.
 
+## [W3] Retrieval goldens and the recall gate
+
+Every later change to ingestion, chunking, ranking or reranking has a number: **recall@8 over the
+profile's promoted retrieval goldens**, measured by the shipped ranker, deterministic, and gated in
+this loop (harness upgrade audit, section 4 item 3; design decision E). There is deliberately no
+LLM judge on this path: ids in, ids out, a number (audit section 5).
+
+### What a retrieval golden is
+
+A query and the chunk ids that answer it. It lives under `<profile>/goldens/retrieval/`, so the
+frozen surface (gate 1, class `golden`) covers it with the failure goldens, and it carries a
+`source`:
+
+| source | how it arrives |
+|---|---|
+| `founder` | `trent improve goldens add --retrieval --query "..." --expect <chunk-id>[,<chunk-id>]` |
+| `captured` | a run: when a seat calls `brain_read` on a chunk id that its own brain recall had ranked, the fleet-memory hook emits a `recall` note on the run bus (`{query, ranked_ids[], read_id}`, carried as a `step_note`), and the loop captures `{query, expected: [read_id]}` |
+
+A golden may also name a document instead of a chunk (`expected_doc: {slug, page}`), for the case
+where the founder knows the contract and the page and not the chunk number. Either way it starts
+**quarantined**. `trent improve goldens list` shows it with its source; `promote <id>` and
+`reject <id>` are the same human commands as for a failure golden, and only a promoted golden is
+counted. The id is content-addressed (`rgold_<hash of query and ids>`), so a seat that reads the
+same chunk in ten runs proposes one golden, and a decision already taken on it is never reopened.
+
+### The number
+
+`trent improve retrieval [--json]` runs `recallFromBrain` — the real ranker, over the profile's
+brain index, with the embedder the profile configured or the lexical ranker when none is — once
+per promoted golden, with no budget cut, and counts a golden as a **hit** when any expected id is
+in the top 8. It prints recall@8, the floor, which ranker measured it, and every query with its
+rank or, for a miss, what the top 8 held instead. Exit 0 at or over the floor, **exit 1 under it**,
+so a CI step or a founder editing the chunker gets a verdict. Quarantined goldens are listed as
+not counted; with nothing promoted, or the brain disabled, the number is reported as not measured
+rather than as a pass.
+
+```yaml
+retrieval:
+  min_recall: 0.9      # recall@8 over the promoted retrieval goldens the ranker must reach
+```
+
+The floor's default, 0.9, is the trigger design decision E recorded for the deferred reranker and
+contextual chunk prefixes: under it retrieval is the problem to work on; over it, it is not.
+
+### The gate
+
+`improve/gate.ts` grades `retrieval_recall` as a deterministic grader, **first** and for free: a
+measured breach ends the gate before any model call, the verdict is `blockedBy: "retrieval_recall"`
+with the metric as its one failure cluster and the whole report attached (the number, the floor,
+the queries the ranker lost and what it returned instead). The draft stays in **quarantine**, not
+rejected — it was never measured; the ranker is what is under the floor — and a sweep after the
+ranker is fixed decides it, as with a holdout regression. The sweep binds the grader to the
+profile's brain and promoted goldens (`improve-retrieval.ts`, `retrievalGateFor`), evaluated once
+per sweep; offline it measures the lexical ranker, `--live` adds the configured embedder, so an
+offline sweep never calls an embedding endpoint. A profile with no promoted retrieval golden binds
+nothing and the loop measures nothing about retrieval, which the sweep does not mistake for a pass.
+
+A draft cannot edit its way past the floor: `fleet-memory/recall.ts`, `hybrid.ts`,
+`brain-index.ts` and the whole `fleet-memory/ingest/` pipeline are frozen as class `ranking`
+(gate 1). A change to the ranker is a human change, and `trent improve retrieval` is how it is
+verified — which is what the audit's failing test asserts: the five fixture queries score
+recall@8 = 1.0 with the shipped ranker, and a ranker patched through the evaluator's `rank` seam
+to return the reverse order fails the gate with the metric named (`improve/retrieval-gate.test.ts`).
+
 ## What is deliberately not here
 
 - **Automatic promotion.** Promotion is a human command and stays one (`improve/lifecycle.ts`),
   for a draft (`trent improve promote`) and for a golden (`trent improve goldens promote`).
 - **Authored suites.** No agent and no founder writes a fixture: a suite grows only from a failure
-  a real run produced (plan decision 4).
+  a real run produced (plan decision 4). The one exception is deliberate and narrow: a founder may
+  name a chunk that answers a question (`goldens add --retrieval`), because a retrieval golden
+  grades the ranker and not a seat, and it still enters the set only through `goldens promote`.
 - **An independent judge.** The judge is a different model on the same key and the same family
   until a second provider key exists (decision 6, above).

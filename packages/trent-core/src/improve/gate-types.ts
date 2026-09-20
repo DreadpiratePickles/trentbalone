@@ -6,6 +6,7 @@
 
 import type { GateCache } from "./gate-cache.js";
 import type { ToolInvocation } from "./repetitive-loop.js";
+import type { RetrievalGateInput, RetrievalGateReport } from "./retrieval-gate.js";
 import type { FrozenSuite } from "./suites.js";
 
 export interface ActualsInput {
@@ -97,7 +98,8 @@ export type GateBlockReason =
   | "holdout_regression"
   | "budget_exhausted"
   | "frozen_surface"
-  | "content_vetoed";
+  | "content_vetoed"
+  | "retrieval_recall";
 
 /** What the reliability re-draw did: which fixtures it re-ran, what it cost, which did not hold. */
 export interface RedrawReport {
@@ -139,6 +141,8 @@ export interface GateVerdict {
   holdout?: GatePartition & { regressions: string[] };
   /** [D0] gate 3: how many consecutive trials every fixture had to pass. */
   trials?: number;
+  /** [W3] recall@k over the promoted retrieval goldens, when the caller bound an evaluator. */
+  retrieval?: RetrievalGateReport;
 }
 
 export interface ExecuteGateInput {
@@ -165,6 +169,11 @@ export interface ExecuteGateInput {
   readonly judgeAdvisory?: boolean;
   /** [D0] gate 2: share of fixtures held out. Default `DEFAULT_HOLDOUT_RATIO`. */
   readonly holdoutRatio?: number;
+  /**
+   * [W3] The recall floor (`retrieval-gate.ts`). Deterministic and free, so it is graded before
+   * anything is run: a measured breach is `retrieval_recall` and costs no model call.
+   */
+  readonly retrieval?: RetrievalGateInput;
 }
 
 export interface MeasuredBaseline extends GateBaseline {

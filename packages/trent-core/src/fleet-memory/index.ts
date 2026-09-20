@@ -36,6 +36,18 @@ export {
   type FleetStep,
 } from "./source.js";
 export { createAppFleetSource, type AppFleetSourceOptions } from "./app-source.js";
+// [C1] The one answer to whether the app's store can work in this process, and the guard that keeps
+// the app's Postgres client from being constructed when it cannot. See app-store.ts.
+export {
+  AppStoreUnusedError,
+  appStoreUsable,
+  describeAppStore,
+  guardAppDatabase,
+  isAppDatabaseGuard,
+  type AppStoreEnv,
+  type AppStoreKind,
+  type AppStoreState,
+} from "./app-store.js";
 // [C1] app memory: the web app's own tiered company memory, read as recall candidates and
 // written back through the app's own writers. See README.md, "Company memory in the app".
 export {
@@ -160,9 +172,36 @@ export {
   type ConversationTurn,
   type FleetMemoryHook,
   type FleetMemoryHookOptions,
+  type FleetMemoryNotice,
   type FleetSeatInput,
   type RunStartedInput,
 } from "./orchestrator-hook.js";
+// [W3] retrieval goldens: the recall note a seat's `brain_read` emits, and recall@k over the golden set.
+export {
+  RECALL_NOTE_MARKER,
+  canonicalChunkId,
+  chunkIdOfBrainRead,
+  createRecallObserver,
+  encodeRecallNote,
+  parseRecallNote,
+  type RecallCaller,
+  type RecallNotePayload,
+  type RecallNotice,
+  type RecallObserver,
+} from "./recall-note.js";
+export {
+  DEFAULT_RECALL_K,
+  RETRIEVAL_EVAL_SEAT,
+  brainRanker,
+  evaluateRetrieval,
+  type BrainRankerOptions,
+  type EvaluateRetrievalOptions,
+  type RankedChunk,
+  type RetrievalEvalResult,
+  type RetrievalQuery,
+  type RetrievalQueryResult,
+  type RetrievalRanker,
+} from "./retrieval-eval.js";
 export {
   CONSOLIDATE_TRIGGER,
   MEMORY_DRAFT_AGENT,

@@ -23,7 +23,8 @@
  * Plus the [D0] gates: every fixture is run `passK` times and passes only if it passed them all
  * (`pass-k.ts`); promotion is decided on the HOLDOUT side of the partition, never on the side
  * reflection optimises; and a judge below its calibration floor is advisory, so it cannot be the
- * reason anything passes.
+ * reason anything passes. [W3] adds `retrieval_recall`: recall@8 over the promoted retrieval
+ * goldens (`retrieval-gate.ts`), deterministic, graded first, and a breach names the metric.
  *
  * Model access is injected (`ActualsRunner`, `JudgeFn`), so the whole gate is testable offline.
  * `createGatewayActuals` binds it to the real model gateway; `judge.ts` binds the judge. Every
@@ -36,6 +37,7 @@ import { JUDGE_ADVISORY_TAG } from "./gate-score.js";
 import type { ActualsRunner, ExecuteGateInput, GateCandidate, GateVerdict, MeasuredBaseline } from "./gate-types.js";
 import { scoreUnderPassK } from "./pass-k.js";
 import { isRepetitiveLoopTag } from "./repetitive-loop.js";
+import { RETRIEVAL_RECALL_METRIC, gradeRetrievalRecall, retrievalBreached, type RetrievalGateReport } from "./retrieval-gate.js";
 import { partitionMetrics } from "./suite-split.js";
 
 export type * from "./gate-types.js";
@@ -56,8 +58,29 @@ export function hasNewFailureCluster(current: Record<string, number>, baseline: 
   return Object.keys(current).some((tag) => tag !== JUDGE_ADVISORY_TAG && !(tag in baseline));
 }
 
+/** [W3] A measured recall breach: the suite was not run, so nothing here is a score of it. */
+function retrievalRefusal(retrieval: RetrievalGateReport): GateVerdict {
+  return {
+    promoted: false,
+    score: 0,
+    delta: 0,
+    blockedBy: "retrieval_recall",
+    stage: "deterministic",
+    actualsCalls: 0,
+    judgeCalls: 0,
+    pendingRubrics: 0,
+    fixtures: [],
+    failureClusters: { [RETRIEVAL_RECALL_METRIC]: 1 },
+    costCents: 0,
+    retrieval,
+  };
+}
+
 /** Run the frozen suite WITH the candidate and decide. Never throws on a grader outcome. */
 export async function executeGate(input: ExecuteGateInput): Promise<GateVerdict> {
+  // [W3] The recall floor is deterministic and free, so it is graded before anything is run.
+  const retrieval = input.retrieval === undefined ? undefined : await gradeRetrievalRecall(input.retrieval);
+  if (retrieval !== undefined && retrievalBreached(retrieval)) return retrievalRefusal(retrieval);
   const systemPrompt = composeSystemPrompt(input.seatPrompt, input.candidate);
   const scored = await scoreUnderPassK({
     suite: input.suite,
@@ -70,9 +93,9 @@ export async function executeGate(input: ExecuteGateInput): Promise<GateVerdict>
     ...(input.passK === undefined ? {} : { passK: input.passK }),
     ...(input.judgeAdvisory === undefined ? {} : { judgeAdvisory: input.judgeAdvisory }),
   });
-  if (scored.stage === "deterministic") return scored;
+  if (scored.stage === "deterministic") return retrieval === undefined ? scored : { ...scored, retrieval };
   const partitions = partitionMetrics(input.suite, input.baseline, scored, input.holdoutRatio);
-  const verdict: GateVerdict = { ...scored, optimise: partitions.optimise, holdout: partitions.holdout };
+  const verdict: GateVerdict = { ...scored, optimise: partitions.optimise, holdout: partitions.holdout, ...(retrieval === undefined ? {} : { retrieval }) };
   // The two most specific reasons first, so a human reads the failure mode, not its symptom.
   if (verdict.fixtures.some((f) => f.failureTags.some(isRepetitiveLoopTag))) return { ...verdict, blockedBy: "repetitive_loop" };
   // [D0] gate 2: promotion is decided on the holdout. A candidate may lift everything the

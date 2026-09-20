@@ -43,6 +43,8 @@ import {
 import type { ModelProvider } from "@trent/core/model-gateway/index.js";
 import type { ImproveStorePort } from "@trent/core/store/index.js";
 import { loadGoldenIndex, reflectionFloor, reflectionRefusal, seatSuitesFor, type GoldenIndex, type ReflectionFloor } from "./improve-goldens.js";
+// [W3] the recall floor, bound to this profile's brain and promoted retrieval goldens.
+import { retrievalGateFor } from "./improve-retrieval.js";
 
 /**
  * All a sweep needs of the command line: the profile's config manager. `CommandContext` satisfies
@@ -97,8 +99,13 @@ export interface LoopConfig {
     minTnr: number;
     frozenPaths: string[];
     blocks: Array<{ label: string; file: string; description: string; limit: number; read_only: boolean }>;
+    /** [W3] `retrieval.min_recall`: the recall@8 floor over the promoted retrieval goldens. */
+    retrievalMinRecall: number;
   };
 }
+
+/** Mirrors `retrieval.min_recall`; used only when a profile predates the key. */
+const DEFAULT_RETRIEVAL_MIN_RECALL = 0.9;
 
 export function loopConfig(ctx: SweepContext): LoopConfig {
   const config = ctx.config().loadConfig() as unknown as {
@@ -110,6 +117,7 @@ export function loopConfig(ctx: SweepContext): LoopConfig {
     memory: { blocks: LoopConfig["gates"]["blocks"] };
     models?: { planner?: string };
     improve: { sweep_cap_cents: number; pass_k: number; holdout_ratio: number; judge_min_tpr: number; judge_min_tnr: number; frozen_paths: string[]; judge_model?: string; min_goldens?: number };
+    retrieval?: { min_recall?: number };
   };
   const planner = config.models?.planner;
   return {
@@ -129,6 +137,7 @@ export function loopConfig(ctx: SweepContext): LoopConfig {
       minTnr: config.improve.judge_min_tnr,
       frozenPaths: [...config.improve.frozen_paths],
       blocks: [...config.memory.blocks],
+      retrievalMinRecall: config.retrieval?.min_recall ?? DEFAULT_RETRIEVAL_MIN_RECALL,
     },
   };
 }
@@ -278,6 +287,9 @@ export async function buildMeteredSweep(ctx: SweepContext, options: MeteredSweep
     // The floor is checked BEFORE model access, so a refusal never costs a call.
     if (live && reflection.blocked !== null) throw reflectionRefusal(reflection);
     const model = live ? await liveModel(ctx, cfg) : undefined;
+    // [W3] the recall floor: every gated draft is held to it first. The configured embedder joins
+    // the ranker only under `--live`, so an offline sweep never calls an embedding endpoint.
+    const retrieval = await retrievalGateFor(ctx, cfg.gates.retrievalMinRecall, { withEmbedder: live });
     const report = await runImprovementSweep(cfg.companyId, {
       store: opened.store,
       installedAgents: cfg.installedAgents,
@@ -292,6 +304,7 @@ export async function buildMeteredSweep(ctx: SweepContext, options: MeteredSweep
       holdoutRatio: cfg.gates.holdoutRatio,
       frozenSurface: frozenSurfaceFor(ctx, cfg),
       judgeFloors: { minTpr: cfg.gates.minTpr, minTnr: cfg.gates.minTnr },
+      ...(retrieval === undefined ? {} : { retrieval }),
       // [D1] reflection follows `live` and nothing else: offline the Foundry and GEPA keep their
       // deterministic fallbacks, which is the literal-marker path and costs no call.
       skipLLM: !live,

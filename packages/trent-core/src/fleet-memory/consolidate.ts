@@ -52,6 +52,7 @@ import {
 } from "./memory-draft.js";
 import { DEFAULT_MAX_REMOVAL_RATIO, addressEntries, applyMemoryOps, parseMemoryOps, removalAllowance, type MemoryOp } from "./memory-ops.js";
 // [C1] The company's semantic facts. Promotion is the only path that writes them: see `writeAppFacts`.
+import { appStoreUsable } from "./app-store.js";
 import { loadAppWriteModules, writeConsolidatedFacts, type AppMemoryWriteModules } from "./app-writes.js";
 
 export {
@@ -397,14 +398,17 @@ export interface PromoteMemoryDraftOptions extends Pick<PromoteOptions, "actor" 
  * writes one row and expires the entries it merged. It runs AFTER the files are written, because
  * the files are the truth for the blocks and these rows are the company's view of the same change.
  *
- * Nothing here can fail a promotion. The app's store singleton is unreachable whenever
- * `DATABASE_URL` names a SQLite file (`apps/web/lib/db.ts` is a postgresql client), which is what
- * a standalone durable profile sets, and a founder's promotion must not depend on that.
+ * Nothing here can fail a promotion, and nothing here is attempted on a profile whose app store is
+ * not usable: with the real writers (no `modules` injected) the one predicate (`app-store.ts`) is
+ * consulted before `loadAppWriteModules` would import anything, and the promotion is complete once
+ * the files are written. `trent doctor` carries the reason the semantic tier is not in use; a
+ * founder's promotion neither depends on that store nor reports its absence as a failure.
  */
 async function writeAppFacts(payload: MemoryDraftPayload, companyId: string, before: MemoryBytes, setting: PromoteMemoryDraftOptions["appMemory"]): Promise<void> {
   const ops = payload.ops ?? [];
   if (setting === false || ops.length === 0) return;
   const options = setting ?? {};
+  if (options.modules === undefined && !appStoreUsable()) return;
   const say = (reason: string) => options.onFailure?.(`The promoted memory did not reach the company's semantic tier: ${reason}`);
   try {
     const modules = options.modules ?? (await loadAppWriteModules());

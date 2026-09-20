@@ -14,6 +14,8 @@
  *   judge_input_memory every other configured block, because the judge's inputs are the outputs of
  *                      prompts those blocks are rendered into (`tools/memory/index.ts` puts every
  *                      block in the prelude), so a memory delta moves the grader
+ *   ranking            [W3] `fleet-memory/{recall,hybrid,brain-index}.ts` and `fleet-memory/ingest/`:
+ *                      what the recall gate measures, so a draft cannot edit its way past the floor
  *   configured         anything else the profile listed in `improve.frozen_paths`
  *
  * A draft whose write would land on one is refused with the path named, and the refusal is a
@@ -29,7 +31,7 @@ import type { ImproveStorePort, SkillDraftRow } from "../store/StorePort.js";
 import { BUNDLED_MECHANICAL_OVERLAYS_DIR } from "./mechanical-overlay.js";
 import { recordLedger } from "./ledger.js";
 
-export type FrozenClass = "suite" | "golden" | "judge_prompt" | "gate_code" | "read_only_memory" | "judge_input_memory" | "configured";
+export type FrozenClass = "suite" | "golden" | "judge_prompt" | "gate_code" | "read_only_memory" | "judge_input_memory" | "ranking" | "configured";
 
 /** Who the ledger says refused: the gate, by path, not a human and not the judge. */
 export const FROZEN_REFUSAL_ACTOR = "gate:frozen_surface";
@@ -47,6 +49,19 @@ function siblingDirs(name: string): string[] {
 }
 
 export const GATE_CODE_DIRS: readonly string[] = [...siblingDirs("improve"), ...siblingDirs("evals"), ...siblingDirs("gepa")];
+
+/**
+ * [W3] The ranking surface the retrieval gate measures: recall, the hybrid blend, the brain index
+ * and the whole ingest pipeline (extractors, chunker, doc file). Listed in src and dist like the
+ * gate code, and by file rather than by directory so `fleet-memory/search.ts` and the hook stay
+ * ordinary paths: a change to the ranker is a human change verified by `trent improve retrieval`.
+ */
+export const RANKING_SURFACE_PATHS: readonly string[] = siblingDirs("fleet-memory").flatMap((dir) => [
+  path.join(dir, "recall.ts"),
+  path.join(dir, "hybrid.ts"),
+  path.join(dir, "brain-index.ts"),
+  path.join(dir, "ingest"),
+]);
 
 /** The judge's own prompt, and any prompt file kept beside it. */
 export const JUDGE_PROMPT_FILES: readonly string[] = siblingDirs("improve").map((dir) => path.join(dir, "judge.ts"));
@@ -133,6 +148,7 @@ export function createFrozenSurface(options: FrozenSurfaceOptions): FrozenSurfac
       if (firstRoot(file, suiteRoots)) return { frozenClass: "suite", path: file, reason: reason("suite", file) };
       if (firstRoot(file, goldenRoots)) return { frozenClass: "golden", path: file, reason: reason("golden", file) };
       if (firstRoot(file, GATE_CODE_DIRS)) return { frozenClass: "gate_code", path: file, reason: reason("gate_code", file) };
+      if (firstRoot(file, RANKING_SURFACE_PATHS)) return { frozenClass: "ranking", path: file, reason: reason("ranking", file) };
       if (firstRoot(file, extra)) return { frozenClass: "configured", path: file, reason: reason("configured", file) };
       return undefined;
     },

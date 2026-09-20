@@ -119,6 +119,7 @@ export {
   FROZEN_REFUSAL_ACTOR,
   GATE_CODE_DIRS,
   JUDGE_PROMPT_FILES,
+  RANKING_SURFACE_PATHS,
   createFrozenSurface,
   draftTargets,
   frozenRefusalMessage,
@@ -263,3 +264,30 @@ export {
 } from "./tool-overrides.js";
 export { ORG_TIER_AGENT, promoteOrgSkill, type PromoteOrgSkillInput, type PromoteOrgSkillResult } from "./org-tier.js";
 export { improveStatus, judgeAgreementOf, type FrontierBest, type ImproveStatus, type JudgeAgreement, type QuarantineEntry } from "./status.js";
+// [W3] retrieval goldens and the recall gate: the kind, its capture from the bus, the floor and the grader.
+export {
+  RETRIEVAL_GOLDENS_SUBDIR,
+  RETRIEVAL_GOLDEN_KIND,
+  addRetrievalGolden,
+  getRetrievalGolden,
+  listRetrievalGoldens,
+  promotedRetrievalGoldens,
+  retrievalGoldenId,
+  retrievalGoldensDir,
+  setRetrievalGoldenStatus,
+  type RetrievalGolden,
+  type RetrievalGoldenInput,
+  type RetrievalGoldenSource,
+} from "./golden-store.js";
+export { createRetrievalCapture, type RetrievalCapture, type RetrievalCaptureOptions } from "./retrieval-capture.js";
+export { RETRIEVAL_GATE_DEFAULTS, RetrievalGateConfigSchema, type RetrievalGateConfig } from "./retrieval-config-schema.js";
+export {
+  DEFAULT_RETRIEVAL_MIN_RECALL,
+  RETRIEVAL_RECALL_METRIC,
+  gradeRetrievalRecall,
+  retrievalBreached,
+  retrievalFailureTag,
+  type RetrievalGateInput,
+  type RetrievalGateReport,
+  type RetrievalMiss,
+} from "./retrieval-gate.js";

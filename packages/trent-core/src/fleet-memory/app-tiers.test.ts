@@ -7,7 +7,7 @@
  * Only `listDocuments` and `buildSeatRegistryRecall`, the two that touch the store singleton, are
  * handed in as fakes.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { filterActiveDocuments } from "@/lib/active-documents";
 import { summarizeCapability } from "@/lib/capability-memory";
@@ -212,17 +212,60 @@ describe("createAppMemoryReader", () => {
   });
 
   it("answers with nothing, and never throws, when the app store cannot serve a query", async () => {
-    // The standalone durable profile points DATABASE_URL at a SQLite file while `@/lib/db` is a
-    // postgresql client, so every app store call throws there. Recall must survive that.
+    // A configured database that does not answer: recall must survive that.
     const read = createAppMemoryReader({
       modules: async () => ({
         ...modules([]),
         listDocuments: async () => {
-          throw new Error("Error validating datasource `db`: the URL must start with the protocol `postgresql://`");
+          throw new Error("Can't reach database server at `db.internal:5432`");
         },
       }),
     });
     await expect(read("co_1", "growth")).resolves.toEqual([]);
+  });
+
+  it("answers with nothing up front, loading no app module, when the app store is not usable", async () => {
+    // The one predicate (`app-store.ts`): unset, empty and a `file:` URL — the wrapper's own SQLite
+    // store, never the app's — all mean the app tiers are skipped before any `import("@/lib/*")`.
+    vi.resetModules();
+    const loaded: string[] = [];
+    vi.doMock("@/lib/store", () => {
+      loaded.push("@/lib/store");
+      return { store: { listDocuments: async () => [] } };
+    });
+    try {
+      const { createAppMemoryReader: fresh } = await import("./app-tiers.js");
+      for (const env of [{}, { DATABASE_URL: "" }, { DATABASE_URL: "file:/tmp/profile/trent.db" }]) {
+        await expect(fresh({ env })("co_1", "growth")).resolves.toEqual([]);
+      }
+      expect(loaded).toEqual([]);
+    } finally {
+      vi.doUnmock("@/lib/store");
+    }
+  });
+});
+
+describe("loadAppMemoryModules", () => {
+  it("refuses, naming the reason, before importing anything when the app store is not usable", async () => {
+    vi.resetModules();
+    const loaded: string[] = [];
+    vi.doMock("@/lib/store", () => {
+      loaded.push("@/lib/store");
+      return { store: { listDocuments: async () => [] } };
+    });
+    try {
+      const { loadAppMemoryModules } = await import("./app-tiers.js");
+      const { AppStoreUnusedError } = await import("./app-store.js");
+      await expect(loadAppMemoryModules({ DATABASE_URL: "file:/tmp/profile/trent.db" })).rejects.toBeInstanceOf(AppStoreUnusedError);
+      await expect(loadAppMemoryModules({})).rejects.toThrow(/in-process/);
+      expect(loaded).toEqual([]);
+      // A postgres URL is the app's own datasource: the modules load, the store among them.
+      const real = await loadAppMemoryModules({ DATABASE_URL: "postgresql://localhost/trent" });
+      expect(typeof real.listDocuments).toBe("function");
+      expect(loaded).toEqual(["@/lib/store"]);
+    } finally {
+      vi.doUnmock("@/lib/store");
+    }
   });
 });
 

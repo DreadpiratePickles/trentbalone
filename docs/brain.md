@@ -212,6 +212,13 @@ chunk before and the chunk after it, headed by the same citation, so a seat expa
 snippet cut without paying for the whole document; `brain_read {"path": "docs/lease.md#7"}` is the
 same request spelled the long way.
 
+**The number behind it.** Every change to the extractors, the chunker, the index or the ranking is
+judged by recall@8 over the profile's promoted retrieval goldens — a query and the chunk ids that
+answer it, added by the founder with `trent improve goldens add --retrieval` or captured from a run
+when a seat reads a ranked chunk by id — and `trent improve retrieval` prints it, exit 1 under
+`retrieval.min_recall`. The improve loop grades the same number first, and the four files above are
+frozen against its drafts. See [improve.md](improve.md), "Retrieval goldens and the recall gate".
+
 ## 8. Configuration
 
 ```yaml

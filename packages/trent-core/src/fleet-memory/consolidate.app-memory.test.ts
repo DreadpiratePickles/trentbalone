@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { InMemoryImproveStore } from "../improve/memory-store.js";
 import type { GatewayCompletion } from "../model-gateway/types.js";
@@ -144,6 +144,42 @@ describe("promoting a memory draft writes the company's semantic facts", () => {
     expect(fs.readFileSync(memoryPath(dir, "memory"), "utf8")).not.toContain("Ship on Fridays after smoke is green.");
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain("postgresql");
+  });
+
+  it("loads no app writer, writes the files and reports no failure when the app store is not usable", async () => {
+    // The default path (no injected modules) consults the one predicate before `loadAppWriteModules`
+    // would import anything: on a profile without a postgres DATABASE_URL the promotion is complete
+    // once the files are written, and the doctor — not a failure line per promotion — says why the
+    // company's semantic tier is not in use.
+    const loaded: string[] = [];
+    for (const specifier of ["@/lib/store", "@/lib/memory-tiers"]) {
+      vi.doMock(specifier, () => {
+        loaded.push(specifier);
+        return { store: {}, writeEpisodicMemory: async () => undefined, SemanticMemory: class {} };
+      });
+    }
+    vi.stubEnv("DATABASE_URL", "file:/tmp/profile/trent.db");
+    try {
+      const failures: string[] = [];
+      const dir = profile();
+      const store = new InMemoryImproveStore();
+      const result = await consolidateMemory({ profileDir: dir, companyId: COMPANY, gateway: fakeGateway() as never, store, now: NOW });
+      if (result.status !== "drafted") throw new Error(result.status);
+      const promoted = await promoteMemoryDraft({
+        store,
+        draftId: result.draft.id,
+        actor: "human",
+        now: NOW,
+        appMemory: { onFailure: (message) => void failures.push(message) },
+      });
+      expect(promoted.status).toBe("live");
+      expect(fs.readFileSync(memoryPath(dir, "user"), "utf8")).toContain("Prefers one-line replies.");
+      expect(failures).toEqual([]);
+      expect(loaded).toEqual([]);
+    } finally {
+      for (const specifier of ["@/lib/store", "@/lib/memory-tiers"]) vi.doUnmock(specifier);
+      vi.unstubAllEnvs();
+    }
   });
 
   it("writes no fact at all when the caller asks for none", async () => {

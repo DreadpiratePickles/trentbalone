@@ -199,6 +199,9 @@
       "image_price_cents": 0,
       "image_auto_approve_under_cents": 0
     },
+    "retrieval": {
+      "min_recall": 0.9
+    },
     "personality": "default",
     "theme": "dark",
     "improve": {
@@ -522,6 +525,9 @@
       "image_model": "fixture-image-model",
       "image_price_cents": 5,
       "image_auto_approve_under_cents": 10
+    },
+    "retrieval": {
+      "min_recall": 0.75
     },
     "personality": "fixture-personality",
     "theme": "light",

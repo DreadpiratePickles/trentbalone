@@ -155,6 +155,10 @@ Test Files  2 passed (2)
 
 If they fail alone, that is a real regression.
 
+## The compiled binary prints `PrismaClientInitializationError` and `trent run` dies on Linux
+
+The wrapped app's Postgres client (`apps/web/lib/db.ts`) was being constructed in a process with no Postgres, and its engine — not shipped in the binary — failed to load as an unhandled rejection; since W1.1 the runtime never hands its SQLite URL to the app and guards the app's client seam when `DATABASE_URL` is not a postgres URL, so if you still see it, `DATABASE_URL` in your shell is a postgres URL the binary cannot reach the engine for, or a wrapper module imports an `apps/web` store module at the top level (`apps/cli/src/runtime/headless.app-store.test.ts` names it).
+
 ## `trent: command not found`
 
 No release has been published yet, so nothing has installed a binary on your PATH. Use

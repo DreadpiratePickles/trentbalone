@@ -50,8 +50,9 @@ TRENT DOCTOR
   ...
   · Brain Repository           The brain has not been created yet: it is written on the first run
                                that assembles a prompt.
-  ◆ App Memory Tiers           The app's company memory is reachable but ephemeral: with no
-                               DATABASE_URL the app store is in-process.
+  ◆ App Memory Tiers           The app's company memory is not used: DATABASE_URL is unset, so
+                               the app's store is in-process and a tier row would not outlive
+                               this process; ...
 
   total 20  passed 9  warnings 4  failed 1  skipped 4  in 7097ms
   1 check(s) failed — exit 3

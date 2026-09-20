@@ -170,6 +170,9 @@ provenance:
 gate:
   ask_classes: []             # classes added to the floor that asks at every level; nothing removes one
 
+retrieval:
+  min_recall: 0.9             # recall@8 over the promoted retrieval goldens the ranker must reach
+
 goals:
   verify_on_stop: true        # a turn that edited code needs fresh test or build evidence to finish
   verify_commands:            # what counts as that evidence
@@ -323,15 +326,22 @@ of context may add lines to the recall block; it may never take one away.
 tier through the app's `writeEpisodicMemory`, filed under `<run id>:<seat>`; semantic facts are
 written only by the consolidation path, from its delta operations, with `supersedesId` set when an
 operation replaces an entry. Both go through the app's store singleton, which is chosen once at
-process start from `DATABASE_URL` (`apps/web/lib/store.ts`):
+process start from `DATABASE_URL` (`apps/web/lib/store.ts`), and whether it is used at all is
+decided by one predicate (`packages/trent-core/src/fleet-memory/app-store.ts`) BEFORE any app
+module is imported:
 
 | `DATABASE_URL` | App company memory |
 |---|---|
-| unset | Reachable, in-process, lost when the process exits. |
-| a postgres URL | Reachable and durable. |
-| a `file:` SQLite path | **Unreachable.** `apps/web/lib/db.ts` builds a client for a postgresql datasource, so every call throws — and this is what a standalone DURABLE profile sets. Recall falls back to the run-derived candidates and the writers report the reason; nothing fails. |
+| a postgres URL | **Used and durable.** The app's own datasource. |
+| unset or empty | **Not used.** The app's store would be in-process, so a tier row would not outlive the process; seats read and write the profile's own memory (blocks, brain, runs, skills, playbook). |
+| a `file:` SQLite path | **Not used.** That is the wrapper's own store format; `apps/web/lib/db.ts` builds a client for a postgresql datasource, so the tiers are skipped rather than handed a URL they cannot open. |
+| any other scheme | **Not used**, for the same reason. |
 
-`trent doctor` says which of the three this profile is in — see the `App Memory Tiers` line.
+The wrapper never exports its own SQLite URL as the app's `DATABASE_URL` (it once did, and the
+app's Postgres client then failed every call, or — in the compiled binary — was constructed for
+nothing and killed `trent run` on any machine without its engine). In every "not used" state the
+readers answer nothing, the writers report nothing to do and no failure, and the app's Postgres
+client is never built. `trent doctor` prints the one reason — see the `App Memory Tiers` line.
 
 ### Failure goldens
 
@@ -568,6 +578,15 @@ executor, else the strongest priced Gemini model that does — and a judge equal
 configuration error naming both. `min_goldens` (5) is how many promoted goldens a seat's suite must
 hold before `trent improve sweep --live` spends a model call reflecting for it. See
 [improve.md](improve.md).
+
+### The retrieval gate
+
+`retrieval.min_recall` (0.9) is the recall@8 the shipped ranker must reach over the profile's
+promoted retrieval goldens (`<profile>/goldens/retrieval/`, added with
+`trent improve goldens add --retrieval` or captured when a seat reads a ranked chunk). Under it
+`trent improve retrieval` exits 1 and no draft promotes; a change to recall, the hybrid blend, the
+brain index or the ingest pipeline is a human change measured by that command. See
+[improve.md](improve.md), "Retrieval goldens and the recall gate".
 
 ### Workspace context files
 
@@ -860,7 +879,7 @@ of the wrapped application, not a style preference.
 | `TRENT_QUEUE_FALLBACK` | `disabled` | Every job executes twice, silently |
 | `TRENT_EVAL_SYNC_QUEUE` | unset | Synchronous dispatch double-runs against the explicit drain |
 | `REDIS_URL` | unset or empty | `getQueue()` returns a queue and a BullMQ connection is attempted |
-| `DATABASE_URL` | a SQLite URL, or unset | Unset selects the in-memory store; set selects the Prisma store |
+| `DATABASE_URL` | a postgres URL, or unset | The APP's database, never the wrapper's SQLite file. Unset selects the app's in-memory store; a postgres URL selects its Prisma store; anything else is cleared by the runtime and the app tiers are skipped (see "Company memory in the app") |
 
 ### Why `TRENT_QUEUE_FALLBACK=disabled` is mandatory
 

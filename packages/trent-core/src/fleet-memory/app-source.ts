@@ -7,9 +7,16 @@
  * OrchestratorStep rows), so a run that finished in this process or a previous one is equally
  * visible. Skills come from the improve tables on the same database (`store.improve()`), when the
  * caller attaches one. The playbook is the reflection loop's folded log.
+ *
+ * [C1] The app's tiered company memory (`listAppMemory`) consults the one store predicate
+ * (`app-store.ts`) before any import and answers nothing on a profile whose app store is not
+ * usable. The runs and the playbook are NOT gated: they are the run-derived recall that remains
+ * when the tiers are skipped, and the modules they read are the ones the orchestrator has already
+ * loaded for the run that is asking.
  */
 
 import type { ImproveStorePort } from "../store/StorePort.js";
+import type { AppStoreEnv } from "./app-store.js";
 import { createAppMemoryReader, type AppMemoryBudgets, type AppMemoryReader } from "./app-tiers.js";
 import type { FleetMemorySource, FleetPlaybookEntry, FleetRun } from "./source.js";
 
@@ -37,6 +44,8 @@ export interface AppFleetSourceOptions {
   readonly appMemoryBudgets?: AppMemoryBudgets;
   /** [C1] The company-memory reader; the real one over `app-tiers.ts` when omitted (tests inject). */
   readonly appMemory?: AppMemoryReader;
+  /** [C1] Where the real reader reads `DATABASE_URL` for the store predicate; `process.env` when omitted. */
+  readonly env?: AppStoreEnv;
 }
 
 export function createAppFleetSource(options: AppFleetSourceOptions = {}): FleetMemorySource {
@@ -46,7 +55,10 @@ export function createAppFleetSource(options: AppFleetSourceOptions = {}): Fleet
   // facts, so a seat reads them here rather than inferring facts from older step outputs.
   const appMemory =
     options.appMemory ??
-    createAppMemoryReader(options.appMemoryBudgets === undefined ? {} : { budgets: options.appMemoryBudgets });
+    createAppMemoryReader({
+      ...(options.appMemoryBudgets === undefined ? {} : { budgets: options.appMemoryBudgets }),
+      ...(options.env === undefined ? {} : { env: options.env }),
+    });
   return {
     improve: options.improve,
     listAppMemory: (companyId, seat) => appMemory(companyId, seat),

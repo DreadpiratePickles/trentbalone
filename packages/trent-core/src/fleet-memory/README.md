@@ -333,19 +333,24 @@ the first row and expires the others. The mirror is a DECORATOR over the adapter
 and never learns about a store. Only a write the adapter itself COMPLETED is mirrored, so a refusal,
 a read-only block and a delegated child's write all mirror nothing.
 
-**Where the writes can go.** The app's store singleton is chosen once, at module evaluation, from
-`DATABASE_URL` (`apps/web/lib/store.ts:11`). Unset, it is the in-process store: the tiers work and
-are lost at exit. A postgres URL: durable. A `file:` SQLite path — which is exactly what a
-standalone DURABLE profile sets (`apps/cli/src/runtime/headless.ts:282`) — makes every call throw,
-because `apps/web/lib/db.ts` builds the client for a postgresql datasource. Every read and every
-write degrades rather than failing, and `doctor/checks/app-memory.ts` reports which of the three a
-profile is in.
+**Where the writes can go, decided before anything is imported.** The app's store singleton is
+chosen once, at module evaluation, from `DATABASE_URL` (`apps/web/lib/store.ts:11`), and
+`app-store.ts` is the one predicate that says whether it is used at all: only a postgres URL — the
+app's own datasource — is. Unset or empty (in-process, rows die with the process), a `file:` SQLite
+path (the wrapper's OWN store, which `apps/web/lib/db.ts`'s postgresql client cannot open) and any
+other scheme mean the readers answer nothing, `loadAppMemoryModules` / `loadAppWriteModules`
+refuse with `AppStoreUnusedError` before any `import("@/lib/*")`, the writers report nothing to do
+and no failure, and `doctor/checks/app-memory.ts` prints the reason once. The standalone runtime
+never hands its SQLite URL to the app (`apps/cli/src/runtime/headless.ts`), and `guardAppDatabase`
+fills the app's `globalThis.__prisma` seam so the Postgres client — whose engine the compiled binary
+does not ship — is never constructed in a process without Postgres.
 
-Proof: `app-tiers.test.ts`, `app-source.test.ts`, `app-writes.test.ts` (the last one also drives
-the app's real `memory-tiers.ts` against the in-process store), `app-memory.bun.test.ts` with
-`app-memory-runner.ts` for the cross-run propagation under Bun, and
-`../doctor/checks/app-memory.test.ts`. Full documentation: docs/configuration.md, "Company memory
-in the app".
+Proof: `app-store.test.ts`, `app-tiers.test.ts`, `app-source.test.ts`, `app-writes.test.ts` (the
+last one also drives the app's real `memory-tiers.ts` against the in-process store, with the
+predicate answered by a stand-in), `app-memory.bun.test.ts` with `app-memory-runner.ts` for the
+cross-run propagation under Bun and the `file:` skip, `../doctor/checks/app-memory.test.ts`,
+`../doctor/app-store-isolation.test.ts` and `apps/cli/src/runtime/headless.app-store.test.ts`.
+Full documentation: docs/configuration.md, "Company memory in the app".
 
 ## Provenance, and the failure channel ([C5])
 

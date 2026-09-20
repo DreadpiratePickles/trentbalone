@@ -19,11 +19,13 @@
  * that is TOLD its write failed because a store it does not know about was unreachable has been
  * lied to. So a failed mirror is reported to the caller's sink, never to the model.
  *
- * Reachability is not a given. `apps/web/lib/store.ts:11` selects the Prisma store whenever
- * `DATABASE_URL` is set, and `apps/web/lib/db.ts` builds a client for a POSTGRESQL datasource, so
- * the standalone durable profile — which points that variable at `<profile>/trent.db` — makes
- * every one of these calls throw. Unset (the in-process store) and a real postgres URL both work.
- * `doctor/checks/app-memory.ts` reports which of the three a profile is in.
+ * Reachability is not a given, and it is decided BEFORE anything is imported. `app-store.ts` is the
+ * one predicate: the app's tiers are used only when `DATABASE_URL` is the app's own postgres
+ * datasource. Unset or empty (the in-process store, whose rows die with the process), a `file:` URL
+ * (the wrapper's SQLite store, which the app's postgresql client cannot open) and any other scheme
+ * mean `loadAppWriteModules` refuses with `AppStoreUnusedError` and the writers report "nothing
+ * written, no failure" — the skip is deliberate, and `doctor/checks/app-memory.ts` prints the reason
+ * once rather than every append printing it again.
  */
 
 import { createHash } from "node:crypto";
@@ -31,8 +33,9 @@ import { createHash } from "node:crypto";
 import { parseAction, type ToolSpec } from "../tools/action.js";
 import type { MemoryAdapter } from "../tools/memory/index.js";
 import type { ToolCallRecord } from "../tools/types.js";
-import { entryIdAt, type MemoryOp } from "./memory-ops.js";
+import { AppStoreUnusedError, describeAppStore, type AppStoreEnv } from "./app-store.js";
 import type { AppDocument } from "./app-tiers.js";
+import { entryIdAt, type MemoryOp } from "./memory-ops.js";
 
 /** One staged fact, as `apps/web/lib/memory-tiers.ts` `SemanticFact` declares it. */
 export interface AppSemanticFact {
@@ -74,7 +77,9 @@ export interface AppWriteOutcome {
 
 const NOTHING: AppWriteOutcome = { written: 0, expired: 0, skipped: 0, reason: null };
 
+/** A refusal from the predicate is not a failure: nothing was attempted, and the doctor carries the reason. */
 function failed(error: unknown): AppWriteOutcome {
+  if (error instanceof AppStoreUnusedError) return NOTHING;
   return { written: 0, expired: 0, skipped: 0, reason: error instanceof Error ? error.message : String(error) };
 }
 
@@ -113,8 +118,15 @@ export function forgetInterruptedAppends(): void {
 /**
  * The app's real writers, imported lazily so nothing in `apps/web` is evaluated before
  * `applyStandaloneEnv` has run — the same rule `app-source.ts` and `app-tiers.ts` follow.
+ *
+ * Consults `describeAppStore` FIRST and refuses with `AppStoreUnusedError` when the app's store is
+ * not usable in this process: the import itself is what constructs the app's Postgres client, so
+ * it is never attempted. `writeSeatEpisode` and `writeConsolidatedFacts` treat that refusal as
+ * "nothing written, no failure".
  */
-export async function loadAppWriteModules(): Promise<AppMemoryWriteModules> {
+export async function loadAppWriteModules(env: AppStoreEnv = process.env): Promise<AppMemoryWriteModules> {
+  const state = describeAppStore(env);
+  if (!state.usable) throw new AppStoreUnusedError(state);
   const [tiers, storeModule] = await Promise.all([
     import("@/lib/memory-tiers") as unknown as Promise<{
       writeEpisodicMemory(options: AppEpisodicInput): Promise<void>;

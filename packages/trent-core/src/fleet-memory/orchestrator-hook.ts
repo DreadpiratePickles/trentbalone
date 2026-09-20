@@ -50,6 +50,7 @@ import { renderBrainBlock } from "./brain-prompt.js";
 import { DEFAULT_FLEET_MEMORY_CONFIG, type FleetMemoryConfig } from "./config.js";
 import type { EmbedFn } from "./lexical.js";
 import { recallForObjective } from "./recall.js";
+import { createRecallObserver, type RecallNotice } from "./recall-note.js";
 import { createFleetSearchAdapter } from "./search.js";
 import { listSharedSkills, renderSharedSkillsIndex } from "./shared-skills.js";
 import {
@@ -106,6 +107,9 @@ export interface ContextNotice {
   readonly detail: string;
 }
 
+/** Everything the hook reports through its sink: pressure once per run, and [W3] a recall note per ranked read. */
+export type FleetMemoryNotice = ContextNotice | RecallNotice;
+
 export interface RunStartedInput {
   readonly runId: string;
   readonly companyId: string;
@@ -133,8 +137,8 @@ export interface FleetMemoryHook {
   stablePreludeFor(runId: string): string | undefined;
   /** The measured assembly for one seat: tier sizes, token estimate, what the ceiling dropped. */
   contextFor(runId: string, seat: string): AssembledContext | undefined;
-  /** Installs (or replaces) the sink that receives `context_pressure`; the orchestrator bridges it to the bus. */
-  setNoticeSink(sink: (notice: ContextNotice) => void): void;
+  /** Installs (or replaces) the sink that receives every notice; the orchestrator bridges it to the bus. */
+  setNoticeSink(sink: (notice: FleetMemoryNotice) => void): void;
   /**
    * [C5] The run's event stream, for the two things a prelude cannot learn from the store: which
    * steps failed (they become `[failure]` entries under the brain) and what each step's tool calls
@@ -143,9 +147,8 @@ export interface FleetMemoryHook {
    */
   traceSink(event: OrcEvent): void;
   /**
-   * [C5] Records one failure directly, for a caller that is not on the event stream. [G2] Refused
-   * while the step's own seat call is still running: a note written from a step in flight carries
-   * whatever had streamed, and the brain's notes reach the next run.
+   * [C5] Records one failure directly, for a caller that is not on the event stream. [G2] Refused while the step's own
+   * seat call is still running: a note written from a step in flight carries whatever had streamed, and the brain's notes reach the next run.
    */
   stepFailed(record: FailureRecord): boolean;
   /** [G2] True when this process watched the step's seat call not finish: a fragment, not an answer. */
@@ -165,15 +168,9 @@ export interface FleetMemoryHookOptions {
   readonly embed?: EmbedFn;
   /** `context.ceiling_chars`: the ceiling on the whole assembled injection. */
   readonly ceilingChars?: number;
-  /**
-   * The active personality's `systemPromptSuffix`. Volatile tier, last block, and the ONLY path by
-   * which a personality reaches a model. Absent or blank means no personality block at all.
-   */
+  /** The active personality's `systemPromptSuffix`: volatile tier, last block, the ONLY path by which a personality reaches a model. Absent or blank means no block. */
   readonly personalitySuffix?: string;
-  /**
-   * The A2.1 seam: workspace context files (`AGENTS.md`, `CLAUDE.md`, `.trent/*.md`) already
-   * scanned, trusted and rendered by their own module. Nothing here opens a file.
-   */
+  /** The A2.1 seam: workspace context files (`AGENTS.md`, `CLAUDE.md`, `.trent/*.md`) already scanned, trusted and rendered by their own module. Nothing here opens a file. */
   readonly workspaceContext?: string;
   /**
    * [C2] The brain (`brain.ts`). Omitted it is built from `profileDir`, which is `brain.enabled`
@@ -184,9 +181,8 @@ export interface FleetMemoryHookOptions {
   readonly brain?: Brain | false;
   readonly onNotice?: (notice: ContextNotice) => void;
   /**
-   * [G2] One step's seat call has settled. The app-memory mirror holds a seat's episodic append
-   * until this says the step finished (`app-writes.ts`); `completed` is false when the call threw
-   * or the run closed around it.
+   * [G2] One step's seat call has settled. The app-memory mirror holds a seat's episodic append until this says the
+   * step finished (`app-writes.ts`); `completed` is false when the call threw or the run closed around it.
    */
   readonly onStepSettled?: (settled: StepSettled) => void;
 }
@@ -225,8 +221,7 @@ function pressureDetail(runId: string, seat: string, assembled: AssembledContext
   const trimmed = assembled.dropped.length === 0 ? "nothing trimmed" : `trimmed: ${assembled.dropped.join(", ")}`;
   return (
     `context pressure on run ${runId}, seat ${seat}: the wrapper's injection is ${assembled.chars} chars ` +
-    `(~${assembled.estimatedTokens} tokens, estimated) against a ${assembled.ceilingChars}-char ceiling, ` +
-    `${percent} percent; ${trimmed}`
+    `(~${assembled.estimatedTokens} tokens, estimated) against a ${assembled.ceilingChars}-char ceiling, ${percent} percent; ${trimmed}`
   );
 }
 
@@ -236,8 +231,11 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
     typeof options.ceilingChars === "number" && Number.isFinite(options.ceilingChars) && options.ceilingChars > 0
       ? Math.trunc(options.ceilingChars)
       : DEFAULT_CONTEXT_CEILING_CHARS;
-  let caller: { seat: string; delegated: boolean } = { seat: "", delegated: false };
-  let notify: ((notice: ContextNotice) => void) | undefined = options.onNotice;
+  let caller: { seat: string; delegated: boolean; runId?: string } = { seat: "", delegated: false };
+  let notify: ((notice: FleetMemoryNotice) => void) | undefined =
+    options.onNotice === undefined ? undefined : (notice) => void (notice.kind === "context_pressure" && options.onNotice?.(notice));
+  // [W3] Which chunks recall ranked per (run, seat), so a seat's `brain_read` of one is a recall note.
+  const recallNotes = createRecallObserver((notice) => notify?.(notice));
   const memory =
     options.memory ??
     (() => {
@@ -349,6 +347,7 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
           ...(options.embed === undefined ? {} : { embed: options.embed }),
         });
         if (fromBrain.block) blocks.push(block("context", CONTEXT_BLOCKS.brainRecall, fromBrain.block));
+        recallNotes.remember(run.runId, seat, run.objective, fromBrain.items.map((item) => item.id));
       } catch {
         // Recall is an index, not a truth: an unreadable one costs relevance, never a run.
       }
@@ -427,12 +426,12 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
   }
 
   return {
-    adapters: brainRead === undefined ? [memory, search] : [memory, search, brainRead],
+    adapters: brainRead === undefined ? [memory, search] : [memory, search, recallNotes.watch(brainRead, () => caller)],
     memory,
     wrapSeatModel(fn) {
       return async (input) => {
-        caller = { seat: input.subtask.seat, delegated: isDelegatedObjective(input.subtask.objective ?? "") };
         const run = runFor(input);
+        caller = { seat: input.subtask.seat, delegated: isDelegatedObjective(input.subtask.objective ?? ""), ...(run === undefined ? {} : { runId: run.runId }) };
         if (!run) return fn(input);
         const seat = input.subtask.seat;
         let pending = run.seats.get(seat);
@@ -472,6 +471,7 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
       // leaves the drain loop and the seat call lands its row in the background. Marked first, so
       // the next run recalls neither the step nor the run.
       interrupted.closeRun(runId);
+      recallNotes.forget(runId);
       runs.delete(runId);
       if (current?.runId === runId) current = runs.values().next().value;
       // Writes made during this run become visible to the next one.

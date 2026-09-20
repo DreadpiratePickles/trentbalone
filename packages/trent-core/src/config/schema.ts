@@ -45,6 +45,8 @@ import { GoalsConfigSchema } from "../goals/config-schema.js";
 // [U1] class floor
 import { GateConfigSchema } from "../governance/gate-config-schema.js";
 import { MediaConfigSchema } from "./sections/media.js";
+// [W3] retrieval gate
+import { RetrievalGateConfigSchema } from "../improve/retrieval-config-schema.js";
 
 /** Every name this module exported before the sections moved out; importers are unaffected. */
 export {
@@ -195,6 +197,9 @@ export const TrentConfigSchema = z.object({
   gate: GateConfigSchema.default({}),
   // [B2] media: the local clip pipeline and its transcription opt-in (`sections/media.ts`, docs/media.md).
   media: MediaConfigSchema.default({}),
+  // [W3] retrieval gate
+  /** The recall floor the improve loop and `trent improve retrieval` hold the ranker to (`improve/retrieval-config-schema.ts`, docs/improve.md). */
+  retrieval: RetrievalGateConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   improve: ImproveConfigSchema.default({}),

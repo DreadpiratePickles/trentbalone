@@ -10,6 +10,7 @@
  *   rollback <iterationId> restore what an iteration replaced, byte-for-byte from the ledger
  *   history                iterations and ledger rows, newest first
  *   tools                  [D5] tool health per tool, and the descriptions an improvement is serving
+ *   retrieval              [W3] recall@8 over the promoted retrieval goldens, exit 1 under retrieval.min_recall
  *
  * Every subcommand goes through `defineCommand`, so `--json` and `--dry-run` come free. Handlers
  * return data and never print. The store is the profile's `trent.db` (bun:sqlite); under a runtime
@@ -89,6 +90,8 @@ export function createImproveRunDeps(input: ImproveRunDepsInput): ImproveRunDeps
 import { improveToolsSpec, toolOverrideTarget } from "./improve-tools.js";
 // [D1] the goldens that ARE a seat's suite, their human gate, and the reflection floor.
 import { goldensSpec, holdoutRecheck, rolesByRun, seatSuitesFor } from "./improve-goldens.js";
+// [W3] recall@8 over the promoted retrieval goldens, held to the floor the sweep gates on.
+import { retrievalSpec } from "./improve-retrieval.js";
 // [D2.1] the one sweep builder every trigger shares, and the store plumbing it carries.
 import {
   buildMeteredSweep,
@@ -96,6 +99,7 @@ import {
   frozenSurfaceFor,
   goldenIndexFor,
   liveModel,
+  loopConfig,
   setImproveStoreForTests,
   storeInfo,
   sweepPlan,
@@ -286,6 +290,8 @@ export const improveSpec: CommandSpec = {
     goldensSpec({ runsFor: (ctx) => withStore(ctx, async (opened, cfg) => rolesByRun(await opened.store.listTraces(cfg.companyId))) }),
     // [D5] tools improve too: the health signal and the descriptions an improvement is serving.
     improveToolsSpec,
+    // [W3] the number every retrieval change is judged by.
+    retrievalSpec(loopConfig),
     draftCommand("promote"),
     draftCommand("reject"),
     rollbackSpec,

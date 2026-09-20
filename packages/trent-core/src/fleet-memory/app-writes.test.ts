@@ -2,11 +2,12 @@
  * [C1] The write side: a seat's episodic append also lands in the app's episodic tier, and the
  * consolidation's delta operations become semantic facts with the supersedes chain set.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { record } from "../tools/action.js";
 import type { MemoryAdapter } from "../tools/memory/index.js";
 import type { ToolCallRecord } from "../tools/types.js";
+import { AppStoreUnusedError, describeAppStore } from "./app-store.js";
 import type { AppDocument } from "./app-tiers.js";
 import {
   seatEpisodeCycleId,
@@ -263,14 +264,71 @@ describe("withAppEpisodicMirror", () => {
   });
 });
 
+describe("the app store predicate on the write side", () => {
+  it("loadAppWriteModules refuses, naming the reason, before importing anything when the app store is not usable", async () => {
+    vi.resetModules();
+    const loaded: string[] = [];
+    for (const specifier of ["@/lib/store", "@/lib/memory-tiers"]) {
+      vi.doMock(specifier, () => {
+        loaded.push(specifier);
+        return { store: {}, writeEpisodicMemory: async () => undefined, SemanticMemory: class {} };
+      });
+    }
+    try {
+      // Fresh registry, fresh classes: the error class must come from the same graph as the loader.
+      const { loadAppWriteModules } = await import("./app-writes.js");
+      const { AppStoreUnusedError: FreshUnused } = await import("./app-store.js");
+      await expect(loadAppWriteModules({ DATABASE_URL: "file:/tmp/profile/trent.db" })).rejects.toBeInstanceOf(FreshUnused);
+      await expect(loadAppWriteModules({})).rejects.toThrow(/in-process/);
+      expect(loaded).toEqual([]);
+      const real = await loadAppWriteModules({ DATABASE_URL: "postgresql://localhost/trent" });
+      expect(typeof real.writeEpisodicMemory).toBe("function");
+      expect(loaded.sort()).toEqual(["@/lib/memory-tiers", "@/lib/store"]);
+    } finally {
+      for (const specifier of ["@/lib/store", "@/lib/memory-tiers"]) vi.doUnmock(specifier);
+    }
+  });
+
+  it("a writer handed the refusal reports nothing written and no failure: the doctor carries the reason", async () => {
+    // The CLI wiring loads the real writers lazily on the first mirrored append; when the app
+    // store is not usable that load refuses up front, and the mirror must not turn a deliberate
+    // skip into a failure line on every append.
+    const state = describeAppStore({ DATABASE_URL: "file:/tmp/profile/trent.db" });
+    if (state.usable) throw new Error("a file: URL is never usable");
+    const refusing: AppMemoryWriteModules = {
+      ...fakeModules(),
+      async writeEpisodicMemory() {
+        throw new AppStoreUnusedError(state);
+      },
+      async listDocuments() {
+        throw new AppStoreUnusedError(state);
+      },
+    };
+    const episode = await writeSeatEpisode({ companyId: "co_1", runId: "run_1", seat: "growth", text: "a fact", modules: refusing });
+    expect(episode).toEqual({ written: 0, expired: 0, skipped: 0, reason: null });
+    const facts = await writeConsolidatedFacts({
+      companyId: "co_1",
+      block: "COMPANY.md",
+      entries: [],
+      ops: [{ op: "append", text: "a fact" }],
+      modules: refusing,
+    });
+    expect(facts).toEqual({ written: 0, expired: 0, skipped: 0, reason: null });
+  });
+});
+
 describe("against the app's real memory-tiers module", () => {
   // No DATABASE_URL under vitest, so `apps/web/lib/store.ts` selects the in-process memStore and
-  // the real `writeEpisodicMemory` / `SemanticMemory` run end to end. Durability is Bun's problem
+  // the real `writeEpisodicMemory` / `SemanticMemory` run end to end. The predicate is answered
+  // with a stand-in postgres URL so the loaders exercise the real modules against that in-process
+  // store — the store the app's own tests use. Durability is Bun's problem
   // (`app-memory.bun.test.ts`); correctness of the call is provable here.
+  const STAND_IN = { DATABASE_URL: "postgresql://stand-in.invalid/exercise-the-real-modules" };
+
   it("writes a real episodic row and a real superseding fact", async () => {
     const { loadAppWriteModules } = await import("./app-writes.js");
     const { createAppMemoryReader, loadAppMemoryModules } = await import("./app-tiers.js");
-    const modules = await loadAppWriteModules();
+    const modules = await loadAppWriteModules(STAND_IN);
     const { store } = (await import("@/lib/store")) as unknown as {
       store: { createCompany(input: { name: string; slug: string; budgetCents: number }): Promise<{ id: string }> };
     };
@@ -292,7 +350,7 @@ describe("against the app's real memory-tiers module", () => {
       ops: [{ op: "append", text: "activation is 40 percent" }],
       modules,
     });
-    const read = createAppMemoryReader({ modules: loadAppMemoryModules });
+    const read = createAppMemoryReader({ modules: () => loadAppMemoryModules(STAND_IN) });
     const before = await read(company.id, "growth");
     expect(before.map((e) => e.text).join(" ")).toContain("activation is 40 percent");
 
