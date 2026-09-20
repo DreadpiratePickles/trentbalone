@@ -14,9 +14,10 @@
  * Every write: `requiresApproval` answers true, `preview` renders the recipient, the amount with
  * its currency, the date and time or the message text, and `execute` calls
  * `requireBoundApproval` with that preview before it sends anything, so the call runs only
- * against an approval bound to exactly these arguments. A replay the wrapper keys is answered
- * from the idempotency store; the rest carry provider-side idempotency from the same key
- * (`types.ts`). Every HTTP call goes out through the egress client with the provider's token from
+ * against an approval bound to exactly these arguments. Every write is keyed by the wrapper, so
+ * a replay is answered from the idempotency store, and every write also carries provider-side
+ * idempotency from the same key (`types.ts`) for a replay that reaches the provider anyway.
+ * Every HTTP call goes out through the egress client with the provider's token from
  * `tokenResolver`, never from the environment. SMS spend lands on the ledger in integer cents.
  * The two reads that return customer-authored text tag their record untrusted, which the policy
  * ring reads as an inbound call for `send-after-untrusted`.

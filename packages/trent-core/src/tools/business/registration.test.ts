@@ -61,10 +61,11 @@ describe("the business toolset is registered in all seven places", () => {
         expect(floored, name).toEqual([]);
       }
     }
-    // The wrapper keys these by their idempotency token; the rest carry provider-side idempotency (docs/business.md).
-    for (const name of ["stripe_invoice_create", "stripe_invoice_send", "stripe_payment_link_create", "square_booking_create", "square_booking_cancel", "square_invoice_create", "square_invoice_send", "sms_send"]) {
-      expect(isSideEffecting(BUSINESS_ADAPTER_NAME, name), name).toBe(true);
-    }
+    // [Y2] The wrapper keys every write by an idempotency token (`quote` and `appointment` joined
+    // the list), on top of the provider-side key each one carries (docs/business.md).
+    expect([...WRITE_TOOLS]).toEqual(expect.arrayContaining(["stripe_quote_create", "calendar_appointment_create", "calendar_appointment_cancel"]));
+    for (const name of WRITE_TOOLS) expect(isSideEffecting(BUSINESS_ADAPTER_NAME, name), name).toBe(true);
+    for (const name of ["customer_search", "calendar_list"]) expect(isSideEffecting(BUSINESS_ADAPTER_NAME, name), name).toBe(false);
   });
 
   it("is off in a blank slate", () => {

@@ -533,11 +533,12 @@ outside the chain. The store is installed per process by `buildTrentTools`
 (`installBoundApprovals`); with none installed the helper refuses and says so.
 
 **The tokens.** `SIDE_EFFECT_SCOPE_TOKENS` (`governance/idempotent-dispatch.ts`) carries
-`publish`, `post`, `reply`, `book`, `invoice`, `charge`, `pay`, `sms`, `refund` and `email`
-beside the original write, patch, execute, send, network, terminal, process_manage, delegate and
-cronjob_manage, so a second identical call in one step returns the first result and nothing is
-sent twice, whatever `orchestrator.resume` replays. The match is a substring; a name such as
-`postgres_query` is keyed too, which only ever collapses two identical calls into one result.
+`publish`, `post`, `reply`, `book`, `invoice`, `charge`, `pay`, `sms`, `refund`, `email`, `quote`
+and `appointment` beside the original write, patch, execute, send, network, terminal,
+process_manage, delegate and cronjob_manage, so a second identical call in one step returns the
+first result and nothing is sent twice, whatever `orchestrator.resume` replays. The match is a
+substring; a name such as `postgres_query` is keyed too, which only ever collapses two identical
+calls into one result.
 
 **The inbound rule.** An inbox, a comment thread, a review feed or an inbound SMS is text somebody
 outside this machine wrote. An adapter declares it with the `inbound` scope, or by naming the

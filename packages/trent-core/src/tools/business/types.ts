@@ -10,8 +10,9 @@ export interface BusinessEnv {
   /**
    * The bound-call key of exactly this call (`governance/bound-approvals.ts` boundCallKey):
    * the material for provider-side idempotency (Stripe's `Idempotency-Key`, Square's
-   * `idempotency_key`, a client-supplied Calendar event id), so a replay the wrapper does not
-   * key is still one side effect at the provider.
+   * `idempotency_key`, a client-supplied Calendar event id), so a replay that reaches the
+   * provider anyway (a retry after a transient failure, a call past the wrapper) is still one
+   * side effect there. The wrapper keys every write as well (`SIDE_EFFECT_SCOPE_TOKENS`).
    */
   readonly key: string;
   /** True inside a seat turn (a run and a step are known); false for a direct REPL call. */

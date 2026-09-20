@@ -55,10 +55,12 @@ A write with a bad argument (a float amount, an end before its start, a recipien
 E.164) is shown on the card as `<tool> cannot run: <reason>`; reject it. Even if approved it
 sends nothing and fails with the same reason.
 
-Idempotency: `invoice`, `pay`, `book`, `send` and `sms` are idempotency tokens, so a second
-identical call in a step is answered from the store and nothing is sent twice, whatever
-`orchestrator.resume` replays. `stripe_quote_create` and the two calendar writes carry no token,
-so they carry the provider's own idempotency instead, derived from the same bound-call key: an
+Idempotency: every business write is keyed by the wrapper, because `invoice`, `pay`, `book`,
+`send`, `sms`, `quote` and `appointment` are all idempotency tokens
+(`governance/idempotent-dispatch.ts`), so a second identical call in a step is answered from the
+store and nothing is sent twice, whatever `orchestrator.resume` replays. Every write also carries
+the provider's own idempotency, derived from the same bound-call key, for the replay that reaches
+the provider anyway (a retry after a transient failure, a call past the wrapper): an
 `Idempotency-Key` header on every Stripe POST, `idempotency_key` in every Square body, and a
 client-supplied event id on a Calendar insert inside a run, which Google answers with 409 and the
 tool reports as the same event.

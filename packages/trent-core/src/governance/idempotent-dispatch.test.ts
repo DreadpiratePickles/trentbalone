@@ -55,11 +55,22 @@ describe("idempotent tool dispatch", () => {
     expect(isSideEffecting("calendar", "list_slots")).toBe(false);
   });
 
+  // [Y2] The business writes that carried no token: a quote and the two calendar appointments.
+  it("names quote and appointment as side effects, so the three business writes are keyed too", () => {
+    for (const tool of ["stripe_quote_create", "calendar_appointment_create", "calendar_appointment_cancel"] as const) {
+      expect(isSideEffecting("business", tool), tool).toBe(true);
+    }
+    // No registered read carries either word; the business reads stay unkeyed.
+    expect(isSideEffecting("business", "customer_search")).toBe(false);
+    expect(isSideEffecting("business", "calendar_list")).toBe(false);
+  });
+
   it("a second identical call in one step per token family returns the first result without a second send", async () => {
     for (const [name, tool] of [
       ["social", "publish_post"], ["social", "post_update"], ["social", "reply_comment"], ["calendar", "book_slot"],
       ["billing", "create_invoice"], ["billing", "charge_card"], ["billing", "pay_invoice"], ["twilio", "sms"],
       ["billing", "refund_charge"], ["mail", "email"],
+      ["business", "stripe_quote_create"], ["business", "calendar_appointment_create"], ["business", "calendar_appointment_cancel"], // [Y2]
     ] as const) {
       const calls: string[] = [];
       const [adapter] = idempotentAdapters([fakeAdapter(name, [name, tool], calls)], new IdempotencyManager());

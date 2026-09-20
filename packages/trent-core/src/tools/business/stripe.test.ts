@@ -5,8 +5,9 @@
  * store on a second identical call; a missing key fails naming `trent connect stripe`.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createBusinessAdapter } from "./index.js";
 import { FakeProviderServer } from "./testing/fake-provider-server.js";
-import { action, buildHarness, inStep, type Harness } from "./testing/harness.js";
+import { action, buildHarness, inStep, stubTokens, type Harness } from "./testing/harness.js";
 
 let stripe: FakeProviderServer;
 let harness: Harness;
@@ -161,7 +162,7 @@ describe("stripe_invoice_send", () => {
 describe("stripe_quote_create", () => {
   const QUOTE = action("stripe_quote_create", { customer: "cus_1", currency: "usd", items: [{ description: "Bathroom retile", amount_cents: 15000 }], expires_in_days: 30 });
 
-  it("creates a price per item, the quote, finalizes it, and reuses one Idempotency-Key on a replay", async () => {
+  async function approveAndCreate(): Promise<{ summary: string; idempotencyKey: string }> {
     const pause = await inStep("run_1", "step_4", () => harness.adapter.dryRun!(QUOTE, {}));
     expect(pause.summary).toContain("150.00 USD");
     expect(pause.summary).toContain("Bathroom retile");
@@ -178,10 +179,30 @@ describe("stripe_quote_create", () => {
     expect(form).toMatchObject({ customer: "cus_1", "line_items[0][price]": "price_1", "line_items[0][quantity]": "1" });
     expect(Number(form.expires_at)).toBeGreaterThan(Date.now() / 1000 + 29 * 86400);
     expect(stripe.received("POST", /finalize$/)).toHaveLength(1);
+    const idempotencyKey = quotes[0]!.headers["idempotency-key"]!;
+    expect(idempotencyKey).toMatch(/^[0-9a-f]{16,}/);
+    return { summary: done.summary, idempotencyKey };
+  }
 
-    await inStep("run_1", "step_4", () => harness.adapter.execute(QUOTE, {}));
+  // [Y2] `quote` is a scope token: the wrapper keys the call, so the replay never reaches Stripe.
+  it("creates a price per item, the quote, finalizes it, and is answered from the store on a replay", async () => {
+    const { summary } = await approveAndCreate();
+    const again = await inStep("run_1", "step_4", () => harness.adapter.execute(QUOTE, {}));
+    expect(again.status).toBe("completed");
+    expect(again.summary).toBe(summary);
+    expect(stripe.received("POST", /^\/v1\/prices$/)).toHaveLength(1);
+    expect(stripe.received("POST", /^\/v1\/quotes$/)).toHaveLength(1);
+    expect(stripe.received("POST", /finalize$/)).toHaveLength(1);
+  });
+
+  it("keeps the provider-side key underneath: the bare adapter, past the wrapper, replays with the same Idempotency-Key", async () => {
+    const { idempotencyKey } = await approveAndCreate();
+    // The adapter alone, against the approval the harness bound: the wrapper is not in front of it.
+    const bare = createBusinessAdapter({ fetchImpl: globalThis.fetch, endpoints: { stripe: stripe.url }, tokens: stubTokens({ stripe: { accessToken: "sk_test_fake_0123456789" } }) });
+    const again = await inStep("run_1", "step_4", () => bare.execute(QUOTE, {}));
+    expect(again.status).toBe("completed");
     const replayed = stripe.received("POST", /^\/v1\/quotes$/);
-    expect(replayed.map((r) => r.headers["idempotency-key"])).toEqual([quotes[0]!.headers["idempotency-key"], quotes[0]!.headers["idempotency-key"]]);
+    expect(replayed.map((r) => r.headers["idempotency-key"])).toEqual([idempotencyKey, idempotencyKey]);
   });
 });
 

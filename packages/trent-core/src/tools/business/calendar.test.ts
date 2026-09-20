@@ -2,11 +2,13 @@
  * Google Calendar through the business toolset against a local fake of www.googleapis.com: the
  * listing is a plain read whose customer-authored text is tagged untrusted; creating and
  * cancelling an event asks at `autonomy: never`, sends exactly the previewed JSON once, and a
- * replay inside the same step carries the same client event id so the provider dedupes it.
+ * replay inside the same step is answered from the idempotency store ([Y2] `appointment` is a
+ * scope token); underneath, the insert carries a client event id so the provider dedupes it too.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createBusinessAdapter } from "./index.js";
 import { FakeProviderServer } from "./testing/fake-provider-server.js";
-import { action, buildHarness, inStep, type Harness } from "./testing/harness.js";
+import { action, buildHarness, inStep, stubTokens, type Harness } from "./testing/harness.js";
 
 let google: FakeProviderServer;
 let harness: Harness;
@@ -118,11 +120,26 @@ describe("calendar_appointment_create", () => {
     const clientId = (posts[0]?.json as { id: string }).id;
     expect(clientId).toMatch(/^[a-v0-9]{5,1024}$/);
 
+    // [Y2] The wrapper keys the call: the replay is answered from the store and Google sees one insert.
     const again = await inStep("run_1", "step_2", () => harness.adapter.execute(CREATE, {}));
+    expect(again.status).toBe("completed");
+    expect(again.summary).toBe(done.summary);
+    expect(google.received("POST", /events$/)).toHaveLength(1);
+  });
+
+  it("keeps the client event id underneath: the bare adapter, past the wrapper, replays into a 409 and reports the same event", async () => {
+    await inStep("run_1", "step_2", () => harness.adapter.dryRun!(CREATE, {}));
+    const done = await inStep("run_1", "step_2", () => harness.adapter.execute(CREATE, {}));
+    expect(done.status).toBe("completed");
+    const clientId = (google.received("POST", /events$/)[0]?.json as { id: string }).id;
+    // The adapter alone, against the approval the harness bound: the wrapper is not in front of it.
+    const bare = createBusinessAdapter({ fetchImpl: globalThis.fetch, endpoints: { google: google.url }, tokens: stubTokens({ google: { accessToken: "ya29.fake-google-token" } }) });
+    const again = await inStep("run_1", "step_2", () => bare.execute(CREATE, {}));
     expect(again.status).toBe("completed");
     expect(again.summary).toContain(clientId);
     const replays = google.received("POST", /events$/);
     expect(replays.map((r) => (r.json as { id: string }).id)).toEqual([clientId, clientId]);
+    expect(google.received("GET", new RegExp(`events/${clientId}$`))).toHaveLength(1);
   });
 
   it("refuses an end before the start: the card says it cannot run, and even an approval inserts nothing", async () => {
