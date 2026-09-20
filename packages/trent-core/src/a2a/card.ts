@@ -7,7 +7,11 @@
  * here: a seat added or renamed in the app changes the card without anyone remembering to.
  *
  * `security` is present only when the server actually enforces a token. A card that advertises
- * authentication a server does not check is worse than a card that admits it has none.
+ * authentication a server does not check is worse than a card that admits it has none. By the
+ * same rule `supportedInterfaces` names A2A v1.0 at the server root only because `rpc.ts` and
+ * `A2AServer.ts` answer the v1.0 method names there (`./v1.ts`); the 0.3.0 fields stay because
+ * the 0.3.0 methods are answered at the same root. Hermes v0.21.3 reads the interface first and
+ * labels the card `JSONRPC v1.0`; a 0.3 client reads `url` and `protocolVersion` as before.
  *
  * Source: https://a2a-protocol.org/latest/specification/
  */
@@ -21,6 +25,7 @@ import {
   type A2AAgentCard,
   type A2AAgentSkill,
 } from "./spec.js";
+import { A2A_V1_PROTOCOL_VERSION } from "./v1.js";
 
 /** The security scheme name the card declares and the server checks. */
 export const A2A_SECURITY_SCHEME = "bearerAuth";
@@ -69,6 +74,9 @@ export function buildAgentCard(options: AgentCardOptions): A2AAgentCard {
     description: AGENT_DESCRIPTION,
     url: options.url,
     preferredTransport: A2A_TRANSPORT_JSONRPC,
+    // v1.0 discovery: the same root answers `SendMessage`, `SendStreamingMessage`, `GetTask` and
+    // `CancelTask` in v1.0 shapes, so a v1.0 client is told so (`./v1.ts`).
+    supportedInterfaces: [{ url: options.url, protocolBinding: A2A_TRANSPORT_JSONRPC, protocolVersion: A2A_V1_PROTOCOL_VERSION }],
     version: options.version,
     capabilities: {
       // Real: `message/stream` folds the orchestrator's own event stream into SSE frames.
@@ -76,6 +84,8 @@ export function buildAgentCard(options: AgentCardOptions): A2AAgentCard {
       // Neither is implemented; saying so is what stops a client waiting for a webhook forever.
       pushNotifications: false,
       stateTransitionHistory: false,
+      // v1.0's spelling of `supportsAuthenticatedExtendedCard` below: one card, at the well-known URI.
+      extendedAgentCard: false,
     },
     defaultInputModes: [A2A_TEXT_MEDIA_TYPE],
     defaultOutputModes: [A2A_TEXT_MEDIA_TYPE],

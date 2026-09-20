@@ -130,11 +130,23 @@ export interface A2ATaskIdParams {
 
 // --------------------------------------------------------------------------- agent card
 
-/** Spec §5.5.4 `AgentCapabilities`. */
+/** Spec §5.5.4 `AgentCapabilities`. `extendedAgentCard` is v1.0's name for the extended card flag. */
 export interface A2AAgentCapabilities {
   readonly streaming?: boolean;
   readonly pushNotifications?: boolean;
   readonly stateTransitionHistory?: boolean;
+  readonly extendedAgentCard?: boolean;
+}
+
+/**
+ * Spec v1.0 `AgentInterface`: one endpoint, one binding, one protocol version. v1.0 clients read
+ * `supportedInterfaces` before the 0.3 top-level `url`; the card carries both, and both are true.
+ */
+export interface A2AAgentInterface {
+  readonly url: string;
+  readonly protocolBinding: string;
+  readonly protocolVersion: string;
+  readonly tenant?: string;
 }
 
 /** Spec §5.5.6 `AgentSkill`. */
@@ -171,6 +183,8 @@ export interface A2AAgentCard {
   readonly securitySchemes?: Record<string, unknown>;
   readonly security?: readonly Record<string, readonly string[]>[];
   readonly supportsAuthenticatedExtendedCard?: boolean;
+  /** v1.0 discovery. Present only when the endpoint answers the v1.0 method names (`./v1.ts`). */
+  readonly supportedInterfaces?: readonly A2AAgentInterface[];
 }
 
 /**

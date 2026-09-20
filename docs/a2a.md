@@ -29,7 +29,10 @@ GET http://127.0.0.1:7895/.well-known/agent-card.json
 The card is generated from the running process, not from a file: the `url` is the endpoint that
 server is listening on, and there is one `skill` per seat, taken from the seat roster with the
 seat's own name and description. `/.well-known/agent.json` answers the same card, for a client
-pinned to the path used before A2A 0.3.
+pinned to the path used before A2A 0.3. The card carries both dialects' discovery fields, because
+the root answers both: `protocolVersion: "0.3.0"`, `url` and `preferredTransport` for a 0.3.0
+client, and `supportedInterfaces: [{url, protocolBinding: "JSONRPC", protocolVersion: "1.0"}]`
+for a v1.0 client (which reads that first).
 
 ### Tags are toolsets
 
@@ -46,13 +49,29 @@ Hermes's `a2a_discover` reads each skill's `name`, `id` and `description` and ig
 
 ### Interop status with Hermes (v0.21.3)
 
-Discovery works: Hermes's `a2a_discover` fetches `/.well-known/agent-card.json`, parses the name,
-url, capabilities and all nine skills, and labels the card `v0.3.0 (pre-1.0 card)`. Calls do not
-yet: Hermes's `a2a_call` speaks A2A **v1.0** (method `SendMessage`, `role: "ROLE_USER"`, parts
-`{text, mediaType}` with no `kind`, `A2A-Version: 1.0` header), which this 0.3.0 server answers
-with `-32601` for the method name and `-32005` for the part shape. Making Trent callable from
-Hermes is a protocol-version upgrade of `rpc.ts`, `TaskLifecycle.ts` and `spec.ts`, not a card
-change; the proof and the exact wire responses are in the session log named above.
+Both directions of the handshake now work, proven live with no model call
+(`docs/sessions/2026-09-20-a2a-v1-wire.md`; discovery first proven in
+`docs/sessions/2026-09-20-hermes-a2a-discovery-proof.md`):
+
+- **Discovery.** Hermes's `a2a_discover` reads the card's `supportedInterfaces` and reports
+  `Protocol: JSONRPC v1.0` (it used to warn `v0.3.0 (pre-1.0 card)`), then posts to that
+  interface's `url`, which is the same server root.
+- **Calls.** Hermes's `a2a_call` speaks A2A **v1.0** on the wire: method `SendMessage`, a message
+  with `role: "ROLE_USER"` and parts `{text, mediaType}` with no `kind`, an `A2A-Version: 1.0`
+  header, and it continues an exchange by `contextId` only, never sending a `taskId`. Trent now
+  answers that request with the v1.0 `SendMessageResponse` (`{"task": ...}`), states spelled
+  `TASK_STATE_*`, roles `ROLE_*`, parts without `kind`, and the `A2A-Version: 1.0` header. Hermes
+  reads the first text artifact as the reply and keys its "the peer needs more input" hint on the
+  literal `TASK_STATE_INPUT_REQUIRED`, which is why the answer is in v1.0 spelling rather than 0.3.
+- **The dialect is the method name.** `SendMessage`, `SendStreamingMessage`, `GetTask` and
+  `CancelTask` are translated at the JSON-RPC edge (`packages/trent-core/src/a2a/v1.ts`) onto the
+  same task lifecycle the 0.3.0 methods use; `ListTasks` and `SubscribeToTask` answer `-32004`,
+  the push-config methods `-32003`. A 0.3.0 request gets exactly the response it got before:
+  `message/send` with v1.0 parts is still `-32005`, and no 0.3.0 answer carries the version header.
+- **Known gap.** Hermes answers an `input-required` task by calling `a2a_call` again with the same
+  `context_id` and no `taskId`, so that second message starts a NEW task in the same context rather
+  than continuing the parked one; the gate's question is therefore not answerable from Hermes yet.
+  A v1.0 client that names `taskId` continues the task as the specification describes.
 
 `trent a2a card` prints that exact object; `trent a2a card engineer` prints it with `skills`
 narrowed to one seat. `--endpoint <url>` sets the advertised `url` when Trent sits behind a proxy.
@@ -61,15 +80,20 @@ narrowed to one seat. `--endpoint <url>` sets the advertised `url` when Trent si
 
 JSON-RPC 2.0, POSTed to the card's `url` (the server root).
 
-| Method | Behaviour |
-|---|---|
-| `message/send` | Creates a task (or continues the one named by `message.taskId`), runs it, and returns the terminal `Task`. The run's summary is the task's artifact, as text `Part`s. |
-| `message/stream` | The same run as `text/event-stream`. The first frame is the `Task`; then a `status-update` per step of real progress, an `artifact-update` carrying the result, and a final `status-update` with `final: true`. |
-| `tasks/get` | The stored task. `historyLength` trims the message history. |
-| `tasks/cancel` | Aborts the run through its own `AbortSignal` and settles the task `canceled`. |
+| Method (0.3.0) | v1.0 name | Behaviour |
+|---|---|---|
+| `message/send` | `SendMessage` | Creates a task (or continues the one named by `message.taskId`), runs it, and returns the terminal `Task` (v1.0: wrapped as `{"task": ...}`). The run's summary is the task's artifact, as text `Part`s. |
+| `message/stream` | `SendStreamingMessage` | The same run as `text/event-stream`. The first frame is the `Task`; then a `status-update` per step of real progress, an `artifact-update` carrying the result, and a final `status-update` with `final: true` (v1.0: `{task}`, `{statusUpdate}`, `{artifactUpdate}` frames with no `kind` or `final`; the stream closing is the terminal signal). |
+| `tasks/get` | `GetTask` | The stored task. `historyLength` trims the message history. |
+| `tasks/cancel` | `CancelTask` | Aborts the run through its own `AbortSignal` and settles the task `canceled`. |
+
+The two columns are one method surface: a request in either dialect reaches the same task, and a
+task created by `SendMessage` can be read with `tasks/get` and vice versa. A v1.0-named request is
+answered in v1.0 shapes (`TASK_STATE_*`, `ROLE_*`, parts discriminated by `{text}` with no `kind`)
+under an `A2A-Version: 1.0` response header; a 0.3.0-named request is answered exactly as before.
 
 States are the specification's `TaskState`: `submitted` -> `working` -> `completed`, `failed`,
-`canceled`, or `input-required`. A run that parks on an approval gate (`ask_human`, `clarify`)
+`canceled`, or `input-required` (v1.0: `TASK_STATE_SUBMITTED` and so on). A run that parks on an approval gate (`ask_human`, `clarify`)
 settles `input-required` and carries the gate's **own question** as the `status.message`; answer it
 with a second `message/send` naming the same `taskId`.
 
@@ -98,8 +122,8 @@ listener binds `127.0.0.1` in both cases.
 - **Push notifications.** `capabilities.pushNotifications` is `false` and the four
   `tasks/pushNotificationConfig/*` methods answer `-32003`. Poll `tasks/get`, or use
   `message/stream`.
-- **`tasks/resubscribe`.** A dropped stream is not re-attachable; the task survives, so read it
-  with `tasks/get`.
+- **`tasks/resubscribe`** (v1.0 `SubscribeToTask`) and v1.0 **`ListTasks`**. A dropped stream is
+  not re-attachable and tasks are not listed; the task survives, so read it with `tasks/get`.
 - **Non-text `Part`s.** `defaultInputModes` and `defaultOutputModes` are `text/plain` only, and a
   file or data part is refused with `-32005`. The runtime port takes a text objective.
 - **The authenticated extended card.** One card, at the well-known URI.

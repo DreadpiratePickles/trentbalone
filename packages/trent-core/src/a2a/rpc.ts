@@ -6,10 +6,16 @@
  * `UnsupportedOperationError` rather than silence, because a client that asked for push
  * notifications needs to know they will never arrive.
  *
+ * Two dialects arrive here: the 0.3.0 names this file was written for, and the v1.0 names
+ * (`SendMessage`, `GetTask`, ...) that `v1.ts` maps onto them at the edge. A v1.0 request is
+ * translated in, answered by the same switch, and translated out; a 0.3.0 request never touches
+ * the translation.
+ *
  * Source: https://a2a-protocol.org/latest/specification/
  */
 
 import type { A2ATaskEngine, A2ATaskOutcome } from "./TaskLifecycle.js";
+import { a2aDialect, toSpecRequest, toV1Result, v1Unsupported } from "./v1.js";
 import {
   A2A_ERROR_PUSH_NOT_SUPPORTED,
   A2A_ERROR_TASK_NOT_FOUND,
@@ -87,12 +93,26 @@ export function beginStream(
   return outcome.ok ? { ok: true, task: outcome.task } : { ok: false, response: jsonRpcError(requestId(request), outcome.error) };
 }
 
-/** Answer one non-streaming request. `message/stream` never reaches here; the transport owns it. */
+/**
+ * Answer one non-streaming request in either dialect. `message/stream` (and its v1.0 name,
+ * `SendStreamingMessage`) never reaches here; the transport owns the stream.
+ */
 export async function dispatchA2A(engine: A2ATaskEngine, request: A2AJsonRpcRequest): Promise<A2AJsonRpcResponse> {
   const id = requestId(request);
   const envelope = invalidRequest(request);
   if (envelope !== undefined) return jsonRpcError(id, envelope);
+  if (a2aDialect(request) !== "1.0") return dispatchSpec(engine, request);
 
+  const method = request.method as string;
+  const refused = v1Unsupported(method);
+  if (refused !== undefined) return jsonRpcError(id, refused);
+  const response = await dispatchSpec(engine, toSpecRequest(request));
+  return response.error !== undefined ? response : jsonRpcResult(id, toV1Result(method, response.result));
+}
+
+/** The 0.3.0 method surface. Every v1.0 request arrives here already translated. */
+async function dispatchSpec(engine: A2ATaskEngine, request: A2AJsonRpcRequest): Promise<A2AJsonRpcResponse> {
+  const id = requestId(request);
   const method = request.method as string;
   const unsupported = UNSUPPORTED[method];
   if (unsupported !== undefined) return jsonRpcError(id, unsupported);

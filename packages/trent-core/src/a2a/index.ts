@@ -4,6 +4,7 @@ export * from "./AgentCard.js";
 export * from "./A2AServer.js";
 export * from "./TaskLifecycle.js";
 export * from "./rpc.js";
+export * from "./v1.js";
 export * from "./legacy.js";
 // The runtime port a delegated task runs on. Re-exported here (and NOT from `../acp/index.js`,
 // which would give `src/index.ts` two star-exports of the same names) so an A2A consumer can build

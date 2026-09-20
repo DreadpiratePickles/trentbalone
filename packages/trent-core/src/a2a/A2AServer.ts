@@ -3,9 +3,11 @@
  * server root, with `message/stream` as Server-Sent Events (spec §4, §5.5, §7.2).
  *
  * This file is the adapter and nothing else. Validation and state live in `TaskLifecycle.ts`, the
- * method surface in `rpc.ts`, the card in `card.ts`; a change in behaviour belongs in one of those,
- * never here. What IS here is everything a transport owns: routing, the SSE framing, bearer
- * authentication, and the deprecation headers on the pre-specification route in `legacy.ts`.
+ * method surface in `rpc.ts`, the card in `card.ts`, the v1.0 dialect in `v1.ts`; a change in
+ * behaviour belongs in one of those, never here. What IS here is everything a transport owns:
+ * routing, the SSE framing (in whichever dialect the request named), the `A2A-Version` header a
+ * v1.0 answer carries, bearer authentication, and the deprecation headers on the pre-specification
+ * route in `legacy.ts`.
  *
  * Source: https://a2a-protocol.org/latest/specification/
  */
@@ -16,11 +18,13 @@ import { buildAgentCard } from "./card.js";
 import { A2ATaskEngine } from "./TaskLifecycle.js";
 import { a2aLegacyMetadata, a2aLegacyParams, a2aLegacyTask, A2A_DEPRECATION_HEADERS, type A2ATaskPayload } from "./legacy.js";
 import { A2A_STREAM_METHOD, beginStream, dispatchA2A, invalidRequest, jsonRpcError, jsonRpcResult, requestId } from "./rpc.js";
+import { A2A_V1_PROTOCOL_VERSION, A2A_VERSION_HEADER, a2aDialect, toSpecRequest, toV1StreamEvent, type A2ADialect } from "./v1.js";
 import {
   A2A_LEGACY_WELL_KNOWN_PATH,
   A2A_WELL_KNOWN_PATH,
   JSONRPC_PARSE_ERROR,
   type A2AJsonRpcRequest,
+  type A2AStreamEvent,
   type A2ATask,
 } from "./spec.js";
 import type { AgentRunner } from "../agent-runner/index.js";
@@ -142,7 +146,7 @@ export class A2AServer {
 
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-A2A-Origin");
+    res.setHeader("Access-Control-Allow-Headers", `Content-Type, Authorization, X-A2A-Origin, ${A2A_VERSION_HEADER}`);
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -208,7 +212,11 @@ export class A2AServer {
     send(res, 200, card);
   }
 
-  /** JSON-RPC at the server root. `message/stream` becomes SSE; everything else, one response. */
+  /**
+   * JSON-RPC at the server root. `message/stream` (or its v1.0 name) becomes SSE; everything
+   * else, one response. The dialect is the request's method name; a v1.0 answer carries the
+   * `A2A-Version` header, a 0.3.0 answer is byte-for-byte what it was before v1.0 existed.
+   */
   private async handleRpc(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     let request: A2AJsonRpcRequest;
     try {
@@ -218,15 +226,21 @@ export class A2AServer {
       return;
     }
 
-    if (request?.method === A2A_STREAM_METHOD && invalidRequest(request) === undefined) {
-      await this.handleStream(request, res);
+    const dialect = a2aDialect(request);
+    if (dialect === "1.0") res.setHeader(A2A_VERSION_HEADER, A2A_V1_PROTOCOL_VERSION);
+    const spec = invalidRequest(request) === undefined ? toSpecRequest(request) : request;
+    if (spec.method === A2A_STREAM_METHOD && invalidRequest(spec) === undefined) {
+      await this.handleStream(spec, res, dialect);
       return;
     }
     send(res, 200, await dispatchA2A(this.engine, request));
   }
 
-  /** Spec §7.2: each SSE `data:` field is a complete JSON-RPC response for the stream's id. */
-  private async handleStream(request: A2AJsonRpcRequest, res: http.ServerResponse): Promise<void> {
+  /**
+   * Spec §7.2: each SSE `data:` field is a complete JSON-RPC response for the stream's id. The
+   * request arrives already translated to 0.3.0; `dialect` says which shape the frames go out in.
+   */
+  private async handleStream(request: A2AJsonRpcRequest, res: http.ServerResponse, dialect: A2ADialect): Promise<void> {
     const id = requestId(request);
     const begun = beginStream(this.engine, request);
     if (!begun.ok) {
@@ -239,7 +253,8 @@ export class A2AServer {
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
-    const frame = (result: unknown): boolean => res.write(`data: ${JSON.stringify(jsonRpcResult(id, result))}\n\n`);
+    const frame = (event: A2AStreamEvent): boolean =>
+      res.write(`data: ${JSON.stringify(jsonRpcResult(id, dialect === "1.0" ? toV1StreamEvent(event) : event))}\n\n`);
     frame(begun.task);
 
     const controller = new AbortController();
@@ -300,6 +315,7 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 }
 
 function send(res: http.ServerResponse, code: number, body: unknown): void {
+  // `writeHead` keeps headers already set on the response (the version header, CORS, deprecation).
   res.writeHead(code, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body, null, 2));
 }
