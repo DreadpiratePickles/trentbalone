@@ -8,10 +8,25 @@ function uniqueStable(values: string[]): string[] {
   return Array.from(new Set(values));
 }
 
+/**
+ * A missing skill directory or SKILL.md is "not installed in this workspace", never a crash:
+ * skills are read from the process's cwd, and a run launched from a directory without
+ * `.claude/skills` (any user's project, once the CLI ships) used to fail its first seat step
+ * with ENOENT and no explanation.
+ */
+function isAbsent(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
+}
+
 export async function listInstalledSkillNames(skillRoot = ".claude/skills"): Promise<string[]> {
   const root = path.resolve(process.cwd(), skillRoot);
-  const entries = await fs.readdir(root, { withFileTypes: true });
-  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+  try {
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+  } catch (error) {
+    if (isAbsent(error)) return [];
+    throw error;
+  }
 }
 
 export async function loadGrantedSkillInstructions(
@@ -24,7 +39,14 @@ export async function loadGrantedSkillInstructions(
   const blocks: string[] = [];
   for (const skill of uniqueStable(skills)) {
     const skillPath = path.join(root, skill, "SKILL.md");
-    const raw = await fs.readFile(skillPath, "utf8");
+    let raw: string;
+    try {
+      raw = await fs.readFile(skillPath, "utf8");
+    } catch (error) {
+      // Granted, but not installed in this workspace: nothing to inject for this skill.
+      if (isAbsent(error)) continue;
+      throw error;
+    }
     blocks.push([`Skill: ${skill}`, stripFrontmatter(raw).trim()].join("\n"));
   }
   return blocks;
