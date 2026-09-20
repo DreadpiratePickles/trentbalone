@@ -35,11 +35,24 @@ pinned to the path used before A2A 0.3.
 
 Each skill's `tags` are the seat's Trent toolsets, read from its capability record
 (`packages/trent-core/src/fleet/seat-capabilities.ts`): the engineer advertises `terminal`, the
-finance seat does not. Hermes's `a2a_orchestrate(capability, message)` fans a message out to the
-peers whose skills carry that capability as a tag, so a Hermes profile with `trent a2a serve` in
-its `a2a_agents` can ask for `terminal` or `web` and reach the seats that have it; a category
-label or a model policy was nothing a peer could ask for. `trent a2a card engineer` shows the
-tags for one seat.
+finance seat does not. They are the names a peer's operator can ask for: Hermes's
+`a2a_orchestrate(capability, message)` matches `capability` against the `capabilities` list the
+operator writes under `a2a_agents.<peer>` in its own `config.yaml`, never against the card
+(verified from `plugins/platforms/a2a/tools.py` in Hermes v0.21.3,
+`docs/sessions/2026-09-20-hermes-a2a-discovery-proof.md`), so the tags are what that operator
+copies into that list; a category label or a model policy was nothing anyone could ask for.
+Hermes's `a2a_discover` reads each skill's `name`, `id` and `description` and ignores `tags`.
+`trent a2a card engineer` shows the tags for one seat.
+
+### Interop status with Hermes (v0.21.3)
+
+Discovery works: Hermes's `a2a_discover` fetches `/.well-known/agent-card.json`, parses the name,
+url, capabilities and all nine skills, and labels the card `v0.3.0 (pre-1.0 card)`. Calls do not
+yet: Hermes's `a2a_call` speaks A2A **v1.0** (method `SendMessage`, `role: "ROLE_USER"`, parts
+`{text, mediaType}` with no `kind`, `A2A-Version: 1.0` header), which this 0.3.0 server answers
+with `-32601` for the method name and `-32005` for the part shape. Making Trent callable from
+Hermes is a protocol-version upgrade of `rpc.ts`, `TaskLifecycle.ts` and `spec.ts`, not a card
+change; the proof and the exact wire responses are in the session log named above.
 
 `trent a2a card` prints that exact object; `trent a2a card engineer` prints it with `skills`
 narrowed to one seat. `--endpoint <url>` sets the advertised `url` when Trent sits behind a proxy.

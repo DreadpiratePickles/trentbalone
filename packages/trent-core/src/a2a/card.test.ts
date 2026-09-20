@@ -1,9 +1,10 @@
 /**
- * W5 — the Agent Card's skills are tagged by TOOLSET. Hermes's `a2a_orchestrate(capability, ...)`
- * fans a message out to the peers whose skills advertise that capability as a tag
- * (`01_discovery/output/hermes-feature-inventory-2026-09.md`, Messaging/A2A), so a tag has to be a
- * name a peer can ask for: the seat's Trent toolsets, read from the seat's own capability record,
- * not a category label or a model policy nobody fans out on.
+ * W5 — the Agent Card's skills are tagged by TOOLSET. A tag is the word a peer's operator asks
+ * for: Hermes's `a2a_orchestrate(capability, ...)` matches it against the `capabilities` list
+ * that operator writes under `a2a_agents.<peer>` in its config.yaml (Hermes v0.21.3
+ * `plugins/platforms/a2a/tools.py`; `docs/sessions/2026-09-20-hermes-a2a-discovery-proof.md`),
+ * so the tags are the seat's Trent toolsets, read from the seat's own capability record, not a
+ * category label or a model policy nobody would copy into that list.
  */
 import { describe, expect, it } from "vitest";
 

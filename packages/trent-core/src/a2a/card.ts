@@ -42,10 +42,13 @@ export interface AgentCardOptions {
 
 /**
  * One skill per seat, in roster order. The seat's own name and description, never a rewrite.
- * [W5] The tags are the seat's Trent toolsets, read from its capability record: a Hermes peer's
- * `a2a_orchestrate(capability, ...)` fans out to the skills whose tags name that capability, so a
- * tag has to be a name a peer can ask for (`terminal`, `web`, ...), not a category label or a
- * model policy. A seat the manifests do not define is a configuration error here, as everywhere.
+ * [W5] The tags are the seat's Trent toolsets, read from its capability record, so a tag is a
+ * name a peer's operator can ask for (`terminal`, `web`, ...), not a category label or a model
+ * policy. Hermes's `a2a_orchestrate(capability, ...)` matches that word against the
+ * `capabilities` list ITS operator writes under `a2a_agents.<peer>` in config.yaml, not against
+ * this card (Hermes v0.21.3 `plugins/platforms/a2a/tools.py`; proof in
+ * docs/sessions/2026-09-20-hermes-a2a-discovery-proof.md); the tags are what that operator
+ * copies there. A seat the manifests do not define is a configuration error here, as everywhere.
  */
 export function agentCardSkills(): A2AAgentSkill[] {
   return Object.entries(CORE_ROLES).map(([id, seat]) => ({
