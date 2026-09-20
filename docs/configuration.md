@@ -883,6 +883,21 @@ what is safe:
 npm run cli -- doctor --json | grep -A3 '"category": "Environment"'
 ```
 
+## Media
+
+```yaml
+media:
+  backend: auto                 # auto | docker | host; auto prefers docker when trent-sandbox-media:1 exists
+  hosted_transcription: false   # true sends audio to the configured provider; previewed and approved as egress
+  whisper_model: ""             # path to a whisper.cpp ggml model for the host backend, when not on the default path
+```
+
+The `media` toolset (`media_probe`, `media_transcribe`, `media_scenes`, `media_clip`,
+`media_thumbnail`) runs allowlisted binaries: through the media sandbox image when it exists, else
+the host's own ffmpeg, whisper.cpp or faster-whisper, PySceneDetect and MediaPipe. `trent doctor`
+names the backend and what is installed. No audio leaves the machine unless
+`hosted_transcription` is set by hand. See [media.md](media.md).
+
 ## Migrations
 
 `config.yaml` carries an integer `version`. `CONFIG_SCHEMA_VERSION` is currently 3.

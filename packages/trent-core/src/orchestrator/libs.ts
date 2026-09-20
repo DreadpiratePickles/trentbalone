@@ -82,7 +82,48 @@ export interface LiveRun {
   steps: Array<{ id: string; title: string; agentRole?: string; status: string; output?: string; completedAt?: string }>;
 }
 
+/**
+ * The persisted step row as `hydrateOrchestrationRun` rebuilds it (`StepRecord`,
+ * `apps/web/lib/orchestrator-runtime.ts`): the slice `selectReadyStepsForEnqueue` reads.
+ */
+export interface HydratedStep {
+  readonly id: string;
+  readonly title: string;
+  readonly agentRole?: string;
+  readonly status: string;
+  readonly dependsOn: readonly string[];
+  readonly output?: string;
+}
+
+/** `OrchestrationRun` (`apps/web/lib/orchestrator.ts:130`) as `hydrateOrchestrationRun` returns it. */
+export interface HydratedRun {
+  readonly id: string;
+  readonly companyId: string;
+  readonly objective: string;
+  readonly status: string;
+  readonly plan?: { readonly steps?: readonly unknown[] };
+  readonly steps: HydratedStep[];
+  readonly startedAt: string;
+  readonly trigger: string;
+  readonly summary?: string;
+}
+
+/** `apps/web/lib/orchestrator-run-persist.ts`: the run rebuilt from its rows, and cached live. */
+export interface RunPersistModule {
+  hydrateOrchestrationRun(runId: string): Promise<HydratedRun | undefined>;
+}
+
+/** `apps/web/lib/orchestrator-run-queue.ts`: the job rows the drain loop consumes. */
+export interface RunQueueModule {
+  enqueueOrchestrationPlanJob(runId: string, companyId: string): Promise<unknown>;
+  enqueueOrchestrationStepJob(runId: string, companyId: string, stepId: string): Promise<unknown>;
+  enqueueOrchestrationConsolidateJob(runId: string, companyId: string): Promise<unknown>;
+  hasRemainingOrchestrationWork(steps: readonly HydratedStep[]): boolean;
+}
+
 export interface OrchestratorModule {
+  /** Ready `pending` steps whose dependencies completed, capped by the free concurrency slots. */
+  selectReadyStepsForEnqueue(steps: HydratedStep[]): HydratedStep[];
   launchOrchestration(opts: {
     companyId: string;
     objective: string;
@@ -132,10 +173,13 @@ export interface Libs {
   readonly gateway: GatewayModule;
   readonly tools: ToolsModule;
   readonly catalog: CatalogModule;
+  /** D2 resume: the two app functions `orchestrator.resume` is built on. */
+  readonly runPersist: RunPersistModule;
+  readonly runQueue: RunQueueModule;
 }
 
 export async function loadLibs(): Promise<Libs> {
-  const [storeMod, orchestratorMod, cacheMod, eventsMod, queueMod, overridesMod, gatewayMod, toolsMod, catalogMod] = await Promise.all([
+  const [storeMod, orchestratorMod, cacheMod, eventsMod, queueMod, overridesMod, gatewayMod, toolsMod, catalogMod, runPersistMod, runQueueMod] = await Promise.all([
     import("@/lib/store") as unknown as Promise<StoreModule>,
     import("@/lib/orchestrator") as unknown as Promise<OrchestratorModule>,
     import("@/lib/orchestrator-cache") as unknown as Promise<CacheModule>,
@@ -145,6 +189,8 @@ export async function loadLibs(): Promise<Libs> {
     import("@/lib/model-gateway") as unknown as Promise<GatewayModule>,
     import("@/lib/tools") as unknown as Promise<ToolsModule>,
     import("@/lib/agent-catalog") as unknown as Promise<CatalogModule>,
+    import("@/lib/orchestrator-run-persist") as unknown as Promise<RunPersistModule>,
+    import("@/lib/orchestrator-run-queue") as unknown as Promise<RunQueueModule>,
   ]);
   return {
     store: storeMod.store,
@@ -156,5 +202,7 @@ export async function loadLibs(): Promise<Libs> {
     gateway: gatewayMod,
     tools: toolsMod,
     catalog: catalogMod,
+    runPersist: runPersistMod,
+    runQueue: runQueueMod,
   };
 }

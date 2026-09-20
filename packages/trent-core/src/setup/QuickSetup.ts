@@ -5,6 +5,7 @@ import {
   primaryEnvVar,
 } from "./detect.js";
 import { ALL_TOOLSETS, STARTER_AGENTS, applyToolsets, withFleet } from "./steps.js";
+import { mediaBackendPresent } from "../tools/media/backend.js";
 import { SetupRun } from "./SetupRun.js";
 import type { SetupOptions, SetupResult } from "./types.js";
 import type { Provider } from "../config/schema.js";
@@ -53,11 +54,15 @@ export class QuickSetup extends SetupRun {
           });
 
     const model = options.model ?? DEFAULT_MODELS[provider];
+    // [B2] `media` needs ffmpeg and ffprobe on PATH or the media image; without one it is written
+    // off explicitly, so a later `trent update` cannot switch it on unasked (docs/media.md).
+    const media = await (this.ctx.mediaBackendPresent ?? (() => mediaBackendPresent(env)))();
+    const toolsets = media ? ALL_TOOLSETS : ALL_TOOLSETS.filter((t) => t !== "media");
 
     this.blank();
     this.say(`Provider: ${provider}`);
     this.say(`Model: ${model}`);
-    this.say(`Toolsets: all ${ALL_TOOLSETS.length} enabled`);
+    this.say(media ? `Toolsets: all ${ALL_TOOLSETS.length} enabled` : `Toolsets: ${toolsets.length} of ${ALL_TOOLSETS.length} enabled; media is off because no ffmpeg/ffprobe or media image was found (docs/media.md)`);
     this.say(`Starter agents: ${STARTER_AGENTS.join(", ")}`);
 
     const proceed = await prompts.confirm({
@@ -71,7 +76,7 @@ export class QuickSetup extends SetupRun {
     }
 
     const base = { ...configManager.loadConfig(), provider, model };
-    const config = withFleet(applyToolsets(base, ALL_TOOLSETS), STARTER_AGENTS);
+    const config = withFleet(applyToolsets(base, toolsets), STARTER_AGENTS);
     configManager.saveConfig(config);
 
     await this.doctor();

@@ -76,6 +76,21 @@ describe("SetupWizard", () => {
       expect(transcript(prompts, output)).toContain("ANTHROPIC_API_KEY");
     });
 
+    it("enables media only when a media backend is present: off with none, on with an injected probe", async () => {
+      const { wizard } = wizardWith({ confirm: true }, { ANTHROPIC_API_KEY: "sk-ant-live" });
+      const res = await wizard.run({ mode: "quick" });
+      expect(res.success).toBe(true);
+      expect(configOnDisk().toolsets).not.toContain("media");
+      expect(configOnDisk().disabled_toolsets).toContain("media");
+      expect(output.lines.join("\n")).toMatch(/media/);
+
+      const withBackend = new SetupWizard({ configManager, prompts: new ScriptedPrompts({ confirm: true }), output, env: { ANTHROPIC_API_KEY: "sk-ant-live" }, mediaBackendPresent: async () => true });
+      const again = await withBackend.run({ mode: "quick" });
+      expect(again.success).toBe(true);
+      expect(configOnDisk().toolsets).toContain("media");
+      expect(configOnDisk().disabled_toolsets).not.toContain("media");
+    });
+
     it("detects a key stored in the profile .env file", async () => {
       configManager.saveSecrets({ OPENAI_API_KEY: "sk-from-file" });
       const { wizard } = wizardWith({ confirm: true }, {});
@@ -248,13 +263,14 @@ describe("SetupWizard", () => {
         "plugins",
         "mcp",
         "human",
+        "media",
       ]);
       expect(onDisk.disabled_toolsets).toEqual(onDisk.agent.disabled_toolsets);
 
       // A later load must still carry both lists, so `trent update` cannot silently re-enable.
       const reloaded = new ConfigManager({ baseDir: tempDir }).loadConfig() as Record<string, any>;
       expect(reloaded.platform_toolsets.cli).toEqual(["file_ops", "terminal"]);
-      expect(reloaded.agent.disabled_toolsets).toHaveLength(11);
+      expect(reloaded.agent.disabled_toolsets).toHaveLength(12);
     });
 
     it("offers the walkthrough as an opt-in and runs it when accepted", async () => {

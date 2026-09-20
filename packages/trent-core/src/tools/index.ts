@@ -38,6 +38,7 @@ import { createTerminalAdapter } from "./terminal/index.js";
 import { createWebToolsAdapter } from "./web/index.js";
 import { createBrowserAdapter } from "./browser/index.js";
 import { askVision, createVisionAdapter, type VisionGateway } from "./vision/index.js";
+import { createMediaAdapter } from "./media/index.js";
 import { seatCapability } from "../fleet/seat-capabilities.js";
 // [D5] tool descriptions: what a promoted improvement draft replaced, read at registration.
 import { applyToolDescriptions, readToolOverrides, type AppliedToolOverride } from "../improve/tool-overrides.js";
@@ -80,6 +81,9 @@ export { createSkillsAdapter, SKILLS_ADAPTER_NAME, SKILL_TOOL_SCHEMAS } from "./
 export { createCronAdapter, CRON_ADAPTER_NAME, CRON_TOOL_SCHEMAS } from "./cron/index.js";
 export { createBrowserAdapter, findChromium, BROWSER_ADAPTER_NAME, BROWSER_TOOL_SCHEMAS } from "./browser/index.js";
 export { createVisionAdapter, askVision, VISION_ADAPTER_NAME, VISION_TOOL_SCHEMAS, type VisionGateway } from "./vision/index.js";
+// [B2] media: the local clip pipeline over allowlisted binaries (docs/media.md).
+export { createMediaAdapter, MEDIA_ADAPTER_NAME, MEDIA_IMAGE, MEDIA_SCOPES, MEDIA_TOOL_SCHEMAS, mediaBackendPresent, reportMediaInstall, selectMediaBackend } from "./media/index.js";
+export type { MediaBackend, MediaInstallReport } from "./media/index.js";
 export { createHumanAdapter, questionFromEvent, renderQuestion, renderQuestions, HumanAnswers, sharedHumanAnswers, CARD_ADAPTER_NAMES, HUMAN_ADAPTER_NAME, HUMAN_SCOPES, HUMAN_TOOL_SCHEMAS } from "./human/index.js";
 export type { HumanAdapter, HumanCallerContext, QuestionDetails, QuestionEntry, QuestionRecord, QuestionsDetails } from "./human/index.js";
 // A3: progressive disclosure and the three tools the catalog was missing.
@@ -116,6 +120,8 @@ export type ToolBuildConfig = Pick<TrentConfig, "toolsets" | "disabled_toolsets"
    * behaviour, which is the gate on. `TrentConfig` satisfies this structurally.
    */
   readonly curator?: { readonly scan_agent_skills?: boolean };
+  /** [B2] `media`: the backend preference, the hosted-transcription opt-in and the whisper model path. */
+  readonly media?: TrentConfig["media"];
 };
 
 export interface ToolBuildDeps {
@@ -241,7 +247,7 @@ export interface TrentToolBuild {
  */
 export const ALWAYS_ON_ADAPTERS: readonly string[] = ["todo", "clarify", "session_search"];
 
-export const IMPLEMENTED_TOOLSETS = ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp", "human"] as const satisfies readonly Toolset[];
+export const IMPLEMENTED_TOOLSETS = ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp", "human", "media"] as const satisfies readonly Toolset[];
 
 /** Enum values this builder does NOT produce, each with the reason a seat will see. */
 export const NOT_YET_IMPLEMENTED: readonly { readonly toolset: Toolset; readonly reason: string }[] = [
@@ -301,7 +307,11 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
     else if (toolset === "cron") adapters.push(createCronAdapter({ profileDir: deps.profileDir }));
     else if (toolset === "mcp") adapters.push(createMcpAdapter(config, { profileDir: deps.profileDir, env: deps.env ?? process.env, ...(egress ? { egress } : {}) }));
     else if (toolset === "human") adapters.push(createHumanAdapter(deps.humanAnswers ? { answers: deps.humanAnswers } : {}));
-    else if (toolset === "vision") {
+    else if (toolset === "media") {
+      // [B2] Docker when the media image exists, the host's own binaries otherwise; the hosted
+      // transcription path exists only with a gateway AND `media.hosted_transcription`.
+      adapters.push(createMediaAdapter(ctx, { env: deps.env ?? process.env, ...(config.media ? { media: config.media } : {}), ...(deps.gateway ? { gateway: deps.gateway } : {}) }));
+    } else if (toolset === "vision") {
       // Without a gateway the adapter is built `unavailable`: every call says not_available, never a stub.
       adapters.push(createVisionAdapter({ workspace: deps.workspace, profileDir: deps.profileDir, ...(deps.gateway ? { gateway: deps.gateway } : {}), ...(egress ? { egress } : {}) }));
     } else if (toolset === "web" || toolset === "browser") {
@@ -430,6 +440,7 @@ export const TOOLSET_BY_ADAPTER: Readonly<Record<string, Toolset>> = {
   vision: "vision",
   mcp: "mcp",
   human: "human",
+  media: "media",
   memory: "memory",
   fleet_search: "memory",
   // A3. `clarify` is the founder card, so it follows `human`; `session_search` reads this profile's

@@ -23,6 +23,8 @@ export const TOOLSET_APPROVAL_GATES: Readonly<Record<string, string>> = {
   file_ops: "file_ops.write",
   terminal: "terminal.dangerous",
   web: "web.egress",
+  // [B2] the one media path that leaves the machine: hosted transcription, an explicit opt-in.
+  media: "media.egress",
 };
 
 function unique(values: readonly string[]): string[] {

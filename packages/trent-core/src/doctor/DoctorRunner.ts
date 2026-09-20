@@ -37,6 +37,8 @@ import { checkBrain } from "./checks/brain.js";
 import { checkBrainImport } from "./checks/brain-import.js";
 // [C1] app memory
 import { checkAppMemory } from "./checks/app-memory.js";
+// [B2] media
+import { checkMedia } from "./checks/media.js";
 
 export interface DoctorRunnerOptions {
   checks?: DoctorCheck[];
@@ -78,6 +80,8 @@ export const DEFAULT_CHECKS: readonly DoctorCheck[] = [
   checkBrainImport,
   // [C1] app memory
   checkAppMemory,
+  // [B2] media
+  checkMedia,
 ];
 
 /** 3 (config) when any check failed; 0 when everything passed or only warned. */

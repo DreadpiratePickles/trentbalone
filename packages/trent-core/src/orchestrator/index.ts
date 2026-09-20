@@ -42,7 +42,8 @@ import { createModelGateway } from "../model-gateway/index.js";
 import type { ModelGateway } from "../model-gateway/types.js";
 import { IN_MEMORY_DATABASE, applyStandaloneEnv, assertStandaloneEnv } from "../runtime/env.js";
 import { EventChannel } from "./event-channel.js";
-import { loadLibs, type Libs } from "./libs.js";
+import { loadLibs, type LaunchedRun, type Libs } from "./libs.js";
+import { slugify } from "./drain.js";
 import { applyModelEnv, assertRoutableModel } from "./model-env.js";
 import { PortShaper, PortTally } from "./provider-ports.js";
 import { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots, type ReleaseSlot } from "./run-slots.js";
@@ -51,16 +52,18 @@ import { applyConsolidation, finishRunVerification, type RunVerificationPort } f
 import { SeatTally, applyStepFailures, shapeEvent, type SeatModelFn } from "./seat-guard.js";
 import { guardedSeatModel } from "./seat-guard-budget.js";
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
-import { runWithToolCallContext } from "../governance/tool-call-context.js";
+import { drainRun } from "./drain.js";
 import type { FleetMemoryHook } from "../fleet-memory/orchestrator-hook.js";
 import type { OrchestratorDelegatePort } from "./delegate-port.js";
 import { createHumanHook } from "./human-hook.js";
+import { describeResume, hydrateOrThrow, prepareResume } from "./resume.js";
 import type { HumanAnswers } from "../tools/human/index.js";
 import type { TrentToolAdapter } from "../tools/types.js";
 import {
   type OrcEvent,
   type Orchestrator,
   type OrchestratorDeps,
+  type OrchestratorResumeOptions,
   type OrchestratorRunHandle,
   type OrchestratorRunOptions,
   type OrchestrationRunSnapshot,
@@ -77,6 +80,7 @@ export type { OrchestratorDelegatePort, DelegatedChildRunner, DelegatedChildSpec
 export { createAppDelegatedChildRunner } from "./delegate-child.js";
 export { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots } from "./run-slots.js";
 export { createGoalVerificationPort, finishRunVerification, type RunVerificationPort } from "./run-verification.js";
+export { describeResume, prepareResume, RESUME_OPERATION, type PreparedResume, type ResumePlan } from "./resume.js";
 
 /**
  * Default drain bound. A 12-step plan (the planner's Zod maximum) costs one plan job, up to 12
@@ -125,67 +129,6 @@ export type OrchestratorDepsWithImprove = OrchestratorDeps & {
   /** [D4] The run-end hook: goal gates before the judge, and `verify_on_stop` (`run-verification.ts`). */
   readonly verification?: RunVerificationPort;
 };
-
-// --- The drain loop -----------------------------------------------------------------------------
-
-type DrainExit = "drained" | "interrupted" | "bounded";
-
-interface DrainControl {
-  isInterrupted(): boolean;
-  /** Resolves when approve()/reject()/cancel() or an abort wakes a parked run. */
-  waitForResume(): Promise<void>;
-  /** Resolves once every event received so far has been shaped, so verdicts made there are visible. */
-  settle(): Promise<void>;
-}
-
-/**
- * Executes queued orchestration jobs until the run is finished, the bound is reached, or the caller
- * interrupts. Ported from `orchestration-eval-integration.ts:126-144` and extended with the three
- * exits a long-lived CLI needs, plus the approval wait: when the queue is empty because the run is
- * parked on a human decision, the loop waits for `approve()`/`reject()` rather than returning.
- *
- * @returns why the loop stopped, for the caller's diagnostics.
- */
-async function drainRun(libs: Libs, companyId: string, runId: string, maxJobs: number, control: DrainControl): Promise<DrainExit> {
-  for (let i = 0; i < maxJobs; i += 1) {
-    await control.settle();
-    if (control.isInterrupted()) return "interrupted";
-
-    const next = (await libs.store.listJobRuns(companyId))
-      .filter((job) => job.type === "orchestration_step" && job.status === "running")
-      .filter((job) => job.metadata?.runId === runId)
-      .sort((a, b) => a.startedAt.localeCompare(b.startedAt))[0];
-    if (!next) {
-      const live = libs.orchestrator.getOrchestrationRun(runId);
-      if (live?.status !== "awaiting_approval") return "drained";
-      await control.waitForResume();
-      continue;
-    }
-
-    try {
-      const stepId = next.metadata?.stepId;
-      const job = (): Promise<unknown> =>
-        libs.queue.processJobData("orchestration_step", { jobRunId: next.id, companyId, runId, action: next.metadata?.action, stepId });
-      // The step's tool calls read this context to key their idempotency rows (governance/idempotent-dispatch.ts).
-      await (stepId === undefined ? job() : runWithToolCallContext({ runId, stepId }, job));
-    } catch (error) {
-      // A cancelled run makes the in-flight worker throw; that is the interruption, not a fault.
-      if (control.isInterrupted()) return "interrupted";
-      throw error;
-    }
-  }
-  return "bounded";
-}
-
-/** The same shape `apps/web/lib/store` derives from a company name, so the lookup round-trips. */
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)+/g, "")
-    .slice(0, 48);
-}
 
 // --- Public factory -----------------------------------------------------------------------------
 
@@ -311,13 +254,22 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
     return { summary, completedAt };
   }
 
-  function run(options: OrchestratorRunOptions): OrchestratorRunHandle {
+  /** What `run` and `resume` each supply: whose run it is, and how its row and queue come to exist. */
+  interface Launch {
+    readonly companyId: string;
+    readonly objective: string;
+    launch(): Promise<{ launched: LaunchedRun; note?: string }>;
+  }
+  type DriveOptions = Omit<OrchestratorRunOptions, "companyId" | "objective">;
+
+  function drive(prepare: (libs: Libs) => Promise<Launch>, options: DriveOptions): OrchestratorRunHandle {
     const channel = new EventChannel();
     const maxJobs = options.maxJobs ?? defaultMaxJobs;
     const tally = new SeatTally();
     const ports = new PortTally();
     let shaper: PortShaper | undefined;
     let runId: string | undefined;
+    let scope: { companyId: string; objective: string } | undefined;
     let cancelRequested = false;
 
     const isInterrupted = (): boolean =>
@@ -348,21 +300,18 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       const libs = await loadLibs();
       const gateway = await loadGateway();
       assertStandaloneEnv();
+      const prepared = await prepare(libs);
+      scope = { companyId: prepared.companyId, objective: prepared.objective };
       installPorts(libs, gateway, tally, ports, (event) => deliver({ ...event, runId: runId ?? event.runId }));
       // The seats' tools exist before the plan is made: registry, router catalog, seat environments.
-      await wireSeatTools(libs, options.companyId, allTools);
+      await wireSeatTools(libs, prepared.companyId, allTools);
       try {
-        const launched = await libs.orchestrator.launchOrchestration({
-          companyId: options.companyId,
-          objective: options.objective,
-          trigger: options.trigger ?? "manual",
-          fullTeam: options.fullTeam ?? false,
-        });
+        const { launched, note } = await prepared.launch();
         runId = launched.id;
         notices.open(launched.id, deliver);
         // The per-run hooks (`run-hooks.ts`): the fleet-memory prelude is built on the first seat
         // call, and the conversation rides along so the hook renders it AFTER that frozen prelude.
-        openRunScope([deps.fleetMemory, deps.delegate], launched.id, options);
+        openRunScope([deps.fleetMemory, deps.delegate], launched.id, { ...options, ...scope });
         // The bus emits run_start inside launchOrchestration, before anyone can subscribe. The
         // launch result carries the same fields, so the stream starts with it after all (D2).
         deliver({
@@ -371,12 +320,13 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
           at: launched.startedAt,
           run: {
             id: launched.id,
-            companyId: options.companyId,
+            companyId: prepared.companyId,
             objective: launched.objective,
             status: launched.status as OrchestrationRunSnapshot["status"],
             trigger: launched.trigger as OrchestrationRunSnapshot["trigger"],
           },
         });
+        if (note !== undefined) deliver({ kind: "heartbeat", runId: launched.id, at: new Date().toISOString(), detail: note });
         return launched.id;
       } catch (error) {
         libs.overrides.clearRuntimeEvalOverrides();
@@ -395,8 +345,9 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       };
       try {
         const id = await started;
+        const { companyId, objective } = scope!;
         const portShaper = new PortShaper(ports, gateway, {
-          objective: options.objective,
+          objective,
           liveRun: () => libs.orchestrator.getOrchestrationRun(id),
           persistSummary: (summary) => applyConsolidation(libs, id, summary),
         });
@@ -410,7 +361,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
             if (shaped) deliver(shaped);
           });
         });
-        await drainRun(libs, options.companyId, id, maxJobs, {
+        await drainRun(libs, companyId, id, maxJobs, {
           isInterrupted,
           waitForResume: () => waitForResume(id, options.signal, isInterrupted),
           settle: () => chain,
@@ -424,7 +375,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
         }
         await applyFailureOverride(libs, id, tally);
         // [D4] Gates before judgment, then verify_on_stop; a refusal rides the bus as a step_note.
-        await finishRunVerification(deps.verification, { runId: id, objective: options.objective, deliver });
+        await finishRunVerification(deps.verification, { runId: id, objective, deliver });
         // The loop's writes are part of the run: a caller that sweeps right after must see them.
         await deps.improve?.flush();
         const snapshot = await snapshotOf(libs, id);
@@ -467,6 +418,42 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
     return handle;
   }
 
+  function run(options: OrchestratorRunOptions): OrchestratorRunHandle {
+    return drive(
+      async (libs) => ({
+        companyId: options.companyId,
+        objective: options.objective,
+        launch: async () => ({
+          launched: await libs.orchestrator.launchOrchestration({
+            companyId: options.companyId,
+            objective: options.objective,
+            trigger: options.trigger ?? "manual",
+            fullTeam: options.fullTeam ?? false,
+          }),
+        }),
+      }),
+      options,
+    );
+  }
+
+  /** D2 (`./resume.ts`): the run's own company and objective, and its queue rebuilt from its rows. */
+  function resume(runId: string, options: OrchestratorResumeOptions = {}): OrchestratorRunHandle {
+    return drive(
+      async (libs) => {
+        const run = await hydrateOrThrow(libs, runId);
+        return {
+          companyId: run.companyId,
+          objective: run.objective,
+          launch: async () => {
+            const prepared = await prepareResume(libs, runId);
+            return { launched: prepared.launched, note: describeResume(prepared.plan) };
+          },
+        };
+      },
+      options,
+    );
+  }
+
   const approve = async (runId: string, stepId: string): Promise<boolean> => {
     const ok = await (await loadLibs()).orchestrator.approveStep(runId, stepId);
     wake(runId);
@@ -475,6 +462,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
 
   return {
     run,
+    resume,
     ensureCompany: async (input) => {
       const libs = await loadLibs();
       const slug = (input.slug ?? slugify(input.name)).toLowerCase();

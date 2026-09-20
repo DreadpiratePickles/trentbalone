@@ -42,6 +42,11 @@ export interface SetupContext {
    * `doctor/`; the CLI wires the real one in.
    */
   runDoctor?: () => Promise<DoctorSummary>;
+  /**
+   * [B2] Quick setup turns the `media` toolset on only when a backend exists: ffmpeg and ffprobe on
+   * the PATH of `env`, or the media image. Injected so a test decides; defaults to the real probe.
+   */
+  mediaBackendPresent?: () => Promise<boolean>;
 }
 
 export interface SetupResult {

@@ -173,6 +173,13 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // asks at every level. A profile that wants `deploy` or `destructive` asked about at `never`
   // names it here; no key lowers the floor. See docs/security.md, "Side-effecting tools: the gate".
   gate: { ask_classes: [] },
+  // [B2] media: docker when the media image exists, else the host's binaries; no audio leaves
+  // the machine until `hosted_transcription` is set by hand (docs/media.md).
+  media: {
+    backend: "auto",
+    hosted_transcription: false,
+    whisper_model: "",
+  },
   personality: "default",
   theme: "dark",
   // [D0] improvement gates
@@ -215,6 +222,7 @@ export const BLANK_SLATE_CONFIG: TrentConfig = {
     "plugins",
     "mcp",
     "human",
+    "media",
   ],
   egress: {
     ...DEFAULT_CONFIG.egress,

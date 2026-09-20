@@ -190,6 +190,11 @@
     "gate": {
       "ask_classes": []
     },
+    "media": {
+      "backend": "auto",
+      "hosted_transcription": false,
+      "whisper_model": ""
+    },
     "personality": "default",
     "theme": "dark",
     "improve": {
@@ -504,6 +509,11 @@
       "ask_classes": [
         "deploy"
       ]
+    },
+    "media": {
+      "backend": "host",
+      "hosted_transcription": true,
+      "whisper_model": "/models/ggml-base.en.bin"
     },
     "personality": "fixture-personality",
     "theme": "light",

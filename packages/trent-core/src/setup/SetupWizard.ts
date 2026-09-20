@@ -25,6 +25,7 @@ export class SetupWizard {
       output: context.output ?? new ConsoleOutput(),
       env: context.env ?? process.env,
       ...(context.runDoctor ? { runDoctor: context.runDoctor } : {}),
+      ...(context.mediaBackendPresent ? { mediaBackendPresent: context.mediaBackendPresent } : {}),
     };
   }
 

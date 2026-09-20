@@ -283,8 +283,19 @@ export interface EnsureCompanyInput {
   readonly vision?: string;
 }
 
+/** What `resume` takes: the run is known, so no company, objective or trigger. */
+export type OrchestratorResumeOptions = Pick<OrchestratorRunOptions, "surface" | "maxJobs" | "signal">;
+
 export interface Orchestrator {
   run(options: OrchestratorRunOptions): OrchestratorRunHandle;
+  /**
+   * D2: picks an existing run back up in THIS process — one a killed `trent run`, cron tick or
+   * heartbeat left `running` — re-enqueues what is ready and drains it to a verdict. A finished
+   * run resolves with its snapshot untouched; an unknown id rejects `started`. A side-effecting
+   * tool call the dead process recorded is answered from the idempotency store, not repeated.
+   * Optional only so the older fakes stay valid; `createOrchestrator` always provides it.
+   */
+  resume?(runId: string, options?: OrchestratorResumeOptions): OrchestratorRunHandle;
   /**
    * Returns the id of the company with this slug, creating it when absent. `launchOrchestration`
    * throws "Company not found" for an unknown id, and nothing else in the CLI path creates one.

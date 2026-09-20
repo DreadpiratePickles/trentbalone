@@ -23,3 +23,5 @@ export * from "./checks/brain.js";
 export * from "./checks/brain-import.js";
 // [C1] app memory
 export * from "./checks/app-memory.js";
+// [B2] media
+export * from "./checks/media.js";

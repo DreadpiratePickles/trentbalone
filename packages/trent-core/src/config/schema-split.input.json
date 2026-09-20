@@ -86,6 +86,8 @@
   "tools": { "disclosure_threshold": 40 },
   "brain": { "enabled": false, "versioning": "off" },
   "checkpoints": { "enabled": false, "max_bytes_per_run": 123456 },
+  "media": { "backend": "host", "hosted_transcription": true, "whisper_model": "/models/ggml-base.en.bin" },
+  "gate": { "ask_classes": ["deploy"] },
   "personality": "fixture-personality",
   "theme": "light",
   "improve": {

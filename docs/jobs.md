@@ -34,6 +34,29 @@ A run parked on an approval keeps its slot. A parked run is a run: releasing its
 cap of one become two the moment a gate is raised, and the approval reminder in `gateway.alerts`
 exists so a parked run is answered, not queued behind.
 
+## Resuming a run a killed process left behind
+
+`trent run --resume <runId>` (and `orchestrator.resume(runId)` for any surface built on the
+orchestrator) picks up a run whose process died mid-step: a `trent run` that was killed, a cron
+tick or a heartbeat sweep that never finished. The app persists every step and its job rows; the
+wrapper's drain loop used to drain only the run it had launched, so those rows sat `running`
+forever. Resume rebuilds the run through the app's `hydrateOrchestrationRun`, then enqueues
+exactly what the dead process owed (`packages/trent-core/src/orchestrator/resume.ts`): the job
+rows it left `running` are drained as they are; with none, the ready steps
+(`selectReadyStepsForEnqueue`) or, failing those, the steps left `running`; a run with no plan is
+planned; a run with every step settled is consolidated; a finished run is reported as it is, and
+an unknown id is a configuration error naming the id. The stream starts with the run's own
+`run_start` and one `heartbeat` line saying what resume decided; the exit codes are `trent run`'s.
+
+A replayed step cannot repeat a side effect. Its tool calls are keyed by `{runId, stepId, tool,
+args}` in the durable idempotency store under the profile (`governance/idempotent-dispatch.ts`),
+and the vocabulary covers write, patch, execute, send, publish, post, reply, book, invoice, charge,
+pay, sms, refund and email (gate G3), so the second execution of the same call in the same step is
+answered from the store instead of being made again. `orchestrator/orchestrator.resume.test.ts`
+kills a two-step run after its `write_file` completed, deletes the file, resumes in a fresh
+orchestrator, and shows step two ran once, the run ended `completed`, and the file was not
+rewritten.
+
 ## `trent jobs failed [--last N]`
 
 Lists the failed `JobRun` rows of this profile's store, newest first, with `id`, `type`,

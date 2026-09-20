@@ -59,6 +59,8 @@ export interface DoctorContext {
   fetchImpl?: FetchLike;
   /** Injected in tests; defaults to spawning the real binary. */
   execImpl?: ExecLike;
+  /** The environment a PATH lookup reads; injected in tests, defaults to `process.env`. */
+  env?: NodeJS.ProcessEnv;
   mode?: DoctorMode;
   /** Connected mode only: the health endpoint of the deployed app. */
   healthUrl?: string;

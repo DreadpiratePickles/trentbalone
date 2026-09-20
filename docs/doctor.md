@@ -1,6 +1,6 @@
 # Doctor
 
-`trent doctor` runs 19 checks. Each one inspects something real: a file, a daemon, a socket, an
+`trent doctor` runs 20 checks. Each one inspects something real: a file, a daemon, a socket, an
 authenticated request. None of them return a hard-coded green.
 
 ```bash
@@ -56,9 +56,9 @@ Glyphs carry the status when colour is off: `✓` ok, `◆` warn, `✗` fail, `�
 
 That capture, and the JSON one further down, are verbatim from a run that predates the egress root,
 brain and app-memory checks, so both report `total 14`. They are transcripts, not specifications;
-the table below is the current list, and a run of `trent doctor` here today reports `total 19`.
+the table below is the current list, and a run of `trent doctor` here today reports `total 20`.
 
-## The 19 checks
+## The 20 checks
 
 | # | Name | What it actually inspects | Auto-fixable |
 |---|---|---|:---:|

@@ -58,6 +58,15 @@ at the cost of one extra round trip the first time a tool is needed. When there 
 deferring — no configured MCP server, no foreign tool names, a catalog under the threshold — the
 bridges are not registered at all, and the adapter list is exactly what it was.
 
+## `media`
+
+The local clip pipeline, in its own page: docs/media.md. One row here so the toolset table is
+complete:
+
+| Toolset | Tools | Backend | Approval |
+|---|---|---|---|
+| `media` | `media_probe`, `media_transcribe`, `media_scenes`, `media_clip`, `media_thumbnail` | `trent-sandbox-media:1` when built, else the host's `ffmpeg`, `ffprobe`, `whisper-cli`, `scenedetect`, `python3` (an allowlist; argv only, never a shell string) | Only `media_transcribe` on the hosted path, which is off until `media.hosted_transcription` is set and then asks every time, because the audio leaves the machine |
+
 ## `todo`
 
 The run's task list: `todo {"action":"add","items":[...]}`, `todo {"action":"update","id":"t1",

@@ -55,7 +55,7 @@ describe("buildTrentToolAdapters", () => {
       { ...deps, egress: { proxyUrl: "http://127.0.0.1:1", token: "tok", caCertPath } },
     );
     expect(skipped).toEqual([]);
-    expect(toolsetAdapters(adapters)).toEqual(["file_ops", "terminal", "web", "code_execution", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp", "human"]);
+    expect(toolsetAdapters(adapters)).toEqual(["file_ops", "terminal", "web", "code_execution", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp", "human", "media"]);
     // Past `tools.disclosure_threshold` the bridges are registered and the deferred names leave
     // the advertised scopes; every name that is still advertised is still a reserved built-in.
     expect(adapters.map((a) => a.name)).toContain(TOOL_BRIDGE_ADAPTER_NAME);

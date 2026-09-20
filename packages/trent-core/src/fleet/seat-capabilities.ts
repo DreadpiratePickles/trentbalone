@@ -65,10 +65,12 @@ export const CAPABILITY_TOOLSETS: Readonly<Record<string, Toolset>> = {
 /**
  * Toolsets every seat may use because they are the WRAPPER's own capabilities, which the app's
  * manifests do not model at all: the skills store, delegation, the cron table, plugins, MCP
- * servers, the founder prompt, vision and the shared brain. The capability differences between
- * seats live in {@link GATED_TOOLSETS}; these are the floor every seat stands on.
+ * servers, the founder prompt, vision, the media pipeline and the shared brain. The capability
+ * differences between seats live in {@link GATED_TOOLSETS}; these are the floor every seat stands on.
+ * `media` is here for the same reason `vision` is: local computation over workspace files, with
+ * its one egress path (hosted transcription) gated by the adapter itself, not by a manifest.
  */
-export const SHARED_SEAT_TOOLSETS: readonly Toolset[] = ["skills", "delegation", "cron", "plugins", "mcp", "vision", "human", "memory"];
+export const SHARED_SEAT_TOOLSETS: readonly Toolset[] = ["skills", "delegation", "cron", "plugins", "mcp", "vision", "human", "memory", "media"];
 
 /** The toolsets a seat gets ONLY when its manifest names a capability that maps to one. */
 export const GATED_TOOLSETS: readonly Toolset[] = ["file_ops", "terminal", "code", "web", "browser"];

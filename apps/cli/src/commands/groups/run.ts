@@ -22,6 +22,10 @@
  *
  * Approvals are never auto-answered. A gate parks the run, opens a durable approval through the
  * same `ApprovalGate` the REPL uses, prints its id and how to decide it, and exits 7.
+ *
+ * `--resume <id>` (D2) drives an existing run instead of launching one: a `trent run`, cron tick
+ * or heartbeat that was killed mid-step is picked up by `orchestrator.resume`, which re-enqueues
+ * what the dead process owed and drains it through the same stream, gates and exit codes.
  */
 import process from "node:process";
 import { EXIT, TrentError, type ExitCode } from "@trent/core/errors/index.js";
@@ -143,7 +147,7 @@ interface Drive {
  * One run, start to verdict. Owns the whole streaming loop: the renderer or the JSONL mapper, the
  * cost ledger, the approval gate and the abort. Nothing here decides an approval or invents a cost.
  */
-async function driveRun(ctx: CommandContext, objective: string, format: Format, cap: number | undefined): Promise<{
+async function driveRun(ctx: CommandContext, objective: string, format: Format, cap: number | undefined, resumeId?: string): Promise<{
   drive: Drive;
   release: () => Promise<void>;
   emitFinal: (drive: Drive) => void;
@@ -189,21 +193,31 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
     await release();
   }, ctx.overrides.signals ?? process);
 
-  const emitSystem = (id: string): void => {
+  const emitSystem = (event: OrcEvent): void => {
     if (systemEmitted || !streaming) return;
     systemEmitted = true;
     ctx.out(
       JSON.stringify({
         type: "system",
         at: now().toISOString(),
-        run_id: id,
+        run_id: event.runId,
         profile: ctx.profile,
         provider: config.provider,
         model: config.model,
-        objective,
-        trigger: "manual",
+        // A resumed run's objective and trigger are the run's own, read off its run_start.
+        objective: resumeId === undefined ? objective : event.run?.objective ?? objective,
+        trigger: resumeId === undefined ? "manual" : event.run?.trigger ?? "manual",
+        ...(resumeId === undefined ? {} : { resumed: true }),
       }),
     );
+  };
+
+  /** The stream: a new run, or an existing one picked back up by the orchestrator. */
+  const events = (): AsyncIterable<OrcEvent> => {
+    if (resumeId === undefined) return runtime.run(objective, { trigger: "manual", signal: abort.signal });
+    const resume = runtime.orchestrator.resume;
+    if (resume === undefined) fail("this runtime's orchestrator cannot resume a run", resumeId);
+    return resume.call(runtime.orchestrator, resumeId, { signal: abort.signal, surface: "run" });
   };
 
   const write = (event: OrcEvent): void => {
@@ -219,9 +233,9 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
   };
 
   try {
-    for await (const event of runtime.run(objective, { trigger: "manual", signal: abort.signal })) {
+    for await (const event of events()) {
       runId ??= event.runId;
-      emitSystem(event.runId);
+      emitSystem(event);
       write(event);
       record(event);
 
@@ -305,21 +319,28 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
 }
 
 export const runSpec: CommandSpec = {
-  name: "run <objective>",
+  name: "run [objective]",
   description:
-    "Run one objective headlessly and stream its events; - reads the objective from stdin. Exit 0 completed, 1 run failed, 3 configuration, 6 over --max-cost-cents, 7 awaiting an approval, 130 interrupted",
+    "Run one objective headlessly and stream its events; - reads the objective from stdin; --resume <id> picks an interrupted run back up instead. Exit 0 completed, 1 run failed, 3 configuration, 6 over --max-cost-cents, 7 awaiting an approval, 130 interrupted",
   options: [
     { flags: "--format <format>", description: "text (the REPL transcript) or stream-json (one JSON object per line)", defaultValue: "text" },
     { flags: "--max-cost-cents <cents>", description: "Stop the run once it has spent more than this many integer cents" },
+    { flags: "--resume <runId>", description: "Resume an existing run that a killed process left running, instead of starting a new one" },
   ],
   async run(ctx, opts, args) {
     const format = parseFormat(opts.format);
     const cap = parseCap(opts.maxCostCents);
+    const resumeId = typeof opts.resume === "string" && opts.resume.trim() !== "" ? opts.resume.trim() : undefined;
+    const usage = (message: string): never => {
+      throw new TrentError({ code: EXIT.USAGE, operation: "run", message });
+    };
     if (ctx.dryRun) {
-      return { data: { dryRun: true, command: "run", objective: String(args[0] ?? ""), format, maxCostCents: cap ?? null } };
+      return { data: { dryRun: true, command: "run", objective: String(args[0] ?? ""), resume: resumeId ?? null, format, maxCostCents: cap ?? null } };
     }
-    const objective = await readObjective(args[0]);
-    const { drive, release, emitFinal } = await driveRun(ctx, objective, format, cap);
+    if (resumeId !== undefined && args[0] !== undefined) usage("run takes an objective or --resume <runId>, not both");
+    if (resumeId === undefined && args[0] === undefined) usage("run needs an objective (or - to read one from stdin), or --resume <runId>");
+    const objective = resumeId === undefined ? await readObjective(args[0]) : "";
+    const { drive, release, emitFinal } = await driveRun(ctx, objective, format, cap, resumeId);
     try {
       emitFinal(drive);
       const exit = exitFor(drive.result, drive.stop);

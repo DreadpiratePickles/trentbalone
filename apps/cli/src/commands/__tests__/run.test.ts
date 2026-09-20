@@ -92,6 +92,7 @@ interface Fakes {
   overrides: CliOverrides;
   built: number;
   runs: Array<{ objective: string; trigger: string }>;
+  resumes: string[];
   approvals: Array<Record<string, unknown>>;
   jobRows: Array<Record<string, unknown>>;
   resolved: string[];
@@ -104,6 +105,7 @@ function fakes(stream: readonly OrcEvent[] = COMPLETED, block?: (signal: AbortSi
     overrides: {},
     built: 0,
     runs: [],
+    resumes: [],
     approvals: [],
     jobRows: [],
     resolved: [],
@@ -138,6 +140,17 @@ function fakes(stream: readonly OrcEvent[] = COMPLETED, block?: (signal: AbortSi
     companyId: COMPANY,
     durable: true,
     store,
+    orchestrator: {
+      resume: (runId: string, options: { signal?: AbortSignal }) => {
+        f.resumes.push(runId);
+        const iterate = (async function* () {
+          for (const event of stream) yield event;
+          if (block !== undefined && options.signal !== undefined) await block(options.signal);
+          f.drained = true;
+        })();
+        return Object.assign(iterate, { started: Promise.resolve(runId), result: async () => ({}), cancel: async () => true });
+      },
+    },
     run: (objective: string, options: { trigger: string; signal?: AbortSignal }) => {
       f.runs.push({ objective, trigger: options.trigger });
       return (async function* () {
@@ -210,6 +223,39 @@ describe("trent run (text)", () => {
     for (const code of ["0", "1", "3", "6", "7", "130"]) {
       expect(result.stdout).toContain(code);
     }
+  });
+});
+
+describe("trent run --resume <id>", () => {
+  it("resumes the run on the orchestrator instead of launching a new one, and streams its events", async () => {
+    const f = fakes();
+    const result = await runCli(["run", "--resume", RUN, "--no-color"], { overrides: f.overrides });
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(f.resumes).toEqual([RUN]);
+    expect(f.runs).toEqual([]);
+    expect(result.stdout).toContain("Run complete");
+    expect(f.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("with --resume the JSON stream's system line names the resumed run and the result carries its id", async () => {
+    const f = fakes();
+    const result = await runCli(["run", "--resume", RUN, "--format", "stream-json"], { overrides: f.overrides });
+    expect(result.exitCode).toBe(EXIT.OK);
+    const lines = jsonl(result.stdout);
+    expect(lines[0]).toMatchObject({ type: "system", run_id: RUN, resumed: true });
+    expect(lines[lines.length - 1]).toMatchObject({ type: "result", status: "completed", run_id: RUN });
+  });
+
+  it("an objective and --resume together is a usage error", async () => {
+    const f = fakes();
+    const result = await runCli(["run", OBJECTIVE, "--resume", RUN], { overrides: f.overrides });
+    expect(result.exitCode).toBe(EXIT.USAGE);
+    expect(f.built).toBe(0);
+  });
+
+  it("--help documents --resume", async () => {
+    const result = await runCli(["run", "--help"]);
+    expect(result.stdout).toContain("--resume");
   });
 });
 
