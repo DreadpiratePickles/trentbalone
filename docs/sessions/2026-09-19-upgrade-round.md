@@ -192,3 +192,15 @@ vitest exit=0
 Pause lifted. Landing order: W1.1, W6 (with lazy adapter imports), W2, W3.
 - W1.1+W3 landed 928ca0f. W6.1 launched: make the social toolset's app-adapter imports lazy (static-graph test) before W6 lands; then W2.
 - W2 and W6 share the seven registration files line-for-line (enum, builder branch, TOOLSET_BY_ADAPTER, setup rosters, doctor lists, mcp toolset-tools); they land as ONE commit after W6.1's lazy imports pass the static-graph test.
+- Wave 2 closed: W1 5d4c4a5, W4 bf98635, W5 d635d69, W1.1+W3 928ca0f, W2+W6 fd51f62 (after W6.1
+  lazy imports; finance seat now carries Stripe on purpose). Tree synced. Clean-HEAD evidence:
+tsc exit=0
+core build exit=0
+repo-scan exit=0
+      Tests  3418 passed | 1 skipped (3419)
+ Test Files  352 passed (352)
+vitest exit=0
+- Wave 3 launched: X1 trent sandbox build --media + creator pack clipping; X2 Linux binary
+  findings (init.sql embed, .claude/skills ENOENT, pino lines on --json, .env.local auto-load);
+  X3 trent usage; X4 cron incidents + quota hold + queue editing; X5 session_search windows +
+  auto-recovery cycles; X6 Codex/Hermes/Claude importers.
