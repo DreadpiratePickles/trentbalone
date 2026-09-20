@@ -1,3 +1,4 @@
+import { CONNECT_ENV_NAMES } from "../connect/providers.js";
 import { TrentSecretsSchema } from "./schema.js";
 
 /**
@@ -20,7 +21,13 @@ export const SECRET_NAME_PATTERN = /(_KEY|_TOKEN|_SECRET|_PASSWORD)$/;
 /** Env-var shape: uppercase, digits and underscores only. */
 export const ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 
-/** Secret names not (or not yet) declared in TrentSecretsSchema. */
+/**
+ * Secret names not (or not yet) declared in TrentSecretsSchema. The `trent connect` names come
+ * from the provider registry, so a provider added there is routed to the secrets file the same
+ * day: its tokens, and also its identifiers (an account SID, a client id) and token metadata
+ * (expiry, granted scopes), because `trent connect list` is where those are read back and
+ * `config get` answering `[set]` for the whole family is simpler to reason about than a split.
+ */
 export const EXTRA_SECRET_NAMES: readonly string[] = [
   "GEMINI_API_KEY",
   "GOOGLE_GENERATIVE_AI_API_KEY",
@@ -30,6 +37,7 @@ export const EXTRA_SECRET_NAMES: readonly string[] = [
   "BRAVE_API_KEY",
   "TAVILY_API_KEY",
   "GITHUB_TOKEN",
+  ...CONNECT_ENV_NAMES,
 ];
 
 export const SECRET_ALLOWLIST: ReadonlySet<string> = new Set<string>([

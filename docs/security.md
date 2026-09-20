@@ -118,6 +118,9 @@ on the host with the host's environment. It is not a sandbox.
 | `~/.trent/keys/audit.key` and `profiles/*/keys/audit.key` | 0600 in a 0700 directory | Generated on first use by `trent audit`; the export and `.sig` are 0600 too |
 | `profiles/*/checkpoints/*/ledger.jsonl` and its `blobs/` | 0600 in a 0700 directory | The agent-write ledger and its pre-images, written temp-then-rename with the mode re-asserted; a pre-image of a workspace file never leaves the profile (docs/checkpoints.md) |
 
+Provider credentials and OAuth tokens taken by `trent connect` (docs/connect.md) go to the same
+`.env` through the same write, and to nowhere else: not `config.yaml`, not a log, not an output.
+
 Session files were 0644 in a 0755 directory before this was hardened. Every write is now
 write-then-rename with the mode re-asserted after the rename, so an interrupted write cannot leave a
 world-readable transcript. A directory that cannot be chmodded — a network mount, Windows — still has

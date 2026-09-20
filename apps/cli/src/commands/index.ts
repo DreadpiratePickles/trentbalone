@@ -46,6 +46,7 @@ import { hooksSpec } from "./groups/hooks.js";
 import { workspaceSpec } from "./groups/workspace.js";
 import { brainSpec } from "./groups/brain.js";
 import { securitySpec } from "./groups/security.js";
+import { connectSpec } from "./groups/connect.js";
 
 export { CLI_VERSION } from "./registry.js";
 export type { CommandContext, CliOverrides } from "./context.js";
@@ -76,6 +77,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   jobsSpec,
   hooksSpec,
   securitySpec,
+  connectSpec,
   a2aSpec,
   acpSpec,
   gatewaySpec,
