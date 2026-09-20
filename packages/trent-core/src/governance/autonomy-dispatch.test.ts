@@ -14,6 +14,8 @@ import type { ToolCallRecord, TrentToolAdapter } from "../tools/types.js";
 import { createToolHookRunner } from "../hooks/runner.js";
 import { hookSpecHash, writeConsent } from "../hooks/consent.js";
 import type { HooksConfig } from "../hooks/types.js";
+import { MemoryGatewayStore } from "../gateway/store/GatewayStore.js";
+import { createBoundApprovalStore } from "./bound-approvals.js";
 
 let home: string;
 let profileDir: string;
@@ -31,10 +33,10 @@ process.stdin.on("end", () => {
 `;
 
 /** Records every action that reached `execute`, so "was it refused" is a fact, not an inference. */
-function fakeAdapter(name: string, asks: (action: string) => boolean, executed: string[]): TrentToolAdapter {
+function fakeAdapter(name: string, asks: (action: string) => boolean, executed: string[], scopes: string[] = [name]): TrentToolAdapter {
   return {
     name,
-    scopes: [name],
+    scopes,
     availability: "real",
     instructions: "",
     routingText: "",
@@ -105,6 +107,47 @@ describe("autonomy: never still refuses what the floor refuses", () => {
     expect(wrapped.requiresApproval('terminal {"command":"rm -rf build"}')).toBe(false);
     expect((await wrapped.execute('terminal {"command":"rm -rf build"}', {})).status).toBe("completed");
     expect(executed).toHaveLength(1);
+  });
+});
+
+// [U1] G1 at the seam: the classes that post, send, book, invoice or charge ask at `never` too.
+describe("the class floor at autonomy: never", () => {
+  const bindings = (): Parameters<typeof autonomyAdapters>[1]["bindings"] => createBoundApprovalStore({ store: new MemoryGatewayStore() });
+
+  it("asks for a send, a charge and a customer write, and the adapter never runs unapproved", async () => {
+    for (const [name, scopes, action] of [
+      ["sms", ["sms", "send_sms"], 'send_sms {"to":"+15550100","body":"your table is booked"}'],
+      ["payments", ["payments", "charge_card"], 'charge_card {"customer":"cus_1","amount_cents":1250}'],
+      ["crm", ["crm", "update_contact"], 'update_contact {"id":"c1","stage":"won"}'],
+    ] as const) {
+      const executed: string[] = [];
+      const wrapped = wrap(fakeAdapter(name, () => false, executed, [...scopes]), { level: "never", bindings: bindings() });
+      expect(wrapped.requiresApproval(action), name).toBe(true);
+      const dry = await wrapped.dryRun!(action, {});
+      expect(dry.status, name).toBe("needs_approval");
+      const result = await wrapped.execute(action, {});
+      expect(result.status, name).toBe("needs_approval");
+      expect(executed, name).toEqual([]);
+    }
+  });
+
+  it("leaves a read alone: a customer lookup and a file read run unasked at never", async () => {
+    const executed: string[] = [];
+    const crm = wrap(fakeAdapter("crm", () => false, executed, ["crm", "get_contact"]), { level: "never", bindings: bindings() });
+    expect(crm.requiresApproval('get_contact {"id":"c1"}')).toBe(false);
+    expect((await crm.execute('get_contact {"id":"c1"}', {})).status).toBe("completed");
+    const files = wrap(fakeAdapter("file_ops", () => false, executed), { level: "never", bindings: bindings() });
+    expect(files.requiresApproval('read_file {"path":"README.md"}')).toBe(false);
+    expect((await files.execute('read_file {"path":"README.md"}', {})).status).toBe("completed");
+    expect(executed).toHaveLength(2);
+  });
+
+  it("a deny glob still refuses a floored call outright rather than asking", async () => {
+    const executed: string[] = [];
+    const wrapped = wrap(fakeAdapter("sms", () => false, executed, ["sms"]), { level: "never", deny: ["*+1555*"], bindings: bindings() });
+    const result = await wrapped.execute('send_sms {"to":"+15550100","body":"x"}', {});
+    expect(result.status).toBe("blocked");
+    expect(executed).toEqual([]);
   });
 });
 

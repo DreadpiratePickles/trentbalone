@@ -10,3 +10,6 @@ export * from "./deny-globs.js";
 export * from "./autonomy.js";
 export * from "./autonomy-dispatch.js";
 export * from "./spend-ledger.js";
+// [U1] the side-effect gate: the class floor and the per-call approval binding
+export * from "./gate-config-schema.js";
+export * from "./bound-approvals.js";

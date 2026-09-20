@@ -42,6 +42,34 @@ describe("idempotent tool dispatch", () => {
     expect(isSideEffecting("vision", "vision_analyze")).toBe(false);
   });
 
+  // [U1] G3: the vocabulary of the executors that post, send, book, invoice or charge.
+  it("names publish, post, reply, book, invoice, charge, pay, sms, refund and email as side effects", () => {
+    for (const [adapter, tool] of [
+      ["social", "publish_post"], ["social", "post_update"], ["social", "reply_comment"], ["calendar", "book_slot"],
+      ["billing", "create_invoice"], ["billing", "charge_card"], ["billing", "pay_invoice"], ["twilio", "sms"],
+      ["billing", "refund_charge"], ["mail", "email"],
+    ] as const) {
+      expect(isSideEffecting(adapter, tool), `${adapter}:${tool}`).toBe(true);
+    }
+    expect(isSideEffecting("social", "list_mentions")).toBe(false);
+    expect(isSideEffecting("calendar", "list_slots")).toBe(false);
+  });
+
+  it("a second identical call in one step per token family returns the first result without a second send", async () => {
+    for (const [name, tool] of [
+      ["social", "publish_post"], ["social", "post_update"], ["social", "reply_comment"], ["calendar", "book_slot"],
+      ["billing", "create_invoice"], ["billing", "charge_card"], ["billing", "pay_invoice"], ["twilio", "sms"],
+      ["billing", "refund_charge"], ["mail", "email"],
+    ] as const) {
+      const calls: string[] = [];
+      const [adapter] = idempotentAdapters([fakeAdapter(name, [name, tool], calls)], new IdempotencyManager());
+      const action = `${tool} {"target":"t1","body":"hello"}`;
+      const [first, second] = await runWithToolCallContext(STEP, async () => [await adapter.execute(action, {}), await adapter.execute(action, {})]);
+      expect(calls, `${name}:${tool}`).toEqual([action]);
+      expect(second, `${name}:${tool}`).toEqual(first);
+    }
+  });
+
   it("a read-scope tool called twice executes twice and records nothing", async () => {
     const calls: string[] = [];
     const manager = new IdempotencyManager();

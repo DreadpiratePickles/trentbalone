@@ -42,6 +42,8 @@ import { EgressConfigSchema, TerminalBackendSchema, TerminalConfigSchema } from 
 import { ToolDisclosureConfigSchema, ToolsetSchema } from "./sections/tools.js";
 import { WorkspaceConfigSchema } from "./sections/workspace.js";
 import { GoalsConfigSchema } from "../goals/config-schema.js";
+// [U1] class floor
+import { GateConfigSchema } from "../governance/gate-config-schema.js";
 
 /** Every name this module exported before the sections moved out; importers are unaffected. */
 export {
@@ -187,6 +189,9 @@ export const TrentConfigSchema = z.object({
     .default({}),
   // [D4] goals: gates before the judge, and verify_on_stop (`goals/config-schema.ts`, docs/goals.md).
   goals: GoalsConfigSchema.default({}),
+  // [U1] class floor
+  /** The side-effect gate (docs/security.md, "Side-effecting tools: the gate"): `ask_classes` adds to the shipped floor and nothing removes from it. */
+  gate: GateConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   improve: ImproveConfigSchema.default({}),

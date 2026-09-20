@@ -5,9 +5,13 @@
  *
  * Scope vocabulary (plan T0.7): a call is side-effecting when its tool name carries `write`,
  * `patch`, `execute`/`exec`, `send`, `network`, `terminal`, `process_manage`, `delegate` or
- * `cronjob_manage`. Read-only tools (`read_file`, `search_files`, `web_search`, ...) go straight
- * through and are never recorded, and so does any call made outside a seat turn, where there is
- * no run/step to key on.
+ * `cronjob_manage`, or [U1] one of the executors' own words: `publish`, `post`, `reply`, `book`,
+ * `invoice`, `charge`, `pay`, `sms`, `refund`, `email`. Read-only tools (`read_file`,
+ * `search_files`, `web_search`, ...) go straight through and are never recorded, and so does any
+ * call made outside a seat turn, where there is no run/step to key on. The match is a substring,
+ * so a name such as `postgres_query` is keyed too; that over-inclusion only ever collapses two
+ * identical calls in one step into one result, which is the safe direction for a word that might
+ * mean a post.
  *
  * Only a `completed` (or `mocked`) record is stored as the answer. `needs_approval` and `blocked`
  * are pauses, not results: the row is discarded so the call after the approval executes. A
@@ -20,7 +24,11 @@ import { IdempotencyManager, IdempotencyRetryLimitError, toolCallKey, type Resul
 import { currentToolCallContext } from "./tool-call-context.js";
 
 /** Substrings of a tool (or adapter) name that mean the call changes something outside the model's context. */
-export const SIDE_EFFECT_SCOPE_TOKENS: readonly string[] = ["write", "patch", "execute", "exec", "send", "network", "terminal", "process_manage", "delegate", "cronjob_manage"];
+export const SIDE_EFFECT_SCOPE_TOKENS: readonly string[] = [
+  "write", "patch", "execute", "exec", "send", "network", "terminal", "process_manage", "delegate", "cronjob_manage",
+  // [U1] G3: what the market executors do. `orchestrator.resume` cannot double-post, double-book or double-charge.
+  "publish", "post", "reply", "book", "invoice", "charge", "pay", "sms", "refund", "email",
+];
 
 function carriesSideEffectToken(name: string): boolean {
   const lowered = name.toLowerCase();

@@ -54,7 +54,11 @@ export class PolicyDispatcher {
 
   /** Appends a call to the current ring, keeping only what the longest rule window needs. */
   remember(call: ClassifiableCall): PolicyClass[] {
-    const classes = classifyCall(call);
+    return this.rememberEntry(call).classes;
+  }
+
+  private rememberEntry(call: ClassifiableCall): { tool: string; classes: PolicyClass[]; at: number } {
+    const entry = { tool: call.tool || call.adapter, classes: classifyCall(call), at: Date.now() };
     const key = this.ringKey();
     let ring = this.rings.get(key);
     if (ring === undefined) {
@@ -62,9 +66,9 @@ export class PolicyDispatcher {
       ring = [];
       this.rings.set(key, ring);
     }
-    ring.push({ tool: call.tool || call.adapter, classes, at: Date.now() });
+    ring.push(entry);
     if (ring.length > this.evaluator.window) ring.splice(0, ring.length - this.evaluator.window);
-    return classes;
+    return entry;
   }
 
   /** The decision for `call` against the current ring, without recording it. */
@@ -89,9 +93,13 @@ export class PolicyDispatcher {
       const execute = async (action: string, payload: Record<string, unknown>): Promise<ToolCallRecord> => {
         const call = this.callOf(adapter, action);
         const decision = this.decide(call);
-        this.remember(call);
+        const entry = this.rememberEntry(call);
         if (decision?.effect === "deny") return record(adapter.name, action, "blocked", describe(decision, "is blocked, whatever the approval state"));
-        return adapter.execute(action, payload);
+        const result = await adapter.execute(action, payload);
+        // [U1] A result the adapter itself tagged untrusted — a delegated child that read a page,
+        // an executor tagging one inbox message — is an inbound read for the rules that follow it.
+        if (result.provenance === "untrusted" && !entry.classes.includes("inbound")) entry.classes.push("inbound");
+        return result;
       };
       return new Proxy(adapter, {
         get(target, property) {
@@ -107,6 +115,7 @@ export class PolicyDispatcher {
 
 function describe(decision: PolicyDecision, verb: string): string {
   const { rule } = decision;
-  const trigger = rule.after === undefined ? `a ${rule.when} call` : `a ${rule.when} call within ${rule.within} calls of a ${rule.after} call`;
+  const read = decision.trigger === undefined ? "" : ` (${decision.trigger.tool})`;
+  const trigger = rule.after === undefined ? `a ${rule.when} call` : `a ${rule.when} call within ${rule.within} calls of a ${rule.after} call${read}`;
   return `Policy rule ${rule.id}: ${trigger} ${verb}. ${rule.reason}.`;
 }

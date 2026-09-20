@@ -65,6 +65,12 @@ export interface TrentToolAdapter extends ToolAdapter {
   readonly descriptionOverrides?: readonly ToolDescriptionOverride[];
   /** Read by the semantic router's catalog through the `registerExternalAdapters` seam. */
   readonly routingText: string;
+  /**
+   * [U1] The exact content or amount a call would send, rendered for the human who approves it
+   * (`governance/bound-approvals.ts`). Absent, or answering nothing, the arguments are shown as
+   * written. An adapter that posts, sends, books, invoices or charges should answer.
+   */
+  readonly preview?: (action: string) => string | undefined;
   /** Releases sandboxes and background processes. */
   cleanup(): Promise<void>;
 }

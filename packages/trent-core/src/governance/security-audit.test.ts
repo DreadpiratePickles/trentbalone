@@ -86,6 +86,9 @@ describe("a profile with nothing wrong with it", () => {
     expect(details.level).toBe("ask_dangerous");
     expect(details.liftsAnyFloor).toBe(false);
     expect(details.floorsStillRefusing).toEqual(["hardline", "approvals.deny", "approval-floor"]);
+    // [U1] The class floor is probed the same way: the verdict function is asked, at the configured level.
+    expect(details.classFloorStillAsks).toBe(true);
+    expect(details.classFloor).toEqual(["external_send", "money_moving", "customer_facing"]);
   });
 
   it("names the egress interception set and the sandbox backend from the real config", async () => {

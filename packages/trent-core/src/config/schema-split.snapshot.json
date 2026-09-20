@@ -187,6 +187,9 @@
       "auto_continue": false,
       "max_continuations": 3
     },
+    "gate": {
+      "ask_classes": []
+    },
     "personality": "default",
     "theme": "dark",
     "improve": {
@@ -496,6 +499,11 @@
       ],
       "auto_continue": false,
       "max_continuations": 3
+    },
+    "gate": {
+      "ask_classes": [
+        "deploy"
+      ]
     },
     "personality": "fixture-personality",
     "theme": "light",

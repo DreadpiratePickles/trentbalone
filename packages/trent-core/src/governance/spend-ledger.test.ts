@@ -11,6 +11,7 @@ import {
   installSpendLedger,
   currentSpendLedger,
   openSpendLedger,
+  recordToolSpend,
   spendLedgerPath,
   type SpendRow,
 } from "./spend-ledger.js";
@@ -101,6 +102,31 @@ describe("spend ledger", () => {
     const ledger = openSpendLedger({ profileDir });
     expect(ledger.rows()).toEqual([]);
     expect(ledger.dailyTotalCents(new Date())).toBe(0);
+  });
+
+  // [U1] G5: external spend — Twilio, Buffer, image generation, hosted transcription — is money
+  // the daily cap has to see. It goes on the same file as model spend, as `surface: "tool"`.
+  it("records a tool's external spend with its provider and counts it in the day the cap reads", () => {
+    const ledger = openSpendLedger({ profileDir, tz: "UTC" });
+    ledger.append(row({ at: "2026-09-18T10:00:00.000Z", surface: "run", cents: 40 }));
+    const written = recordToolSpend({ run_id: "run_1", tool: "sms", provider: "twilio", cents: 8, seat: "support", at: "2026-09-18T11:00:00.000Z" }, ledger);
+    expect(written).toMatchObject({ surface: "tool", provider: "twilio", tool: "sms", cents: 8, seat: "support", run_id: "run_1", tokens: 0 });
+    recordToolSpend({ run_id: "run_1", tool: "image_generate", provider: "openai", model: "gpt-image-1", cents: 4, units: 1, at: "2026-09-18T11:30:00.000Z" }, ledger);
+    // What `BudgetLedger.exceeded()` and `trent budget status` read is `dailyTotalCents`: the tool rows are in it.
+    expect(ledger.dailyTotalCents("2026-09-18")).toBe(52);
+    expect(ledger.dailyBySurfaceCents("2026-09-18")).toEqual({ run: 40, tool: 12 });
+    expect(ledger.runTotalCents("run_1")).toBe(52);
+    const lines = fs.readFileSync(spendLedgerPath(profileDir), "utf8").trim().split("\n").map((line) => JSON.parse(line) as SpendRow);
+    expect(lines[2]).toMatchObject({ surface: "tool", provider: "openai", model: "gpt-image-1", tool: "image_generate", units: 1 });
+  });
+
+  it("refuses a float tool charge and records nothing when no ledger is installed", () => {
+    const ledger = openSpendLedger({ profileDir });
+    expect(() => recordToolSpend({ run_id: "run_1", tool: "sms", provider: "twilio", cents: 0.5 }, ledger)).toThrow(/integer cents/);
+    expect(recordToolSpend({ run_id: "run_1", tool: "sms", provider: "twilio", cents: 3 })).toBeUndefined();
+    installSpendLedger(ledger);
+    expect(recordToolSpend({ run_id: "run_1", tool: "sms", provider: "twilio", cents: 3 })?.surface).toBe("tool");
+    expect(ledger.dailyTotalCents(new Date())).toBe(3);
   });
 
   it("is installed for the process, so every surface writes and reads the same file", () => {

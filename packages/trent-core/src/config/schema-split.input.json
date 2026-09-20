@@ -98,5 +98,6 @@
     "judge_model": "fixture-judge-model",
     "min_goldens": 7
   },
-  "an_unknown_future_key": { "kept": true, "by": "passthrough" }
+  "an_unknown_future_key": { "kept": true, "by": "passthrough" },
+  "gate": { "ask_classes": ["deploy"] }
 }

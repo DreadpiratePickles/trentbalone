@@ -410,7 +410,7 @@ reaches the idempotency store or the adapter.
 
 Classes come from the tool name (else the adapter name, else its scope list) using the app's MCP
 policy vocabulary: `read_only`, `write`, `execute`, `external_send`, `network`, `secret_access`,
-`destructive`, `money_moving`, `deploy`, `customer_facing`. The arguments add two: a path or value
+`destructive`, `money_moving`, `deploy`, `customer_facing`, `inbound`. The arguments add two: a path or value
 that looks like a secret (`.env`, `id_rsa`, `*.pem`, `secrets`, `credentials`, tokens, passwords)
 adds `secret_access`; a command the approval floor would call destructive (`rm -rf`, `DROP TABLE`,
 `git push --force`, `git reset --hard`, any hardline hit) adds `destructive`.
@@ -433,6 +433,7 @@ The shipped defaults:
 | `execute-after-network` | require_approval | `execute` within 5 calls of `network` |
 | `money-needs-approval` | require_approval | every `money_moving` call |
 | `no-secret-writes` | deny | `write` that is also `secret_access` |
+| `send-after-untrusted` | require_approval | `external_send` within 20 calls of `inbound` (see "Side-effecting tools: the gate") |
 
 `deny` returns a `blocked` tool result naming the rule id and reason, exactly like the hardline
 floor: the seat sees why, the run continues, and an approval granted earlier does not lift it.
@@ -486,6 +487,77 @@ untrusted input and a durable write instead. A held write is decided on either s
 approvals list` and `/approvals` show each one's kind, the seat that made it and the untrusted tools
 it came from, `approve <id>` replays the seat's own action with the provenance recorded in the
 entry, and `reject <id>` discards it, leaving the denied row behind as the record of the refusal.
+
+## Side-effecting tools: the gate
+
+A tool that posts, sends, books, invoices or charges is different in kind from one that writes a
+file: what it does leaves the machine and cannot be rolled back. Before this gate existed, the
+levels above did not cover it. `autonomy: never` lifted an adapter's own approval
+(`governance/autonomy.ts`), one approval covered the rest of a step
+(`apps/web/lib/seat-agent-loop.ts:209`; a step that once held an approval re-runs with it,
+`orchestrator-run-phases.ts:253`), `publish`, `post`, `book`, `invoice` and `charge` were not
+idempotency words, the provenance tag knew nothing of an inbox, and the spend ledger held model
+spend only. Five mechanisms close those holes, all applied in the one wrapper chain
+`buildTrentTools` builds (`packages/trent-core/src/tools/index.ts`), so a market toolset registered
+there is gated before it exists. Nothing is switchable off.
+
+**The three classes.** A call the policy classifier (`governance/policy-rules.ts` `classifyCall`)
+marks `external_send` (send, email, message, post, publish, notify, reply, sms), `money_moving`
+(charge, refund, payment, payout, transfer, invoice, pay, stripe, checkout, billing) or
+`customer_facing` (customer, contact, lead, crm, ticket, book, booking, appointment, reservation)
+is on the class floor, unless it is a pure read: `get_contact` is a read, `update_contact` is not.
+The floor asks a human at every autonomy level; `never` cannot lift it, a hardline hit or an
+`approvals.deny` glob still refuses it outright, and `gate.ask_classes` in `config.yaml` can add a
+class (`deploy`, say) but no key removes one (`governance/gate-config-schema.ts`).
+
+**The binding rule.** The approval for such a call is bound to the call's idempotency key,
+`{runId, stepId, tool, args}` (`governance/IdempotencyManager.ts` `toolCallKey`), and is stored as
+a pending row in `<profile>/gateway.json` carrying a preview of exactly what would be sent — the
+adapter's own rendering when it declares `preview(action)`, the arguments as written otherwise
+(`governance/bound-approvals.ts`). A yes to call A does not approve call B in the same step, a
+changed argument is a different approval, and a reordered argument is not. The check runs inside
+`execute`, so the loop-wide grant the seat loop holds after one yes reaches no call whose key a
+human has not seen. At the pause the wrapper's `dryRun` stores the preview and stamps the row;
+the replay of that exact call inside the same seat turn is the one implicit grant, recorded on the
+row as `decidedBy: step approval` (a no fails the step, and a failed step never runs again under
+its id). Outside a seat turn nothing is implicit: the call is parked, its summary names the row,
+and `trent approvals approve <id>` or `reject <id>` decides it — no new command, the same rows
+`trent approvals list` already shows. A new adapter calls
+`requireBoundApproval(call, preview)` inside `execute` with the exact content or amount before it
+sends anything, and returns the record it is handed when the answer is not granted; an adapter
+that forgets is still gated by the wrapper, and an adapter that calls it is gated even when built
+outside the chain. The store is installed per process by `buildTrentTools`
+(`installBoundApprovals`); with none installed the helper refuses and says so.
+
+**The tokens.** `SIDE_EFFECT_SCOPE_TOKENS` (`governance/idempotent-dispatch.ts`) carries
+`publish`, `post`, `reply`, `book`, `invoice`, `charge`, `pay`, `sms`, `refund` and `email`
+beside the original write, patch, execute, send, network, terminal, process_manage, delegate and
+cronjob_manage, so a second identical call in one step returns the first result and nothing is
+sent twice, whatever `orchestrator.resume` replays. The match is a substring; a name such as
+`postgres_query` is keyed too, which only ever collapses two identical calls into one result.
+
+**The inbound rule.** An inbox, a comment thread, a review feed or an inbound SMS is text somebody
+outside this machine wrote. An adapter declares it with the `inbound` scope, or by naming the
+tool with the family (`inbox_list`, `inbound_sms`); its results are tagged `untrusted` exactly as
+a web page is (`UNTRUSTED_ADAPTERS` gains `inbound`), and the same test adds the `inbound` class to
+the call in the policy ring, as it does for the web, browser, MCP and plugin families and for any
+result an adapter tagged untrusted itself. The shipped rule `send-after-untrusted`
+(`require_approval`, `external_send` within 20 calls of `inbound`) is the mirror of
+`send-after-secret`: a post in a step that read a comment asks, and the reason names the call it
+read, even when nothing else would have asked. A post with no untrusted read in the step is
+gated by the class floor alone. Reads should be named `<family>_list` or `<family>_read`: the
+classifier reads `send`, `email`, `message`, `post`, `publish`, `reply` and `sms` as outbound
+wherever they appear in a name, so `read_email` would be gated as a send.
+
+**External spend.** A Twilio message, a Buffer post, an image generation or a hosted
+transcription is money. An adapter records it with `recordToolSpend({ run_id, tool, provider,
+cents })` (`governance/spend-ledger.ts`); the row lands on the same `spend.ndjson` as model spend,
+as `surface: "tool"` with the provider, and `dailyTotalCents` — what the REPL's cap check and
+`trent budget status` read — counts it. Integer cents; a float throws.
+
+Tested in `governance/autonomy.test.ts`, `autonomy-dispatch.test.ts`, `bound-approvals.test.ts`,
+`idempotent-dispatch.test.ts`, `provenance.test.ts`, `policy-rules.test.ts`, `spend-ledger.test.ts`
+and, through `buildTrentTools` on fake executors at `autonomy: never`, `gate-chain.test.ts`.
 
 ## Auditing a profile
 

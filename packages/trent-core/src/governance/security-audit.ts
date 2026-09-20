@@ -35,6 +35,8 @@ import { defaultPluginsDir } from "../tools/plugins/index.js";
 import { loadPluginManifests } from "../tools/plugins/manifest.js";
 import { workspaceStatus } from "../workspace-context/index.js";
 import { autonomyVerdict, type AutonomyLevel } from "./autonomy.js";
+import { floorClasses } from "./gate-config-schema.js";
+import type { PolicyClass } from "./policy-rules.js";
 import { HARDLINE_RULES } from "./hardline.js";
 import { auditConfigSecrets, auditFilePermissions, octal } from "./security-audit-files.js";
 
@@ -126,18 +128,26 @@ const FLOOR_PROBES: ReadonlyArray<{ readonly name: string; readonly ask: (level:
   },
 ];
 
+/** [U1] The class floor asks rather than refuses; it is probed the same way, at the configured level. */
+function classFloorStillAsks(level: AutonomyLevel, floor: readonly PolicyClass[]): boolean {
+  return floor.every(
+    (cls) => autonomyVerdict({ level, hardline: null, deny: null, floor: null, adapterAsks: false, pureRead: false, classFloor: [cls] }).outcome === "ask",
+  );
+}
+
 function auditAutonomy(config: TrentConfig, out: SecurityAuditCollector): void {
   const level = config.autonomy;
   const floorsStillRefusing = FLOOR_PROBES.filter((probe) => probe.ask(level) === "refuse").map((probe) => probe.name);
   const liftsAnyFloor = floorsStillRefusing.length !== FLOOR_PROBES.length;
-  out.section("autonomy", "Autonomy level", { level, liftsAnyFloor, floorsStillRefusing });
+  const classFloor = floorClasses(config.gate);
+  out.section("autonomy", "Autonomy level", { level, liftsAnyFloor, floorsStillRefusing, classFloor, classFloorStillAsks: classFloorStillAsks(level, classFloor) });
 
   if (level === "never") {
     out.finding({
       id: "autonomy-never",
       section: "autonomy",
       severity: "high",
-      message: `autonomy is "never", so every call the approval floors would have asked a human about runs unattended`,
+      message: `autonomy is "never", so every call the approval floors would have asked a human about runs unattended, except a call on the class floor (${classFloor.join(", ")}), which still asks`,
       fix: "trent config set autonomy ask_dangerous",
     });
   }

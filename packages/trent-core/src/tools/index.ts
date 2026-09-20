@@ -12,6 +12,9 @@ import { IdempotencyManager } from "../governance/IdempotencyManager.js";
 import { idempotentAdapters } from "../governance/idempotent-dispatch.js";
 import { PolicyDispatcher } from "../governance/policy-dispatch.js";
 import { autonomyAdapters } from "../governance/autonomy-dispatch.js";
+// [U1] the class floor and the per-call approval binding every side-effecting executor sits behind.
+import { createBoundApprovalStore, installBoundApprovals, type BoundApprovalStore } from "../governance/bound-approvals.js";
+import { floorClasses } from "../governance/gate-config-schema.js";
 import { createProvenanceLedger, provenanceAdapters, type ProvenanceLedger } from "../governance/provenance.js";
 import { holdMemoryWrite } from "./memory/holds.js";
 import { DEFAULT_AUTONOMY } from "../governance/autonomy.js";
@@ -47,6 +50,16 @@ export {
   adapterProvenance, createProvenanceLedger, isSharedWriteTool, isSkillWriteTool, provenanceAdapters, provenanceOf, worstProvenance,
 } from "../governance/provenance.js";
 export type { HeldWriteInput, ProvenanceLedger, ProvenancePolicy } from "../governance/provenance.js";
+// [U1] the gate: what a new executor calls inside `execute`, and what a surface lists and decides.
+export {
+  BOUND_CALL_KIND, STEP_APPROVAL, boundCallKey, createBoundApprovalStore, currentBoundApprovals, installBoundApprovals, requireBoundApproval,
+} from "../governance/bound-approvals.js";
+export type { BoundApprovalDecision, BoundApprovalDetails, BoundApprovalRow, BoundApprovalStore, BoundCall } from "../governance/bound-approvals.js";
+export { CLASS_FLOOR, GateConfigSchema, floorClasses } from "../governance/gate-config-schema.js";
+export type { GateConfig } from "../governance/gate-config-schema.js";
+export { INBOUND_SCOPE, isInboundCall } from "../governance/provenance.js";
+export { recordToolSpend } from "../governance/spend-ledger.js";
+export type { ToolSpendCharge } from "../governance/spend-ledger.js";
 export {
   HELD_WRITE_ACTION, activeHeldWriteSession, approveHeldMemoryWrite, closeHeldWriteSession, denyHeldMemoryWrite, heldWriteAction,
   holdMemoryWrite, listHeldMemoryWrites, openHeldWriteSession, provenanceMarker, summariseHeldWrite,
@@ -94,6 +107,8 @@ export type ToolBuildConfig = Pick<TrentConfig, "toolsets" | "disabled_toolsets"
   readonly tools?: TrentConfig["tools"];
   /** [C5] `provenance`: what a memory or skill write made from untrusted context may do. */
   readonly provenance?: TrentConfig["provenance"];
+  /** [U1] `gate.ask_classes`: classes added to the shipped class floor. Absent means the shipped floor alone. */
+  readonly gate?: TrentConfig["gate"];
   /**
    * [D3] `curator.scan_agent_skills`: whether an agent-authored skill is scanned as a composed
    * bundle before it becomes active. D3 declared the key and nothing read it, so the gate was
@@ -172,6 +187,13 @@ export interface ToolBuildDeps {
    * a caller passes its own to build without reading the profile.
    */
   readonly toolOverrides?: readonly ToolDescriptionOverride[];
+  /**
+   * [U1] Where an approval bound to one side-effecting call lives (`governance/bound-approvals.ts`).
+   * Defaults to the rows in `<profileDir>/gateway.json`, which `trent approvals` lists and decides;
+   * tests pass an in-memory one. Whatever is used is installed as the process's store, so an
+   * adapter calling `requireBoundApproval` inside `execute` binds against the same rows.
+   */
+  readonly bindings?: BoundApprovalStore;
 }
 
 /** One toolset that was enabled in config but could not be built here, and why the seat cannot use it. */
@@ -202,6 +224,8 @@ export interface TrentToolBuild {
    * hand-built list and reads no profile.
    */
   readonly descriptionOverrides?: readonly AppliedToolOverride[];
+  /** [U1] The bound-approval rows this build's gate reads and writes; a surface lists them to explain a parked call. */
+  readonly bindings?: BoundApprovalStore;
 }
 
 /**
@@ -327,10 +351,18 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
     (config.hooks === undefined
       ? undefined
       : createToolHookRunner({ profileDir: deps.profileDir, hooks: config.hooks, ...(deps.seat === undefined ? {} : { seat: deps.seat }) }));
+  // [U1] The class floor and its binding live in the same wrapper: a post, a send, a booking, an
+  // invoice or a charge asks at every level, and runs only against an approval bound to exactly
+  // that call. The store is installed process-wide so an adapter's own `requireBoundApproval`
+  // reads the rows this gate wrote.
+  const bindings = deps.bindings ?? createBoundApprovalStore({ profileDir: deps.profileDir });
+  installBoundApprovals(bindings);
   const guarded = autonomyAdapters(policy.wrap(idempotentAdapters(described.adapters, idempotency)), {
     level: config.autonomy ?? DEFAULT_AUTONOMY,
     deny: config.approvals?.deny ?? [],
     hardline: { home: deps.home ?? os.homedir(), profileDir: deps.profileDir },
+    floor: floorClasses(config.gate),
+    bindings,
     ...(hooks === undefined ? {} : { hooks }),
     ...(deps.seat === undefined ? {} : { seat: deps.seat }),
   });
@@ -366,6 +398,7 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
     skipped,
     provenance: ledger,
     descriptionOverrides: described.applied,
+    bindings,
     // A getter, not a snapshot: a hook is skipped when a CALL is made, which is always after the
     // build returned. Reading this field at the end of a run is what makes the notice reachable.
     get hookNotices(): readonly string[] {

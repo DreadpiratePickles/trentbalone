@@ -45,7 +45,7 @@ const skills = adapter("skills", ["skills_list", "skill_view", "skill_manage"]);
 
 describe("adapterProvenance", () => {
   it("names web, browser, MCP and plugin output untrusted and everything Trent runs itself trusted", () => {
-    expect([...UNTRUSTED_ADAPTERS].sort()).toEqual(["browser", "mcp", "plugins", "web"]);
+    expect([...UNTRUSTED_ADAPTERS].sort()).toEqual(["browser", "inbound", "mcp", "plugins", "web"]);
     expect(adapterProvenance("web", "web_extract")).toBe("untrusted");
     expect(adapterProvenance("browser", "browser_get_text")).toBe("untrusted");
     expect(adapterProvenance("mcp", "mcp_status")).toBe("untrusted");
@@ -54,6 +54,32 @@ describe("adapterProvenance", () => {
     expect(adapterProvenance("memory", "memory")).toBe("trusted");
     expect(worstProvenance(["trusted", "untrusted", "trusted"])).toBe("untrusted");
     expect(worstProvenance(["trusted", "trusted"])).toBe("trusted");
+  });
+});
+
+// [U1] G4: an inbox, a comment thread, a review feed or an inbound SMS is text somebody outside
+// this machine wrote. An adapter says so by declaring the `inbound` scope, or by naming its tools
+// with the family, and the result is tagged the way a web page is.
+describe("the inbound class", () => {
+  it("is untrusted by scope declaration, by tool family, and by adapter name", () => {
+    expect(adapterProvenance("social", "inbox_list", ["social", "inbound"])).toBe("untrusted");
+    expect(adapterProvenance("social", "inbox_list", ["social"])).toBe("untrusted");
+    expect(adapterProvenance("twilio", "inbound_sms", ["twilio"])).toBe("untrusted");
+    expect(adapterProvenance("inbound", "list_comments")).toBe("untrusted");
+    expect(adapterProvenance("social", "list_mentions", ["social"])).toBe("trusted");
+    expect(adapterProvenance("calendar", "book_slot", ["calendar"])).toBe("trusted");
+  });
+
+  it("tags the results of an adapter that declared inbound untrusted through the wrapper, and taints the step", async () => {
+    const ledger = createProvenanceLedger();
+    const inbox: TrentToolAdapter = { ...adapter("reviews", ["reviews_list"]), scopes: ["reviews", "reviews_list", "inbound"] };
+    const [wrapped] = provenanceAdapters([inbox], { ledger });
+    const result = await runWithToolCallContext({ runId: "run_in", stepId: "step_1" }, () => wrapped!.execute('reviews_list {"limit":5}', {}));
+    expect(result.provenance).toBe("untrusted");
+    runWithToolCallContext({ runId: "run_in", stepId: "step_1" }, async () => {
+      expect(ledger.isUntrusted()).toBe(true);
+      expect(ledger.sources()).toEqual(["reviews_list"]);
+    });
   });
 });
 

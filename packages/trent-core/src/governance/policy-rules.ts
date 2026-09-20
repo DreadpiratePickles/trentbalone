@@ -6,15 +6,18 @@
  *
  * The class names are the app's own MCP policy vocabulary (`apps/web/lib/mcp-policy.ts`
  * MCP_TOOL_POLICY_CLASSES) extended with the scope classes the Trent adapters carry
- * (`execute`, `external_send`, `network`). They are redeclared here because core cannot import
- * `apps/web` from governance without loading the app's graph.
+ * (`execute`, `external_send`, `network`, and [U1] `inbound`: the call's result is text somebody
+ * outside this machine wrote, by the same test `provenance.ts` tags a result untrusted with).
+ * They are redeclared here because core cannot import `apps/web` from governance without loading
+ * the app's graph.
  *
  * The evaluator is pure: history in, decision out. `policy-dispatch.ts` owns the per-run rings.
  */
 import { z } from "zod";
 import { dangerous, floorBlock } from "../tools/approval-floors.js";
+import { adapterProvenance } from "./provenance.js";
 
-export const POLICY_CLASSES = ["read_only", "write", "execute", "external_send", "network", "secret_access", "destructive", "money_moving", "deploy", "customer_facing"] as const;
+export const POLICY_CLASSES = ["read_only", "write", "execute", "external_send", "network", "secret_access", "destructive", "money_moving", "deploy", "customer_facing", "inbound"] as const;
 export const PolicyClassSchema = z.enum(POLICY_CLASSES);
 export type PolicyClass = z.infer<typeof PolicyClassSchema>;
 
@@ -47,6 +50,8 @@ export interface PolicyCall {
 export interface PolicyDecision {
   readonly effect: PolicyRule["effect"];
   readonly rule: PolicyRule;
+  /** The history entry that satisfied `after`, so the reason can name what was read. */
+  readonly trigger?: PolicyCall;
 }
 
 export const DEFAULT_POLICY_RULES: readonly PolicyRule[] = [
@@ -56,6 +61,8 @@ export const DEFAULT_POLICY_RULES: readonly PolicyRule[] = [
   { id: "execute-after-network", effect: "require_approval", when: "execute", after: "network", within: 5, reason: "execution right after external content was fetched; a human rules out an injected instruction" },
   { id: "money-needs-approval", effect: "require_approval", when: "money_moving", within: DEFAULT_WINDOW, reason: "money-moving calls always go through a human" },
   { id: "no-secret-writes", effect: "deny", when: "write", also: "secret_access", within: DEFAULT_WINDOW, reason: "seats never write secret files; rotate credentials by hand" },
+  // [U1] G4: the mirror of send-after-secret for text somebody outside this machine wrote.
+  { id: "send-after-untrusted", effect: "require_approval", when: "external_send", after: "inbound", within: DEFAULT_WINDOW, reason: "text authored outside this machine was read earlier in this run; a human rules out a send it steered" },
 ];
 
 /** Config rules append; a config rule carrying a default's id replaces it in place. */
@@ -81,9 +88,13 @@ export class PolicyEvaluator {
     for (const rule of this.rules) {
       if (!current.includes(rule.when)) continue;
       if (rule.also !== undefined && !current.includes(rule.also)) continue;
-      if (rule.after !== undefined && !history.slice(-rule.within).some((call) => call.classes.includes(rule.after!))) continue;
-      if (rule.effect === "deny") return { effect: "deny", rule };
-      pending ??= { effect: "require_approval", rule };
+      let trigger: PolicyCall | undefined;
+      if (rule.after !== undefined) {
+        trigger = history.slice(-rule.within).find((call) => call.classes.includes(rule.after!));
+        if (trigger === undefined) continue;
+      }
+      if (rule.effect === "deny") return { effect: "deny", rule, ...(trigger === undefined ? {} : { trigger }) };
+      pending ??= { effect: "require_approval", rule, ...(trigger === undefined ? {} : { trigger }) };
     }
     return pending;
   }
@@ -110,9 +121,10 @@ const NAME_CLASSES: ReadonlyArray<readonly [RegExp, PolicyClass]> = [
   tokenRule(["network", "web", "browser", "http", "fetch", "download", "upload", "curl"], "network"),
   tokenRule(["secret", "secrets", "token", "tokens", "credential", "credentials", "password", "api_key", "apikey", "private_key"], "secret_access"),
   tokenRule(["delete", "destroy", "remove", "purge", "drop", "revoke", "truncate"], "destructive"),
-  tokenRule(["charge", "refund", "payment", "payout", "transfer", "invoice", "stripe", "checkout", "billing"], "money_moving"),
+  tokenRule(["charge", "refund", "payment", "payout", "transfer", "invoice", "stripe", "checkout", "billing", "pay"], "money_moving"),
   tokenRule(["deploy", "release", "rollback"], "deploy"),
-  tokenRule(["customer", "contact", "lead", "crm", "ticket"], "customer_facing"),
+  // [U1] A booking is a commitment made to a customer; it sits on the class floor with the rest.
+  tokenRule(["customer", "contact", "lead", "crm", "ticket", "book", "booking", "appointment", "reservation"], "customer_facing"),
 ];
 
 /** `read_only` is dropped when the call also does something: `web_search` is a network call, not a read. */
@@ -139,7 +151,9 @@ function destructiveCommand(text: string): boolean {
 
 /**
  * The classes of one call: from the tool name, else the adapter name, else the adapter's scope
- * list (the first level that yields a class wins), then from what the arguments touch.
+ * list (the first level that yields a class wins), then from what the arguments touch, then
+ * [U1] `inbound` when the result would be tagged untrusted before it is even read — the web,
+ * browser, MCP and plugin families, and an adapter that declared the `inbound` scope.
  */
 export function classifyCall(call: ClassifiableCall): PolicyClass[] {
   const classes = new Set<PolicyClass>();
@@ -148,6 +162,7 @@ export function classifyCall(call: ClassifiableCall): PolicyClass[] {
     for (const [re, cls] of NAME_CLASSES) if (re.test(normalised)) classes.add(cls);
     if (classes.size > 0) break;
   }
+  if (adapterProvenance(call.adapter, call.tool, call.scopes) === "untrusted") classes.add("inbound");
   const texts: string[] = [];
   stringsOf(call.args, 0, texts);
   if (texts.some((text) => SECRET_ARG.test(text))) classes.add("secret_access");

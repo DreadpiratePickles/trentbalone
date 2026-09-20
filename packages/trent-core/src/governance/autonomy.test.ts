@@ -3,7 +3,8 @@
  * it never decides whether the hardline list, `approvals.deny` or the approval floor apply.
  */
 import { describe, expect, it } from "vitest";
-import { autonomyVerdict, AUTONOMY_LEVELS, AutonomyLevelSchema, DEFAULT_AUTONOMY, isPureRead, type AutonomyInput } from "./autonomy.js";
+import { autonomyVerdict, AUTONOMY_LEVELS, AutonomyLevelSchema, classFloorOf, DEFAULT_AUTONOMY, isPureRead, type AutonomyInput } from "./autonomy.js";
+import { CLASS_FLOOR, floorClasses, GateConfigSchema } from "./gate-config-schema.js";
 import { DEFAULT_CONFIG } from "../config/defaults.js";
 import { TrentConfigSchema } from "../config/schema.js";
 
@@ -91,6 +92,45 @@ describe("ask_always", () => {
 describe("never", () => {
   it("auto-approves everything the floors would have asked about", () => {
     expect(autonomyVerdict({ ...clean, level: "never", pureRead: false, adapterAsks: true }).outcome).toBe("allow");
+  });
+});
+
+// [U1] G1: the class floor. A call that posts, sends, books, invoices or charges asks at every
+// level; the level can only decide how often OTHER calls ask.
+describe("the class floor asks at every level", () => {
+  it("ships the three classes and lets config add one but never remove one", () => {
+    expect([...CLASS_FLOOR]).toEqual(["external_send", "money_moving", "customer_facing"]);
+    expect(GateConfigSchema.parse({}).ask_classes).toEqual([]);
+    expect(floorClasses({ ask_classes: ["deploy", "external_send"] })).toEqual(["external_send", "money_moving", "customer_facing", "deploy"]);
+    expect(GateConfigSchema.safeParse({ ask_classes: ["teleport"] }).success).toBe(false);
+    expect(GateConfigSchema.safeParse({ never_ask: ["external_send"] }).success).toBe(false);
+  });
+
+  it("asks for a floored class at every level, naming the class, even when the adapter would not", () => {
+    for (const level of AUTONOMY_LEVELS) {
+      const verdict = autonomyVerdict({ ...clean, level, pureRead: false, adapterAsks: false, classFloor: ["external_send"] });
+      expect(verdict.outcome, level).toBe("ask");
+      expect(verdict.reason).toContain("external_send");
+    }
+  });
+
+  it("is still below the refusals: a deny glob or a hardline hit on a floored call refuses, it does not ask", () => {
+    expect(autonomyVerdict({ ...clean, level: "never", classFloor: ["money_moving"], deny: { glob: "*stripe*", subject: "stripe charge" } }).outcome).toBe("refuse");
+    expect(autonomyVerdict({ ...clean, level: "never", classFloor: ["money_moving"], hardline: { id: "probe", reason: "probe" } }).outcome).toBe("refuse");
+  });
+
+  it("does not touch a call carrying no floored class: never still auto-approves it", () => {
+    expect(autonomyVerdict({ ...clean, level: "never", pureRead: false, adapterAsks: true, classFloor: [] }).outcome).toBe("allow");
+  });
+
+  it("classFloorOf names the floored classes of a non-read call and nothing for a read", () => {
+    const floor = floorClasses();
+    expect(classFloorOf({ adapter: "sms", scopes: ["sms"], tool: "send_sms", args: { to: "+15550100", body: "hello" } }, floor)).toEqual(["external_send"]);
+    expect(classFloorOf({ adapter: "payments", scopes: ["payments"], tool: "charge_card", args: { amount_cents: 1250 } }, floor)).toEqual(["money_moving"]);
+    expect(classFloorOf({ adapter: "crm", scopes: ["crm"], tool: "update_contact", args: { id: "c1" } }, floor)).toEqual(["customer_facing"]);
+    expect(classFloorOf({ adapter: "crm", scopes: ["crm"], tool: "get_contact", args: { id: "c1" } }, floor)).toEqual([]);
+    expect(classFloorOf({ adapter: "file_ops", scopes: ["file_ops"], tool: "read_file", args: { path: "README.md" } }, floor)).toEqual([]);
+    expect(classFloorOf({ adapter: "file_ops", scopes: ["file_ops"], tool: "write_file", args: { path: "a", content: "b" } }, floor)).toEqual([]);
   });
 });
 

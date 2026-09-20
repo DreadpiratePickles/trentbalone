@@ -18,14 +18,19 @@
  * carry one; when one is installed it answers the totals and the file stays the record.
  *
  * Money is INTEGER CENTS. `append` throws on a float rather than rounding one in silently.
+ *
+ * [U1] External spend is on the same file. A Twilio message, a Buffer post, an image generation,
+ * a hosted transcription: each is money a tool spent, recorded as `surface: "tool"` with the
+ * provider and the tool, and `dailyTotalCents` counts it exactly as it counts a model charge, so
+ * `budget.daily_cap` sees it (rulebook principle 15). `recordToolSpend` is what an adapter calls.
  */
 import fs from "node:fs";
 import path from "node:path";
 
 import { localDayKey } from "../heartbeat/quiet-hours.js";
 
-/** Which surface charged. Anything else is recorded as given, so an unknown surface is visible. */
-export type SpendSurface = "repl" | "run" | "gateway" | "cron" | "heartbeat" | "unknown" | (string & {});
+/** Which surface charged. `tool` is external spend by an adapter. Anything else is recorded as given, so an unknown surface is visible. */
+export type SpendSurface = "repl" | "run" | "gateway" | "cron" | "heartbeat" | "tool" | "unknown" | (string & {});
 
 /** One charge. The file holds exactly this shape, one JSON object per line. */
 export interface SpendRow {
@@ -40,6 +45,10 @@ export interface SpendRow {
   /** Integer cents. Never a float. */
   readonly cents: number;
   readonly tokens: number;
+  /** [U1] The tool that spent it, on a `surface: "tool"` row. */
+  readonly tool?: string;
+  /** [U1] What was bought, when the provider bills per unit rather than per token: messages, images, seconds. */
+  readonly units?: number;
 }
 
 /** A row as a caller hands it over: `at` defaults to now. */
@@ -181,6 +190,43 @@ export class SpendLedger implements SpendLedgerReader {
 
 export function openSpendLedger(options: SpendLedgerOptions): SpendLedger {
   return new SpendLedger(options);
+}
+
+/** [U1] One external charge as an adapter reports it: the provider that billed, the tool that spent, integer cents. */
+export interface ToolSpendCharge {
+  readonly run_id: string;
+  readonly tool: string;
+  /** Who billed: `twilio`, `buffer`, `openai`, `deepgram`. */
+  readonly provider: string;
+  /** Integer cents. Never a float. */
+  readonly cents: number;
+  /** The product or model billed, when the provider names one; defaults to the tool. */
+  readonly model?: string;
+  readonly units?: number;
+  readonly seat?: string;
+  readonly at?: string;
+}
+
+/**
+ * [U1] Records external spend on the day's ledger. Returns the row, or nothing when no ledger is
+ * open in this process — the adapter should then say so in its summary rather than assume the
+ * cap saw the charge. Throws on a float, exactly as `append` does.
+ */
+export function recordToolSpend(charge: ToolSpendCharge, ledger: Pick<SpendLedger, "append"> | undefined = installed): SpendRow | undefined {
+  if (!Number.isInteger(charge.cents)) throw new TypeError(`tool spend must be integer cents, received ${charge.cents}`);
+  if (ledger === undefined) return undefined;
+  return ledger.append({
+    surface: "tool",
+    run_id: charge.run_id,
+    ...(charge.seat === undefined ? {} : { seat: charge.seat }),
+    model: charge.model ?? charge.tool,
+    provider: charge.provider,
+    cents: charge.cents,
+    tokens: 0,
+    tool: charge.tool,
+    ...(charge.units === undefined ? {} : { units: charge.units }),
+    ...(charge.at === undefined ? {} : { at: charge.at }),
+  });
 }
 
 /**

@@ -167,6 +167,9 @@ provenance:
   untrusted_writes: hold      # hold | allow | deny: a memory write from an untrusted step
   untrusted_skills: deny      # deny | allow: skill_manage from an untrusted step
 
+gate:
+  ask_classes: []             # classes added to the floor that asks at every level; nothing removes one
+
 goals:
   verify_on_stop: true        # a turn that edited code needs fresh test or build evidence to finish
   verify_commands:            # what counts as that evidence
@@ -531,6 +534,14 @@ and not a default. `untrusted_skills` governs `skill_manage` from such a step an
 because a skill is executable content a later seat runs without reading it. Nothing here inspects
 untrusted text for an instruction; the gate is on the combination of untrusted input and a durable
 write. See [security.md](security.md), "Provenance and untrusted context".
+
+### The side-effect gate
+
+`gate.ask_classes` adds policy classes to the class floor: the calls a human approves at every
+autonomy level, bound to the exact call. The shipped floor is `external_send`, `money_moving` and
+`customer_facing` (a post, a send, a booking, an invoice, a charge) and is a constant, not a key;
+`never` does not lift it and no setting lowers it. Name `deploy` or `destructive` here to have
+those asked about at `never` too. See [security.md](security.md), "Side-effecting tools: the gate".
 
 ### Goals
 

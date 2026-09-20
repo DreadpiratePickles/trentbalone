@@ -168,6 +168,11 @@ export const DEFAULT_CONFIG: TrentConfig = {
     max_continuations: 3,
   },
   // [/D4]
+  // [U1] class floor
+  // Nothing added: the shipped floor (`external_send`, `money_moving`, `customer_facing`) already
+  // asks at every level. A profile that wants `deploy` or `destructive` asked about at `never`
+  // names it here; no key lowers the floor. See docs/security.md, "Side-effecting tools: the gate".
+  gate: { ask_classes: [] },
   personality: "default",
   theme: "dark",
   // [D0] improvement gates
