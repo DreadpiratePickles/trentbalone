@@ -10,11 +10,21 @@
  *   `file:` SQLite   the postgres client refuses the URL, so every call throws — and that is
  *                    exactly what the standalone DURABLE profile sets (`headless.ts:282`).
  *
- * The line is measured, never inferred: the probe asks the app's own store for one company's
- * documents and reports what came back. An unreachable app tier is a WARNING, not a failure —
- * fleet recall still has the runs, the skills and the playbook, and the brain still holds identity
- * and decisions — but an operator who thinks the company's facts are reaching their seats when
- * they are not has been told something false, which is the thing this check exists to prevent.
+ * With a database configured the line is measured: the probe asks the app's own store for one
+ * company's documents and reports what came back. With none configured the app's store is NOT
+ * loaded, and the in-process case is read straight off `store.ts:11`. That is not laziness: every
+ * module exporting the app's store, `mem-store` included, evaluates `db.ts:8` `new PrismaClient()`,
+ * whose engine constructor starts loading the postgres query-engine library as a promise nothing
+ * awaits. A query would await it and catch the failure, but with no `DATABASE_URL` no query ever
+ * reaches that client, and on any machine except the one that built the binary the engine is not
+ * found: the promise rejects unhandled and Bun kills `trent doctor` before the report is written
+ * (binary.yml's Linux RUN job, f403127, once `checkMedia` ran after this check and its `docker
+ * inspect` kept the process alive long enough). `app-store-isolation.test.ts` holds the line.
+ *
+ * An unreachable app tier is a WARNING, not a failure — fleet recall still has the runs, the
+ * skills and the playbook, and the brain still holds identity and decisions — but an operator who
+ * thinks the company's facts are reaching their seats when they are not has been told something
+ * false, which is the thing this check exists to prevent.
  */
 import type { CheckResult, DoctorCheck, DoctorContext } from "../types.js";
 
@@ -93,8 +103,15 @@ export const checkAppMemory: DoctorCheck = {
   name: NAME,
   category: CATEGORY,
   async run(ctx: DoctorContext): Promise<CheckResult> {
+    // The same truthiness test as `store.ts:11`: unset and "" both mean the in-process store.
+    const databaseUrl = process.env.DATABASE_URL || undefined;
+    if (databaseUrl === undefined) {
+      // The in-process store has no failure mode to measure, and loading it constructs the app's
+      // Prisma client, which must not happen on a profile that will never query it (see above).
+      return describeAppMemory({ databaseUrl, probe: { ok: true } });
+    }
     const configured = (ctx.configManager.loadConfig() as { company?: { id?: string } }).company?.id;
     const probe = await probeAppStore(configured === undefined ? "co_doctor_probe" : String(configured));
-    return describeAppMemory({ databaseUrl: process.env.DATABASE_URL, probe });
+    return describeAppMemory({ databaseUrl, probe });
   },
 };
