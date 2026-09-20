@@ -180,3 +180,4 @@ vitest exit=0
 - On resume, landing order: W1.1 first, then W6 with its imports made lazy (re-verify the
   static-graph test), W2, W3; then a clean-HEAD full run; then a follow-up agent for findings
   (b), (c), (d) and the .env.local auto-load.
+- Daily check 2026-09-20 02:50: clean-HEAD full suite 3296 passed / 1 skipped after regenerating the Prisma client in the isolation worktree (the prune step had removed it; isolate.sh now regenerates after pruning). No HEAD defect.

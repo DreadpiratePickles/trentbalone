@@ -12,6 +12,8 @@ for d in node_modules apps/web/node_modules apps/cli/node_modules; do [ -e $WT/$
 ( cd $WT && npx prisma generate --schema packages/trent-core/prisma/schema.sqlite.prisma >/dev/null 2>&1 ) || echo "prisma generate (core) failed"
 for spec in "${FILES[@]}"; do f=${spec%%=*}; src=$ROOT/$f; [ "$spec" != "$f" ] && src=${spec#*=}; mkdir -p $WT/$(dirname $f); if [ -e $src ]; then rm -rf $WT/$f; cp -R $src $WT/$f; else rm -rf $WT/$f; fi; done
 find $WT/apps $WT/packages -type d -empty -not -path "*/node_modules/*" -delete 2>/dev/null
+# regenerate after prune: the prune can remove the generated client dir
+( cd $WT && npx prisma generate --schema packages/trent-core/prisma/schema.sqlite.prisma >/dev/null 2>&1 ) || echo "prisma generate (core, post-prune) failed"
 cd $WT
 rc=0
 npx tsc --noEmit -p apps/cli/tsconfig.json; r=$?; echo "tsc exit=$r"; [ $r -ne 0 ] && rc=1
