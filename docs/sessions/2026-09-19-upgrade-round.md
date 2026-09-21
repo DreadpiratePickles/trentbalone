@@ -240,3 +240,34 @@ vitest exit=0
   answers -32601/-32005; docs claimed orchestrate fans out by tags, it reads capabilities (fixed).
 - Y5 launched: A2A v1.0 wire translation at the RPC edge so Hermes calls land in the task
   lifecycle; live probe from the Hermes venv, no model call. CI: 2bf5df2 run 35544291702 success.
+- CI on ac2eb98 (run 35544934870): first attempt failed on
+  `tools/browser/browser.chromium.test.ts` (real Chromium through the egress proxy, 60 s timeout);
+  none of the three commits since the green 99a3ffe touch browser or egress code, the file passes
+  locally 3/3, and the rerun of the failed job went green. Recorded as a CI flake to watch; if it
+  recurs, give that test its own timeout or move it to the sandbox job.
+- Y5 landed c403e92: A2A v1.0 on the wire beside 0.3.0 (a2a/v1.ts translation; eight red tests
+  first); live proof from Hermes's own client on a keyless scratch profile: HTTP 200 with a task,
+  run stopped at the gateway's no-key check, spentCents 0; a2a_discover prints JSONRPC v1.0.
+- Y6 launched: continuation by contextId without taskId for input-required tasks (Hermes never
+  sends taskId); v1.0 error texts in v1.0 spelling.
+- Y6 landed 14e1b04: per A2A v1.0 spec 3.4.3 a contextId-only message starts a NEW task (the
+  lifecycle already did; pinned by context-continuation.test.ts); Hermes's client never resends a
+  taskId, so answering input-required is a Hermes-side gap, recorded in docs/a2a.md; v1.0 error
+  texts in v1.0 spelling (three red first). Y7 landed a1a4e04: a taskId with another context's id
+  is rejected with -32602 (spec MUST; red first).
+- CI: c403e92 success. Final clean-HEAD full suite + CI on a1a4e04 running at close.
+
+## Open after the follow-up wave (all need Bobby or a measurement)
+- Platform applications (Meta, YouTube, TikTok, Google Business Profile): Bobby, "last".
+- Gemini image quota for the live image proof (429 today).
+- RAG reranker / query prefixes: after a recall@8 measurement on real documents.
+- Hermes answering an input-required Trent task: Hermes-side (its client sends no taskId).
+- Release checklist steps that are Bobby's (05_release/output/release-checklist-v1.md).
+- Close (2026-09-21 00:40Z): clean-HEAD full suite on a1a4e04 (isolate.sh, whole suite):
+tsc exit=0
+core build exit=0
+repo-scan exit=0
+      Tests  3608 passed | 1 skipped (3609)
+ Test Files  370 passed (370)
+vitest exit=0
+  CI green on c403e92 (35545661538), 14e1b04 (35546188321), a1a4e04 (35549717577). Tree clean.
