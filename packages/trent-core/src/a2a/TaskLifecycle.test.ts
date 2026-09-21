@@ -14,7 +14,7 @@ import { describe, it, expect } from "vitest";
 import type { OrcEvent } from "../orchestrator/types.js";
 import { NO_RUNNER_REASON, type AgentRunInput, type AgentRunner } from "../agent-runner/index.js";
 import { A2ATaskEngine, A2A_RESULT_ARTIFACT } from "./TaskLifecycle.js";
-import { a2aMessageText, A2A_ERROR_NO_RUNTIME, A2A_ERROR_TASK_NOT_CANCELABLE, A2A_ERROR_TASK_NOT_FOUND, type A2AMessageSendParams } from "./spec.js";
+import { a2aMessageText, A2A_ERROR_NO_RUNTIME, A2A_ERROR_TASK_NOT_CANCELABLE, A2A_ERROR_TASK_NOT_FOUND, JSONRPC_INVALID_PARAMS, type A2AMessageSendParams } from "./spec.js";
 
 function ev(kind: OrcEvent["kind"], extra: Partial<OrcEvent> = {}): OrcEvent {
   return { kind, runId: "run_a2a", at: "2026-09-18T00:00:00.000Z", ...extra } as OrcEvent;
@@ -97,6 +97,29 @@ describe("A2ATaskEngine", () => {
     expect(a2aMessageText(outcome.task.status.message)).toBe("may I drop the legacy index?");
     expect(outcome.task.status.message?.role).toBe("agent");
     expect(outcome.task.artifacts).toEqual([]);
+  });
+
+  it("a message naming a task with another context's id is rejected, not adopted (spec 3.4.3 MUST)", async () => {
+    const runner = fakeRunner([ev("run_start"), ev("run_awaiting_approval", { detail: "which repo?" })]);
+    const engine = new A2ATaskEngine({ runner });
+    const waiting = await submit(engine);
+    expect(waiting.ok).toBe(true);
+    if (!waiting.ok) return;
+
+    const mismatched = engine.begin({ message: { ...params("acme/backend").message, taskId: waiting.task.id, contextId: "ctx-someone-else" } });
+
+    expect(mismatched.ok).toBe(false);
+    if (mismatched.ok) return;
+    expect(mismatched.error.code).toBe(JSONRPC_INVALID_PARAMS);
+    expect(mismatched.error.message).toContain(waiting.task.contextId);
+    expect(mismatched.error.message).toContain("ctx-someone-else");
+    // The waiting task is untouched: still waiting, its history unchanged.
+    const still = engine.get(waiting.task.id);
+    expect(still?.status.state).toBe("input-required");
+    expect(still?.history).toHaveLength(waiting.task.history?.length ?? 0);
+
+    const matched = engine.begin({ message: { ...params("acme/backend").message, taskId: waiting.task.id, contextId: waiting.task.contextId } });
+    expect(matched.ok).toBe(true);
   });
 
   it("a cancelled run settles on the protocol's own canceled state", async () => {

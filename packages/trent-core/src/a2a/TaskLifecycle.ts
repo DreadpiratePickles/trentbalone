@@ -142,6 +142,14 @@ export class A2ATaskEngine {
     if (message.taskId !== undefined && existing === undefined && options.adoptTaskId !== true) {
       return { ok: false, error: { code: A2A_ERROR_TASK_NOT_FOUND, message: `no task with id "${message.taskId}" exists here` } };
     }
+    // Spec 3.4.3: a taskId with a contextId that is not the task's own MUST be rejected, never
+    // adopted, so one caller cannot append to another context's task by naming its id.
+    if (existing !== undefined && message.contextId !== undefined && message.contextId !== existing.contextId) {
+      return {
+        ok: false,
+        error: { code: JSONRPC_INVALID_PARAMS, message: `task "${existing.id}" belongs to context "${existing.contextId}", not "${message.contextId}"` },
+      };
+    }
     if (existing !== undefined && A2A_TERMINAL_STATES.has(existing.status.state)) {
       return {
         ok: false,

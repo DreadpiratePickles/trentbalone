@@ -115,6 +115,8 @@ the same context is `input-required`, which keeps waiting for the message that n
 the specification's rule, not a Trent choice: A2A v1.0 §3.4.3 says clients "MAY use contextId
 without taskId to start a new task within an existing conversation context" and that an
 input-required task is continued "by sending a new message with the same taskId and contextId".
+A `taskId` with a `contextId` that is not the task's own is rejected with `-32602` naming both ids
+(the same section's MUST), so a caller cannot append to another context's task by naming its id.
 Trent does not keep conversational state per context: each task's run takes the text of the
 message that began or continued it, so a `taskId`-less follow-up runs as its own objective. The
 rule is pinned by `packages/trent-core/src/a2a/context-continuation.test.ts`, which also shows a
