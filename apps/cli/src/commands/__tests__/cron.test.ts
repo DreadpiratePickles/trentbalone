@@ -338,6 +338,42 @@ describe("trent cron", () => {
     expect(fs.existsSync(jobsFile())).toBe(false);
   });
 
+  it("[P1-D] add --model pins the job: the stored record and list round-trip it; without it the record has no model", async () => {
+    const pinned = await add("--model", "gemini-3.5-flash-lite", "--name", "cheap digest");
+    const plain = await add();
+    expect(pinned.model).toBe("gemini-3.5-flash-lite");
+    expect(plain).not.toHaveProperty("model");
+
+    const onDisk = JSON.parse(fs.readFileSync(jobsFile(), "utf8")) as { jobs: CronJob[] };
+    expect(onDisk.jobs.find((j) => j.id === pinned.id)).toMatchObject({ model: "gemini-3.5-flash-lite" });
+    expect(onDisk.jobs.find((j) => j.id === plain.id)).not.toHaveProperty("model");
+    expect(await listJobs()).toEqual([pinned, plain]);
+    expect((await runCli(["cron", "list", "--no-color"])).stdout).toContain("gemini-3.5-flash-lite");
+
+    // A blank pin is refused, not stored as "no pin".
+    const blank = await runCli(["cron", "add", "--schedule", "@daily", "--prompt", "hello", "--model", "  ", "--json"]);
+    expect(blank.exitCode).toBe(EXIT.CONFIG);
+    expect(readCronJobs(home)).toHaveLength(2);
+  });
+
+  it("[P1-D] a pinned job never runs on another model: run <id> refuses before the runtime, a tick records the refusal", async () => {
+    const job = await add("--model", "gemini-3.5-flash-lite");
+    const f = fakes();
+
+    const manual = await runCli(["cron", "run", job.id, "--json"], { overrides: f.overrides });
+    expect(manual.exitCode).toBe(EXIT.CONFIG);
+    expect(manual.stdout).toContain("gemini-3.5-flash-lite");
+    expect(f.runs).toEqual([]);
+
+    writeCronJobs(home, readCronJobs(home).map((j) => ({ ...j, next_run_at: "2026-09-15T09:00:00.000Z" })));
+    const tick = await runCli(["cron", "start", "--once", "--json"], { overrides: f.overrides });
+    expect(tick.exitCode).toBe(EXIT.OK);
+    expect(f.runs).toEqual([]);
+    const [row] = readCronRuns(home, job.id);
+    expect(row).toMatchObject({ status: "failed", trigger: "scheduled" });
+    expect(row?.summary).toContain("gemini-3.5-flash-lite");
+  });
+
   it("human rendering lists each job on one line without --json", async () => {
     const job = await add("--name", "digest");
     const result = await runCli(["cron", "list", "--no-color"]);

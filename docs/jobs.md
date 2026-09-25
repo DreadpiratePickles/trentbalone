@@ -89,6 +89,16 @@ A step that exhausts its cycles ends `failed` with every error it saw, in order,
 `orchestrator/orchestrator.recovery.test.ts` proves the recovered write is not repeated, the
 second failure is reported with both errors, and a park is left alone.
 
+## A cron job's model pin
+
+| Flag | Stored as | At fire time |
+|---|---|---|
+| `trent cron add --model <id>` | `model` on the job in `<profile>/cron/jobs.json` (listed by `trent cron list`) | The runner passes the pin in the run input; a job without one passes nothing and runs on the model configured when it fires. |
+
+Today the pin is stored and refused, never run on another model, until a per-run model path
+exists, which is the next task: `trent cron run <id>` exits 3 naming the pin before any runtime
+is built, and a scheduled tick records a failed row with the same reason and calls no model.
+
 ## `trent jobs failed [--last N]`
 
 Lists the failed `JobRun` rows of this profile's store, newest first, with `id`, `type`,

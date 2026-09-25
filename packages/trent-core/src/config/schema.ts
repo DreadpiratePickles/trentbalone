@@ -51,6 +51,8 @@ import { RetrievalGateConfigSchema } from "../improve/retrieval-config-schema.js
 import { CronConfigSchema } from "../cron/config-schema.js";
 // [X5] auto recovery
 import { RecoveryConfigSchema } from "../orchestrator/recovery-config-schema.js";
+// [P1-D] connect inherit
+import { ConnectConfigSchema } from "./sections/connect.js";
 
 /** Every name this module exported before the sections moved out; importers are unaffected. */
 export {
@@ -210,6 +212,9 @@ export const TrentConfigSchema = z.object({
   // [X5] auto recovery
   /** Re-runs of a step that failed on a transient provider or tool error (`orchestrator/recovery-config-schema.ts`, docs/jobs.md). */
   agent: RecoveryConfigSchema.default({}),
+  // [P1-D] connect inherit
+  /** `inherit_default`: another profile reads a `trent connect` provider it never connected from the default profile's `.env`, read-only (`config/sections/connect.ts`, docs/connect.md). */
+  connect: ConnectConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   improve: ImproveConfigSchema.default({}),

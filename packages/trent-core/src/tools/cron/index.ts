@@ -69,6 +69,11 @@ export interface CronJob {
   handler?: string;
   /** What the handler receives: the queued call, exactly as it was approved. */
   payload?: Record<string, unknown>;
+  /**
+   * [P1-D] The model this job runs on, pinned at `trent cron add --model`. Absent means the model
+   * configured at fire time. The runner passes it in the run input (`cron/CronRunner.ts`).
+   */
+  model?: string;
 }
 
 export const CRON_TOOL_SCHEMAS: ToolSchema[] = [
@@ -112,6 +117,8 @@ export interface CronJobInput {
   skills?: string[] | undefined;
   enabled_toolsets?: string[] | undefined;
   workdir?: string | undefined;
+  /** [P1-D] A model pin; absent means the configured model at fire time. */
+  model?: string | undefined;
 }
 
 /** `<profile>/cron/jobs.json` — the one file both the tool and `trent cron` read. */
@@ -194,6 +201,7 @@ export function newCronJob(input: CronJobInput, stamp: string): CronJob {
     skills: input.skills,
     enabled_toolsets: input.enabled_toolsets,
     workdir: input.workdir,
+    ...(input.model === undefined ? {} : { model: input.model }),
     enabled: true,
     created_at: stamp,
     updated_at: stamp,

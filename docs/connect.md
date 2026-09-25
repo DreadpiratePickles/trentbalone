@@ -108,7 +108,7 @@ refresh meta` exchanges the current token for a long-lived one (`fb_exchange_tok
 import { tokenResolver, platformTokenResolver } from "@trent/core/connect/index.js";
 
 const token = await tokenResolver("google");
-// { provider, kind, accessToken, expiresAt?, scopes, refreshed, username? }
+// { provider, kind, accessToken, expiresAt?, scopes, refreshed, username?, source }
 ```
 
 `tokenResolver(provider, options?)` returns a credential usable now. For an oauth2 provider a
@@ -128,7 +128,27 @@ adapter raises its own `needs_credentials`.
 
 `connectDoctorLines(store)` gives one `CheckResult`-shaped line per provider (ok, warn on an expired
 token with `trent connect refresh <provider>` as the fix, skip when not connected) for a doctor
-check to emit.
+check to emit. A connected line ends with the file it resolved from.
+
+## One grant per machine: profiles inherit from default
+
+A second profile (`--profile work`, `TRENT_PROFILE=work`) does not redo every `trent connect`. For a
+provider the profile's own `.env` names none of, the resolver reads the default profile's
+`~/.trent/.env`; every result carries `source` (`{ path, profile, inherited }`: a path, never a
+value), and `trent connect list --json`, the business and social `trent doctor` lines and the
+social toolset see the inherited connection the same way. The profile's own file wins whenever it
+names any of the provider's values, even an incomplete set, so connecting a provider in the profile
+(a second Google account, say) takes over from default for that provider only. The unit is the
+provider, never the single key, so one grant's access token is never paired with another's refresh
+token. The default profile's file is only ever read from another profile: it is parsed without
+exporting anything into the process environment, `connect`, `refresh` and `remove` in the profile
+touch its own file only, and an inherited OAuth token is handed out while it is valid but never
+refreshed from the other profile (a refresh writes back, and Square's PKCE refresh tokens are single
+use, so a copy here would strand the default profile). When an inherited token expires the resolver
+exits 4 naming the file and `trent --profile default connect refresh <provider>`. Only `trent
+connect` providers inherit; model keys and gateway bot tokens stay per profile. Turn it off with
+`trent --profile <name> config set connect.inherit_default false`, which edits that profile's
+`config.yaml` (see [configuration.md](configuration.md), "Profiles").
 
 ## What the security audit sees
 

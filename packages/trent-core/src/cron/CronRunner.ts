@@ -63,6 +63,12 @@ export interface CronRunRow {
 export interface CronRunOptions {
   readonly trigger: OrchestrationTrigger;
   readonly signal?: AbortSignal;
+  /**
+   * [P1-D] The job's pinned model (`CronJob.model`). Absent, not undefined, for an unpinned job, so
+   * the model is the one configured at fire time. A `run` that cannot honour a pin must refuse it
+   * rather than run the job on another model.
+   */
+  readonly model?: string;
 }
 
 /** [B1] What a handler answers for a job that names it; the row records it as a run would be. */
@@ -266,7 +272,8 @@ export class CronRunner {
         const answer = await handler(job, { now: startedAt, trigger });
         folded = { summary: answer.summary, failed: answer.failed === true, costCents: answer.costCents ?? 0 };
       } else {
-        for await (const event of this.deps.run(job.prompt, { trigger: "scheduled" })) folded = fold(folded, event);
+        const input: CronRunOptions = { trigger: "scheduled", ...(job.model === undefined ? {} : { model: job.model }) };
+        for await (const event of this.deps.run(job.prompt, input)) folded = fold(folded, event);
       }
     } catch (error) {
       thrown = error;

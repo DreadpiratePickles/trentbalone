@@ -212,6 +212,9 @@
     "agent": {
       "auto_recovery_cycles": 1
     },
+    "connect": {
+      "inherit_default": true
+    },
     "personality": "default",
     "theme": "dark",
     "improve": {
@@ -549,6 +552,9 @@
     },
     "agent": {
       "auto_recovery_cycles": 2
+    },
+    "connect": {
+      "inherit_default": false
     },
     "personality": "fixture-personality",
     "theme": "light",

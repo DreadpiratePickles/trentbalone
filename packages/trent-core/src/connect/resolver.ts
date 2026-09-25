@@ -10,6 +10,14 @@
  * `platformTokenResolver` is the same resolver in the exact shape
  * `apps/web/lib/social/live-platform-adapter.ts` takes as `deps.tokenResolver`, checked by
  * type against that file, so a social toolset passes it through without an adapter of its own.
+ *
+ * [P1-D] A profile other than `default` resolves a provider it never connected from the default
+ * profile's secrets file (`ConnectStore.view`, `connect.inherit_default`), and every result names
+ * the file in `source`. Nothing here writes that file: an inherited OAuth token is handed out while
+ * it is valid and never refreshed from this profile, because a refresh writes back to the file it
+ * read and some providers (Square with PKCE) rotate the refresh token, so a copy kept here would
+ * leave the default profile holding a dead one. Expired, it is an AUTH error naming the file and
+ * the command that renews it there.
  */
 import type { createLiveSocialAdapter } from "@/lib/social/live-platform-adapter";
 import type { SocialPlatform } from "@/lib/social/platform-adapter";
@@ -19,7 +27,7 @@ import { refreshOAuth } from "./flow.js";
 import { withRefreshLock } from "./lock.js";
 import type { FetchLike } from "./oauth.js";
 import { connectProvider, type ConnectAuthKind, type ConnectProviderId, type OAuthEndpoints } from "./providers.js";
-import { ConnectStore, type StoredTokens } from "./store.js";
+import { ConnectStore, type ConnectionSource, type ProviderView, type StoredTokens } from "./store.js";
 
 /** A token inside this window of its expiry is refreshed before it is handed out. */
 export const REFRESH_WINDOW_MS = 5 * 60 * 1000;
@@ -35,6 +43,8 @@ export interface ResolvedToken {
   readonly scopes: readonly string[];
   /** True when this call renewed the token before returning it. */
   readonly refreshed: boolean;
+  /** [P1-D] The secrets file this credential was read from. A path, never a value; absent only from a test stub. */
+  readonly source?: ConnectionSource;
 }
 
 export interface TokenResolverOptions {
@@ -59,22 +69,39 @@ function expired(tokens: StoredTokens, now: Date): boolean {
   return Number.isFinite(expiry) && expiry <= now.getTime();
 }
 
-async function resolveOAuth(store: ConnectStore, manager: ConfigManager, id: ConnectProviderId, options: TokenResolverOptions): Promise<ResolvedToken> {
+function notConnected(id: ConnectProviderId): TrentError {
+  return new TrentError({ code: EXIT.AUTH, operation: `connect.${id}.resolve`, message: `${connectProvider(id).name} is not connected; run trent connect ${id}`, target: id });
+}
+
+function oauthToken(id: ConnectProviderId, tokens: StoredTokens, refreshed: boolean, source: ConnectionSource): ResolvedToken {
+  return { provider: id, kind: "oauth2", accessToken: tokens.accessToken, ...(tokens.expiresAt === undefined ? {} : { expiresAt: tokens.expiresAt }), scopes: tokens.scopes, refreshed, source };
+}
+
+async function resolveOAuth(store: ConnectStore, view: ProviderView, manager: ConfigManager, id: ConnectProviderId, options: TokenResolverOptions): Promise<ResolvedToken> {
   const provider = connectProvider(id);
   const spec = provider.oauth;
   if (spec === undefined) throw new Error(`${id} is not an oauth2 provider`);
   const now = options.now ?? (() => new Date());
-  const notConnected = (): TrentError =>
-    new TrentError({ code: EXIT.AUTH, operation: `connect.${id}.resolve`, message: `${provider.name} is not connected; run trent connect ${id}`, target: id });
+  const source = view.record.source;
 
-  const first = store.tokens(id);
-  if (first === undefined) throw notConnected();
-  if (!needsRefresh(first, now())) return { provider: id, kind: "oauth2", accessToken: first.accessToken, ...(first.expiresAt === undefined ? {} : { expiresAt: first.expiresAt }), scopes: first.scopes, refreshed: false };
+  const first = view.tokens();
+  if (first === undefined) throw notConnected(id);
+  if (source.inherited) {
+    // Borrowed read-only: valid (inside the refresh window too) is handed out, expired is refused.
+    if (!expired(first, now())) return oauthToken(id, first, false, source);
+    throw new TrentError({
+      code: EXIT.AUTH,
+      operation: `connect.${id}.resolve`,
+      message: `the ${provider.name} token this profile inherits from ${source.path} expired, and a profile never writes another's file; renew it there with trent --profile default connect refresh ${id}, or connect this profile with trent connect ${id}`,
+      target: id,
+    });
+  }
+  if (!needsRefresh(first, now())) return oauthToken(id, first, false, source);
 
   return withRefreshLock(manager.getProfileDir(), id, async () => {
     // Re-read under the lock: a peer may have refreshed while this caller waited.
     const tokens = store.tokens(id);
-    if (tokens === undefined) throw notConnected();
+    if (tokens === undefined) throw notConnected(id);
     const fresh = !needsRefresh(tokens, now());
     const renewable = spec.refresh === "exchange_long_lived" || tokens.refreshToken !== undefined;
     if (fresh || !renewable) {
@@ -86,7 +113,7 @@ async function resolveOAuth(store: ConnectStore, manager: ConfigManager, id: Con
           target: id,
         });
       }
-      return { provider: id, kind: "oauth2", accessToken: tokens.accessToken, ...(tokens.expiresAt === undefined ? {} : { expiresAt: tokens.expiresAt }), scopes: tokens.scopes, refreshed: false };
+      return oauthToken(id, tokens, false, source);
     }
     await refreshOAuth(store, id, {
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
@@ -94,8 +121,8 @@ async function resolveOAuth(store: ConnectStore, manager: ConfigManager, id: Con
       now,
     });
     const renewed = store.tokens(id);
-    if (renewed === undefined) throw notConnected();
-    return { provider: id, kind: "oauth2", accessToken: renewed.accessToken, ...(renewed.expiresAt === undefined ? {} : { expiresAt: renewed.expiresAt }), scopes: renewed.scopes, refreshed: true };
+    if (renewed === undefined) throw notConnected(id);
+    return oauthToken(id, renewed, true, source);
   });
 }
 
@@ -103,19 +130,15 @@ export async function tokenResolver(id: ConnectProviderId, options: TokenResolve
   const provider = connectProvider(id);
   const manager = options.manager ?? new ConfigManager();
   const store = new ConnectStore(manager);
-  if (provider.kind === "oauth2") return resolveOAuth(store, manager, id, options);
+  const view = store.view(id);
+  if (provider.kind === "oauth2") return resolveOAuth(store, view, manager, id, options);
 
-  const record = store.read(id);
-  if (!record.connected) {
-    throw new TrentError({ code: EXIT.AUTH, operation: `connect.${id}.resolve`, message: `${provider.name} is not connected; run trent connect ${id}`, target: id });
-  }
+  if (!view.record.connected) throw notConnected(id);
   const secretField = provider.fields.find((f) => f.secret);
   const idField = provider.fields.find((f) => !f.secret);
-  const accessToken = secretField === undefined ? undefined : store.field(id, secretField.env);
-  if (accessToken === undefined) {
-    throw new TrentError({ code: EXIT.AUTH, operation: `connect.${id}.resolve`, message: `${provider.name} is not connected; run trent connect ${id}`, target: id });
-  }
-  const username = idField === undefined ? undefined : store.field(id, idField.env);
+  const accessToken = secretField === undefined ? undefined : view.field(secretField.env);
+  if (accessToken === undefined) throw notConnected(id);
+  const username = idField === undefined ? undefined : view.field(idField.env);
   return {
     provider: id,
     kind: provider.kind,
@@ -123,6 +146,7 @@ export async function tokenResolver(id: ConnectProviderId, options: TokenResolve
     ...(provider.kind === "basic" && username !== undefined ? { username } : {}),
     scopes: [],
     refreshed: false,
+    source: view.record.source,
   };
 }
 
@@ -154,10 +178,11 @@ export function platformTokenResolver(options: TokenResolverOptions = {}): Platf
     const id = PLATFORM_PROVIDER[input.platform];
     if (id === undefined) return undefined;
     const manager = options.manager ?? new ConfigManager();
-    const store = new ConnectStore(manager);
-    if (!store.read(id).connected) return undefined;
+    const view = new ConnectStore(manager).view(id);
+    if (!view.record.connected) return undefined;
     const token = await tokenResolver(id, { ...options, manager });
-    const stored = store.tokens(id);
+    // Re-read from the file the provider resolved from: a refresh above may have rotated it.
+    const stored = view.tokens();
     return {
       accessToken: token.accessToken,
       ...(stored?.refreshToken === undefined ? {} : { refreshToken: stored.refreshToken }),

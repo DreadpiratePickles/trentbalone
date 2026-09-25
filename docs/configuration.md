@@ -183,6 +183,9 @@ cron:
 agent:
   auto_recovery_cycles: 1     # re-runs of a step that failed on a transient provider or tool error; 0 turns it off
 
+connect:
+  inherit_default: true       # another profile reads a provider it never connected (trent connect) from default's .env, read-only
+
 goals:
   verify_on_stop: true        # a turn that edited code needs fresh test or build evidence to finish
   verify_commands:            # what counts as that evidence
@@ -901,6 +904,12 @@ npm run cli -- --profile client-acme config get provider
 `default` uses `~/.trent` directly. Any other name uses `~/.trent/profiles/<name>/`, with its own
 `config.yaml` and its own `.env`. Sessions, skills and agents are per-profile too; an earlier version
 shared them from the base directory across every profile, which is fixed.
+
+One exception, on by default: a provider the profile has not connected itself with `trent connect`
+is read from the default profile's `.env`, read-only (`connect.inherit_default`, see
+[connect.md](connect.md), "One grant per machine"). Model keys and gateway tokens are never
+inherited. `npm run cli -- --profile work config set connect.inherit_default false` turns it off
+for that profile; it is a `config.yaml` key (the `secrets.` prefix is the route into `.env`).
 
 ## The standalone environment contract
 

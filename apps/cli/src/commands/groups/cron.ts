@@ -12,6 +12,12 @@
  * [X4] So does the one `[CRON_FAILURE]` alert an incident sends, to `gateway.owner`, the path
  * the heartbeat's replies take; `cron.failure_alert_after` and `cron.quota_hold_minutes` come
  * from config.
+ *
+ * [P1-D] `add --model <id>` pins a job's model and the runner passes the pin in the run input.
+ * The headless runtime does not take a model per run yet (the configured model reaches the
+ * gateway through a process-wide env bridge, first write wins: `orchestrator/model-env.ts`), so a
+ * pinned job is refused with a CONFIG error naming the pin, never run on another model: `run <id>`
+ * refuses before the runtime is built, and a tick records the refusal as a failed row.
  */
 import process from "node:process";
 import { CronRunner, DEFAULT_TICK_MS, readCronRuns, type CronRunRow } from "@trent/core/cron/index.js";
@@ -46,8 +52,22 @@ function optionalString(opts: Record<string, unknown>, key: string): string | un
   return value.length > 0 ? value : undefined;
 }
 
+/**
+ * [P1-D] A pinned job never runs on a model it did not name. Until the runtime takes a model per
+ * run, every pin is refused here, before a model is called; an unpinned job passes.
+ */
+function refusePin(model: string | undefined, operation: string): void {
+  if (model === undefined) return;
+  throw new TrentError({
+    code: EXIT.CONFIG,
+    operation,
+    message: `this job is pinned to model ${model}, and the runtime runs one configured model per process, so it cannot honour a per-job pin yet; the job was not run and no model was called. Re-add it without --model to run it on the configured model`,
+    target: model,
+  });
+}
+
 /** The validated fields of `add`; throws the same refusals the tool reports, as config errors. */
-function validateAdd(opts: Record<string, unknown>): { name: string | undefined; schedule: string; prompt: string; deliver: string | undefined } {
+function validateAdd(opts: Record<string, unknown>): { name: string | undefined; schedule: string; prompt: string; deliver: string | undefined; model: string | undefined } {
   const prompt = optionalString(opts, "prompt");
   if (prompt === undefined) fail("cron.add", "add requires --prompt <text>");
   const schedule = validateCronExpression(opts.schedule);
@@ -57,7 +77,10 @@ function validateAdd(opts: Record<string, unknown>): { name: string | undefined;
     const reasons = [...new Set(findings.map((f) => `${f.category}: ${f.reason}`))];
     fail("cron.add", `prompt refused (prompt injection / credential scan): ${reasons.join("; ")}. Scheduled prompts run unattended; rewrite the prompt without it`);
   }
-  return { name: optionalString(opts, "name"), schedule: schedule.normalized, prompt, deliver: optionalString(opts, "deliver") };
+  // [P1-D] A blank --model is refused rather than stored as "no pin".
+  const model = optionalString(opts, "model");
+  if (opts.model !== undefined && model === undefined) fail("cron.add", "--model needs a model id, e.g. --model gemini-3.5-flash-lite");
+  return { name: optionalString(opts, "name"), schedule: schedule.normalized, prompt, deliver: optionalString(opts, "deliver"), model };
 }
 
 function findJob(ctx: CommandContext, operation: string, id: string): { jobs: CronJob[]; job: CronJob } {
@@ -115,7 +138,11 @@ async function openRunner(ctx: CommandContext): Promise<{ runner: CronRunner; ru
   const runner = new CronRunner({
     profileDir: configManager.getProfileDir(),
     // [G3.1] A scheduled job's cost is cron's, even when it rides the gateway's runtime.
-    run: (prompt, options) => runtime.run(prompt, { ...options, surface: "cron" }),
+    // [P1-D] A pin the runtime cannot honour is refused; the runner records it as a failed row.
+    run: (prompt, options) => {
+      refusePin(options.model, "cron.run");
+      return runtime.run(prompt, { ...options, surface: "cron" });
+    },
     // [B1] A queued social post is a handled job: the approval bound at queue time is re-read
     // from this profile's rows and the post leaves once through the idempotent path; no prompt.
     handlers: { [SOCIAL_PUBLISH_HANDLER]: createSocialPublishHandler({ profileDir: configManager.getProfileDir(), social: { manager: configManager } }) },
@@ -166,7 +193,8 @@ function runLine(row: CronRunRow, ctx: CommandContext): string {
 function jobLine(job: CronJob, ctx: CommandContext): string {
   const state = job.enabled ? ctx.theme.success("on ") : ctx.theme.meta("off");
   const deliver = job.deliver ? ` ${ctx.theme.meta(`-> ${job.deliver}`)}` : "";
-  return `  ${state} ${ctx.theme.value(job.id)} ${ctx.theme.meta(job.schedule.padEnd(12, " "))} ${ctx.theme.body(job.name)}${deliver}`;
+  const model = job.model ? ` ${ctx.theme.meta(`model ${job.model}`)}` : "";
+  return `  ${state} ${ctx.theme.value(job.id)} ${ctx.theme.meta(job.schedule.padEnd(12, " "))} ${ctx.theme.body(job.name)}${deliver}${model}`;
 }
 
 export const cronSpec: CommandSpec = {
@@ -183,7 +211,7 @@ export const cronSpec: CommandSpec = {
         const d = data as { jobs: CronJob[] };
         const lines = [ctx.theme.emphasis(`SCHEDULED JOBS (${d.jobs.length})`)];
         for (const job of d.jobs) lines.push(jobLine(job, ctx));
-        if (d.jobs.length === 0) lines.push(ctx.theme.meta("  none; trent cron add --schedule <cron> --prompt <text> [--deliver <target>] [--name <name>]"));
+        if (d.jobs.length === 0) lines.push(ctx.theme.meta("  none; trent cron add --schedule <cron> --prompt <text> [--deliver <target>] [--name <name>] [--model <id>]"));
         lines.push(ctx.theme.meta("  a runner executes this schedule while `trent cron start` is running"));
         return lines;
       },
@@ -196,6 +224,7 @@ export const cronSpec: CommandSpec = {
         { flags: "--prompt <text>", description: "What the job should do when it runs; scanned for injection" },
         { flags: "--deliver <target>", description: "Where the result goes, e.g. slack:#channel" },
         { flags: "--name <name>", description: "Display name; defaults to the start of the prompt" },
+        { flags: "--model <id>", description: "Pin the job's model; absent means the model configured at fire time" },
       ],
       run(ctx, opts) {
         if (ctx.dryRun) {
@@ -260,7 +289,7 @@ export const cronSpec: CommandSpec = {
       async run(ctx, _opts, args) {
         const id = String(args[0]);
         if (ctx.dryRun) return { data: { dryRun: true, command: "cron run", id } };
-        findJob(ctx, "cron.run", id);
+        refusePin(findJob(ctx, "cron.run", id).job.model, "cron.run");
         const { runner, close } = await openRunner(ctx);
         try {
           const row = await runner.runNow(id);

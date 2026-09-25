@@ -10,11 +10,14 @@ function result(partial: Omit<CheckResult, "category" | "name">): CheckResult {
   return { category: CATEGORY, name: NAME, ...partial };
 }
 
-/** Read a key from the profile's `.env`, falling back to the process environment. */
+/**
+ * Read a key from the profile's `.env`, falling back to the process environment. `from` names
+ * where it was found, by path or as the environment, for the message; never the value. [P1-D]
+ */
 function readKey(
   ctx: DoctorContext,
   envVars: readonly string[],
-): { envVar: string; value: string } | undefined {
+): { envVar: string; value: string; from: string } | undefined {
   let secrets: Record<string, unknown> = {};
   try {
     secrets = ctx.configManager.loadSecrets() as unknown as Record<string, unknown>;
@@ -22,9 +25,11 @@ function readKey(
     secrets = {};
   }
   for (const envVar of envVars) {
-    const candidate = secrets[envVar] ?? process.env[envVar];
+    const inFile = secrets[envVar];
+    const candidate = inFile ?? process.env[envVar];
     if (typeof candidate === "string" && candidate.trim() !== "") {
-      return { envVar, value: candidate.trim() };
+      const from = inFile !== undefined ? ctx.configManager.getSecretsPath() : "the process environment";
+      return { envVar, value: candidate.trim(), from };
     }
   }
   return undefined;
@@ -86,7 +91,7 @@ export const checkCredentials: DoctorCheck = {
     if (!shape.valid) {
       return result({
         status: "fail",
-        message: `${found.envVar} is not a usable ${credential.label} key: ${shape.reason}.`,
+        message: `${found.envVar} (from ${found.from}) is not a usable ${credential.label} key: ${shape.reason}.`,
         fixHint: `Replace it with a real key: \`trent config set ${found.envVar} <your-api-key>\`.`,
         details: { ...base, shape: "invalid" },
       });
@@ -102,7 +107,7 @@ export const checkCredentials: DoctorCheck = {
     if (outcome === "unauthorized") {
       return result({
         status: "fail",
-        message: `${credential.label} rejected ${found.envVar}: the key is well formed but not accepted.`,
+        message: `${credential.label} rejected ${found.envVar} (from ${found.from}): the key is well formed but not accepted.`,
         fixHint: `Issue a new key in the ${credential.label} console, then \`trent config set ${found.envVar} <your-api-key>\`.`,
         details,
       });
@@ -111,7 +116,7 @@ export const checkCredentials: DoctorCheck = {
     if (outcome === "unreachable") {
       return result({
         status: "warn",
-        message: `${credential.label} was unreachable within ${timeoutMs}ms, so ${found.envVar} could not be verified. Offline is not the same as misconfigured.`,
+        message: `${credential.label} was unreachable within ${timeoutMs}ms, so ${found.envVar} (from ${found.from}) could not be verified. Offline is not the same as misconfigured.`,
         fixHint: "Re-run `trent doctor` once network access to the provider is available.",
         details,
       });
@@ -119,7 +124,7 @@ export const checkCredentials: DoctorCheck = {
 
     return result({
       status: "ok",
-      message: `${found.envVar} authenticated against ${credential.label}.`,
+      message: `${found.envVar} (from ${found.from}) authenticated against ${credential.label}.`,
       details,
     });
   },

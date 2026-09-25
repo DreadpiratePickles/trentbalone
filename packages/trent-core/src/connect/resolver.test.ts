@@ -4,7 +4,7 @@
  * the same provider produce one refresh and both see the new token. `platformTokenResolver` is
  * the same thing in the shape `apps/web/lib/social/live-platform-adapter.ts` injects.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -219,5 +219,142 @@ describe("platformTokenResolver", () => {
 
     expect(server.refreshCount).toBe(1);
     expect(credential?.accessToken).toBe(server.issued.accessTokens[0]);
+  });
+});
+
+/**
+ * [P1-D] A second profile reads a provider it never connected from the default profile's file:
+ * one grant per machine. The profile's own file wins whenever it names the provider at all, the
+ * fallback is never written (not even by a refresh), and `connect.inherit_default: false` turns
+ * the second read off. Every resolution names the file it came from, by path only.
+ */
+describe("inheritance from the default profile's secrets file", () => {
+  const DEFAULT_STRIPE = "sk_test_inherit_default_0123456789";
+  const WORK_STRIPE = "sk_test_inherit_work_0123456789ab";
+  let work: ConfigManager;
+
+  beforeEach(() => {
+    work = new ConfigManager({ baseDir: home, profile: "work" });
+  });
+
+  /** Every path `fs.readFileSync` is asked for while the spy is on. */
+  function recordReads(): { paths: string[]; restore: () => void } {
+    const paths: string[] = [];
+    const original = fs.readFileSync;
+    const spy = vi.spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+      paths.push(String(file));
+      return (original as (...args: unknown[]) => unknown).call(fs, file, options);
+    }) as typeof fs.readFileSync);
+    return { paths, restore: () => spy.mockRestore() };
+  }
+
+  it("a provider absent from the profile's file and present in default's resolves, and the resolution names default's path", async () => {
+    store.writeFields("stripe", { STRIPE_SECRET_KEY: DEFAULT_STRIPE });
+    connectGoogle(inMinutes(60));
+    const before = fs.readFileSync(manager.getSecretsPath(), "utf8");
+    const inherited = { path: manager.getSecretsPath(), profile: "default", inherited: true };
+
+    const stripe = await tokenResolver("stripe", { manager: work });
+    const google = await tokenResolver("google", { ...googleOptions(), manager: work });
+
+    expect(stripe).toMatchObject({ kind: "api_key", accessToken: DEFAULT_STRIPE, source: inherited });
+    expect(google).toMatchObject({ kind: "oauth2", accessToken: ACCESS, refreshed: false, source: inherited });
+    expect(new ConnectStore(work).read("stripe")).toMatchObject({ connected: true, source: inherited });
+    // Read, never written: default's file is byte-identical and the profile got no file of its own.
+    expect(fs.readFileSync(manager.getSecretsPath(), "utf8")).toBe(before);
+    expect(fs.existsSync(work.getSecretsPath())).toBe(false);
+  });
+
+  it("a value present in both resolves from the profile's", async () => {
+    store.writeFields("stripe", { STRIPE_SECRET_KEY: DEFAULT_STRIPE });
+    new ConnectStore(work).writeFields("stripe", { STRIPE_SECRET_KEY: WORK_STRIPE });
+
+    const token = await tokenResolver("stripe", { manager: work });
+
+    expect(token).toMatchObject({ accessToken: WORK_STRIPE, source: { path: work.getSecretsPath(), profile: "work", inherited: false } });
+
+    // A half-finished connect here is this profile's: it does not borrow default's complete pair.
+    store.writeFields("twilio", { TWILIO_ACCOUNT_SID: "ACinheritdefault000000000000000001", TWILIO_AUTH_TOKEN: "twilio-auth-inherit-default" });
+    new ConnectStore(work).writeFields("twilio", { TWILIO_ACCOUNT_SID: "ACinheritwork000000000000000000001" });
+    expect(new ConnectStore(work).read("twilio")).toMatchObject({ connected: false, source: { path: work.getSecretsPath(), inherited: false } });
+    expect((await failure(tokenResolver("twilio", { manager: work }))).code).toBe(EXIT.AUTH);
+  });
+
+  it("with inherit_default false, only the profile's file is read", async () => {
+    store.writeFields("stripe", { STRIPE_SECRET_KEY: DEFAULT_STRIPE });
+    // The control: on by default, the same profile resolves the key from default's file.
+    expect((await tokenResolver("stripe", { manager: work })).source).toMatchObject({ profile: "default", inherited: true });
+
+    work.updateConfig({ connect: { inherit_default: false } });
+    const reads = recordReads();
+    let failed: { code: number; message: string };
+    try {
+      failed = await failure(tokenResolver("stripe", { manager: work }));
+      expect(new ConnectStore(work).read("stripe")).toMatchObject({ connected: false, source: { path: work.getSecretsPath(), profile: "work", inherited: false } });
+    } finally {
+      reads.restore();
+    }
+
+    expect(failed.code).toBe(EXIT.AUTH);
+    expect(failed.message).toContain("trent connect stripe");
+    expect(reads.paths).not.toContain(manager.getSecretsPath());
+  });
+
+  it("the active profile IS default: no double read", async () => {
+    store.writeFields("stripe", { STRIPE_SECRET_KEY: DEFAULT_STRIPE });
+    const own = { path: manager.getSecretsPath(), profile: "default", inherited: false };
+
+    expect((await tokenResolver("stripe", { manager })).source).toEqual(own);
+
+    // A miss is where a naive fallback would read the same file a second time.
+    const reads = recordReads();
+    try {
+      expect(new ConnectStore(manager).read("buffer")).toMatchObject({ connected: false, source: own });
+      expect(reads.paths.filter((p) => p === manager.getSecretsPath())).toHaveLength(1);
+      reads.paths.length = 0;
+      expect((await failure(tokenResolver("buffer", { manager }))).code).toBe(EXIT.AUTH);
+      expect(reads.paths.filter((p) => p === manager.getSecretsPath())).toHaveLength(1);
+    } finally {
+      reads.restore();
+    }
+  });
+
+  it("hands out an inherited oauth2 token while it is valid and never refreshes it from another profile", async () => {
+    connectGoogle(inMinutes(2));
+    const nearing = await tokenResolver("google", { ...googleOptions(), manager: work });
+    expect(nearing).toMatchObject({ accessToken: ACCESS, refreshed: false, source: { profile: "default", inherited: true } });
+
+    connectGoogle(inMinutes(-1));
+    const expiredBytes = fs.readFileSync(manager.getSecretsPath(), "utf8");
+    const failed = await failure(tokenResolver("google", { ...googleOptions(), manager: work }));
+
+    expect(failed.code).toBe(EXIT.AUTH);
+    expect(failed.message).toContain(manager.getSecretsPath());
+    expect(failed.message).toContain("trent --profile default connect refresh google");
+    expect(failed.message).not.toContain(ACCESS);
+    expect(server.refreshCount).toBe(0);
+    expect(fs.readFileSync(manager.getSecretsPath(), "utf8")).toBe(expiredBytes);
+    expect(fs.existsSync(work.getSecretsPath())).toBe(false);
+  });
+
+  it("platformTokenResolver hands an inherited credential over, refresh token included", async () => {
+    connectGoogle(inMinutes(60));
+    const resolve = platformTokenResolver({ ...googleOptions(), manager: work });
+
+    const youtube = await resolve({ companyId: "co_1", platform: "youtube", externalAccountId: "UC123" });
+
+    expect(youtube).toMatchObject({ accessToken: ACCESS, refreshToken: REFRESH, externalAccountId: "UC123" });
+  });
+
+  it("reads default's file without exporting it into this process's environment", async () => {
+    fs.writeFileSync(manager.getSecretsPath(), `STRIPE_SECRET_KEY=${DEFAULT_STRIPE}\nTRENT_FIXTURE_INHERIT_ONLY=fixture-not-exported\n`, { mode: 0o600 });
+    try {
+      const token = await tokenResolver("stripe", { manager: work });
+      expect(token.accessToken).toBe(DEFAULT_STRIPE);
+      expect(process.env.TRENT_FIXTURE_INHERIT_ONLY).toBeUndefined();
+      expect(process.env.STRIPE_SECRET_KEY).toBeUndefined();
+    } finally {
+      delete process.env.TRENT_FIXTURE_INHERIT_ONLY;
+    }
   });
 });

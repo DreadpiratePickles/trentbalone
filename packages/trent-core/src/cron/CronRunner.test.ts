@@ -13,7 +13,7 @@ import { TrentError } from "../errors/index.js";
 import type { OrcEvent } from "../orchestrator/types.js";
 import { cronRunnerActive, cronRunnerLockPath, newCronJob, readCronJobs, writeCronJobs, type CronJob } from "../tools/cron/index.js";
 import { liveWriters } from "../profile/locks.js";
-import { CronRunner, cronRunsPath, readCronRuns, type CronRunRow } from "./CronRunner.js";
+import { CronRunner, cronRunsPath, readCronRuns, type CronRunOptions, type CronRunRow } from "./CronRunner.js";
 
 let profileDir: string;
 let clock: Date;
@@ -257,5 +257,38 @@ describe("CronRunner.start / stop", () => {
     fs.writeFileSync(cronRunnerLockPath(profileDir), JSON.stringify({ pid: process.pid, started_at: "2026-09-15T08:00:00.000Z" }));
     expect(() => fake().runner.start()).toThrow(/already running/);
     expect(liveWriters(profileDir)).toEqual([]);
+  });
+});
+
+describe("[P1-D] per-job model pin", () => {
+  it("a pinned job's run input names the pin; an unpinned job's names nothing", async () => {
+    const inputs: Array<{ prompt: string; options: CronRunOptions }> = [];
+    const runner = new CronRunner({
+      profileDir,
+      now,
+      log: () => undefined,
+      run: (prompt, options) => {
+        inputs.push({ prompt, options });
+        const events = summaryFor(prompt);
+        return (async function* () {
+          for (const e of events) yield e;
+        })();
+      },
+    });
+    const pinned = dueJob({ prompt: "nightly digest on the cheap model", model: "gemini-3.5-flash-lite" });
+    dueJob();
+
+    await runner.tick();
+
+    expect(inputs).toHaveLength(2);
+    const pinnedInput = inputs.find((i) => i.prompt === pinned.prompt);
+    const plainInput = inputs.find((i) => i.prompt !== pinned.prompt);
+    expect(pinnedInput?.options).toEqual({ trigger: "scheduled", model: "gemini-3.5-flash-lite" });
+    // Nothing at all, not `model: undefined`: the gateway resolves the configured model at fire time.
+    expect(plainInput?.options).toEqual({ trigger: "scheduled" });
+    expect(Object.keys(plainInput?.options ?? {})).not.toContain("model");
+
+    await runner.runNow(pinned.id);
+    expect(inputs.at(-1)?.options).toEqual({ trigger: "scheduled", model: "gemini-3.5-flash-lite" });
   });
 });

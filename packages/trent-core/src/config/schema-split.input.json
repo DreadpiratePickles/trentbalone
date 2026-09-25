@@ -92,6 +92,7 @@
   "retrieval": { "min_recall": 0.75 },
   "cron": { "failure_alert_after": 5, "quota_hold_minutes": 45 },
   "agent": { "auto_recovery_cycles": 2 },
+  "connect": { "inherit_default": false },
   "personality": "fixture-personality",
   "theme": "light",
   "improve": {

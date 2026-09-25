@@ -21,7 +21,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const name of Object.keys(process.env)) {
-    if (/^(GOOGLE|STRIPE)_/.test(name)) delete process.env[name];
+    if (/^(GOOGLE|STRIPE|BUFFER)_/.test(name)) delete process.env[name];
   }
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -52,6 +52,25 @@ describe("connectDoctorLines", () => {
     expect(byId.google?.message).toContain("2 scopes");
     const text = JSON.stringify(lines);
     for (const secret of ["sk_test_doctor", "access-doctor", "refresh-doctor", "doctor-client-secret"]) expect(text).not.toContain(secret);
+  });
+
+  it("[P1-D] names the file each connected provider resolved from, and says when it is the default profile's", () => {
+    store.writeFields("stripe", { STRIPE_SECRET_KEY: "sk_test_doctor_inherit_0123456789" });
+    const workManager = new ConfigManager({ baseDir: home, profile: "work" });
+    const work = new ConnectStore(workManager);
+    work.writeFields("buffer", { BUFFER_ACCESS_TOKEN: "buffer-doctor-work-0123456789" });
+    const defaultPath = new ConfigManager({ baseDir: home }).getSecretsPath();
+
+    const byId = Object.fromEntries(connectDoctorLines(work).map((l) => [l.provider, l]));
+
+    expect(byId.stripe).toMatchObject({ status: "ok" });
+    expect(byId.stripe?.message).toContain(defaultPath);
+    expect(byId.stripe?.message).toContain("default profile");
+    expect(byId.buffer).toMatchObject({ status: "ok" });
+    expect(byId.buffer?.message).toContain(workManager.getSecretsPath());
+    expect(byId.buffer?.message).not.toContain("default profile");
+    const text = JSON.stringify(Object.values(byId));
+    for (const secret of ["sk_test_doctor_inherit", "buffer-doctor-work"]) expect(text).not.toContain(secret);
   });
 
   it("reports an oauth2 app that is registered but not authorized as skip pointing at trent connect", () => {

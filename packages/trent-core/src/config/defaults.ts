@@ -202,6 +202,10 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // One re-run of a step that failed on a transient provider or tool error, with the error in
   // its prompt; never for an approval park, a budget stop or a refusal. 0 turns it off.
   agent: { auto_recovery_cycles: 1 },
+  // [P1-D] connect inherit
+  // A second profile reads a `trent connect` provider it never connected from the default
+  // profile's secrets file, read-only: one grant per machine, which is what people want.
+  connect: { inherit_default: true },
   personality: "default",
   theme: "dark",
   // [D0] improvement gates

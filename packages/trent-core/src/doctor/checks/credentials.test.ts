@@ -108,6 +108,23 @@ describe("credentials check", () => {
     }
   });
 
+  it("[P1-D] names the file the key resolved from, or the environment when it came from there", async () => {
+    writeKey(REAL_SHAPED_ANTHROPIC);
+    const fromFile = await checkCredentials.run(context({ fetchImpl: async () => jsonResponse(200) }));
+    expect(fromFile.status).toBe("ok");
+    expect(fromFile.message).toContain(configManager.getSecretsPath());
+
+    // A profile with no file of its own, run with the key exported by the shell.
+    const bare = new ConfigManager({ baseDir: tempDir, profile: "bare" });
+    bare.saveConfig({ ...bare.loadConfig(), provider: "anthropic" });
+    process.env.ANTHROPIC_API_KEY = REAL_SHAPED_ANTHROPIC;
+    const fromEnv = await checkCredentials.run(context({ profile: "bare", configManager: bare, fetchImpl: async () => jsonResponse(200) }));
+    expect(fromEnv.status).toBe("ok");
+    expect(fromEnv.message).toContain("environment");
+    expect(fromEnv.message).not.toContain(bare.getSecretsPath());
+    expect(JSON.stringify([fromFile, fromEnv])).not.toContain(REAL_SHAPED_ANTHROPIC);
+  });
+
   it("fails when the active provider has no key at all", async () => {
     const result = await checkCredentials.run(context());
     expect(result.status).toBe("fail");
