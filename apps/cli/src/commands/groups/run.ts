@@ -26,17 +26,27 @@
  * `--resume <id>` (D2) drives an existing run instead of launching one: a `trent run`, cron tick
  * or heartbeat that was killed mid-step is picked up by `orchestrator.resume`, which re-enqueues
  * what the dead process owed and drains it through the same stream, gates and exit codes.
+ *
+ * [P2-1] `--model <id>` runs the whole run on one model of the profile's provider: the planner, the
+ * critic, the consolidator and every seat. This process is the run's only one, so the pin is handed
+ * to the runtime before it is built and written over every model variable before the libs load
+ * (`orchestrator/model-env.ts` `applyModelPinEnv`). The `system` line and the result name the model
+ * asked for (`model`) and the models the steps actually reported (`models`). A pinned cron job runs
+ * as a child of this command (`../../runtime/child-run.ts`), which sets `TRENT_RUN_SURFACE=cron` so
+ * the child's spend is cron's and its trigger `scheduled`.
  */
 import process from "node:process";
 import { format as formatArgs } from "node:util";
 import { EXIT, TrentError, type ExitCode } from "@trent/core/errors/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
+import { parseModelPin } from "@trent/core/orchestrator/model-env.js";
 import { questionFromEvent } from "@trent/core/tools/human/index.js";
 import { ApprovalGate } from "../../repl/approvals.js";
 import { BudgetLedger, formatCents } from "../../repl/budget.js";
 import { ABORT_REASON } from "../../repl/interrupt.js";
 import { TranscriptRenderer } from "../../repl/render.js";
 import type { ReplConfig } from "../../repl/types.js";
+import { RUN_SURFACE_ENV } from "../../runtime/child-run.js";
 import { createHeadlessRuntime, type HeadlessRuntime } from "../../runtime/headless.js";
 import { releaseOnSignal } from "../../signals.js";
 import { GLYPHS } from "../../ui/index.js";
@@ -61,6 +71,10 @@ type RunResult = {
   cost_cents: number;
   duration_ms: number;
   run_id: string | null;
+  /** [P2-1] The model the run was asked to run on: the `--model` pin, else the configured model. */
+  model: string;
+  /** [P2-1] The distinct models the run's steps reported, first seen first: what actually ran. */
+  models: string[];
   error?: string;
   approval_id?: string;
 };
@@ -89,6 +103,15 @@ function parseCap(raw: unknown): number | undefined {
     fail("--max-cost-cents must be a positive whole number of cents", text);
   }
   return cents;
+}
+
+/** [P2-1] The surfaces a parent may hand this command (a pinned cron job's child); anything else is `run`. */
+const CHILD_SURFACES: ReadonlySet<string> = new Set(["cron"]);
+
+/** [P2-1] Whose run this is: `trent run`'s own, or a scheduled job's run in a child process. */
+function runOrigin(): { surface: string; trigger: "manual" | "scheduled" } {
+  const named = process.env[RUN_SURFACE_ENV]?.trim() ?? "";
+  return CHILD_SURFACES.has(named) ? { surface: named, trigger: "scheduled" } : { surface: "run", trigger: "manual" };
 }
 
 /** The objective: the argument, or everything on stdin when the argument is `-`. */
@@ -179,7 +202,7 @@ interface Drive {
  * One run, start to verdict. Owns the whole streaming loop: the renderer or the JSONL mapper, the
  * cost ledger, the approval gate and the abort. Nothing here decides an approval or invents a cost.
  */
-async function driveRun(ctx: CommandContext, objective: string, format: Format, cap: number | undefined, resumeId?: string): Promise<{
+async function driveRun(ctx: CommandContext, objective: string, format: Format, cap: number | undefined, resumeId?: string, pin?: string): Promise<{
   drive: Drive;
   release: () => Promise<void>;
   emitFinal: (drive: Drive) => void;
@@ -190,10 +213,13 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
   const startedAt = now().getTime();
   // Before the runtime is built: the app's logger fixes its level when its module is evaluated.
   const restoreStdout = ctx.json || format === "stream-json" ? quietStdoutForMachines() : undefined;
+  // [P2-1] Who spends and why: `trent run`'s own, or a pinned cron job's child run.
+  const origin = runOrigin();
   let runtime: HeadlessRuntime;
   try {
     // [G3.1] `surface` names who spends: this run's cost is `trent run`'s on the day's one ledger.
-    runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config, surface: "run" });
+    // [P2-1] The pin is the runtime's before it is built: the libs load on the pinned environment.
+    runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config, surface: origin.surface, ...(pin === undefined ? {} : { model: pin }) });
   } catch (caught) {
     restoreStdout?.();
     throw caught;
@@ -222,6 +248,7 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
   let error: string | undefined = "the run ended without a verdict";
   let runId: string | null = null;
   let approvalId: string | undefined;
+  const models: string[] = []; // [P2-1] what the steps reported, first seen first
   let systemEmitted = false;
   let finish!: () => void;
   const settled = new Promise<void>((resolve) => {
@@ -247,10 +274,10 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
         run_id: event.runId,
         profile: ctx.profile,
         provider: config.provider,
-        model: config.model,
+        model: pin ?? config.model,
         // A resumed run's objective and trigger are the run's own, read off its run_start.
         objective: resumeId === undefined ? objective : event.run?.objective ?? objective,
-        trigger: resumeId === undefined ? "manual" : event.run?.trigger ?? "manual",
+        trigger: resumeId === undefined ? origin.trigger : event.run?.trigger ?? origin.trigger,
         ...(resumeId === undefined ? {} : { resumed: true }),
       }),
     );
@@ -258,10 +285,10 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
 
   /** The stream: a new run, or an existing one picked back up by the orchestrator. */
   const events = (): AsyncIterable<OrcEvent> => {
-    if (resumeId === undefined) return runtime.run(objective, { trigger: "manual", signal: abort.signal });
+    if (resumeId === undefined) return runtime.run(objective, { trigger: origin.trigger, signal: abort.signal, ...(pin === undefined ? {} : { model: pin }) });
     const resume = runtime.orchestrator.resume;
     if (resume === undefined) fail("this runtime's orchestrator cannot resume a run", resumeId);
-    return resume.call(runtime.orchestrator, resumeId, { signal: abort.signal, surface: "run" });
+    return resume.call(runtime.orchestrator, resumeId, { signal: abort.signal, surface: origin.surface });
   };
 
   const write = (event: OrcEvent): void => {
@@ -272,6 +299,8 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
   /** Integer cents off the events that carry them; the REPL's ledger does the arithmetic. */
   const record = (event: OrcEvent): void => {
     if (event.kind !== "step_end" && event.kind !== "consolidate_end") return;
+    const ran = event.step?.model;
+    if (typeof ran === "string" && ran !== "" && !models.includes(ran)) models.push(ran);
     const cost = event.step?.costCents;
     if (typeof cost === "number" && Number.isInteger(cost)) ledger.record(cost);
   };
@@ -343,6 +372,8 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
     cost_cents: ledger.spentCents,
     duration_ms: Math.max(0, now().getTime() - startedAt),
     run_id: runId,
+    model: pin ?? config.model,
+    models,
     ...(error === undefined ? {} : { error }),
     ...(approvalId === undefined ? {} : { approval_id: approvalId }),
   };
@@ -370,21 +401,23 @@ export const runSpec: CommandSpec = {
     { flags: "--format <format>", description: "text (the REPL transcript) or stream-json (one JSON object per line)", defaultValue: "text" },
     { flags: "--max-cost-cents <cents>", description: "Stop the run once it has spent more than this many integer cents" },
     { flags: "--resume <runId>", description: "Resume an existing run that a killed process left running, instead of starting a new one" },
+    { flags: "--model <id>", description: "Run the whole run (planner, critic, consolidator and every seat) on this model of the profile's provider" },
   ],
   async run(ctx, opts, args) {
     const format = parseFormat(opts.format);
     const cap = parseCap(opts.maxCostCents);
     const resumeId = typeof opts.resume === "string" && opts.resume.trim() !== "" ? opts.resume.trim() : undefined;
+    const pin = opts.model === undefined ? undefined : parseModelPin(opts.model); // [P2-1]
     const usage = (message: string): never => {
       throw new TrentError({ code: EXIT.USAGE, operation: "run", message });
     };
     if (ctx.dryRun) {
-      return { data: { dryRun: true, command: "run", objective: String(args[0] ?? ""), resume: resumeId ?? null, format, maxCostCents: cap ?? null } };
+      return { data: { dryRun: true, command: "run", objective: String(args[0] ?? ""), resume: resumeId ?? null, format, maxCostCents: cap ?? null, model: pin ?? null } };
     }
     if (resumeId !== undefined && args[0] !== undefined) usage("run takes an objective or --resume <runId>, not both");
     if (resumeId === undefined && args[0] === undefined) usage("run needs an objective (or - to read one from stdin), or --resume <runId>");
     const objective = resumeId === undefined ? await readObjective(args[0]) : "";
-    const { drive, release, emitFinal } = await driveRun(ctx, objective, format, cap, resumeId);
+    const { drive, release, emitFinal } = await driveRun(ctx, objective, format, cap, resumeId, pin);
     try {
       emitFinal(drive);
       const exit = exitFor(drive.result, drive.stop);

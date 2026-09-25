@@ -16,7 +16,7 @@ import { GatewayManager, type OutboundMessage } from "@trent/core/gateway/index.
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { createCronAdapter, readCronJobs, writeCronJobs, type CronJob } from "@trent/core/tools/cron/index.js";
 import type { CliOverrides } from "../context.js";
-import type { HeadlessRuntime } from "../../runtime/headless.js";
+import type { HeadlessRuntime, HeadlessRuntimeDeps } from "../../runtime/headless.js";
 import { runCli } from "../index.js";
 
 let home: string;
@@ -76,7 +76,9 @@ function fakeSignals(order: string[]) {
 
 interface Fakes {
   overrides: CliOverrides;
-  runs: Array<{ objective: string; trigger: string }>;
+  /** [P2-1] One entry per runtime built: the model it was built for and the surface it names, when any. */
+  built: Array<{ model?: string; surface?: string }>;
+  runs: Array<{ objective: string; trigger: string; model?: string }>;
   sent: Array<{ platform: string; message: OutboundMessage }>;
   managers: GatewayManager[];
   cleanup: ReturnType<typeof vi.fn>;
@@ -99,17 +101,25 @@ function fakes(events?: OrcEvent[]): Fakes {
     order.push("cleanup");
     return undefined;
   });
-  const runtime = {
-    run: (objective: string, options: { trigger: string }) => {
-      runs.push({ objective, trigger: options.trigger });
-      const stream = events ?? [ev("run_start"), ev("run_done", { run: { status: "completed", summary: `brief for: ${objective}` } })];
-      return (async function* () {
-        for (const event of stream) yield event;
-      })();
-    },
-    cleanup,
-  } as unknown as HeadlessRuntime;
+  const built: Fakes["built"] = [];
+  // [P2-1] A runtime runs on the model it was built for: its steps report that model, as the app's do.
+  const runtimeFor = (deps: HeadlessRuntimeDeps): HeadlessRuntime =>
+    ({
+      run: (objective: string, options: { trigger: string; model?: string }) => {
+        runs.push({ objective, trigger: options.trigger, ...(options.model === undefined ? {} : { model: options.model }) });
+        const stream = events ?? [
+          ev("run_start"),
+          ev("step_end", { step: { id: "stp_1", agentRole: "analyst", status: "completed", model: deps.model ?? "configured-model", costCents: 2 } }),
+          ev("run_done", { run: { status: "completed", summary: `brief for: ${objective}` } }),
+        ];
+        return (async function* () {
+          for (const event of stream) yield event;
+        })();
+      },
+      cleanup,
+    }) as unknown as HeadlessRuntime;
   return {
+    built,
     runs,
     sent,
     managers,
@@ -119,7 +129,10 @@ function fakes(events?: OrcEvent[]): Fakes {
     overrides: {
       signals,
       now: () => new Date("2026-09-15T09:00:00.000Z"),
-      gatewayRuntime: async () => runtime,
+      gatewayRuntime: async (deps) => {
+        built.push({ ...(deps.model === undefined ? {} : { model: deps.model }), ...(deps.surface === undefined ? {} : { surface: deps.surface }) });
+        return runtimeFor(deps);
+      },
       gatewayManager: (configManager, options) => {
         const manager = new GatewayManager(configManager, options);
         vi.spyOn(manager, "send").mockImplementation(async (platform, message) => {
@@ -356,22 +369,35 @@ describe("trent cron", () => {
     expect(readCronJobs(home)).toHaveLength(2);
   });
 
-  it("[P1-D] a pinned job never runs on another model: run <id> refuses before the runtime, a tick records the refusal", async () => {
-    const job = await add("--model", "gemini-3.5-flash-lite");
+  it("[P2-1] a pinned job runs on its pin and records it", async () => {
+    const PIN = "gemini-3.6-flash";
+    const job = await add("--model", PIN, "--deliver", "slack:#sales");
     const f = fakes();
 
     const manual = await runCli(["cron", "run", job.id, "--json"], { overrides: f.overrides });
-    expect(manual.exitCode).toBe(EXIT.CONFIG);
-    expect(manual.stdout).toContain("gemini-3.5-flash-lite");
-    expect(f.runs).toEqual([]);
+    expect(manual.exitCode).toBe(EXIT.OK);
+    // One runtime, built for the pin (a child `trent run --model` in production); no in-process one.
+    expect(f.built).toEqual([{ model: PIN, surface: "cron" }]);
+    expect(f.runs).toEqual([{ objective: job.prompt, trigger: "scheduled", model: PIN }]);
+    const data = JSON.parse(manual.stdout) as { id: string; run: CronRunRow };
+    expect(data.run).toMatchObject({ status: "completed", trigger: "manual", model: PIN, summary: `brief for: ${job.prompt}`, costCents: 2 });
+    expect(readCronRuns(home, job.id)).toEqual([data.run]);
+    expect(f.sent.map((s) => s.message.text)).toEqual([`brief for: ${job.prompt}`]);
+    expect(f.cleanup).toHaveBeenCalledTimes(1);
 
+    // A tick with an unpinned job beside it: the unpinned one runs in-process, the pinned one on its pin.
+    const plain = await add("--name", "plain digest");
     writeCronJobs(home, readCronJobs(home).map((j) => ({ ...j, next_run_at: "2026-09-15T09:00:00.000Z" })));
     const tick = await runCli(["cron", "start", "--once", "--json"], { overrides: f.overrides });
     expect(tick.exitCode).toBe(EXIT.OK);
-    expect(f.runs).toEqual([]);
-    const [row] = readCronRuns(home, job.id);
-    expect(row).toMatchObject({ status: "failed", trigger: "scheduled" });
-    expect(row?.summary).toContain("gemini-3.5-flash-lite");
+    expect(f.built.slice(1)).toEqual([{}, { model: PIN, surface: "cron" }]);
+    expect(f.runs.slice(1)).toEqual([
+      { objective: job.prompt, trigger: "scheduled", model: PIN },
+      { objective: plain.prompt, trigger: "scheduled" },
+    ]);
+    expect(readCronRuns(home, job.id).at(-1)).toMatchObject({ status: "completed", trigger: "scheduled", model: PIN });
+    expect(readCronRuns(home, plain.id)[0]).not.toHaveProperty("model");
+    expect((await runCli(["cron", "runs", job.id, "--no-color"])).stdout).toContain(PIN);
   });
 
   it("human rendering lists each job on one line without --json", async () => {

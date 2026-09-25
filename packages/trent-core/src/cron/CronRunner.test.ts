@@ -291,4 +291,27 @@ describe("[P1-D] per-job model pin", () => {
     await runner.runNow(pinned.id);
     expect(inputs.at(-1)?.options).toEqual({ trigger: "scheduled", model: "gemini-3.5-flash-lite" });
   });
+
+  it("[P2-1] a pinned job's history row records the model it ran on; an unpinned row names none", async () => {
+    const runner = fake().runner;
+    const pinned = dueJob({ prompt: "nightly digest on the cheap model", model: "gemini-3.6-flash" });
+    const plain = dueJob();
+
+    await runner.tick();
+    await runner.runNow(pinned.id);
+
+    const rows = readCronRuns(profileDir, pinned.id);
+    expect(rows.map((row) => [row.trigger, row.status, row.model])).toEqual([
+      ["scheduled", "completed", "gemini-3.6-flash"],
+      ["manual", "completed", "gemini-3.6-flash"],
+    ]);
+    expect(readCronRuns(profileDir, plain.id)[0]).not.toHaveProperty("model");
+  });
+
+  it("[P2-1] a pinned run that fails still records its pin, so the failed row says which model failed", async () => {
+    const runner = fake({ events: () => [ev("run_start"), ev("run_failed", { detail: "404 model gemini-9 not found" })] }).runner;
+    const pinned = dueJob({ model: "gemini-9" });
+    await runner.tick();
+    expect(readCronRuns(profileDir, pinned.id)[0]).toMatchObject({ status: "failed", model: "gemini-9", summary: "Run failed: 404 model gemini-9 not found" });
+  });
 });

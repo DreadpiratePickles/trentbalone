@@ -47,7 +47,15 @@ export interface ModelTierConfig {
 }
 
 /** The model block `applyModelEnv` reads: the configured provider/model plus the optional tiers. */
-export type ModelEnvConfig = OrchestratorModelConfig & { readonly models?: ModelTierConfig };
+export type ModelEnvConfig = OrchestratorModelConfig & {
+  readonly models?: ModelTierConfig;
+  // [P2-1] the per-run model pin
+  /**
+   * This process's pin (`trent run --model <id>`, a pinned cron job's child run): written over every
+   * model variable, operator values included, so every call of the run names it (`applyModelPinEnv`).
+   */
+  readonly pin?: string;
+};
 
 /** The app's three model tiers, in the order the per-provider variable lists use. */
 export const MODEL_TIERS = ["haiku", "sonnet", "opus"] as const;
@@ -150,7 +158,8 @@ export interface ModelEnvReport {
 function setIfUnset(name: string, value: string, written: string[], kept: string[]): void {
   const current = process.env[name];
   if (current !== undefined && current.trim() !== "") {
-    kept.push(name);
+    // [P2-1] A variable the pin wrote is reported as written, not as an operator's value kept.
+    if (!written.includes(name)) kept.push(name);
     return;
   }
   process.env[name] = value;
@@ -167,7 +176,11 @@ export function applyModelEnv(config: ModelEnvConfig | undefined): ModelEnvRepor
   if (!config) return { written, kept, unsupportedProvider: false };
 
   const provider = config.provider.trim().toLowerCase();
-  const model = config.model.trim();
+  // [P2-1] A pin goes first and beats everything below, which only fills what is unset; the alias
+  // route is handed the pin as its one model.
+  const pinned = config.pin === undefined ? [] : applyModelPinEnv(config.pin, provider, config.models?.fallback_on_pin === true);
+  written.push(...pinned);
+  const model = (config.pin ?? config.model).trim();
   // Prices are not routing, so they are written whatever the provider turns out to be; so are the
   // [P1-C] call policies (fallback_on_pin, reasoning_effort), which the gateway reads per call.
   const pricing = [...applyModelOverridesEnv(config.overrides), ...applyModelCallEnv(config.models)];
@@ -180,13 +193,13 @@ export function applyModelEnv(config: ModelEnvConfig | undefined): ModelEnvRepor
     // The alias writes one model into every OpenAI tier variable. Configured tiers are written
     // FIRST so the alias keeps them (it only fills what is unset); the base URL, the key and the
     // provider identity it resolves are untouched (A0.3).
-    const tierWritten: string[] = [];
+    const tierWritten: string[] = [...pinned]; // [P2-1] the pin's names, so they are not reported kept
     const tierKept: string[] = [];
     if (config.models !== undefined) applyTierEnv(alias.provider, config, tierWritten, tierKept);
     const report = applyProviderAliasEnv(alias.alias, model);
     return {
       written: [...tierWritten, ...report.written, ...pricing],
-      kept: [...tierKept, ...report.kept],
+      kept: [...tierKept, ...report.kept.filter((name) => !pinned.includes(name))], // [P2-1]
       unsupportedProvider: false,
       ...(report.unroutable === undefined ? {} : { unroutableProvider: report.unroutable }),
     };
@@ -226,4 +239,68 @@ export function assertRoutableModel(report: ModelEnvReport, provider: string | u
     target: name,
     context: { provider: name, envKeys: modelEnvKeys(name) },
   });
+}
+
+// [P2-1] the per-run model pin ────────────────────────────────────────────────────────────────
+
+/** Longest model id a pin accepts; real ids are well under it, and argv and env stay bounded. */
+const MAX_MODEL_PIN_LENGTH = 200;
+/** A model id: letters, digits and `. _ : / @ + -`, not starting with `-` (it would parse as a flag). */
+const MODEL_PIN_PATTERN = /^[A-Za-z0-9][\w.:/@+-]*$/;
+/** What `anthropic/<m>` loses on openrouter: the app builds openrouter seat names as `anthropic/${anthropic tier}`. */
+const OPENROUTER_ANTHROPIC_PREFIX = "anthropic/";
+/** The gateway's workbench route reads these for the planner, the critic and the consolidator. */
+const WORKBENCH_MODEL_VARS = ["WORKBENCH_PLANNER_MODEL", "WORKBENCH_EXECUTOR_MODEL"] as const;
+
+function pinError(message: string, target: string): TrentError {
+  return new TrentError({ code: EXIT.CONFIG, operation: "model.pin", message, target });
+}
+
+/**
+ * [P2-1] A pin as the flag or the job record carries it, trimmed and checked: a model id, not a
+ * blank, not a sentence, not something a child process would read as a flag.
+ */
+export function parseModelPin(raw: unknown): string {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  if (value === "") throw pinError("--model needs a model id of the profile's provider, e.g. --model gemini-3.6-flash", String(raw ?? ""));
+  if (value.length > MAX_MODEL_PIN_LENGTH || !MODEL_PIN_PATTERN.test(value)) {
+    throw pinError(`--model must be one model id (letters, digits and . _ : / @ + -, at most ${MAX_MODEL_PIN_LENGTH} characters)`, value.slice(0, MAX_MODEL_PIN_LENGTH));
+  }
+  return value;
+}
+
+/**
+ * [P2-1] Writes a per-run pin over every model variable a run's calls read, the operator's values
+ * included: the provider's tier variables (every seat, whatever its tier, and the critic follower),
+ * the gateway's workbench models (the planner, the critic and the consolidator) and the preferred
+ * provider. Unless `models.fallback_on_pin` is true the provider chain is narrowed to the pin's
+ * provider, so neither the app's seat loop nor the gateway answers a pinned call from another
+ * provider's model (P1-C's rule, for every call of the run). Call it in a process that runs ONLY the
+ * pinned run, before the libs load: `trent run --model`, and a pinned cron job's child of it.
+ * Returns the names written; values are never logged.
+ */
+export function applyModelPinEnv(pin: string, provider: string, fallbackOnPin = false): string[] {
+  const model = parseModelPin(pin);
+  const key = provider.trim().toLowerCase();
+  const routed = resolveProviderAlias(key)?.provider ?? key;
+  if (!ROUTER_PROVIDERS.has(routed)) return []; // `assertRoutableModel` refuses the provider itself
+  let tierModel = model;
+  let tierProvider = routed;
+  if (routed === "openrouter") {
+    if (!model.startsWith(OPENROUTER_ANTHROPIC_PREFIX) || model.length === OPENROUTER_ANTHROPIC_PREFIX.length) {
+      throw pinError(`openrouter builds its seat models as anthropic/<model>, so a pin there must be one (got ${model}); a seat could not run on it`, model);
+    }
+    tierModel = model.slice(OPENROUTER_ANTHROPIC_PREFIX.length);
+    tierProvider = "anthropic";
+  }
+  const written: string[] = [];
+  const force = (name: string, value: string): void => {
+    process.env[name] = value;
+    written.push(name);
+  };
+  for (const name of tierVars(tierProvider)) force(name, tierModel);
+  for (const name of WORKBENCH_MODEL_VARS) force(name, model);
+  force("MODEL_PREFERRED_PROVIDER", routed);
+  if (!fallbackOnPin) force("MODEL_ALLOWED_PROVIDERS", routed);
+  return written;
 }

@@ -14,13 +14,15 @@
  * from config.
  *
  * [P1-D] `add --model <id>` pins a job's model and the runner passes the pin in the run input.
- * The headless runtime does not take a model per run yet (the configured model reaches the
- * gateway through a process-wide env bridge, first write wins: `orchestrator/model-env.ts`), so a
- * pinned job is refused with a CONFIG error naming the pin, never run on another model: `run <id>`
- * refuses before the runtime is built, and a tick records the refusal as a failed row.
+ * [P2-1] A pinned job runs on its pin: a runtime is on one model for the life of its process (the
+ * app resolves every model name from the environment and freezes some at load), so the job runs on
+ * a runtime built on the pin — in production a child `trent run - --model <id>` whose event stream
+ * the runner folds like any other (`../../runtime/child-run.ts`). The history row records the pin.
+ * An unpinned job runs in-process as before; `run <id>` on a pinned job builds no in-process runtime.
  */
 import process from "node:process";
-import { CronRunner, DEFAULT_TICK_MS, readCronRuns, type CronRunRow } from "@trent/core/cron/index.js";
+import { CronRunner, DEFAULT_TICK_MS, readCronRuns, type CronRunOptions, type CronRunRow, type CronRunnerDeps } from "@trent/core/cron/index.js";
+import type { ConfigManager } from "@trent/core/config/index.js";
 import { SOCIAL_PUBLISH_HANDLER, createSocialPublishHandler } from "@trent/core/tools/social/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { GatewayManager } from "@trent/core/gateway/index.js";
@@ -35,8 +37,12 @@ import {
 import type { CommandSpec } from "../registry.js";
 import type { CommandContext } from "../context.js";
 import { cronIncidentsSpec, cronQueueSpec } from "./cron-queue.js";
+import { acquireProfileWriter } from "@trent/core/profile/locks.js";
+import { parseModelPin } from "@trent/core/orchestrator/model-env.js";
+import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import type { ReplConfig } from "../../repl/types.js";
-import { createHeadlessRuntime, type HeadlessRuntime } from "../../runtime/headless.js";
+import { openChildRun, type ChildRun } from "../../runtime/child-run.js";
+import { createHeadlessRuntime, type HeadlessRuntime, type HeadlessRuntimeDeps } from "../../runtime/headless.js";
 import { releaseOnSignal, type SignalTarget } from "../../signals.js";
 
 function fail(operation: string, message: string, target?: string): never {
@@ -52,20 +58,6 @@ function optionalString(opts: Record<string, unknown>, key: string): string | un
   return value.length > 0 ? value : undefined;
 }
 
-/**
- * [P1-D] A pinned job never runs on a model it did not name. Until the runtime takes a model per
- * run, every pin is refused here, before a model is called; an unpinned job passes.
- */
-function refusePin(model: string | undefined, operation: string): void {
-  if (model === undefined) return;
-  throw new TrentError({
-    code: EXIT.CONFIG,
-    operation,
-    message: `this job is pinned to model ${model}, and the runtime runs one configured model per process, so it cannot honour a per-job pin yet; the job was not run and no model was called. Re-add it without --model to run it on the configured model`,
-    target: model,
-  });
-}
-
 /** The validated fields of `add`; throws the same refusals the tool reports, as config errors. */
 function validateAdd(opts: Record<string, unknown>): { name: string | undefined; schedule: string; prompt: string; deliver: string | undefined; model: string | undefined } {
   const prompt = optionalString(opts, "prompt");
@@ -77,9 +69,9 @@ function validateAdd(opts: Record<string, unknown>): { name: string | undefined;
     const reasons = [...new Set(findings.map((f) => `${f.category}: ${f.reason}`))];
     fail("cron.add", `prompt refused (prompt injection / credential scan): ${reasons.join("; ")}. Scheduled prompts run unattended; rewrite the prompt without it`);
   }
-  // [P1-D] A blank --model is refused rather than stored as "no pin".
-  const model = optionalString(opts, "model");
-  if (opts.model !== undefined && model === undefined) fail("cron.add", "--model needs a model id, e.g. --model gemini-3.5-flash-lite");
+  // [P1-D] A blank --model is refused rather than stored as "no pin". [P2-1] So is anything that is
+  // not one model id, because the pin becomes a `--model` argument of a child `trent run`.
+  const model = opts.model === undefined ? undefined : parseModelPin(opts.model);
   return { name: optionalString(opts, "name"), schedule: schedule.normalized, prompt, deliver: optionalString(opts, "deliver"), model };
 }
 
@@ -118,13 +110,43 @@ function parseDeliverTarget(target: string): { platform: string; channelId: stri
 }
 
 /**
+ * [P2-1] One pinned job's run, on a runtime built on its pin and released when the run ends: a child
+ * `trent run --model` in production, or whatever `ctx.overrides.gatewayRuntime` builds in a test.
+ */
+async function* runPinned(ctx: CommandContext, deps: HeadlessRuntimeDeps & { readonly model: string }, prompt: string, options: CronRunOptions): AsyncGenerator<OrcEvent> {
+  const open = ctx.overrides.gatewayRuntime ?? ((d: typeof deps): Promise<ChildRun> => Promise.resolve(openChildRun({ profile: ctx.profile, model: d.model, surface: "cron", log: (line) => ctx.err(line) })));
+  const pinned: ChildRun = await open(deps);
+  try {
+    yield* pinned.run(prompt, { ...options, surface: "cron" });
+  } finally {
+    await pinned.cleanup();
+  }
+}
+
+/**
+ * [P2-1] A cron runner's `run`: a pinned job on a runtime built on its pin, an unpinned one on this
+ * process's `runtime`, both charged to `cron`. Exported so every runner (the service daemon's too)
+ * honours a pin the same way instead of refusing it.
+ */
+export function cronJobRun(ctx: CommandContext, input: { readonly configManager: ConfigManager; readonly config: ReplConfig; readonly runtime: Pick<HeadlessRuntime, "run"> | undefined }): CronRunnerDeps["run"] {
+  return (prompt, options) => {
+    if (options.model !== undefined) return runPinned(ctx, { configManager: input.configManager, config: input.config, surface: "cron", model: options.model }, prompt, options);
+    if (input.runtime === undefined) throw new TrentError({ code: EXIT.CONFIG, operation: "cron.run", message: "this runner was opened for a pinned job only" });
+    return input.runtime.run(prompt, { ...options, surface: "cron" });
+  };
+}
+
+/**
  * The runner over this profile's schedule, on the headless runtime. The gateway manager is built
  * on first delivery only, so a job with no `deliver` target never touches the gateway config.
+ * [P2-1] `inProcess: false` (`run <id>` on a pinned job) builds no in-process runtime; the command
+ * still registers as a live writer on the profile for as long as it writes the job's history.
  */
-async function openRunner(ctx: CommandContext): Promise<{ runner: CronRunner; runtime: HeadlessRuntime; close: () => Promise<void> }> {
+async function openRunner(ctx: CommandContext, { inProcess = true }: { inProcess?: boolean } = {}): Promise<{ runner: CronRunner; close: () => Promise<void> }> {
   const configManager = ctx.config();
   const config = configManager.loadConfig();
-  const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config: config as unknown as ReplConfig });
+  const runtime = inProcess ? await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config: config as unknown as ReplConfig }) : undefined;
+  const releaseWriter = runtime === undefined ? acquireProfileWriter(configManager.getProfileDir(), "cron") : undefined;
   const buildManager = ctx.overrides.gatewayManager ?? ((cm, options) => new GatewayManager(cm, options));
   let manager: GatewayManager | undefined;
   const owner = config.gateway.owner;
@@ -138,11 +160,8 @@ async function openRunner(ctx: CommandContext): Promise<{ runner: CronRunner; ru
   const runner = new CronRunner({
     profileDir: configManager.getProfileDir(),
     // [G3.1] A scheduled job's cost is cron's, even when it rides the gateway's runtime.
-    // [P1-D] A pin the runtime cannot honour is refused; the runner records it as a failed row.
-    run: (prompt, options) => {
-      refusePin(options.model, "cron.run");
-      return runtime.run(prompt, { ...options, surface: "cron" });
-    },
+    // [P2-1] A pinned job runs on a runtime built on its pin; an unpinned one on this process's.
+    run: cronJobRun(ctx, { configManager, config: config as unknown as ReplConfig, runtime }),
     // [B1] A queued social post is a handled job: the approval bound at queue time is re-read
     // from this profile's rows and the post leaves once through the idempotent path; no prompt.
     handlers: { [SOCIAL_PUBLISH_HANDLER]: createSocialPublishHandler({ profileDir: configManager.getProfileDir(), social: { manager: configManager } }) },
@@ -162,11 +181,11 @@ async function openRunner(ctx: CommandContext): Promise<{ runner: CronRunner; ru
   });
   return {
     runner,
-    runtime,
     close: async () => {
       runner.stop();
       await manager?.stopAll();
-      await runtime.cleanup();
+      await runtime?.cleanup();
+      releaseWriter?.();
     },
   };
 }
@@ -187,7 +206,8 @@ function runLine(row: CronRunRow, ctx: CommandContext): string {
   const status = row.status === "completed" ? ctx.theme.success("completed") : ctx.theme.meta("failed   ");
   const cost = row.costCents !== undefined ? ` ${ctx.theme.meta(`${row.costCents}c`)}` : "";
   const delivery = row.deliveryError !== undefined ? ` ${ctx.theme.meta(`delivery failed: ${row.deliveryError}`)}` : "";
-  return `  ${status} ${ctx.theme.value(row.startedAt)} ${ctx.theme.meta(row.trigger.padEnd(9, " "))}${cost} ${ctx.theme.body(row.summary)}${delivery}`;
+  const model = row.model !== undefined ? ` ${ctx.theme.meta(`model ${row.model}`)}` : ""; // [P2-1]
+  return `  ${status} ${ctx.theme.value(row.startedAt)} ${ctx.theme.meta(row.trigger.padEnd(9, " "))}${cost}${model} ${ctx.theme.body(row.summary)}${delivery}`;
 }
 
 function jobLine(job: CronJob, ctx: CommandContext): string {
@@ -289,8 +309,9 @@ export const cronSpec: CommandSpec = {
       async run(ctx, _opts, args) {
         const id = String(args[0]);
         if (ctx.dryRun) return { data: { dryRun: true, command: "cron run", id } };
-        refusePin(findJob(ctx, "cron.run", id).job.model, "cron.run");
-        const { runner, close } = await openRunner(ctx);
+        // [P2-1] A pinned prompt job runs on a runtime of its own, so this process builds none.
+        const { job } = findJob(ctx, "cron.run", id);
+        const { runner, close } = await openRunner(ctx, { inProcess: job.model === undefined || job.handler !== undefined });
         try {
           const row = await runner.runNow(id);
           if (row.status === "failed") {

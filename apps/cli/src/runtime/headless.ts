@@ -36,6 +36,8 @@ import {
   type OrchestrationTrigger,
   type Orchestrator,
 } from "@trent/core/orchestrator/index.js";
+import { parseModelPin } from "@trent/core/orchestrator/model-env.js";
+import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { guardAppDatabase, type AppStoreState, type FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
 import { acquireProfileWriter } from "@trent/core/profile/locks.js";
 import { runSessionHooks } from "@trent/core/hooks/index.js";
@@ -139,6 +141,14 @@ export interface HeadlessRuntimeDeps {
    * A runtime that names none tags its runs `unknown` — recorded, so the gap is visible.
    */
   readonly surface?: string;
+  // [P2-1] the per-run model pin
+  /**
+   * The ONE model this process runs on (`trent run --model <id>`, a pinned cron job's child): handed
+   * to the orchestrator as `model.pin`, which writes it over every model variable before the libs
+   * load, so the planner, the critic, the consolidator and every seat call it. The libs freeze a
+   * process's models, so a runtime is pinned for its life; absent, the configured models apply.
+   */
+  readonly model?: string;
 }
 
 export interface HeadlessRunOptions {
@@ -157,11 +167,19 @@ export interface HeadlessRunOptions {
    * spend would read as the gateway's. Defaults to the runtime's surface.
    */
   readonly surface?: string;
+  /**
+   * [P2-1] The model this ONE run must run on (a pinned cron job passes its pin). Honoured only by a
+   * runtime built on that pin (`HeadlessRuntimeDeps.model`); any other runtime refuses the run with
+   * a configuration error before the orchestrator is called, never runs it on another model.
+   */
+  readonly model?: string;
 }
 
 export interface HeadlessRuntime {
   readonly orchestrator: Orchestrator;
   readonly companyId: string;
+  /** [P2-1] The model this runtime is pinned to, or undefined when it runs the configured models. */
+  readonly model: string | undefined;
   /**
    * A2.1: the workspace this session was launched in, as the trust record and the scanner left it.
    * Its blocks are already in the stable tier; a surface reads this to say what was NOT loaded.
@@ -221,6 +239,8 @@ export async function openStore(databaseUrl: string): Promise<OpenedStore> {
 }
 
 export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<HeadlessRuntime> {
+  // [P2-1] A malformed pin is refused before anything is opened or registered.
+  const pin = deps.model === undefined ? undefined : parseModelPin(deps.model);
   const config = deps.config ?? (deps.configManager.loadConfig() as unknown as ReplConfig);
   const profileDir = deps.configManager.getProfileDir();
   const workspace = deps.workspace ?? process.cwd();
@@ -337,7 +357,8 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     const modelTiers = tiers && Object.keys(tiers).length > 0 ? { models: tiers } : {};
     // A variable, not a literal in the call: the tier block is carried to `applyModelEnv`, which
     // reads it, through a dep type that declares provider, model and prices only.
-    const model = { provider: config.provider, model: config.model, ...modelOverrides, ...modelTiers };
+    // [P2-1] A pinned runtime carries its pin; an unpinned one sends exactly what it sent before.
+    const model = { provider: config.provider, model: config.model, ...modelOverrides, ...modelTiers, ...(pin === undefined ? {} : { pin }) };
     const orchestrator = createOrchestrator({
       // The APP's database, never the core store's: a usable postgres URL is handed on unchanged
       // and `applyStandaloneEnv` keeps it; anything else hands on nothing, so the app's
@@ -381,6 +402,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     return {
       orchestrator,
       companyId,
+      model: pin,
       workspace: workspaceContext,
       store,
       durable,
@@ -394,6 +416,8 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       checkpoints,
       goals,
       run: (objective, options = {}) => {
+        // [P2-1] Before the turn opens: a run on a model this process did not load is not this run.
+        if (options.model !== undefined && options.model !== pin) throw pinnedElsewhere(options.model, pin);
         // [E1] One run is one turn: `trent run`, a cron tick and a heartbeat are each a single
         // checkpoint, and a REPL turn is the run it starts. Opening a turn nothing has written
         // into yet is a no-op, so a surface that also marks its own boundary cannot skip a number.
@@ -443,4 +467,16 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     releaseWriter();
     throw error;
   }
+}
+
+// [P2-1] the per-run model pin
+/** The refusal for a run naming a model its runtime was not built on. Names models, never secrets. */
+function pinnedElsewhere(requested: string, pin: string | undefined): TrentError {
+  const runsOn = pin === undefined ? "the configured models" : `model ${pin}`;
+  return new TrentError({
+    code: EXIT.CONFIG,
+    operation: "run.model",
+    message: `this run asks for model ${requested}, and this runtime runs ${runsOn} for the life of its process; a run on another model needs its own process (trent run --model ${requested}). Nothing was run and no model was called`,
+    target: requested,
+  });
 }

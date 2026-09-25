@@ -93,11 +93,17 @@ second failure is reported with both errors, and a park is left alone.
 
 | Flag | Stored as | At fire time |
 |---|---|---|
-| `trent cron add --model <id>` | `model` on the job in `<profile>/cron/jobs.json` (listed by `trent cron list`) | The runner passes the pin in the run input; a job without one passes nothing and runs on the model configured when it fires. |
+| `trent cron add --model <id>` | `model` on the job in `<profile>/cron/jobs.json` (listed by `trent cron list`) | The whole run (planner, critic, consolidator and every seat) runs on the pin, and the history row records it as `model` (`trent cron runs <id>`); a job without one runs on the models configured when it fires. |
 
-Today the pin is stored and refused, never run on another model, until a per-run model path
-exists, which is the next task: `trent cron run <id>` exits 3 naming the pin before any runtime
-is built, and a scheduled tick records a failed row with the same reason and calls no model.
+A pinned job runs in its own process: the runner starts `trent run - --model <id> --format
+stream-json` on the same profile, hands it the prompt on stdin, and folds the child's events into
+the job's history row exactly as it folds an in-process run, so the summary, the cost, the delivery
+and the incident book are unchanged. It is a process of its own because a runtime is on one model
+for its life: the app resolves every model name from the environment and freezes some of them when
+it loads. The child's spend is charged to `cron`, and a run that ends any way but `completed`
+records a failed row with the child's own reason. The pin must be one model id of the profile's
+provider; `models.fallback_on_pin` decides whether a pinned call may fall back to another provider
+(by default it may not). The same pin is available to a one-off run as `trent run --model <id>`.
 
 ## `trent jobs failed [--last N]`
 

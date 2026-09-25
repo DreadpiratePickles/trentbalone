@@ -272,6 +272,7 @@ echo "Draft the launch email" | npm run cli -- run -   # objective on stdin
 npm run cli -- run "..." --format stream-json          # one JSON object per line
 npm run cli -- run "..." --json                        # the final result object only; the app's own stdout lines go to stderr
 npm run cli -- run "..." --max-cost-cents 200          # stop the run once it passes $2.00
+npm run cli -- run "..." --model gemini-3.6-flash      # the whole run on one model of the profile's provider
 ```
 
 A run that belongs to a goal ends by running that goal's shell quality gates, and a turn that edited
@@ -297,15 +298,24 @@ field switches every line. Nothing is renamed, dropped or invented here: a tool 
 The last line is `{"type":"result","status":"completed","cost_cents":0,"duration_ms":0,"run_id":"..."}`,
 whose keys are the session store's own (`run_id`, `cost_cents`, `duration_ms`). `status` is
 `completed`, `failed`, `paused` (an approval, and then `approval_id` names it) or `cancelled` (the
-cost cap, or Ctrl+C), and `error` carries the reason when there is one. Costs are integer cents,
-never dollars.
+cost cap, or Ctrl+C), and `error` carries the reason when there is one. `model` is the model the run
+was asked to run on (the `--model` pin, else the configured model) and `models` the distinct models
+its steps reported, which is what actually ran. Costs are integer cents, never dollars.
+
+`--model <id>` runs the whole run on one model of the profile's provider: the planner, the critic,
+the consolidator and every seat, whatever tier the profile gives each of them, and over a model
+variable set in the shell. `trent run` is the run's only process, so the pin is written into the
+environment before the runtime loads, and unless `models.fallback_on_pin` is true no call of the run
+may fall back to another provider. The `system` line names the pin, every `step_end` carries it in
+`step.model`, and so do the run's rows in the spend ledger (`trent usage --by model`). A pinned cron
+job ([jobs.md](jobs.md)) runs through this same flag in a child process.
 
 | Exit | Meaning |
 |---|---|
 | 0 | The run completed |
 | 1 | The run failed; the `result` line carries the reason in `error` |
 | 2 | No objective was given |
-| 3 | Configuration: an unknown `--format`, a `--max-cost-cents` that is not a positive whole number, an empty stdin |
+| 3 | Configuration: an unknown `--format`, a `--max-cost-cents` that is not a positive whole number, a `--model` that is not one model id, an empty stdin |
 | 6 | The run passed `--max-cost-cents` and was stopped |
 | 7 | The run is parked on an approval; `approval_id` names it |
 | 130 | Interrupted (Ctrl+C); the run was aborted and the runtime released |

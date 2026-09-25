@@ -58,6 +58,8 @@ export interface CronRunRow {
   costCents?: number;
   /** Set when the run finished but `deliver` threw; the summary is still on disk here. */
   deliveryError?: string;
+  /** [P2-1] The model a pinned job's run was pinned to (`CronJob.model`); absent for an unpinned or handled job. */
+  model?: string;
 }
 
 export interface CronRunOptions {
@@ -65,8 +67,9 @@ export interface CronRunOptions {
   readonly signal?: AbortSignal;
   /**
    * [P1-D] The job's pinned model (`CronJob.model`). Absent, not undefined, for an unpinned job, so
-   * the model is the one configured at fire time. A `run` that cannot honour a pin must refuse it
-   * rather than run the job on another model.
+   * the model is the one configured at fire time. [P2-1] A `run` honours it by running the job on a
+   * runtime built on the pin (the CLI: a child `trent run --model`); a runtime built on anything else
+   * refuses it rather than run the job on another model.
    */
   readonly model?: string;
 }
@@ -288,6 +291,8 @@ export class CronRunner {
       trigger,
       summary: threw !== undefined ? `Run failed: ${threw}` : (folded.summary ?? ""),
       ...(folded.costCents > 0 ? { costCents: folded.costCents } : {}),
+      // [P2-1] The run input's pin, so the history says which model each run was on.
+      ...(job.handler === undefined && job.model !== undefined ? { model: job.model } : {}),
     };
     if (!failed && job.deliver !== undefined && row.summary !== "" && this.deps.deliver !== undefined) {
       try {
