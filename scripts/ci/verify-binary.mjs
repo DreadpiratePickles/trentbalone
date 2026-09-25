@@ -127,7 +127,16 @@ function scratch(label) {
   delete env.DATABASE_URL;
   // Windows: the binary's SQLite and lock handles can outlive its exit by a few hundred ms, and an
   // immediate rmdir then fails with EBUSY (seen twice in CI on 2026-09-25). Node retries these.
-  const rm = (dir) => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+  // The retries were not enough on 2026-09-25 either (the runner's file scanner can hold a fresh
+  // file past the window), and every assertion has already passed by the time dispose runs, so a
+  // scratch dir that cannot be removed is a warning, never a failed job.
+  const rm = (dir) => {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+    } catch (err) {
+      console.warn(`warn: could not remove scratch dir ${dir}: ${err?.code ?? err}`);
+    }
+  };
   return { home, cwd, env, dispose: () => { rm(home); rm(cwd); } };
 }
 
