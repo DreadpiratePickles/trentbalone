@@ -11,6 +11,7 @@ import { ConfigManager, FleetManager, PersonalityManager, SessionManager, Skills
 import type { createOrchestrator as createRealOrchestrator } from "@trent/core/orchestrator/index.js";
 import { createModelGateway } from "@trent/core/model-gateway/index.js";
 import { InMemoryTraceStore } from "@trent/core/traces/index.js";
+import { acquireProfileWriter } from "@trent/core/profile/locks.js";
 import { autoTheme, canUseRawMode, terminalWidth, type Theme } from "../ui/index.js";
 import { playBoot, type BootStdin } from "../ui/boot.js";
 import { ReplEngine, bindApprovalAnswers, type ReplRunner } from "./engine.js";
@@ -184,6 +185,9 @@ export class ClassicRepl {
       io.exit(BOOT_INTERRUPT_EXIT_CODE);
       return;
     }
+    // A live writer on the profile from here to exit, before the transcript is first written, so
+    // `trent sessions prune` and the other maintenance commands refuse while this session is up.
+    const releaseWriter = acquireProfileWriter(this.#configManager.getProfileDir(), "repl");
 
     // The conversation before the object graph: a resumed session's recap belongs on screen
     // whether or not the store, the proxy or the sandboxes come up.
@@ -206,6 +210,9 @@ export class ClassicRepl {
       buildAdapters: this.#deps.buildAdapters,
       startEgress: this.#deps.startEgress,
       probeDocker: this.#deps.probeDocker,
+    }).catch((error: unknown) => {
+      releaseWriter();
+      throw error;
     });
     const { tools, store, durable, fleetMemory, orchestrator, companyId } = runtime;
     writeLine(toolsStatusLine(tools, theme));
@@ -246,7 +253,10 @@ export class ClassicRepl {
     const exit = (code: number): void => {
       // Ctrl+C is a key here (raw mode), so the proxy and the sandboxes are stopped BEFORE the
       // process goes; `process.exit` would otherwise leave the listener and the containers behind.
-      exiting ??= runtime.cleanup().finally(() => io.exit(code));
+      exiting ??= runtime.cleanup().finally(() => {
+        releaseWriter();
+        io.exit(code);
+      });
     };
 
     try {
@@ -295,6 +305,7 @@ export class ClassicRepl {
     } finally {
       // A throw or stdin ending: release now. After Ctrl+C the exit path already owns the cleanup.
       await (exiting ?? runtime.cleanup());
+      releaseWriter();
     }
   }
 

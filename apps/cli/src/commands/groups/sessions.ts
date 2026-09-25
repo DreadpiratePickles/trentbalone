@@ -11,6 +11,7 @@ import { SessionManager, searchSessions, SESSION_SEARCH_DEFAULT_LIMIT, type Sess
 import { exportSession, type ExportedSession } from "@trent/core/telemetry/index.js";
 import { MCP_CONNECTOR_GALLERY, mcpConnectorTemplateById } from "@trent/core/mcp/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
+import { refuseUnderLiveWriters } from "@trent/core/profile/locks.js";
 import type { CommandSpec } from "../registry.js";
 
 const MCP_CONFIG_KEY = "mcp_servers";
@@ -201,6 +202,7 @@ export const sessionsSpec: CommandSpec = {
       options: [
         { flags: "--max-age-days <days>", description: "Delete sessions older than this" },
         { flags: "--max-count <n>", description: "Keep at most this many sessions" },
+        { flags: "--force", description: "Prune even while a REPL, gateway, cron runner or run is writing this profile (one warning line)" },
       ],
       run(ctx, opts) {
         const manager = new SessionManager(ctx.config());
@@ -218,6 +220,9 @@ export const sessionsSpec: CommandSpec = {
             },
           };
         }
+        // Deleting transcripts under a live session can take the file it is appending to: refuse,
+        // naming each writer, unless --force (`@trent/core/profile/locks`).
+        refuseUnderLiveWriters({ profileDirs: [ctx.config().getProfileDir()], operation: "sessions.prune", force: opts.force === true, warn: (line) => ctx.err(line) });
         const result = manager.pruneSessions(bounds);
         return { data: { removed: result.removed, removedCount: result.removed.length, kept: result.kept } };
       },

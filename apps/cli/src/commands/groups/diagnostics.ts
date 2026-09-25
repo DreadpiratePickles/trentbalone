@@ -18,6 +18,7 @@ import {
 } from "@trent/core/doctor/index.js";
 import { SetupWizard, type SetupMode } from "@trent/core/setup/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
+import { refuseUnderLiveWriters } from "@trent/core/profile/locks.js";
 import type { CommandContext } from "../context.js";
 import type { CommandSpec, JsonData } from "../registry.js";
 import { GLYPHS, type AgentState } from "../../ui/index.js";
@@ -90,6 +91,7 @@ export const doctorSpec: CommandSpec = {
     { flags: "--mode <mode>", description: "standalone or connected" },
     { flags: "--health-url <url>", description: "Connected mode health endpoint" },
     { flags: "--timeout <ms>", description: "Per-probe deadline in milliseconds" },
+    { flags: "--force", description: "With --fix: remediate even while a REPL, gateway, cron runner or run is writing this profile" },
   ],
   async run(ctx, opts) {
     if (ctx.dryRun) {
@@ -107,6 +109,9 @@ export const doctorSpec: CommandSpec = {
     const options = runnerOptions(ctx, opts);
 
     if (opts.fix === true) {
+      // Remediation writes the profile (modes, directories, config); the read-only doctor never
+      // refuses, --fix does while another process writes it (`@trent/core/profile/locks`).
+      refuseUnderLiveWriters({ profileDirs: [ctx.config().getProfileDir()], operation: "doctor.fix", force: opts.force === true, warn: (line) => ctx.err(line) });
       const fixer = new FixRunner(ctx.config(), options);
       const { actions, newReport } = await fixer.runFixes();
       return {

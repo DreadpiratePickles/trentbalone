@@ -10,7 +10,9 @@
  * consumers get one parseable object at startup instead of waiting for a process that never ends.
  */
 
+import { ConfigManager } from "@trent/core/config/index.js";
 import { GatewayManager, linkRunApprovals, type RunApprovalLink } from "@trent/core/gateway/index.js";
+import { gatewayRunningError, liveGatewayHolder, profileLockPath, type ProfileLockHolder } from "@trent/core/profile/locks.js";
 import { egressBindHosts, TokenManager } from "@trent/core/egress/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import type { CommandContext } from "../context.js";
@@ -34,6 +36,21 @@ import {
 
 export { a2aSpec, acpSpec } from "./protocol-commands.js";
 
+/** Every profile on this host whose gateway lock names a live process: the host-level view. */
+function gatewaysOnHost(manager: ConfigManager): Array<{ profile: string } & ProfileLockHolder> {
+  return manager.listProfiles().flatMap((profile) => {
+    const holder = liveGatewayHolder(new ConfigManager({ baseDir: manager.getBaseDir(), profile }).getProfileDir());
+    return holder === null ? [] : [{ profile, ...holder }];
+  });
+}
+
+interface GatewayLockView {
+  readonly running: boolean;
+  readonly pid?: number;
+  readonly label?: string;
+  readonly startedAt?: string;
+}
+
 export const gatewaySpec: CommandSpec = {
   name: "gateway",
   description: "Messaging gateway: platform status, credentials and listener",
@@ -42,20 +59,33 @@ export const gatewaySpec: CommandSpec = {
       name: "status",
       description: "Show which messaging platforms are configured and their designated agent",
       run(ctx) {
-        const status = new GatewayManager(ctx.config()).getStatus();
+        const manager = ctx.config();
+        const status = new GatewayManager(manager).getStatus();
         const platforms = Object.entries(status).map(([id, info]) => ({
           id,
           name: info.name,
           configured: info.configured,
           designatedAgent: info.designatedAgent,
         }));
+        // Whether a gateway holds this profile's lock (the pid to stop), and which profiles on this
+        // host run one: one gateway per profile, several per host (`@trent/core/profile/locks`).
+        const holder = liveGatewayHolder(manager.getProfileDir());
+        const gateway: GatewayLockView = holder === null ? { running: false } : { running: true, ...holder };
         return {
-          data: { count: platforms.length, configured: platforms.filter((p) => p.configured).length, platforms },
+          data: { count: platforms.length, configured: platforms.filter((p) => p.configured).length, platforms, gateway, gateways: gatewaysOnHost(manager) },
         };
       },
       render(data, ctx) {
-        const d = data as { platforms: { id: string; configured: boolean; designatedAgent: string }[] };
+        const d = data as { platforms: { id: string; configured: boolean; designatedAgent: string }[]; gateway: GatewayLockView; gateways: Array<{ profile: string; pid: number }> };
         const lines = [ctx.theme.emphasis("MESSAGING GATEWAY")];
+        lines.push(
+          d.gateway.running
+            ? `  ${ctx.theme.success("running")}   ${ctx.theme.value(`pid ${String(d.gateway.pid)}`)} ${ctx.theme.meta(`${d.gateway.label ?? ""} since ${d.gateway.startedAt ?? "?"}`)}`
+            : `  ${ctx.theme.meta("not running on this profile")}`,
+        );
+        for (const other of d.gateways.filter((g) => g.profile !== ctx.profile)) {
+          lines.push(`  ${ctx.theme.meta(`also running on profile ${other.profile}:`)} ${ctx.theme.value(`pid ${String(other.pid)}`)}`);
+        }
         for (const p of d.platforms) {
           const mark = p.configured ? ctx.theme.success("connected") : ctx.theme.meta("not set  ");
           lines.push(`  ${mark} ${ctx.theme.value(p.id.padEnd(14, " "))} ${ctx.theme.meta(p.designatedAgent)}`);
@@ -108,6 +138,11 @@ export const gatewaySpec: CommandSpec = {
             },
           };
         }
+        // One gateway per profile: a live holder of this profile's gateway lock is refused here,
+        // before a runtime, a proxy or a sandbox exists. The manager takes the lock itself when it
+        // starts, so a gateway that slips in after this check is still refused below.
+        const holder = liveGatewayHolder(configManager.getProfileDir());
+        if (holder !== null) throw gatewayRunningError("gateway.start", holder, profileLockPath(configManager.getProfileDir(), "gateway"));
         // The same object graph the REPL runs on, with no terminal: every message that passes the
         // pairing gate becomes a real orchestrated run, and its consolidated summary is the reply.
         // A gated step on any run this runtime executes becomes a card to `gateway.owner`, and
@@ -155,7 +190,14 @@ export const gatewaySpec: CommandSpec = {
           await manager.stopAll();
           await runtime.cleanup();
         };
-        const started = await manager.startAllConfigured();
+        let started: string[];
+        try {
+          started = await manager.startAllConfigured();
+        } catch (error) {
+          // Refused by the profile's gateway lock: nothing this command built may outlive the refusal.
+          await shutdown();
+          throw error;
+        }
         if (started.length === 0) {
           // Nothing is listening, so the process exits: the proxy and the sandboxes go first.
           await shutdown();

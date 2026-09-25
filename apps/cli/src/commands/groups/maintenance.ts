@@ -3,8 +3,10 @@
  */
 
 import fs from "node:fs";
+import { ConfigManager } from "@trent/core/config/index.js";
 import { UpdateChecker } from "@trent/core/updater/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
+import { refuseUnderLiveWriters } from "@trent/core/profile/locks.js";
 import { CLI_VERSION, type CommandSpec } from "../registry.js";
 
 export const updateSpec: CommandSpec = {
@@ -34,6 +36,7 @@ export const uninstallSpec: CommandSpec = {
   options: [
     { flags: "--yes", description: "Confirm removal; required, since this deletes data" },
     { flags: "--all-profiles", description: "Remove the whole Trent base directory" },
+    { flags: "--force", description: "Remove even while a REPL, gateway, cron runner or run is writing a profile being removed" },
   ],
   run(ctx, opts) {
     const manager = ctx.config();
@@ -57,6 +60,13 @@ export const uninstallSpec: CommandSpec = {
         target,
       });
     }
+    // Deleting a profile out from under a live gateway or REPL is the worst version of maintenance
+    // under a writer. The default profile's directory IS the base directory, which holds every
+    // named profile, so removing it (or --all-profiles) checks the writers of all of them.
+    const profileDirs = target === manager.getBaseDir()
+      ? manager.listProfiles().map((profile) => new ConfigManager({ baseDir: manager.getBaseDir(), profile }).getProfileDir())
+      : [target];
+    refuseUnderLiveWriters({ profileDirs, operation: "uninstall", force: opts.force === true, warn: (line) => ctx.err(line) });
     const existed = fs.existsSync(target);
     if (existed) fs.rmSync(target, { recursive: true, force: true });
     return { data: { removed: target, existed } };

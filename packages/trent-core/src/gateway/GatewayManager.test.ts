@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ConfigManager } from "../config/ConfigManager.js";
+import { EXIT, TrentError } from "../errors/index.js";
 import { GatewayManager } from "./GatewayManager.js";
 import { WebhookServer } from "./WebhookServer.js";
 import { FileGatewayStore, MemoryGatewayStore } from "./store/GatewayStore.js";
@@ -331,5 +332,61 @@ describe("GatewayManager double-texting policy", () => {
     await m.handleInbound(inbound("a@example.com", "/stop"));
     await first;
     expect(log).toEqual(["one:start", "one:end:aborted"]);
+  });
+});
+
+describe("GatewayManager: one gateway per profile (profile/locks.ts)", () => {
+  let base: string;
+  let server: FakeServer;
+  const managers: GatewayManager[] = [];
+
+  beforeEach(async () => {
+    base = fs.mkdtempSync(path.join(os.tmpdir(), "trent-gateway-lock-"));
+    server = new FakeServer();
+    botApi(server, []);
+    await server.start();
+  });
+
+  afterEach(async () => {
+    for (const m of managers.splice(0)) await m.stopAll();
+    await server.stop();
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  /** A manager on `profile` under the shared base dir, with Telegram configured against the fake Bot API. */
+  function build(profile?: string): GatewayManager {
+    const m = new GatewayManager(new ConfigManager({ baseDir: base, ...(profile === undefined ? {} : { profile }) }), {
+      store: new MemoryGatewayStore(),
+      adapterContext: { baseUrls: { telegram: server.baseUrl }, settings: { TELEGRAM_BOT_TOKEN: TOKEN } },
+      drainIntervalMs: 20,
+    });
+    managers.push(m);
+    return m;
+  }
+
+  it("a second start on the same profile refuses naming the first pid and starts no adapter", async () => {
+    const first = build();
+    expect(await first.startAllConfigured()).toEqual(["telegram"]);
+    const second = build();
+    const adapterStart = vi.spyOn(second.getAdapter("telegram")!, "start");
+    const refusal = await second.startAllConfigured().then(() => undefined, (error: unknown) => error);
+    expect(refusal).toBeInstanceOf(TrentError);
+    expect((refusal as TrentError).code).toBe(EXIT.CONFIG);
+    expect((refusal as TrentError).message).toContain(`pid ${process.pid}`);
+    expect(adapterStart).not.toHaveBeenCalled();
+  });
+
+  it("a start on a different profile dir is allowed", async () => {
+    const main = build();
+    const work = build("work");
+    expect(await main.startAllConfigured()).toEqual(["telegram"]);
+    expect(await work.startAllConfigured()).toEqual(["telegram"]);
+  });
+
+  it("stopAll releases the lock, so the next start on the profile succeeds", async () => {
+    const first = build();
+    await first.startAllConfigured();
+    await first.stopAll();
+    expect(await build().startAllConfigured()).toEqual(["telegram"]);
   });
 });

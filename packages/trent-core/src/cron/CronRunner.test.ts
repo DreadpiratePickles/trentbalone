@@ -12,6 +12,7 @@ import path from "node:path";
 import { TrentError } from "../errors/index.js";
 import type { OrcEvent } from "../orchestrator/types.js";
 import { cronRunnerActive, cronRunnerLockPath, newCronJob, readCronJobs, writeCronJobs, type CronJob } from "../tools/cron/index.js";
+import { liveWriters } from "../profile/locks.js";
 import { CronRunner, cronRunsPath, readCronRuns, type CronRunRow } from "./CronRunner.js";
 
 let profileDir: string;
@@ -241,5 +242,20 @@ describe("CronRunner.start / stop", () => {
     f.runner.start();
     expect(JSON.parse(fs.readFileSync(cronRunnerLockPath(profileDir), "utf8"))).toMatchObject({ pid: process.pid });
     f.runner.stop();
+  });
+
+  it("a running runner is a live writer on the profile, so maintenance refuses; stop releases it, a refused start holds nothing", () => {
+    const f = fake();
+    f.runner.start();
+    try {
+      expect(liveWriters(profileDir)).toEqual([expect.objectContaining({ pid: process.pid, label: "cron" })]);
+    } finally {
+      f.runner.stop();
+    }
+    expect(liveWriters(profileDir)).toEqual([]);
+
+    fs.writeFileSync(cronRunnerLockPath(profileDir), JSON.stringify({ pid: process.pid, started_at: "2026-09-15T08:00:00.000Z" }));
+    expect(() => fake().runner.start()).toThrow(/already running/);
+    expect(liveWriters(profileDir)).toEqual([]);
   });
 });

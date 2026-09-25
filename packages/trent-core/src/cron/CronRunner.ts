@@ -17,6 +17,7 @@ import process from "node:process";
 import { NODE_IO, atomicWriteFileSync, type ConfigIO } from "../config/atomic-fs.js";
 import { EXIT, TrentError } from "../errors/index.js";
 import type { OrcEvent, OrchestrationTrigger } from "../orchestrator/types.js";
+import { acquireProfileWriter } from "../profile/locks.js";
 import { StructuredLogger } from "../telemetry/logger.js";
 import {
   cronRunnerActive,
@@ -160,6 +161,8 @@ export class CronRunner {
   private readonly historyLimit: number;
   private timer: ReturnType<typeof setInterval> | undefined;
   private ticking: Promise<TickResult> | undefined;
+  /** Set while started: this process's writer registration on the profile (`profile/locks.ts`). */
+  private releaseWriter: (() => void) | undefined;
 
   constructor(deps: CronRunnerDeps) {
     this.deps = deps;
@@ -368,6 +371,9 @@ export class CronRunner {
     const file = cronRunnerLockPath(this.deps.profileDir);
     if (!this.io.existsSync(path.dirname(file))) this.io.mkdirSync(path.dirname(file), { recursive: true });
     atomicWriteFileSync(this.io, file, `${JSON.stringify({ pid: process.pid, started_at: this.now().toISOString() })}\n`, RUNS_FILE_MODE);
+    // A ticking runner writes the profile (jobs.json, run history, the runs it launches), so it is a
+    // live writer: `trent sessions prune` and the other maintenance commands refuse while it runs.
+    this.releaseWriter = acquireProfileWriter(this.deps.profileDir, "cron");
     this.timer = setInterval(() => {
       this.tick().catch((error: unknown) => {
         this.logger.error("cron.tick.failed", { reason: error instanceof Error ? error.message : String(error) });
@@ -384,6 +390,8 @@ export class CronRunner {
     const file = cronRunnerLockPath(this.deps.profileDir);
     const lock = readCronRunnerLock(this.deps.profileDir, this.deps.io);
     if (lock?.pid === process.pid && this.io.existsSync(file)) this.io.unlinkSync(file);
+    this.releaseWriter?.();
+    this.releaseWriter = undefined;
     this.logger.info("cron.runner.stopped", { pid: process.pid });
   }
 

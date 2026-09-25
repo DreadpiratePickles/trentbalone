@@ -96,6 +96,59 @@ the adapters, the proxy and the sandboxes before the process exits with 130. The
 interrupt (`apps/cli/src/signals.ts`), so the binary's own Ctrl+C handler waits for that release
 instead of exiting on top of it; a second Ctrl+C exits at once.
 
+## One gateway per profile
+
+Two `gateway start` on one profile used to attach every adapter twice, so each Telegram or Discord
+message was answered twice. The manager now takes the profile's gateway lock before any adapter
+starts (`packages/trent-core/src/profile/locks.ts`), and `gateway start` checks it before it builds
+a runtime: a second start on the same profile exits 3 naming the running one's pid and starts
+nothing. Different profiles may each run a gateway (`--profile work`), one per profile, several per
+host.
+
+The lock is `<profile>/locks/gateway.lock`, one JSON object `{ pid, startedAt, label, hostname }`,
+mode 0600 in a 0700 directory, created with `O_EXCL` so of two racing starts exactly one wins. A
+holder is alive while `kill(pid, 0)` succeeds or fails with `EPERM`; a dead pid (`ESRCH`), or a file
+naming this process's own pid that it does not hold (a pid reused after a restart), is stale and
+taken over. `stopAll`, Ctrl+C, SIGTERM and a normal exit release it; a process killed outright
+leaves a file naming a dead pid, which the next start takes over. The hostname is shown, never used
+to judge liveness, so one profile directory shared by two machines is not supported.
+
+`gateway status` names the holder, and every other profile on this host with a gateway up (`--json`
+carries them as `gateway` and `gateways`):
+
+```
+MESSAGING GATEWAY
+  running   pid 75380 gateway since 2026-09-25T21:23:05.845Z
+  also running on profile work: pid 75411
+```
+
+## Maintenance refuses under a live writer
+
+The REPL, `gateway start`, `cron start`, `heartbeat start` and `trent run` (everything built on the
+headless runtime) register their process as a writer on the profile for as long as they run:
+`<profile>/locks/writers/<pid>.lock`, one file per process, its label listing the surfaces in it
+(`repl`, `gateway`, `session+cron`). The commands that rewrite or delete profile state read that
+set first and, while any other live process is in it, exit 3 naming each pid and label, having
+touched nothing:
+
+| Command | Why it refuses |
+|---|---|
+| `trent sessions prune` | deletes transcripts a live session may be appending to |
+| `trent fleet import` | writes `trent.db`, the agents and skills directories and `config.yaml` |
+| `trent doctor --fix` | rewrites modes, directories and config; plain `doctor` is read-only and never refuses |
+| `trent uninstall` | deletes the profile; the default profile's directory is the base directory, so every profile's writers count |
+
+```
+error: sessions.prune: refusing: another process is writing this profile: pid 75875 (session+cron); stop it first, or pass --force (<profile>/locks/writers)
+  exit code: 3
+```
+
+`--force` on each goes ahead after one `warning:` line naming the writers. A writer file naming a
+dead pid never blocks, and the next writer to start removes it. The command's own process never
+blocks itself. `trent brain import` and `brain forget` are not maintenance: they are the founder's
+writes through the brain's one write path, which already serialises with seat writes under the
+memory lock, so they do not refuse.
+
 ## The approval bridge
 
 `packages/trent-core/src/gateway/ApprovalBridge.ts` is wired to the approval gate, which is durable
@@ -223,5 +276,3 @@ turn of its own. The REPL applies the same three modes from `repl.double_text_po
 - A published run against every live platform. The live tests exist but skip without credentials;
   only the wire tests run in CI.
 - A `gateway` check in `trent doctor` that probes a configured platform end to end.
-- A clean release of the runtime on Ctrl+C: `apps/cli/src/index.ts` exits on SIGINT before the
-  gateway's shutdown runs. Use SIGTERM for a graceful stop.

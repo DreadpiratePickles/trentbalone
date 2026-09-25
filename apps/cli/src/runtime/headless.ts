@@ -37,6 +37,7 @@ import {
   type Orchestrator,
 } from "@trent/core/orchestrator/index.js";
 import { guardAppDatabase, type AppStoreState, type FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
+import { acquireProfileWriter } from "@trent/core/profile/locks.js";
 import { runSessionHooks } from "@trent/core/hooks/index.js";
 import { loadWorkspaceContext, type WorkspaceContext } from "@trent/core/workspace-context/index.js";
 import { createVersionPinHook, type VersionPinHook } from "@trent/core/fleet/index.js";
@@ -223,6 +224,9 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
   const config = deps.config ?? (deps.configManager.loadConfig() as unknown as ReplConfig);
   const profileDir = deps.configManager.getProfileDir();
   const workspace = deps.workspace ?? process.cwd();
+  // Every surface built on this graph writes the profile, so it is a live writer on it from here
+  // to `cleanup()`: the maintenance commands refuse while it is up (`@trent/core/profile/locks`).
+  const releaseWriter = acquireProfileWriter(profileDir, deps.surface ?? "session");
   // First, before any wiring can import a module from `apps/web`: is the APP's database usable in
   // this process? The answer decides what the orchestrator is told below and, when it is no, fills
   // the app's `globalThis.__prisma` seam so `apps/web/lib/db.ts` never constructs a Postgres
@@ -425,6 +429,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
         closeGoalSession(goals);
         await goals.cleanup();
         await tools.cleanup();
+        releaseWriter();
       },
     };
   } catch (error) {
@@ -435,6 +440,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     closeGoalSession(goals);
     await goals.cleanup();
     await tools.cleanup();
+    releaseWriter();
     throw error;
   }
 }

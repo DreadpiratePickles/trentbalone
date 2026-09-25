@@ -28,6 +28,7 @@
 import path from "node:path";
 
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
+import { refuseUnderLiveWriters } from "@trent/core/profile/locks.js";
 import { createAgentVersions, createProfileDefinitionSource, exportAgent, exportClaudeAgents, exportCodexAgents, exportHermesProfiles, importAgent, type AgentVersions } from "@trent/core/fleet/index.js";
 import { detectForeignFormat, FOREIGN_FORMATS, importForeignAgent, type ForeignFormat, type ImportForeignResult } from "@trent/core/fleet/import-foreign.js";
 import type { McpServerConfig } from "@trent/core/config/index.js";
@@ -297,9 +298,13 @@ const importSpec: CommandSpec = {
   options: [
     { flags: "--from <format>", description: `The host format to read: ${FOREIGN_FORMATS.join(" | ")} (detected from the path when omitted; a Trent bundle needs no flag)` },
     { flags: "--allow-flagged", description: "Add an MCP server the install-time scan flagged, stored as flagged, as trent mcp add --allow-flagged does" },
+    { flags: "--force", description: "Import even while a REPL, gateway, cron runner or run is writing this profile (one warning line)" },
   ],
-  run: (ctx, opts, args) =>
-    withVersions(ctx, async ({ versions, agentsDir, skillsDir, budgetCapCents, model }) => {
+  run: (ctx, opts, args) => {
+    // Before the store is opened: an import writes trent.db, the agents and skills directories and
+    // config.yaml, so it refuses under a live writer unless --force (`@trent/core/profile/locks`).
+    if (!ctx.dryRun) refuseUnderLiveWriters({ profileDirs: [ctx.config().getProfileDir()], operation: "fleet.import", force: opts.force === true, warn: (line) => ctx.err(line) });
+    return withVersions(ctx, async ({ versions, agentsDir, skillsDir, budgetCapCents, model }) => {
       const target = path.resolve(String(args[0] ?? ""));
       const format = importFormat(opts, target) ?? detectForeignFormat(target);
       if (ctx.dryRun) return { data: { dryRun: true, command: "fleet import", dir: target, format: format ?? null } };
@@ -318,7 +323,8 @@ const importSpec: CommandSpec = {
         if (server.outcome === "added" && server.findings.length > 0) ctx.err(`warning: ${server.name} is installed flagged; the scan found ${server.findings.map((f) => `${f.tool} [${f.categories.join("; ")}]`).join(", ")}`);
       }
       return { data: foreignSummary(result) };
-    }),
+    });
+  },
   render: (data, ctx) => {
     const d = data as { agentId?: string; version?: number; format?: string; inspected?: string[]; dir?: string; dryRun?: boolean; skills?: ImportForeignResult["skills"]; mcpServers?: ImportForeignResult["mcpServers"]; notCarried?: string[] };
     if (d.dryRun === true) return [`  ${ctx.theme.meta("would import")} ${String(d.dir)} ${ctx.theme.meta(`(${String(d.format)})`)}`];

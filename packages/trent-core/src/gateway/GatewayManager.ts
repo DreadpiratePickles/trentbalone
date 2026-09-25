@@ -9,6 +9,7 @@
 
 import path from "node:path";
 import { ConfigManager } from "../config/ConfigManager.js";
+import { acquireProfileLock, acquireProfileWriter, gatewayRunningError } from "../profile/locks.js";
 import type { StorePort } from "../store/StorePort.js";
 import { ApprovalBridge, type ApprovalRequest } from "./ApprovalBridge.js";
 import { BUSY_STATUS_LINE, ConversationQueue, INTERRUPT_REASON, type DoubleTextPolicy, type SubmitResult } from "./ConversationQueue.js";
@@ -75,6 +76,8 @@ export class GatewayManager {
   private drainTimer?: ReturnType<typeof setInterval>;
   private lastHealth = new Map<string, HealthStatus>();
   private readonly drainIntervalMs: number;
+  /** Releases this profile's gateway lock and writer registration; set while started. */
+  private releaseProfileLocks?: () => void;
 
   constructor(configManager?: ConfigManager, options: GatewayManagerOptions = {}) {
     this.configManager = configManager ?? new ConfigManager();
@@ -159,7 +162,15 @@ export class GatewayManager {
 
   // ------------------------------------------------------------------ lifecycle
 
+  /**
+   * One gateway per profile (`profile/locks.ts`): the profile's gateway lock is taken before any
+   * adapter starts, so a second start on the same profile throws `EXIT.CONFIG` naming the first
+   * one's pid and attaches nothing, instead of answering every chat message a second time. A start
+   * on another profile is unaffected. The gateway is also a live writer on the profile, so the
+   * maintenance commands refuse while it runs. `stopAll` releases both.
+   */
   public async startAllConfigured(): Promise<string[]> {
+    this.holdProfileLocks();
     const started: string[] = [];
     for (const [id, adapter] of this.adapters) {
       if (!adapter.isConfigured()) continue;
@@ -182,6 +193,22 @@ export class GatewayManager {
     clearInterval(this.drainTimer);
     this.drainTimer = undefined;
     for (const adapter of this.adapters.values()) await adapter.stop().catch(() => undefined);
+    // Last: the lock says a gateway is attached until its adapters have let go.
+    const release = this.releaseProfileLocks;
+    this.releaseProfileLocks = undefined;
+    release?.();
+  }
+
+  private holdProfileLocks(): void {
+    if (this.releaseProfileLocks !== undefined) return;
+    const profileDir = this.configManager.getProfileDir();
+    const lock = acquireProfileLock({ profileDir, role: "gateway", label: "gateway" });
+    if (!lock.ok) throw gatewayRunningError("gateway.start", lock.holder, lock.path);
+    const releaseWriter = acquireProfileWriter(profileDir, "gateway");
+    this.releaseProfileLocks = () => {
+      releaseWriter();
+      lock.release();
+    };
   }
 
   // ------------------------------------------------------------------ outbound
