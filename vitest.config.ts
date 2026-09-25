@@ -47,6 +47,13 @@ const includeLiveTests = process.env.TRENT_TEST_LIVE === "1";
 const EXCLUSIVE = [
   "packages/trent-core/src/store/derive-sqlite-schema.test.ts",
   "apps/cli/src/commands/__tests__/desktop.test.ts",
+  // Each of these spawns a Bun child that transpiles the generated Prisma client. Run in parallel,
+  // two such children race on Bun's transpile cache and one dies with "Cannot find module
+  // './internal/class'" (CI, 2026-09-25, twice, green on rerun). Serial, they never overlap.
+  "apps/cli/src/repl/__tests__/approvals.restart.test.ts",
+  "apps/cli/src/commands/__tests__/audit.test.ts",
+  "packages/trent-core/src/store/store.durability.test.ts",
+  "packages/trent-core/src/fleet-memory/app-memory.bun.test.ts",
 ];
 
 const ROOT_EXCLUDE = [
