@@ -55,7 +55,10 @@ TRENT DOCTOR
 Glyphs carry the status when colour is off: `✓` ok, `◆` warn, `✗` fail, `·` skip.
 
 That capture, and the JSON one further down, are verbatim from a run that predates the egress root,
-brain and app-memory checks, so both report `total 14`. They are transcripts, not specifications;
+brain and app-memory checks, so both report `total 14`. Its Standalone Environment Contract failure
+came from a shell with `TRENT_QUEUE_FALLBACK` unset; since 2026-09-25 the CLI sets `disabled` itself
+when the variable is unset or empty (`apps/cli/src/env-defaults.ts`), so today that check fails only
+when a different value was set explicitly, and the fix is to remove that value. They are transcripts, not specifications;
 the table below is the current list, and a run of `trent doctor` here today reports `total 20`.
 
 ## The 22 checks

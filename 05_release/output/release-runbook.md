@@ -64,6 +64,16 @@ Permissions: every job is `contents: read` except `publish` (`contents: write`) 
    Merge to `main` (the tag must point at a commit CI verified), then tag.
 4. **Working tree.** `scripts/release/preflight.sh` on this machine today: 7 pass, 2 fail (dirty
    tree from other in-flight agents; HEAD not pushed). Both are expected to clear on `main`.
+5. **The ECDSA public key was never in git** (found 2026-09-25, public-readiness audit section 1.3).
+   Root `.gitignore` `*.pem` matched `scripts/installer/keys/ecdsa-p256.pub.pem`, so on any clean
+   checkout `render.sh --check` exits 2 and release.yml's "Committed public keys must be present"
+   exits 1: the first tag and the Pages build would both die at their first step. Fixed in the
+   working tree (P2-A1, `docs/sessions/2026-09-25-p2a1-release-path.md`): a negation for exactly that
+   file, and a CI job `installer-render` that runs the key checks and `render.sh --check` on every
+   push. It lands only when committed with `git add .gitignore scripts/installer/keys/ecdsa-p256.pub.pem`.
+   `preflight.sh` check 4 reads the working tree, so it passes on a developer machine even while the
+   key is untracked: confirm with `git ls-files scripts/installer/keys/ecdsa-p256.pub.pem` (must print
+   the path) and `git ls-files 'scripts/installer/keys/*.key*'` (must print nothing) before tagging.
 
 ## Closed finding: the minisign key format (fixed in `e65d88a`)
 

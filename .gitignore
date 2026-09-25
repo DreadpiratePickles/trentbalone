@@ -50,6 +50,11 @@ prisma/generated/
 # OS and IDE files
 .DS_Store
 *.pem
+# Re-include exactly ONE .pem: the ECDSA P-256 release PUBLIC key. It is not a secret: the committed
+# scripts/install.sh embeds it verbatim, and render.sh, release.yml and pages.yml read it from a clean
+# checkout. This must stay AFTER the last *.pem line (git applies the last matching pattern). The
+# private half, ecdsa-p256.key.pem, stays ignored here and in scripts/installer/keys/.gitignore.
+!scripts/installer/keys/ecdsa-p256.pub.pem
 .idea/
 .vscode/
 *.swp

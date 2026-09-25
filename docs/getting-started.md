@@ -12,10 +12,11 @@ through the workspace.
 | npm | Workspace installs | `trent doctor`, Dependencies check |
 | git | Required by the dependencies check | `trent doctor`, Dependencies check |
 | Docker | Only for the `docker` sandbox backend | `trent doctor`, Workbench check |
-| bun | Only for the SQLite store and `npm run build:binary` | Not yet checked by doctor |
+| bun | For the durable SQLite store (`npm run cli:bun`) and `npm run build:binary` | Not yet checked by doctor |
 
 Docker is optional. Without it, set the terminal backend to `local` and everything else works. bun is
-optional unless you want to compile the single-file binary yourself.
+optional too: without it everything runs, but approvals, budget and the audit chain live in process
+memory and do not survive a restart (see "Durable state needs Bun" below).
 
 ## 2. Clone and install
 
@@ -25,7 +26,24 @@ npm install
 ```
 
 `npm install` sets up the workspaces in `packages/*` and `apps/*`. It does not install anything into
-`~/.trent`.
+`~/.trent`. It also generates the Prisma client for the CLI's SQLite store: the root `postinstall`
+runs `prisma generate --schema packages/trent-core/prisma/schema.sqlite.prisma`, the same command CI
+runs. It writes only `packages/trent-core/src/store/generated/`, which is gitignored, and it is safe
+to re-run with `npm run postinstall` after a schema change or a `git clean`.
+
+### Durable state needs Bun
+
+The store's SQLite driver is `bun:sqlite`, so the store is durable only when the CLI runs under Bun:
+
+```bash
+npm run cli:bun --                          # the REPL, persisted in trent.db in the profile directory
+npm run cli:bun -- improve status --json    # "store": {"durable": true}
+```
+
+Under Node (`npm run cli --`) everything works, but the store is in process memory: the REPL prints
+`This session is not durable`, and approvals, budget and the audit chain do not survive a restart.
+`npm run cli:bun` runs `bun --no-env-file apps/cli/src/index.ts`, so a `.env` file in the directory
+you launch from is never read.
 
 ## 3. Check what is missing
 
@@ -59,19 +77,26 @@ TRENT DOCTOR
 ```
 
 That is an elided capture of `TRENT_HOME=$(mktemp -d) npm run cli -- doctor`, taken on 2026-09-18
-with `TRENT_QUEUE_FALLBACK=disabled` already exported. Your own counts will differ; the exit code
-is the part to read. Exit code 3 means configuration. See [doctor.md](doctor.md).
+with `TRENT_QUEUE_FALLBACK=disabled` exported by hand, which the CLI now does for you (section 4).
+Your own counts will differ; the exit code is the part to read. Exit code 3 means configuration. See
+[doctor.md](doctor.md).
 
-## 4. Set the environment contract
+## 4. The environment contract
+
+There is nothing to export. The CLI sets `TRENT_QUEUE_FALLBACK=disabled` itself, before anything
+else loads, whenever the variable is unset or empty (`apps/cli/src/env-defaults.ts`). Two things are
+still yours:
 
 ```bash
-export TRENT_QUEUE_FALLBACK=disabled
 unset TRENT_EVAL_SYNC_QUEUE REDIS_URL UPSTASH_REDIS_REST_URL UPSTASH_REDIS_REST_TOKEN
 ```
 
-This is not optional and it is not a performance tweak. Without it the application's inline queue
-fallback races the CLI's own drain loop and every job executes twice. Measured on a three-step run:
-31 worker invocations, 13 step executions, `run_done` emitted ten times, nothing on stderr, final
+and never set `TRENT_QUEUE_FALLBACK` to anything but `disabled`. An explicit value is left alone, and
+the doctor's Standalone Environment Contract check fails on it.
+
+This is not optional and it is not a performance tweak. Without `disabled` the application's inline
+queue fallback races the CLI's own drain loop and every job executes twice. Measured on a three-step
+run: 31 worker invocations, 13 step executions, `run_done` emitted ten times, nothing on stderr, final
 status `completed`. You would only find out from the bill.
 
 Put those lines in your shell profile, or in a `.envrc`, so a second terminal does not silently lose
@@ -173,6 +198,7 @@ If you see `DEGRADED`, nothing on the screen came from a model.
 
 ```bash
 npm run cli --          # REPL
+npm run cli:bun --      # REPL on the durable store (needs bun; see section 2)
 npm run tui             # full-screen Ink TUI
 npm run cli -- --continue
 ```

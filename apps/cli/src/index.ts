@@ -10,6 +10,8 @@
  * 7 awaiting approval, 130 interrupt.
  */
 
+// FIRST import, on purpose: it sets TRENT_QUEUE_FALLBACK before any other module is evaluated.
+import "./env-defaults.js";
 import { EXIT } from "@trent/core/errors/index.js";
 import { runCli } from "./commands/index.js";
 import { interruptIsOwned } from "./signals.js";

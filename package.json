@@ -8,12 +8,14 @@
     "apps/*"
   ],
   "scripts": {
+    "postinstall": "prisma generate --schema packages/trent-core/prisma/schema.sqlite.prisma --no-hints",
     "test": "vitest run",
     "test:live": "TRENT_TEST_LIVE=1 vitest run",
     "test:web": "npm --prefix apps/web test",
     "test:all": "npm run test && npm run test:web",
     "build": "npm run --workspaces --if-present build",
     "cli": "tsx apps/cli/src/index.ts",
+    "cli:bun": "bun --no-env-file apps/cli/src/index.ts",
     "tui": "tsx apps/cli/src/index.ts --tui",
     "doctor": "tsx apps/cli/src/index.ts doctor"
   },

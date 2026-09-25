@@ -40,6 +40,10 @@ Cause: `TRENT_QUEUE_FALLBACK` is not `disabled`. The wrapped application's inlin
 queue explicitly. Both run. Under vitest, `NODE_ENV=test` suppresses the fallback, which is why this
 never shows up in a test run and always shows up in a real one.
 
+The CLI sets `disabled` itself when the variable is unset or empty (`apps/cli/src/env-defaults.ts`),
+so through the CLI this happens only when something set a different value explicitly: a shell
+profile, a `.envrc`, a CI `env:` block, a process manager's unit file.
+
 Measured on a three-step run: 31 worker invocations, 13 step executions, `run_done` emitted ten
 times, zero bytes on stderr.
 
@@ -49,15 +53,15 @@ Identify:
 npm run cli -- doctor --json | grep -A4 '"category": "Environment"'
 ```
 
-Fix:
+Fix: remove the explicit value where it is set, so the CLI's default applies (or set it to
+`disabled`), and clear the queue variables:
 
 ```bash
-export TRENT_QUEUE_FALLBACK=disabled
-unset TRENT_EVAL_SYNC_QUEUE REDIS_URL UPSTASH_REDIS_REST_URL UPSTASH_REDIS_REST_TOKEN
+unset TRENT_QUEUE_FALLBACK TRENT_EVAL_SYNC_QUEUE REDIS_URL UPSTASH_REDIS_REST_URL UPSTASH_REDIS_REST_TOKEN
 ```
 
-Put these in your shell profile. A second terminal without them behaves differently from the first,
-which is the worst version of this bug.
+Do it at the source, not in one terminal. A second terminal that still inherits the old value
+behaves differently from the first, which is the worst version of this bug.
 
 ## The retired Google default model 404s
 
@@ -133,8 +137,8 @@ sh -c 'command -v bun || echo "bun not on PATH in this shell"'
 Fix: use the absolute path, `~/.bun/bin/bun`, in any script or CI step, or export the PATH inside the
 script rather than relying on the profile.
 
-Nothing in the default developer loop needs bun today. It is the SQLite runtime and the binary
-compiler, so you hit this when running the store tests or a build, not when running the CLI.
+`npm run cli --` does not need bun. `npm run cli:bun --` (the durable store), the store tests and a
+binary build do, so those are where you hit this.
 
 ## Two tests time out under load
 
@@ -167,6 +171,25 @@ compiled binary, so every binary silently fell back to the in-memory store. The 
 `node packages/trent-core/scripts/derive-sqlite-schema.mjs`); a first `trent run` from any directory
 creates `<TRENT_HOME>/trent.db` with the schema. If the file is still absent, the binary was built
 without the generated module (`scripts/ci/build-binary.sh` refuses to build without it).
+
+## From a clone, the REPL says `This session is not durable`
+
+Symptom: the REPL prints `This session is not durable: the SQLite store needs Bun`, no `trent.db`
+appears in the profile directory, and `improve status --json` reports `"durable": false`.
+
+Cause, one of two. Under Node (`npm run cli --`) there is no `bun:sqlite`, so the store is in process
+memory by design. Under Bun, the store's Prisma client was never generated: the `reason` then names
+`Cannot find module './generated/client'`. The client is gitignored derived output.
+
+Identify:
+
+```bash
+npm run --silent cli:bun -- improve status --json    # "store": {"durable": true} when all is well
+ls packages/trent-core/src/store/generated/client.ts
+```
+
+Fix: run the CLI under Bun (`npm run cli:bun --`). If the client is missing, `npm run postinstall`
+regenerates it (`npm install` runs the same step; an install made with `--ignore-scripts` skips it).
 
 ## `trent run` ends "without a verdict" from a directory that has no `.claude/skills`
 
