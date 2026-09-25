@@ -10,6 +10,7 @@
  * answer the reader already has.
  */
 
+import type { ReasoningEffort } from "./call-policy.js";
 import { abortableSleep, classifyProviderError, retryDelayMs, type RetryPolicy } from "./retry.js";
 import type { GatewayMessage, ModelProvider, ProviderStreamFn, ProviderStreamFrame } from "./types.js";
 
@@ -20,6 +21,8 @@ export interface AttemptContext {
   readonly messages: GatewayMessage[];
   readonly temperature: number;
   readonly maxTokens: number;
+  /** [P1-C] Handed to the stream function only when set, so an unconfigured call is unchanged. */
+  readonly reasoningEffort?: ReasoningEffort;
   readonly signal?: AbortSignal;
   readonly retryPolicy: RetryPolicy;
   readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -36,6 +39,9 @@ export type AttemptOutcome =
       readonly sawUsage: boolean;
       readonly inputTokens: number;
       readonly outputTokens: number;
+      /** [P1-C] 0 when the provider reported no cache hits. */
+      readonly cachedInputTokens: number;
+      readonly reasoningTokens: number;
       readonly finishReason?: string;
       readonly text: string;
       readonly aborted: boolean;
@@ -88,6 +94,8 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
     let sawUsage = false;
     let inputTokens = 0;
     let outputTokens = 0;
+    let cachedInputTokens = 0;
+    let reasoningTokens = 0;
     let finishReason: string | undefined;
     let text = "";
 
@@ -96,6 +104,7 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
       temperature: ctx.temperature,
       maxTokens: ctx.maxTokens,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
+      ...(ctx.reasoningEffort === undefined ? {} : { reasoningEffort: ctx.reasoningEffort }),
     });
 
     try {
@@ -119,6 +128,8 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
           sawUsage = true;
           inputTokens = frame.inputTokens;
           outputTokens = frame.outputTokens;
+          cachedInputTokens = frame.cachedInputTokens ?? 0;
+          reasoningTokens = frame.reasoningTokens ?? 0;
         } else if (frame.type === "finish") {
           finishReason = frame.reason;
         }
@@ -142,6 +153,8 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
         sawUsage,
         inputTokens,
         outputTokens,
+        cachedInputTokens,
+        reasoningTokens,
         text,
         aborted,
         ...(finishReason === undefined ? {} : { finishReason }),

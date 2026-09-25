@@ -55,4 +55,15 @@ export const ModelTiersConfigSchema = z.object({
   executor: z.string().min(1).optional(),
   planner: z.string().min(1).optional(),
   judge: z.string().min(1).optional(),
+  // [P1-C] model cost
+  // `fallback_on_pin`: absent is false. A request that names its model (a pin) is answered by that
+  // model or fails with its provider's own error; true lets it fall back across the provider chain
+  // like a default-resolved request (`model-gateway/call-policy.ts`).
+  // `reasoning_effort`: absent is omitted from the request body, so Google uses the model's default.
+  // The values are Google's (https://ai.google.dev/gemini-api/docs/openai, "Thinking"); `none` is
+  // accepted for 2.5 models only. Listed literally, as `media.ts` does for the alias table, so config
+  // does not import the gateway; `model-gateway/call-policy.test.ts` asserts the two lists agree.
+  fallback_on_pin: z.boolean().optional(),
+  reasoning_effort: z.enum(["none", "minimal", "low", "medium", "high"]).optional(),
+  // [/P1-C]
 }).strict();

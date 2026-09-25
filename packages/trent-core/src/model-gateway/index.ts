@@ -38,6 +38,12 @@
  * is invoked to close it. The signal is also forwarded into `ProviderStreamFn`, which is what
  * aborts the socket for any implementation that accepts one; the app's own two stream functions
  * take no signal, and giving them one would mean editing read-only `apps/web`.
+ *
+ * [P1-C] Three more, from the 2026-09-25 cost work (docs/sessions/2026-09-25-p1c-model-cost.md):
+ * `google` streams through the Trent-side `openai-compat.ts` (usage frames, cached prompt tokens,
+ * thinking tokens, `reasoning_effort`); cached tokens are priced at the row's cached ratio
+ * (`pricing.ts`); and a request that names its model is never answered by another one unless
+ * `models.fallback_on_pin` says so (`call-policy.ts`).
  */
 
 import type {
@@ -56,6 +62,9 @@ import type {
 } from "./types.js";
 
 import { runProviderAttempts } from "./attempts.js";
+import { modelCallPolicyFromEnv, planAttempts, type ReasoningEffort } from "./call-policy.js";
+import { collectCompletion } from "./complete.js";
+import { googleCompatRoute, streamGoogleCompatChat } from "./openai-compat.js";
 import { modelOverridesFromEnv, priceCall } from "./pricing.js";
 import {
   PROVIDER_ALIAS_ROUTES,
@@ -71,6 +80,7 @@ import { EXIT, TrentError } from "../errors/index.js";
 
 export type * from "./types.js";
 export {
+  DEFAULT_CACHED_INPUT_RATIO,
   MODEL_OVERRIDES_ENV,
   MODEL_PRICE_PREFIXES,
   MODEL_PRICE_TABLE,
@@ -103,6 +113,17 @@ export {
   type ProviderAlias,
   type ProviderAliasRoute,
 } from "./providers.js";
+export {
+  MODEL_CALL_ENV,
+  REASONING_EFFORTS,
+  applyModelCallEnv,
+  isReasoningEffort,
+  modelCallPolicyFromEnv,
+  planAttempts,
+  type ModelCallPolicy,
+  type ReasoningEffort,
+} from "./call-policy.js";
+export { buildCompatChatBody, parseCompatUsage, type CompatUsage } from "./openai-compat.js";
 export {
   DEFAULT_RETRY_POLICY,
   ProviderHttpError,
@@ -189,7 +210,28 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
   // env vars cannot retroactively change this one's routing.
   const policy = policyModule.buildModelPolicySnapshot();
 
+  // [P1-C] The call policies: config first, then the env bridge a no-argument gateway reads.
+  const bridged = modelCallPolicyFromEnv();
+  const fallbackOnPin = config.fallbackOnPin ?? bridged.fallbackOnPin;
+  const configuredEffort: ReasoningEffort | undefined = config.reasoningEffort ?? bridged.reasoningEffort;
+  let effortIgnoredLogged = false;
+
   const defaultStreamProvider: ProviderStreamFn = async function* (provider, model, input) {
+    if (provider === "google") {
+      // [P1-C] The app's streamer asks Google for no usage and cannot carry reasoning_effort.
+      const route = googleCompatRoute();
+      if (!route.apiKey) throw new Error("GEMINI_API_KEY is not configured");
+      yield* streamGoogleCompatChat(
+        { model, messages: input.messages, temperature: input.temperature, maxTokens: input.maxTokens, ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}), ...(input.signal ? { signal: input.signal } : {}) },
+        { apiKey: route.apiKey, baseUrl: route.baseUrl, ...(config.fetchImpl ? { fetchImpl: config.fetchImpl } : {}) },
+      );
+      return;
+    }
+    if (input.reasoningEffort !== undefined && !effortIgnoredLogged) {
+      // Said once, not per call: the app's streamer for this provider has no field to carry it in.
+      effortIgnoredLogged = true;
+      retryLog("model_gateway.reasoning_effort_not_sent", { provider, model, reason: "only the google path carries reasoning_effort" });
+    }
     if (provider === "anthropic") {
       yield* clientModule.streamAnthropicMessages({
         model,
@@ -266,7 +308,7 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
     return gatewayModule.estimateModelCostCents(input);
   }
 
-  function estimateCostCents(input: { modelTier: ModelTier; inputTokens: number; outputTokens: number; model?: string }): number {
+  function estimateCostCents(input: { modelTier: ModelTier; inputTokens: number; outputTokens: number; model?: string; cachedInputTokens?: number }): number {
     if (input.model === undefined) return tierCostCents(input);
     const alias = activeProviderAlias();
     return priceCall(
@@ -275,6 +317,7 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
         modelTier: input.modelTier,
         inputTokens: input.inputTokens,
         outputTokens: input.outputTokens,
+        ...(input.cachedInputTokens === undefined ? {} : { cachedInputTokens: input.cachedInputTokens }),
         overrides,
         ...(alias ? { alias } : {}),
       },
@@ -285,9 +328,19 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
   async function* stream(req: GatewayStreamRequest): AsyncGenerator<GatewayStreamEvent> {
     const role = req.role ?? "executor";
     const route = resolveRoute(role);
-    const providers = req.provider ? [req.provider] : route.providers;
+    // [P1-C] A request that names its model is pinned: one provider, that model, unless fallback_on_pin.
+    const plan = planAttempts({
+      ...(req.model === undefined ? {} : { requestModel: req.model }),
+      ...(req.provider === undefined ? {} : { requestProvider: req.provider }),
+      routeProviders: route.providers,
+      modelForProvider: route.modelForProvider,
+      inferProvider: (model) => gatewayModule.inferProviderFromModel(model),
+      fallbackOnPin,
+    });
+    const attempts = plan.attempts;
+    const reasoningEffort = req.reasoningEffort ?? configuredEffort;
 
-    if (providers.length === 0) {
+    if (attempts.length === 0) {
       throw new Error(
         `model gateway: no configured provider in the chain [${route.fallbackChain.join(", ")}]. ` +
           "Seed an API key via createModelGateway({ apiKeys: … }).",
@@ -308,9 +361,8 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
 
     let lastError: unknown;
 
-    for (let index = 0; index < providers.length; index++) {
-      const provider = providers[index]!;
-      const model = route.modelForProvider(provider);
+    for (let index = 0; index < attempts.length; index++) {
+      const { provider, model } = attempts[index]!;
 
       if (req.signal?.aborted) {
         yield { type: "finish", reason: "aborted", provider, model };
@@ -328,6 +380,7 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
         messages: messages as GatewayMessage[],
         temperature,
         maxTokens,
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
         retryPolicy,
         log: retryLog,
         logFields: aliasField,
@@ -347,8 +400,10 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
         if (outcome.kind === "complete") {
           const inputTokens = outcome.sawUsage ? outcome.inputTokens : estimateTokens(promptChars);
           const outputTokens = outcome.sawUsage ? outcome.outputTokens : estimateTokens(outcome.text);
+          // [P1-C] An estimated call has no cache figure; a reported one is priced with it.
+          const cachedInputTokens = outcome.sawUsage ? outcome.cachedInputTokens : 0;
           const priced = priceCall(
-            { model, modelTier: route.modelTier, inputTokens, outputTokens, provider, overrides, ...(alias ? { alias } : {}) },
+            { model, modelTier: route.modelTier, inputTokens, outputTokens, cachedInputTokens, provider, overrides, ...(alias ? { alias } : {}) },
             tierCostCents,
           );
           yield {
@@ -358,6 +413,8 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
             modelTier: route.modelTier,
             inputTokens,
             outputTokens,
+            cachedInputTokens,
+            ...(outcome.sawUsage && outcome.reasoningTokens > 0 ? { reasoningTokens: outcome.reasoningTokens } : {}),
             costCents: priced.costCents,
             estimated: !outcome.sawUsage,
             priced_as_default: priced.pricedAsDefault,
@@ -381,11 +438,12 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
 
       lastError = failure;
       // The audit's rule, kept: a half-delivered answer is never replayed on another provider.
-      const willFallBack = !emittedToken && index < providers.length - 1;
+      const willFallBack = !emittedToken && index < attempts.length - 1;
       retryLog("model_gateway.provider_failed", {
         provider,
         model,
         errorClass: classifyProviderError(failure).errorClass,
+        pinned: plan.pinned,
         willFallBack,
         ...aliasField,
       });
@@ -396,55 +454,8 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
     throw lastError instanceof Error ? lastError : new Error("model gateway: fallback chain exhausted");
   }
 
-  async function complete(req: GatewayStreamRequest): Promise<GatewayCompletion> {
-    let text = "";
-    let provider: ModelProvider = "google";
-    let model = "";
-    let modelTier: ModelTier = "sonnet";
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let costCents = 0;
-    let estimated = true;
-    let pricedAsDefault = true;
-    let unpriced = true;
-    let providerAlias: string | undefined;
-    let finishReason = "stop";
-
-    for await (const event of stream(req)) {
-      if (event.type === "token") {
-        text += event.content;
-        provider = event.provider;
-        model = event.model;
-      } else if (event.type === "usage") {
-        provider = event.provider;
-        model = event.model;
-        modelTier = event.modelTier;
-        inputTokens = event.inputTokens;
-        outputTokens = event.outputTokens;
-        costCents = event.costCents;
-        estimated = event.estimated;
-        pricedAsDefault = event.priced_as_default;
-        unpriced = event.unpriced;
-        providerAlias = event.providerAlias;
-      } else {
-        finishReason = event.reason;
-      }
-    }
-
-    return {
-      text,
-      provider,
-      model,
-      modelTier,
-      inputTokens,
-      outputTokens,
-      costCents,
-      estimated,
-      priced_as_default: pricedAsDefault,
-      unpriced,
-      ...(providerAlias === undefined ? {} : { providerAlias }),
-      finishReason,
-    };
+  function complete(req: GatewayStreamRequest): Promise<GatewayCompletion> {
+    return collectCompletion(stream(req));
   }
 
   return { stream, complete, resolveRoute, configuredProviders, estimateCostCents };

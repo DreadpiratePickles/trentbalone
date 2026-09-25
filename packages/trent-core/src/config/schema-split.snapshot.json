@@ -492,7 +492,9 @@
       "fast": "fixture-fast",
       "executor": "fixture-executor",
       "planner": "fixture-planner",
-      "judge": "fixture-judge"
+      "judge": "fixture-judge",
+      "fallback_on_pin": true,
+      "reasoning_effort": "low"
     },
     "tools": {
       "disclosure_threshold": 40

@@ -123,8 +123,21 @@ describe("buildSpendReport", () => {
 
   it("reports an empty ledger as zeros", () => {
     const report = buildSpendReport([], { now, tz: "UTC", window: resolveSpendWindow(undefined, now, "UTC"), by: "seat" });
-    expect(report.today).toEqual({ cents: 0, tokens: 0, rows: 0, groups: [] });
-    expect(report.period).toEqual({ cents: 0, tokens: 0, rows: 0, groups: [] });
+    expect(report.today).toEqual({ cents: 0, tokens: 0, cachedInputTokens: 0, rows: 0, groups: [] });
+    expect(report.period).toEqual({ cents: 0, tokens: 0, cachedInputTokens: 0, rows: 0, groups: [] });
+  });
+
+  // [P1-C] cached prompt tokens
+  it("sums cached prompt tokens into today's and the period's totals; a row without the field counts zero", () => {
+    const cached = [
+      ...rows,
+      row({ surface: "run", model: "gemini-3.5-flash-lite", provider: "google", cents: 9, tokens: 1_000_000, cachedInputTokens: 800_000 }),
+      row({ surface: "run", model: "gemini-3.5-flash-lite", provider: "google", cents: 3, tokens: 50_000, cachedInputTokens: 40_000, at: "2026-09-15T10:00:00.000Z" }),
+    ];
+    const report = buildSpendReport(cached, { now, tz: "UTC", window: resolveSpendWindow("7d", now, "UTC"), by: "surface" });
+    expect(report.today.cachedInputTokens).toBe(800_000);
+    expect(report.period.cachedInputTokens).toBe(840_000);
+    expect(buildSpendReport(rows, { now, tz: "UTC", window: resolveSpendWindow("7d", now, "UTC"), by: "surface" }).period.cachedInputTokens).toBe(0);
   });
 
   it("skips a row whose timestamp cannot be read", () => {

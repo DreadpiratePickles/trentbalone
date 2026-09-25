@@ -281,3 +281,100 @@ describe("model gateway retry — observability", () => {
     expect(serialised).not.toMatch(/api[_-]?key/i);
   });
 });
+
+// [P1-C] a pinned model never falls back silently
+describe("model gateway — a pinned model never falls back silently (P1-C)", () => {
+  function pinned(script: Partial<Record<ModelProvider, Attempt[]>>, opts: { fallbackOnPin?: boolean } = {}) {
+    const { streamProvider } = scripted(script);
+    const seen: Array<[ModelProvider, string]> = [];
+    const recording: ProviderStreamFn = (provider, model, input) => {
+      seen.push([provider, model]);
+      return streamProvider(provider, model, input);
+    };
+    const logs: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const gateway = createModelGateway({
+      apiKeys: { google: KEYS.google, anthropic: KEYS.anthropic },
+      preferredProvider: "google",
+      allowedProviders: ["google", "anthropic"],
+      models: { executor: "gemini-3.5-flash-lite" },
+      streamProvider: recording,
+      retry: { attempts: 3, random: () => 1, sleep: async () => undefined },
+      retryLog: (event, fields) => logs.push({ event, fields }),
+      ...(opts.fallbackOnPin === undefined ? {} : { fallbackOnPin: opts.fallbackOnPin }),
+    });
+    return { gateway, seen, logs };
+  }
+
+  async function settle(stream: AsyncGenerator<GatewayStreamEvent>): Promise<{ events: GatewayStreamEvent[]; failure: unknown }> {
+    const events: GatewayStreamEvent[] = [];
+    try {
+      for await (const event of stream) events.push(event);
+      return { events, failure: undefined };
+    } catch (failure) {
+      return { events, failure };
+    }
+  }
+
+  it("an explicit model fails with the provider error and no fallback attempt is made", async () => {
+    const { gateway, seen, logs } = pinned({ google: ["401"], anthropic: ["ok"] });
+    const { events, failure } = await settle((await gateway).stream({ messages: ASK, model: "gemini-3.6-flash" }));
+
+    expect(failure).toBeInstanceOf(ProviderHttpError);
+    expect((failure as ProviderHttpError).status).toBe(401);
+    expect(seen).toEqual([["google", "gemini-3.6-flash"]]);
+    // Nothing answered, so there is no usage event and nothing for any surface to write to the ledger.
+    expect(events.filter((e) => e.type === "usage")).toHaveLength(0);
+    const failed = logs.filter((entry) => entry.event === "model_gateway.provider_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.fields).toMatchObject({ provider: "google", model: "gemini-3.6-flash", pinned: true, willFallBack: false, errorClass: "auth" });
+  });
+
+  it("a transient failure on a pinned model is retried on that model only, then fails", async () => {
+    const { gateway, seen } = pinned({ google: ["500", "500", "500"], anthropic: ["ok"] });
+    const { failure } = await settle((await gateway).stream({ messages: ASK, model: "gemini-3.6-flash" }));
+    expect((failure as ProviderHttpError).status).toBe(500);
+    expect(seen).toEqual([
+      ["google", "gemini-3.6-flash"],
+      ["google", "gemini-3.6-flash"],
+      ["google", "gemini-3.6-flash"],
+    ]);
+  });
+
+  it("a default-resolved model still falls back", async () => {
+    const { gateway, seen, logs } = pinned({ google: ["401"], anthropic: ["ok"] });
+    const { events, failure } = await settle((await gateway).stream({ messages: ASK }));
+    expect(failure).toBeUndefined();
+    expect(seen.map(([provider]) => provider)).toEqual(["google", "anthropic"]);
+    expect(seen[0]?.[1]).toBe("gemini-3.5-flash-lite");
+    expect(events.find((e) => e.type === "usage")).toMatchObject({ provider: "anthropic" });
+    expect(logs.find((entry) => entry.event === "model_gateway.provider_failed")?.fields).toMatchObject({ pinned: false, willFallBack: true });
+  });
+
+  it("fallback_on_pin true restores the chain", async () => {
+    const { gateway, seen } = pinned({ google: ["401"], anthropic: ["ok"] }, { fallbackOnPin: true });
+    const { events, failure } = await settle((await gateway).stream({ messages: ASK, model: "gemini-3.6-flash" }));
+    expect(failure).toBeUndefined();
+    expect(seen[0]).toEqual(["google", "gemini-3.6-flash"]);
+    // The fallback provider answers with ITS model, never the pinned Gemini id.
+    expect(seen[1]?.[0]).toBe("anthropic");
+    expect(seen[1]?.[1]).not.toBe("gemini-3.6-flash");
+    expect(events.find((e) => e.type === "usage")).toMatchObject({ provider: "anthropic" });
+  });
+
+  it("a gateway built with no arguments reads fallback_on_pin from the env bridge", async () => {
+    process.env.TRENT_MODEL_FALLBACK_ON_PIN = "false";
+    try {
+      const held = pinned({ google: ["401"], anthropic: ["ok"] });
+      expect((await settle((await held.gateway).stream({ messages: ASK, model: "gemini-3.6-flash" }))).failure).toBeInstanceOf(ProviderHttpError);
+      expect(held.seen.map(([provider]) => provider)).toEqual(["google"]);
+
+      process.env.TRENT_MODEL_FALLBACK_ON_PIN = "true";
+      const { gateway, seen } = pinned({ google: ["401"], anthropic: ["ok"] });
+      const { failure } = await settle((await gateway).stream({ messages: ASK, model: "gemini-3.6-flash" }));
+      expect(failure).toBeUndefined();
+      expect(seen.map(([provider]) => provider)).toEqual(["google", "anthropic"]);
+    } finally {
+      delete process.env.TRENT_MODEL_FALLBACK_ON_PIN;
+    }
+  });
+});

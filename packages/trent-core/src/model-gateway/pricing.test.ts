@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createModelGateway } from "./index.js";
 import {
+  DEFAULT_CACHED_INPUT_RATIO,
   MODEL_OVERRIDES_ENV,
   MODEL_PRICE_PREFIXES,
   MODEL_PRICE_TABLE,
@@ -58,6 +59,48 @@ describe("priceCall: the per-model overlay", () => {
       expect(row.source.length, id).toBeGreaterThan(0);
     }
     expect(Object.keys(MODEL_PRICE_TABLE)).toEqual(expect.arrayContaining(["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.5-pro"]));
+  });
+});
+
+describe("[P1-C] cached prompt tokens are priced at the row's cached ratio", () => {
+  it("the Gemini rows carry the cached ratio from Google's pricing page; every other row the 0.25 default", () => {
+    // https://ai.google.dev/gemini-api/docs/pricing, read 2026-09-25: flash-lite $0.30 in, $0.03 cached.
+    expect(DEFAULT_CACHED_INPUT_RATIO).toBe(0.25);
+    for (const id of ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-2.5-pro", "gemini-2.5-flash"]) {
+      expect(MODEL_PRICE_TABLE[id]?.cachedInputRatio, id).toBe(0.1);
+    }
+    expect(priceRowFor("claude-sonnet-4-6")?.cachedInputRatio).toBeUndefined();
+  });
+
+  it("prices 800k cached of 1M input on flash-lite at 9 cents, not the 30 a full-rate bill says", () => {
+    const priced = priceCall({ model: "gemini-3.5-flash-lite", modelTier: "sonnet", inputTokens: MILLION, cachedInputTokens: 800_000, outputTokens: 0 }, tierDefault);
+    // 200k x $0.30/1M = 6.0 cents, 800k x $0.03/1M = 2.4 cents -> 8.4 -> 9 (rounded up, integer).
+    expect(priced.costCents).toBe(9);
+    const full = priceCall({ model: "gemini-3.5-flash-lite", modelTier: "sonnet", inputTokens: MILLION, outputTokens: 0 }, tierDefault);
+    expect(full.costCents).toBe(30);
+  });
+
+  it("a row with no ratio of its own prices cached tokens at the default, and so does the tier fallback", () => {
+    const sonnet = priceCall({ model: "claude-sonnet-4-6", modelTier: "sonnet", inputTokens: MILLION, cachedInputTokens: MILLION, outputTokens: 0 }, tierDefault);
+    expect(sonnet.costCents).toBe(75); // $3.00/1M x 0.25
+    const seen: number[] = [];
+    const unpriced = priceCall(
+      { model: "some-model-nobody-listed", modelTier: "sonnet", inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 0 },
+      (input) => {
+        seen.push(input.inputTokens);
+        return 1;
+      },
+    );
+    expect(seen).toEqual([400]); // 200 uncached + 800 x 0.25
+    expect(unpriced.unpriced).toBe(true);
+  });
+
+  it("an override keeps the model's cached ratio, and a cached count above the prompt is clamped to it", () => {
+    const overrides = { "gemini-3.5-flash-lite": { input_cents_per_million: 100, output_cents_per_million: 0 } };
+    const priced = priceCall({ model: "gemini-3.5-flash-lite", modelTier: "sonnet", inputTokens: MILLION, cachedInputTokens: MILLION, outputTokens: 0, overrides }, tierDefault);
+    expect(priced.costCents).toBe(10);
+    const clamped = priceCall({ model: "gemini-3.5-flash-lite", modelTier: "sonnet", inputTokens: MILLION, cachedInputTokens: 5 * MILLION, outputTokens: 0 }, tierDefault);
+    expect(clamped.costCents).toBe(3);
   });
 });
 

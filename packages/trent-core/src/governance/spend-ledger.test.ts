@@ -83,6 +83,19 @@ describe("spend ledger", () => {
     expect(ledger.runTotalCents("run_missing")).toBe(0);
   });
 
+  // [P1-C] cached prompt tokens
+  it("records cached prompt tokens on the row as a whole count, and leaves the key off when there were none", () => {
+    const ledger = openSpendLedger({ profileDir });
+    ledger.append(row({ run_id: "run_cached", cachedInputTokens: 8_165.9 }));
+    ledger.append(row({ run_id: "run_plain", cachedInputTokens: 0 }));
+    ledger.append(row({ run_id: "run_old" }));
+    const [cached, plain, old] = ledger.rows();
+    expect(cached?.cachedInputTokens).toBe(8_165);
+    expect(plain && "cachedInputTokens" in plain).toBe(false);
+    expect(old && "cachedInputTokens" in old).toBe(false);
+    expect(() => ledger.append(row({ cachedInputTokens: -1 }))).toThrow(/cached/);
+  });
+
   it("refuses a float, because money is integer cents", () => {
     const ledger = openSpendLedger({ profileDir });
     expect(() => ledger.append(row({ cents: 1.5 }))).toThrow(/integer cents/);

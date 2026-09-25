@@ -2,10 +2,15 @@
  * Offline unit tests for the model gateway wrapper. No network, no real keys.
  * Every provider stream is injected through `streamProvider`.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
+import { installSpendLedger, openSpendLedger } from "../governance/spend-ledger.js";
+import { closeRunScope, openRunScope, recordRunSpend } from "../orchestrator/run-hooks.js";
 import { createModelGateway } from "./index.js";
-import type { GatewayStreamEvent, ProviderStreamFn } from "./types.js";
+import type { GatewayStreamEvent, ProviderStreamFn, ProviderStreamFrame } from "./types.js";
 
 const FAKE_KEYS = {
   google: "test-google-key",
@@ -220,5 +225,114 @@ describe("createModelGateway — cancellation", () => {
     }
     expect(events.filter((e) => e.type === "token")).toHaveLength(0);
     expect(events.find((e) => e.type === "finish")).toMatchObject({ reason: "aborted" });
+  });
+});
+
+// [P1-C] cached prompt tokens
+describe("createModelGateway — cached prompt tokens (P1-C)", () => {
+  const frames = (usage: Extract<ProviderStreamFrame, { type: "usage" }>): ProviderStreamFn =>
+    async function* () {
+      yield { type: "token", content: "ok" };
+      yield usage;
+      yield { type: "finish", reason: "stop" };
+    };
+
+  async function flashLite(streamProvider: ProviderStreamFn) {
+    return createModelGateway({
+      apiKeys: { google: FAKE_KEYS.google },
+      preferredProvider: "google",
+      allowedProviders: ["google"],
+      models: { executor: "gemini-3.5-flash-lite" },
+      streamProvider,
+    });
+  }
+
+  it("a usage frame with cached_tokens prices them at the cached ratio and the ledger row records them", async () => {
+    const gateway = await flashLite(frames({ type: "usage", inputTokens: 1_000_000, outputTokens: 0, cachedInputTokens: 800_000 }));
+    const events: GatewayStreamEvent[] = [];
+    for await (const event of gateway.stream({ messages: [{ role: "user", content: "hi" }] })) events.push(event);
+    const usage = events.find((e) => e.type === "usage");
+    if (usage?.type !== "usage") throw new Error("no usage event");
+    expect(usage.cachedInputTokens).toBe(800_000);
+    expect(usage.costCents).toBe(9); // 200k at $0.30/1M + 800k at $0.03/1M, not 30 at full rate
+
+    const completion = await gateway.complete({ messages: [{ role: "user", content: "hi" }] });
+    expect(completion).toMatchObject({ inputTokens: 1_000_000, cachedInputTokens: 800_000, costCents: 9 });
+
+    // The run meter every surface writes through: the charge reaches the day's ledger row intact.
+    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-cached-ledger-"));
+    const ledger = openSpendLedger({ profileDir });
+    installSpendLedger(ledger);
+    try {
+      openRunScope([], "run_cached", { companyId: "co_1", objective: "cache", surface: "repl" });
+      recordRunSpend("run_cached", {
+        model: completion.model,
+        provider: completion.provider,
+        cents: completion.costCents,
+        tokens: completion.inputTokens + completion.outputTokens,
+        ...(completion.cachedInputTokens === undefined ? {} : { cachedInputTokens: completion.cachedInputTokens }),
+      });
+      closeRunScope([], "run_cached");
+      expect(ledger.rows()).toEqual([
+        expect.objectContaining({ run_id: "run_cached", model: "gemini-3.5-flash-lite", cents: 9, tokens: 1_000_000, cachedInputTokens: 800_000 }),
+      ]);
+    } finally {
+      installSpendLedger(undefined);
+      fs.rmSync(profileDir, { recursive: true, force: true });
+    }
+  });
+
+  it("no cached_tokens field means zero and full price", async () => {
+    const gateway = await flashLite(frames({ type: "usage", inputTokens: 1_000_000, outputTokens: 0 }));
+    const completion = await gateway.complete({ messages: [{ role: "user", content: "hi" }] });
+    expect(completion.cachedInputTokens).toBe(0);
+    expect(completion.costCents).toBe(30);
+  });
+
+  it("thinking tokens a provider reports are billed as output and named on the row", async () => {
+    const gateway = await flashLite(frames({ type: "usage", inputTokens: 0, outputTokens: 1_000_000, reasoningTokens: 999_000 }));
+    const completion = await gateway.complete({ messages: [{ role: "user", content: "hi" }] });
+    expect(completion).toMatchObject({ outputTokens: 1_000_000, reasoningTokens: 999_000, costCents: 250 });
+  });
+});
+
+// [P1-C] the default google path: include_usage, cached tokens off the wire, reasoning_effort
+describe("createModelGateway — the default google path (P1-C)", () => {
+  const WIRE_USAGE = { prompt_tokens: 5_000, completion_tokens: 4, total_tokens: 5_004, prompt_tokens_details: { cached_tokens: 4_096 } };
+
+  function wire() {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchImpl = async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      const text = [
+        { choices: [{ delta: { content: "done" }, index: 0, finish_reason: "stop" }] },
+        { choices: [], usage: WIRE_USAGE },
+      ].map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n";
+      return new Response(text, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+    return { fetchImpl, bodies };
+  }
+
+  const base = { apiKeys: { google: FAKE_KEYS.google }, preferredProvider: "google" as const, allowedProviders: ["google" as const], models: { executor: "gemini-3.5-flash-lite" } };
+
+  it("the body carries reasoning_effort when configured and omits it otherwise", async () => {
+    const configured = wire();
+    const low = await createModelGateway({ ...base, reasoningEffort: "low", fetchImpl: configured.fetchImpl });
+    await low.complete({ messages: [{ role: "user", content: "hi" }] });
+    await low.complete({ messages: [{ role: "user", content: "hi" }], reasoningEffort: "high" });
+    expect(configured.bodies.map((body) => body.reasoning_effort)).toEqual(["low", "high"]);
+
+    const plain = wire();
+    const unset = await createModelGateway({ ...base, fetchImpl: plain.fetchImpl });
+    await unset.complete({ messages: [{ role: "user", content: "hi" }] });
+    expect("reasoning_effort" in plain.bodies[0]!).toBe(false);
+  });
+
+  it("reads the cached tokens off the wire and reports real usage, not the chars/4 estimate", async () => {
+    const { fetchImpl, bodies } = wire();
+    const gateway = await createModelGateway({ ...base, fetchImpl });
+    const completion = await gateway.complete({ messages: [{ role: "user", content: "hi" }] });
+    expect(bodies[0]!.stream_options).toEqual({ include_usage: true });
+    expect(completion).toMatchObject({ text: "done", estimated: false, inputTokens: 5_000, cachedInputTokens: 4_096, outputTokens: 4 });
   });
 });

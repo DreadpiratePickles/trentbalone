@@ -48,6 +48,8 @@ export interface SpendGroup {
 export interface SpendTotals {
   readonly cents: number;
   readonly tokens: number;
+  /** [P1-C] Prompt-cache hits inside `tokens`, summed; 0 when no row carried any. */
+  readonly cachedInputTokens: number;
   readonly rows: number;
   /** Largest spender first, then by name; a group that spent nothing is not listed. */
   readonly groups: SpendGroup[];
@@ -126,12 +128,14 @@ function groupOf(row: SpendRow, by: SpendGroupKey): string {
 function totals(rows: readonly SpendRow[], by: SpendGroupKey): SpendTotals {
   let cents = 0;
   let tokens = 0;
+  let cachedInputTokens = 0;
   const groups = new Map<string, { cents: number; tokens: number; rows: number }>();
   for (const row of rows) {
     const rowCents = Math.trunc(row.cents);
     const rowTokens = Math.trunc(row.tokens);
     cents += rowCents;
     tokens += rowTokens;
+    cachedInputTokens += Number.isFinite(row.cachedInputTokens) ? Math.trunc(row.cachedInputTokens ?? 0) : 0;
     const key = groupOf(row, by);
     const group = groups.get(key) ?? { cents: 0, tokens: 0, rows: 0 };
     group.cents += rowCents;
@@ -142,7 +146,7 @@ function totals(rows: readonly SpendRow[], by: SpendGroupKey): SpendTotals {
   const sorted = [...groups.entries()]
     .map(([key, group]) => ({ key, ...group }))
     .sort((a, b) => b.cents - a.cents || a.key.localeCompare(b.key));
-  return { cents, tokens, rows: rows.length, groups: sorted };
+  return { cents, tokens, cachedInputTokens, rows: rows.length, groups: sorted };
 }
 
 /** Today's and the window's totals over `rows`, each grouped by `by`. A row whose timestamp cannot be read is skipped. */

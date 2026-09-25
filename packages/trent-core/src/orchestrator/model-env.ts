@@ -18,6 +18,7 @@
 
 import { EXIT, TrentError } from "../errors/index.js";
 import { seatCapability } from "../fleet/seat-capabilities.js";
+import { applyModelCallEnv } from "../model-gateway/call-policy.js";
 import { applyModelOverridesEnv } from "../model-gateway/pricing.js";
 import { aliasEnvKeys, applyProviderAliasEnv, resolveProviderAlias } from "../model-gateway/providers.js";
 import type { OrchestratorModelConfig } from "./types.js";
@@ -39,6 +40,10 @@ export interface ModelTierConfig {
   readonly planner?: string;
   /** B2.1: the critic's own model, where a provider has a critic variable. Defaults to its tier. */
   readonly judge?: string;
+  /** [P1-C] A pinned model may fall back across providers. Bridged to the gateway, not a tier. */
+  readonly fallback_on_pin?: boolean;
+  /** [P1-C] `reasoning_effort` on the call. Bridged to the gateway, not a tier. */
+  readonly reasoning_effort?: string;
 }
 
 /** The model block `applyModelEnv` reads: the configured provider/model plus the optional tiers. */
@@ -163,8 +168,9 @@ export function applyModelEnv(config: ModelEnvConfig | undefined): ModelEnvRepor
 
   const provider = config.provider.trim().toLowerCase();
   const model = config.model.trim();
-  // Prices are not routing, so they are written whatever the provider turns out to be.
-  const pricing = applyModelOverridesEnv(config.overrides);
+  // Prices are not routing, so they are written whatever the provider turns out to be; so are the
+  // [P1-C] call policies (fallback_on_pin, reasoning_effort), which the gateway reads per call.
+  const pricing = [...applyModelOverridesEnv(config.overrides), ...applyModelCallEnv(config.models)];
 
   // `ollama`, `lmstudio`, `deepseek` and `groq` are OpenAI-compatible endpoints, not new provider
   // identities: the alias boundary resolves them into `openai` plus a base URL, which is what the

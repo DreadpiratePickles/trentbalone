@@ -48,6 +48,8 @@ export interface RunSpendUsage {
   readonly provider: string;
   readonly cents: number;
   readonly tokens: number;
+  /** [P1-C] Prompt-cache hits inside `tokens`, when the charge's source reported them. */
+  readonly cachedInputTokens?: number;
   readonly seat?: string;
 }
 
@@ -76,11 +78,12 @@ export function recordRunSpend(runId: string, usage: RunSpendUsage): void {
   if (scope === undefined) return;
   const key = `${usage.seat ?? ""}|${usage.model}|${usage.provider}`;
   const held = scope.groups.get(key);
+  const cached = Math.trunc(usage.cachedInputTokens ?? 0) + Math.trunc(held?.cachedInputTokens ?? 0);
   scope.groups.set(
     key,
     held === undefined
-      ? { ...usage, cents: Math.trunc(usage.cents), tokens: Math.trunc(usage.tokens) }
-      : { ...held, cents: held.cents + Math.trunc(usage.cents), tokens: held.tokens + Math.trunc(usage.tokens) },
+      ? { ...usage, cents: Math.trunc(usage.cents), tokens: Math.trunc(usage.tokens), ...(cached > 0 ? { cachedInputTokens: cached } : {}) }
+      : { ...held, cents: held.cents + Math.trunc(usage.cents), tokens: held.tokens + Math.trunc(usage.tokens), ...(cached > 0 ? { cachedInputTokens: cached } : {}) },
   );
 }
 
@@ -104,6 +107,7 @@ function closeRunSpend(runId: string): void {
       provider: usage.provider,
       cents: usage.cents,
       tokens: usage.tokens,
+      ...(usage.cachedInputTokens === undefined ? {} : { cachedInputTokens: usage.cachedInputTokens }),
     });
   }
 }

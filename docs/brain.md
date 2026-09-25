@@ -65,8 +65,12 @@ What reaches a prompt, and what does not:
 - The **context tier** carries brain recall: the CHUNKS of decisions, notes, this seat's own notes
   and imported documents that rank against THIS objective (`brain-index.ts`), one line per hit with
   a chunk id the seat can cite and hand back to `brain_read`. It is per (run, seat) and never in the
-  cacheable prefix. Imported documents are deliberately absent from the stable tier's tree: a
-  document drop never moves the cacheable bytes.
+  stable tier, which is ordered first so a provider cache can hit it. Imported documents are
+  deliberately absent from the stable tier's tree: a document drop never changes the stable bytes.
+  Measured on 2026-09-25, the second of two calls sharing the stable tier had 0 cached tokens on
+  `gemini-3.5-flash-lite` and 8,164 of 10,543 cached on `gemini-3.6-flash`. In seat prompts the
+  stable tier follows the objective today, so it is not a shared prefix; that is a recorded
+  follow-up (docs/sessions/2026-09-25-p1c-model-cost.md).
 
 ## 3. Writes, and the gates over them
 

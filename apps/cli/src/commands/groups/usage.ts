@@ -45,7 +45,9 @@ export interface UsageData {
 }
 
 function renderTotals(label: string, totals: SpendTotals, ctx: CommandContext): string[] {
-  const lines = [`  ${ctx.theme.meta(label.padEnd(8, " "))} ${ctx.theme.value(formatCents(totals.cents))} ${ctx.theme.meta(`${totals.cents} cents, ${totals.tokens} tokens, ${totals.rows} charges`)}`];
+  // [P1-C] Prompt-cache hits are named only when there were some; the JSON always carries the total.
+  const cached = totals.cachedInputTokens > 0 ? `, ${totals.cachedInputTokens} cached` : "";
+  const lines = [`  ${ctx.theme.meta(label.padEnd(8, " "))} ${ctx.theme.value(formatCents(totals.cents))} ${ctx.theme.meta(`${totals.cents} cents, ${totals.tokens} tokens${cached}, ${totals.rows} charges`)}`];
   for (const group of totals.groups) {
     lines.push(`    ${ctx.theme.body(group.key.padEnd(KEY_WIDTH, " "))} ${ctx.theme.value(formatCents(group.cents))} ${ctx.theme.meta(`${group.tokens} tokens, ${group.rows} charges`)}`);
   }

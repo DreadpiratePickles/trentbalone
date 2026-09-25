@@ -7,6 +7,8 @@
  * See 01_discovery/output/model-gateway-contract.md, "Other notes".
  */
 
+import type { ReasoningEffort } from "./call-policy.js";
+
 /**
  * The five provider identities `apps/web` understands. This union does NOT grow when Trent gains a
  * new endpoint: `ollama`, `lmstudio`, `deepseek` and `groq` are OpenAI-compatible, so they are
@@ -28,6 +30,15 @@ export type GatewayStreamRequest = {
   role?: StreamRole;
   /** Force a single provider, bypassing the fallback chain. */
   provider?: ModelProvider;
+  /**
+   * [P1-C] An EXPLICIT model for this request: a seat pin, a `--model` flag, a cron pin. Absent is
+   * DEFAULT-RESOLVED (the route's configured model, with the fallback chain). An explicit model is
+   * answered by that model or the call fails with its provider's own error, unless
+   * `models.fallback_on_pin` is true (`call-policy.ts`).
+   */
+  model?: string;
+  /** [P1-C] Beats `models.reasoning_effort` for this call. Sent to Google only (`openai-compat.ts`). */
+  reasoningEffort?: ReasoningEffort;
   maxTokens?: number;
   temperature?: number;
   /**
@@ -49,6 +60,13 @@ export type GatewayStreamEvent =
       modelTier: ModelTier;
       inputTokens: number;
       outputTokens: number;
+      /**
+       * [P1-C] The part of `inputTokens` the provider served from its prompt cache, priced at the
+       * row's cached ratio (`pricing.ts`). 0 when the provider reported none; the gateway always sets it.
+       */
+      cachedInputTokens?: number;
+      /** [P1-C] Thinking tokens inside `outputTokens`, when the provider reports them. */
+      reasoningTokens?: number;
       /** Always INTEGER CENTS. Never a float. */
       costCents: number;
       /**
@@ -81,6 +99,9 @@ export type GatewayCompletion = {
   modelTier: ModelTier;
   inputTokens: number;
   outputTokens: number;
+  /** [P1-C] See the usage event. Optional here only so existing fakes keep compiling. */
+  cachedInputTokens?: number;
+  reasoningTokens?: number;
   costCents: number;
   estimated: boolean;
   priced_as_default: boolean;
@@ -102,7 +123,16 @@ export type GatewayRoute = {
 export type ProviderStreamFrame =
   | { type: "token"; content: string }
   | { type: "finish"; reason: string }
-  | { type: "usage"; inputTokens: number; outputTokens: number };
+  | {
+      type: "usage";
+      inputTokens: number;
+      /** Billed output, thinking tokens included. */
+      outputTokens: number;
+      /** [P1-C] Prompt-cache hits inside `inputTokens`; absent means none were reported. */
+      cachedInputTokens?: number;
+      /** [P1-C] Thinking tokens inside `outputTokens`. */
+      reasoningTokens?: number;
+    };
 
 /**
  * Injection point used by the offline tests; the default hits the real providers.
@@ -115,7 +145,7 @@ export type ProviderStreamFrame =
 export type ProviderStreamFn = (
   provider: ModelProvider,
   model: string,
-  input: { messages: GatewayMessage[]; temperature: number; maxTokens: number; signal?: AbortSignal },
+  input: { messages: GatewayMessage[]; temperature: number; maxTokens: number; signal?: AbortSignal; reasoningEffort?: ReasoningEffort },
 ) => AsyncGenerator<ProviderStreamFrame>;
 
 export type ModelGatewayConfig = {
@@ -156,6 +186,14 @@ export type ModelGatewayConfig = {
    * builds its gateway with no arguments.
    */
   modelOverrides?: ModelOverrides;
+  /**
+   * [P1-C] `models.fallback_on_pin` and `models.reasoning_effort`. Omitted means "read the env
+   * bridge" (`call-policy.ts`), because the orchestrator builds its gateway with no arguments.
+   */
+  fallbackOnPin?: boolean;
+  reasoningEffort?: ReasoningEffort;
+  /** [P1-C] Test seam for the Trent-side Google streamer; the default is the global `fetch`. */
+  fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>;
 };
 
 /** One `model_overrides` entry. Rates are CENTS per million tokens; the cost itself is integer cents. */
@@ -173,5 +211,5 @@ export interface ModelGateway {
   resolveRoute(role?: StreamRole): GatewayRoute;
   configuredProviders(): ModelProvider[];
   /** With `model`, the per-model overlay (`pricing.ts`) applies; without it, the app's tier price. */
-  estimateCostCents(input: { modelTier: ModelTier; inputTokens: number; outputTokens: number; model?: string }): number;
+  estimateCostCents(input: { modelTier: ModelTier; inputTokens: number; outputTokens: number; model?: string; cachedInputTokens?: number }): number;
 }

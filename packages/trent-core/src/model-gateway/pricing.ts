@@ -18,6 +18,14 @@
  * operator's own hardware and cost nothing per token. `unverified` = the id is not on any pricing
  * page we hold; the number is the nearest published tier as a stand-in and MUST be confirmed
  * before it is trusted for billing — every unverified row says so in its `note`.
+ *
+ * [P1-C] Cached prompt tokens. A provider that served part of the prompt from its cache bills those
+ * tokens at a fraction of the input rate: `cachedInputRatio` on the row, else
+ * `DEFAULT_CACHED_INPUT_RATIO`. The Gemini rows carry Google's own figure from
+ * https://ai.google.dev/gemini-api/docs/pricing (read 2026-09-25): "Context caching price" is a tenth
+ * of the input price on every listed model (flash-lite $0.30 -> $0.03, 3.5-flash $1.50 -> $0.15,
+ * 3.6-flash $0.75 -> $0.075, 2.5-pro $1.25 -> $0.125, 2.5-flash $0.30 -> $0.03). The 0.25 default is
+ * deliberately the higher figure: a row nobody checked overstates a cache hit's cost, never hides it.
  */
 
 import { isLocalAlias, type ProviderAlias } from "./providers.js";
@@ -40,7 +48,15 @@ export interface ModelPriceRow {
   readonly source: PriceSource;
   readonly contextWindow?: number;
   readonly note?: string;
+  /** [P1-C] Cached input tokens bill at this fraction of the input rate. Absent: the default. */
+  readonly cachedInputRatio?: number;
 }
+
+/** [P1-C] The cached-token ratio for a row that states none, and for the app's tier fallback. */
+export const DEFAULT_CACHED_INPUT_RATIO = 0.25;
+
+/** Google's published cached-input fraction (pricing page, see the header). */
+const GOOGLE_CACHED = 0.1;
 
 const USD_PER_MILLION = 100_000_000; // micro-cents in one dollar
 const usd = (dollars: number): number => Math.round(dollars * USD_PER_MILLION);
@@ -49,7 +65,7 @@ const row = (
   input: number,
   output: number,
   source: PriceSource,
-  extra: { contextWindow?: number; note?: string } = {},
+  extra: { contextWindow?: number; note?: string; cachedInputRatio?: number } = {},
 ): ModelPriceRow => ({
   inputMicroCentsPerMillion: usd(input),
   outputMicroCentsPerMillion: usd(output),
@@ -62,14 +78,19 @@ const UNLISTED = (family: string): string =>
 
 /** Exact model ids. Checked before any prefix rule. */
 export const MODEL_PRICE_TABLE: Readonly<Record<string, ModelPriceRow>> = {
-  "gemini-3.5-flash-lite": row(0.3, 2.5, "google-list-2026-09", { contextWindow: 1_000_000 }),
-  "gemini-3.5-flash": row(1.5, 9.0, "google-list-2026-09", { contextWindow: 1_000_000 }),
+  "gemini-3.5-flash-lite": row(0.3, 2.5, "google-list-2026-09", { contextWindow: 1_000_000, cachedInputRatio: GOOGLE_CACHED }),
+  "gemini-3.5-flash": row(1.5, 9.0, "google-list-2026-09", { contextWindow: 1_000_000, cachedInputRatio: GOOGLE_CACHED }),
+  // [P1-C] Listed 2026-09-25 at $0.75 / $3.75 "through Dec 31, 2026" and $1.50 / $7.50 from 2027-01-01.
+  "gemini-3.6-flash": row(0.75, 3.75, "google-list-2026-09", {
+    cachedInputRatio: GOOGLE_CACHED,
+    note: "promotional list price through 2026-12-31; Google lists $1.50 in / $7.50 out from 2027-01-01",
+  }),
   "gemini-3.5-pro": row(2.0, 12.0, "unverified", {
     contextWindow: 1_000_000,
     note: "not on Google's pricing page on 2026-09-13; carries the published gemini-3.1-pro (<=200K) price as a stand-in",
   }),
-  "gemini-2.5-pro": row(1.25, 10.0, "google-list-2026-09", { contextWindow: 1_048_576 }),
-  "gemini-2.5-flash": row(0.3, 2.5, "google-list-2026-09", { contextWindow: 1_048_576 }),
+  "gemini-2.5-pro": row(1.25, 10.0, "google-list-2026-09", { contextWindow: 1_048_576, cachedInputRatio: GOOGLE_CACHED }),
+  "gemini-2.5-flash": row(0.3, 2.5, "google-list-2026-09", { contextWindow: 1_048_576, cachedInputRatio: GOOGLE_CACHED }),
   "gemini-2.0-flash": row(0.1, 0.4, "google-list-2026-09", { contextWindow: 1_048_576 }),
   "deepseek-chat": row(0.27, 1.1, "deepseek-list-2026-05", { contextWindow: 128_000 }),
   "deepseek-reasoner": row(0.55, 2.19, "deepseek-list-2026-05", { contextWindow: 128_000 }),
@@ -127,6 +148,8 @@ export interface PriceCallInput {
   readonly modelTier: ModelTier;
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /** [P1-C] The part of `inputTokens` served from the provider's prompt cache. Clamped to `inputTokens`. */
+  readonly cachedInputTokens?: number;
   /** The identity the call was routed as. */
   readonly provider?: ModelProvider;
   /** The user-facing alias, when one was used. A local alias prices at zero. */
@@ -188,8 +211,17 @@ export function contextWindowFor(
   return priceRowFor(model, alias)?.contextWindow;
 }
 
-function centsFrom(row: ModelPriceRow, inputTokens: number, outputTokens: number): number {
-  const inputMicro = Math.max(0, inputTokens) * row.inputMicroCentsPerMillion;
+/** [P1-C] The cached share of the prompt, whole and never more than the prompt. */
+function cachedShare(inputTokens: number, cachedInputTokens: number | undefined): { uncached: number; cached: number } {
+  const input = Math.max(0, inputTokens);
+  const cached = Math.min(input, Math.max(0, Math.trunc(cachedInputTokens ?? 0)));
+  return { uncached: input - cached, cached };
+}
+
+function centsFrom(row: ModelPriceRow, inputTokens: number, outputTokens: number, cachedInputTokens?: number): number {
+  const { uncached, cached } = cachedShare(inputTokens, cachedInputTokens);
+  const cachedRate = Math.round(row.inputMicroCentsPerMillion * (row.cachedInputRatio ?? DEFAULT_CACHED_INPUT_RATIO));
+  const inputMicro = uncached * row.inputMicroCentsPerMillion + cached * cachedRate;
   const outputMicro = Math.max(0, outputTokens) * row.outputMicroCentsPerMillion;
   // micro-cents per million x tokens -> divide by 1e6 (tokens per million) and 1e6 (micro-cents per cent).
   return Math.ceil((inputMicro + outputMicro) / 1_000_000 / 1_000_000);
@@ -200,13 +232,17 @@ export function priceCall(input: PriceCallInput, tierDefault: TierPricer): Price
   const hasOverridePrice =
     typeof override?.input_cents_per_million === "number" || typeof override?.output_cents_per_million === "number";
   if (override && hasOverridePrice) {
+    // An override prices the tokens; the model's cached ratio still applies (it is a property of the
+    // provider's cache, not of the rate someone negotiated).
+    const ratio = priceRowFor(input.model, input.alias)?.cachedInputRatio;
     const overrideRow: ModelPriceRow = {
       inputMicroCentsPerMillion: Math.round((override.input_cents_per_million ?? 0) * 1_000_000),
       outputMicroCentsPerMillion: Math.round((override.output_cents_per_million ?? 0) * 1_000_000),
       source: "override",
+      ...(ratio === undefined ? {} : { cachedInputRatio: ratio }),
     };
     return {
-      costCents: centsFrom(overrideRow, input.inputTokens, input.outputTokens),
+      costCents: centsFrom(overrideRow, input.inputTokens, input.outputTokens, input.cachedInputTokens),
       pricedAsDefault: false,
       unpriced: false,
       source: "override",
@@ -215,15 +251,18 @@ export function priceCall(input: PriceCallInput, tierDefault: TierPricer): Price
 
   const priceRow = priceRowFor(input.model, input.alias);
   if (!priceRow) {
+    // The tier pricer takes whole tokens, so the cached share is converted to its full-rate
+    // equivalent at the default ratio and rounded UP: never cheaper than the bill.
+    const { uncached, cached } = cachedShare(input.inputTokens, input.cachedInputTokens);
     const costCents = tierDefault({
       modelTier: input.modelTier,
-      inputTokens: input.inputTokens,
+      inputTokens: uncached + Math.ceil(cached * DEFAULT_CACHED_INPUT_RATIO),
       outputTokens: input.outputTokens,
     });
     return { costCents: Math.max(0, Math.ceil(costCents)), pricedAsDefault: true, unpriced: true, source: "default" };
   }
   return {
-    costCents: centsFrom(priceRow, input.inputTokens, input.outputTokens),
+    costCents: centsFrom(priceRow, input.inputTokens, input.outputTokens, input.cachedInputTokens),
     pricedAsDefault: false,
     unpriced: false,
     source: priceRow.source,

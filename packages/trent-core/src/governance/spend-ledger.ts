@@ -45,6 +45,12 @@ export interface SpendRow {
   /** Integer cents. Never a float. */
   readonly cents: number;
   readonly tokens: number;
+  /**
+   * [P1-C] The part of the prompt the provider served from its cache (already inside `tokens`, and
+   * already priced at the cached rate in `cents`). Written only when there were some, so a row from
+   * before the field existed and a row with no cache hits read the same.
+   */
+  readonly cachedInputTokens?: number;
   /** [U1] The tool that spent it, on a `surface: "tool"` row. */
   readonly tool?: string;
   /** [U1] What was bought, when the provider bills per unit rather than per token: messages, images, seconds. */
@@ -119,7 +125,17 @@ export class SpendLedger implements SpendLedgerReader {
     if (!Number.isInteger(charge.cents)) {
       throw new TypeError(`spend must be integer cents, received ${charge.cents}`);
     }
-    const row: SpendRow = { ...charge, at: charge.at ?? this.#now().toISOString(), tokens: Math.trunc(charge.tokens) };
+    const { cachedInputTokens: rawCached, ...rest } = charge;
+    if (rawCached !== undefined && !(Number.isFinite(rawCached) && rawCached >= 0)) {
+      throw new TypeError(`cached input tokens must be a non-negative count, received ${rawCached}`);
+    }
+    const cached = Math.trunc(rawCached ?? 0);
+    const row: SpendRow = {
+      ...rest,
+      at: charge.at ?? this.#now().toISOString(),
+      tokens: Math.trunc(charge.tokens),
+      ...(cached > 0 ? { cachedInputTokens: cached } : {}),
+    };
     fs.mkdirSync(path.dirname(this.path), { recursive: true, mode: DIR_MODE });
     // The mode is only honoured at creation, so an existing file keeps whatever it has; create it
     // closed first and the append never widens it.

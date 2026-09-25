@@ -26,6 +26,7 @@ interface Group {
 interface Window {
   cents: number;
   tokens: number;
+  cachedInputTokens: number;
   rows: number;
   groups: Group[];
 }
@@ -51,6 +52,7 @@ interface Charge {
   provider?: string;
   cents: number;
   tokens?: number;
+  cachedInputTokens?: number;
   at?: string;
 }
 
@@ -64,6 +66,7 @@ function charge(c: Charge): void {
     provider: c.provider ?? "anthropic",
     cents: c.cents,
     tokens: c.tokens ?? 100,
+    ...(c.cachedInputTokens === undefined ? {} : { cachedInputTokens: c.cachedInputTokens }),
   });
 }
 
@@ -103,6 +106,7 @@ describe("trent usage", () => {
     expect(data.today).toEqual({
       cents: 203,
       tokens: 2300,
+      cachedInputTokens: 0,
       rows: 4,
       groups: [
         { key: "repl", cents: 120, tokens: 1000, rows: 1 },
@@ -164,8 +168,8 @@ describe("trent usage", () => {
 
   it("reports a profile that has never spent as zeros rather than failing", async () => {
     const data = await usage([]);
-    expect(data.today).toEqual({ cents: 0, tokens: 0, rows: 0, groups: [] });
-    expect(data.period).toEqual({ cents: 0, tokens: 0, rows: 0, groups: [] });
+    expect(data.today).toEqual({ cents: 0, tokens: 0, cachedInputTokens: 0, rows: 0, groups: [] });
+    expect(data.period).toEqual({ cents: 0, tokens: 0, cachedInputTokens: 0, rows: 0, groups: [] });
     expect(data.remainingCents).toBe(1000);
   });
 
@@ -180,5 +184,19 @@ describe("trent usage", () => {
     expect(human.stdout).toContain("twilio");
     expect(human.stdout).toContain("2300 tokens");
     expect(human.stdout).toContain("budget.daily_cap");
+  });
+
+  // [P1-C] cached prompt tokens
+  it("totals cached prompt tokens in --json, and the text names them only when there are some", async () => {
+    seedProfile();
+    const before = await runCli(["usage", "--no-color"], { overrides: { now: () => at } });
+    expect(before.stdout).not.toContain("cached");
+
+    charge({ surface: "run", seat: "engineer", model: "gemini-3.5-flash-lite", provider: "google", cents: 9, tokens: 1_000_000, cachedInputTokens: 800_000 });
+    const data = await usage([]);
+    expect(data.today.cachedInputTokens).toBe(800_000);
+    expect(data.period.cachedInputTokens).toBe(800_000);
+    const human = await runCli(["usage", "--no-color"], { overrides: { now: () => at } });
+    expect(human.stdout).toContain("800000 cached");
   });
 });

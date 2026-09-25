@@ -676,7 +676,8 @@ Each REPL turn is one orchestration run, and the runs of one session are a conve
 `repl.history_turns` turns (default 8), trimmed to `repl.history_chars` characters (default 6000,
 oldest dropped first), travel with the next run as a message list. The line you type stays the
 objective; the transcript is rendered into the seat prompt *after* the frozen fleet-memory prelude,
-so the cacheable prefix does not move between turns. A turn you interrupted with Ctrl+C is kept in
+so the tiers stay ordered for a provider cache to hit, stable first (see "The three tiers" for what
+that was measured to be worth). A turn you interrupted with Ctrl+C is kept in
 the session marked `interrupted` and is never re-threaded: a fragment is not an answer. Chat threads
 through the gateway get the same treatment, bounded by the same two numbers.
 
@@ -689,6 +690,8 @@ key to raise. `--continue` seeds the ledger from the resumed session's `total_co
 cap survives a restart rather than resetting with the process.
 `trent budget status` reads today's ledger against the cap by surface; `trent usage` reads the same
 ledger over a period (`--since 7d|30d|YYYY-MM-DD`, month to date by default) grouped `--by surface|seat|model|provider|tool`.
+Each total carries `cachedInputTokens`, the prompt tokens a provider served from its cache; the
+text output names it only when it is not zero.
 Both go through the one spend report (`packages/trent-core/src/governance/spend-report.ts`), so the two never disagree about a number.
 
 ### Money is integer cents
@@ -724,11 +727,17 @@ Everything the wrapper injects into a seat prompt is assembled in three tiers, i
 | `context` | this seat's own live skills, the cross-agent recall for this objective | once per (run, seat) |
 | `volatile` | the session transcript, the active personality's tone stance | whenever the surface changes it |
 
-The stable tier is the part a provider could cache, so nothing that depends on the objective, the
-seat or the turn may live in it. Before 2026-09-18 the whole prelude was memoised with the *first*
-seat's scope, which handed every later seat of a run the first seat's recall and the first seat's
-skills; the freeze now sits on the stable tier and on the run's view of the company, and each seat
-gets its own `context` tier.
+The tiers are ordered so a provider's prompt cache can hit the stable tier, which is why nothing
+that depends on the objective, the seat or the turn may live in it. Measured on 2026-09-25
+(`packages/trent-core/src/model-gateway/prompt-cache.live.test.ts`, two calls sharing a ~10.5k-token
+stable tier as their prefix), the second call had 0 cached tokens on `gemini-3.5-flash-lite`, the
+default model, and 8,164 of 10,543 cached on `gemini-3.6-flash`. In seat prompts the stable tier
+follows the objective today (the wrapped app renders `Company`/`Seat`/`Objective`/... before the
+injection), so across two objectives it is not a shared prefix; moving it ahead of the objective is
+a recorded follow-up (docs/sessions/2026-09-25-p1c-model-cost.md). Before 2026-09-18 the whole
+prelude was memoised with the *first* seat's scope, which handed every later seat of a run the first
+seat's recall and the first seat's skills; the freeze now sits on the stable tier and on the run's
+view of the company, and each seat gets its own `context` tier.
 
 The personality reaches the `volatile` tier and nowhere else. It is never part of the system prompt
 and never part of the seat prompt the improvement loop protects
@@ -770,7 +779,10 @@ The most recent turns are kept verbatim, and a tool call is never separated from
 
 Nine names are accepted. Five are routed by the wrapped application itself; the other four are
 OpenAI-compatible endpoints that the gateway resolves at the boundary into the `openai` client plus
-a base URL, so the same streaming path serves all of them.
+a base URL, so the same streaming path serves all of them. The exception is `google`, whose
+calls stream through the gateway's own OpenAI-compatible client
+(`packages/trent-core/src/model-gateway/openai-compat.ts`), because the app's client asks Google
+for no usage frame and cannot send `reasoning_effort`.
 
 | `provider` | Key | Endpoint (override with) | Default model |
 |---|---|---|---|
@@ -835,6 +847,32 @@ npm run cli -- config set models.planner gemini-3.6-pro
 npm run cli -- fleet show finance        # model + tier the finance seat resolves
 ```
 
+### Pinned models and reasoning effort
+
+Two more keys live in the `models` block. Neither is a tier; both reach the gateway on the same
+env bridge as `model_overrides` (`TRENT_MODEL_FALLBACK_ON_PIN`, `TRENT_REASONING_EFFORT`).
+
+```yaml
+models:
+  fallback_on_pin: false     # the default; true lets a pinned model fall back like any other call
+  reasoning_effort: low      # none | minimal | low | medium | high; unset sends nothing
+```
+
+A gateway request that names its model is **pinned**. It is answered by that model or it fails
+with that provider's own error; no other provider is tried, so no other model is billed. A
+transient failure (429, 5xx) is still retried on the same model. A request that names no model
+takes the configured one and falls back across the chain as before. `fallback_on_pin: true` gives a
+pin the chain back. Today the request field is `GatewayStreamRequest.model`; seat calls are routed
+and fall back inside the wrapped app (`apps/web/lib/model-gateway.ts` `executeSeatModel`), which
+this key does not reach.
+
+`reasoning_effort` is sent as `reasoning_effort` on Google calls only, and only when set. The values
+are Google's (https://ai.google.dev/gemini-api/docs/openai, "Thinking"): `none` is accepted for 2.5
+models only, and Gemini 3 models refuse it. The other providers go through the wrapped app's
+streamer, which cannot carry the field; the gateway logs `model_gateway.reasoning_effort_not_sent`
+once when that happens. Measured on `gemini-3.5-flash-lite` with one golden prompt: `low` 169
+output tokens (168 of them thinking), `high` 321 (320 thinking).
+
 ## Retry and fallback
 
 Every provider attempt is bounded: **3 attempts**, exponential backoff with full jitter, 500 ms
@@ -847,7 +885,8 @@ attempt, delay, error class and status — never a credential.
 When the attempts are spent the next provider in the fallback chain is tried. Once a token has
 reached you the answer is half-delivered, so there is no retry and no fallback: you get the error
 rather than a duplicated paragraph. Cancelling (Ctrl+C) ends a backoff wait immediately and starts
-no further attempt.
+no further attempt. A request that names its model never moves to the next provider unless
+`models.fallback_on_pin` is true (see "Pinned models and reasoning effort").
 
 ## Model pricing
 
@@ -867,6 +906,14 @@ Rates are cents per million tokens; the cost itself is always integer cents. Mod
 `ollama` and `lmstudio` are priced at zero — the tokens were produced on your hardware. A model
 nothing can price is reported with `unpriced` on the usage row and its cost is the wrapped app's
 tier estimate: visibly a guess, not a bill. Add a `model_overrides` entry to make it exact.
+
+Cached prompt tokens are priced separately. When the provider says part of the prompt was served
+from its cache (`prompt_tokens_details.cached_tokens`), those tokens bill at the row's cached ratio:
+a tenth of the input rate on the Gemini rows, per Google's pricing page, and 0.25 on a row that
+states none (an override keeps the model's ratio). Google's thinking tokens are billed as output:
+the endpoint reports them only in `total_tokens`, and the gateway adds them to the output count and
+names them `reasoningTokens` on the usage row. `cachedInputTokens` rides the usage row and the
+spend ledger, and `trent usage --json` totals it.
 
 ## The yaml and env split
 
