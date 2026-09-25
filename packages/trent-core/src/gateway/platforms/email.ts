@@ -2,6 +2,12 @@
  * Email: IMAP polling for inbound (unseen mail, UID cursor persisted), SMTP submission
  * for outbound. Threads are Message-ID chains; there are no buttons, so an approval is
  * decided by an `APPROVE <id> <nonce>` reply, parsed by the gateway core.
+ *
+ * `From:` is whatever the sender typed, so by default a mail reaches the handler (and with it
+ * pairing, routing and approvals) only when the receiving server's verdict authenticates the
+ * From domain (`email/auth-results.ts`); `gateway.email.authserv_id` names that server so a
+ * header the sender wrote is never read, and `gateway.email.require_authenticated_from: false`
+ * turns the check off.
  */
 
 import {
@@ -20,6 +26,7 @@ import {
 import { buttonsAsText, nowIso, TransportError } from "../transport/http.js";
 import { SmtpClient } from "./email/smtp.js";
 import { ImapClient, bareAddress, stripQuotedReply } from "./email/imap.js";
+import { checkSenderAuth } from "./email/auth-results.js";
 import type { Security } from "./email/lineSocket.js";
 
 export const EMAIL_DEFAULT_POLL_MS = 30_000;
@@ -93,7 +100,15 @@ export class EmailAdapter implements TransportAdapter {
     await this.polling;
   }
 
+  /** `gateway.email`: only an explicit `require_authenticated_from: false` turns the check off. */
+  private senderAuthPolicy(): { required: boolean; authservId?: string } {
+    const email = this.ctx.config.loadConfig().gateway?.email;
+    return { required: email?.require_authenticated_from !== false, authservId: email?.authserv_id };
+  }
+
   async pollOnce(): Promise<number> {
+    // Read before anything is fetched or marked seen, so a config error loses no mail.
+    const policy = this.senderAuthPolicy();
     const client = new ImapClient(this.imapOptions());
     await client.connect();
     try {
@@ -105,6 +120,20 @@ export class EmailAdapter implements TransportAdapter {
         this.ctx.store.mutate((s) => { s.cursors[CURSOR_KEY] = String(uid); });
         const h = fetched.headers;
         const sender = bareAddress(h.from);
+        if (policy.required) {
+          const auth = checkSenderAuth({
+            authservId: policy.authservId,
+            fromAddress: sender,
+            fromHeaderCount: fetched.headerValues.from?.length ?? 0,
+            authenticationResults: fetched.headerValues["authentication-results"] ?? [],
+            receivedSpf: fetched.headerValues["received-spf"] ?? [],
+          });
+          if (!auth.ok) {
+            // Refused before pairing and routing: no code, no agent, no approval. Never the subject or body.
+            (this.ctx.logger ?? SILENT_LOGGER).warn("email: refused mail whose From is not authenticated", { from: sender, verdict: auth.verdict });
+            continue;
+          }
+        }
         const nameMatch = /^\s*"?([^"<]+?)"?\s*</.exec(h.from ?? "");
         const msg: InboundMessage = {
           id: h["message-id"] ?? `uid:${uid}`,

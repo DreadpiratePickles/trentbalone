@@ -15,4 +15,16 @@ export const GatewayConfigSchema = z.object({
   owner: z.object({ platform: z.string(), channelId: z.string() }).optional(),
   /** Push alerts to `owner`: how long a gate may wait unanswered before one reminder is sent. */
   alerts: z.object({ approval_wait_minutes: z.number().int().positive().default(30) }).default({}),
+  // [P1-A] email auth
+  /**
+   * Inbound email is dropped before pairing and routing unless the receiving server's
+   * Authentication-Results authenticates the From domain (DMARC pass, or an aligned SPF or DKIM
+   * pass). `false` restores the old behaviour, for a server that strips or never writes the header.
+   * `authserv_id` names that server (RFC 8601 section 2.2): only its own header is read, any other
+   * is the sender's. Unset, the topmost header is read.
+   */
+  email: z.object({
+    require_authenticated_from: z.boolean().default(true),
+    authserv_id: z.string().trim().min(1).optional(),
+  }).default({}),
 });

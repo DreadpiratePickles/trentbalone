@@ -53,6 +53,9 @@
       "double_text_policy": "enqueue",
       "alerts": {
         "approval_wait_minutes": 30
+      },
+      "email": {
+        "require_authenticated_from": true
       }
     },
     "repl": {
@@ -294,6 +297,10 @@
       },
       "alerts": {
         "approval_wait_minutes": 15
+      },
+      "email": {
+        "require_authenticated_from": false,
+        "authserv_id": "mx.fixture.test"
       }
     },
     "repl": {

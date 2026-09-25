@@ -32,6 +32,38 @@ pairing (default deny, random codes with a one-hour expiry, rate limited, admin 
 a per-platform circuit breaker and health, and approvals that are checked against the durable row so
 a forged or replayed callback is rejected.
 
+## Email: only an authenticated From gets through
+
+`From:` is text the sender types, and pairing is keyed on it, so before an email is paired, routed
+or read as an `APPROVE <id> <nonce>` reply, the adapter checks the receiving mail server's own
+verdict (`packages/trent-core/src/gateway/platforms/email/auth-results.ts`). It reads one
+`Authentication-Results` header: with `gateway.email.authserv_id` set, the first one whose
+authserv-id (the token before the first `;`, RFC 8601 section 2.2) is that name, compared
+case-insensitively, every other one being ignored as the sender's; without it, the topmost one.
+It accepts `dmarc=pass` for the From domain or, when the server reports no DMARC policy, a
+`dkim=pass` or an envelope-sender `spf=pass` whose domain is aligned with the From domain: equal,
+or one inside the other (`bounces.example.com` for `example.com`); sibling subdomains never align.
+`Received-SPF` names no server, so it is read only when `authserv_id` is unset and a message has no
+`Authentication-Results` at all. Anything else (a DMARC fail, no verdict header, no header from the
+named server, two `From:` headers) is marked seen and dropped with one log line naming the address
+and the verdict, never the subject or body: no pairing code, no agent, no decision.
+
+```yaml
+gateway:
+  email:
+    require_authenticated_from: true
+    authserv_id: mx.example.com   # the first token of your server's own Authentication-Results line
+```
+
+Set `authserv_id`; it is the recommended configuration. Unset, the topmost header decides, and the
+check is only as strong as your server's habit of writing that header: on a server that skips it,
+the topmost header would be the sender's own. To find the name, read the top
+`Authentication-Results:` line of a message your server delivered; a server that omits the name
+(its line starts with a result such as `spf=pass`) cannot be pinned, so leave `authserv_id` unset
+there. `gateway.email.require_authenticated_from: false` restores the old behaviour, and a mail
+server that strips the header, or never writes one, must opt out, since otherwise every message is
+refused.
+
 ## What does work
 
 `gateway status` reads the profile secrets and reports, per platform, whether the credential is

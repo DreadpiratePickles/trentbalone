@@ -88,6 +88,9 @@ gateway:
   platforms: []
   routes: {}                  # platform -> agentId
   double_text_policy: enqueue # enqueue | interrupt | reject: a second message on a busy chat
+  email:
+    require_authenticated_from: true # inbound mail needs the server's DMARC, or aligned SPF/DKIM, pass
+    # authserv_id: mx.example.com    # recommended: read only your server's Authentication-Results
 
 repl:
   double_text_policy: enqueue # the same three modes for input typed during a REPL turn
@@ -653,6 +656,16 @@ longer matches what was approved. Every file is scanned for prompt injection bef
 and run it as the next turn, the default), `interrupt` (abort the running turn and run the new
 message once it has settled) or `reject` (refuse it with one status line; the model never sees
 it). `/stop` interrupts the running turn under every policy. See [gateway.md](gateway.md).
+
+### Email needs an authenticated From
+
+`gateway.email.require_authenticated_from` (default `true`) drops an inbound email before pairing
+and routing unless the receiving mail server's own verdict authenticates the `From:` domain. Set it
+to `false` only for a mail server that strips or never writes `Authentication-Results`.
+`gateway.email.authserv_id` (unset by default, recommended) names that server as it names itself in
+the header (RFC 8601 authserv-id); set, only its own header is read and a message without one is
+refused, so a header the sender wrote can never vouch for them. Unset, the topmost header is read.
+See [gateway.md](gateway.md), "Email: only an authenticated From gets through".
 
 ### Conversation history
 

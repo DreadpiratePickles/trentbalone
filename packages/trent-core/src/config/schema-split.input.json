@@ -18,7 +18,8 @@
     "routes": { "slack": "ceo", "telegram": "support-responder" },
     "double_text_policy": "interrupt",
     "owner": { "platform": "slack", "channelId": "C0FIXTURE" },
-    "alerts": { "approval_wait_minutes": 15 }
+    "alerts": { "approval_wait_minutes": 15 },
+    "email": { "require_authenticated_from": false, "authserv_id": "mx.fixture.test" }
   },
   "repl": { "double_text_policy": "reject", "history_turns": 12, "history_chars": 9000 },
   "context": { "ceiling_chars": 90000, "compact_after_chars": 18000 },

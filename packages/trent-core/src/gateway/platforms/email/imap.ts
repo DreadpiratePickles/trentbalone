@@ -17,11 +17,15 @@ export interface ImapOptions {
 
 export interface FetchedMessage {
   uid: number;
+  /** One value per header name (the last occurrence), names lower-cased. */
   headers: Record<string, string>;
+  /** Every occurrence of every fetched header, top to bottom, names lower-cased. */
+  headerValues: Record<string, string[]>;
   text: string;
 }
 
-const HEADER_FIELDS = "FROM TO SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES";
+/** AUTHENTICATION-RESULTS and RECEIVED-SPF carry the receiving server's verdict on the sender. */
+const HEADER_FIELDS = "FROM TO SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES AUTHENTICATION-RESULTS RECEIVED-SPF";
 
 export class ImapClient {
   readonly transcript: string[] = [];
@@ -81,7 +85,8 @@ export class ImapClient {
     // literals: [prefix, header-literal, between, text-literal, suffix]
     const headerRaw = literals[1] ?? "";
     const textRaw = literals[3] ?? "";
-    return { uid, headers: parseHeaders(headerRaw), text: decodeBody(textRaw, parseHeaders(headerRaw)) };
+    const headers = parseHeaders(headerRaw);
+    return { uid, headers, headerValues: parseHeaderValues(headerRaw), text: decodeBody(textRaw, headers) };
   }
 
   async markSeen(uid: number): Promise<void> {
@@ -104,14 +109,25 @@ function quote(value: string): string {
   return `"${value.replace(/(["\\])/g, "\\$1")}"`;
 }
 
-export function parseHeaders(raw: string): Record<string, string> {
-  const out: Record<string, string> = {};
+function headerLines(raw: string): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
   const unfolded = raw.replace(/\r?\n[ \t]+/g, " ");
   for (const line of unfolded.split(/\r?\n/)) {
     const idx = line.indexOf(":");
     if (idx <= 0) continue;
-    out[line.slice(0, idx).trim().toLowerCase()] = decodeWords(line.slice(idx + 1).trim());
+    out.push([line.slice(0, idx).trim().toLowerCase(), decodeWords(line.slice(idx + 1).trim())]);
   }
+  return out;
+}
+
+export function parseHeaders(raw: string): Record<string, string> {
+  return Object.fromEntries(headerLines(raw));
+}
+
+/** Every value of every header, in message order: the first Authentication-Results is the receiving server's. */
+export function parseHeaderValues(raw: string): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [name, value] of headerLines(raw)) (out[name] ??= []).push(value);
   return out;
 }
 

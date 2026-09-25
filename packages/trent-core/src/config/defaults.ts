@@ -51,6 +51,8 @@ export const DEFAULT_CONFIG: TrentConfig = {
     routes: {},
     double_text_policy: "enqueue",
     alerts: { approval_wait_minutes: 30 },
+    // [P1-A] email auth
+    email: { require_authenticated_from: true },
   },
   // [A1] context management
   // `history_chars` is what the next run may be told; `context.ceiling_chars` bounds the whole
