@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { ConfigManager } from "../../config/ConfigManager.js";
 import { SlackAdapter } from "./slack.js";
 import { MemoryGatewayStore } from "../store/GatewayStore.js";
 import { FakeServer, json, waitFor } from "../testing/fakeServer.js";
 import { FakeSocketServer } from "../testing/fakeSocket.js";
 import type { InboundMessage, ButtonCallback, InboundReaction } from "../transport/types.js";
+import { saveVoiceNote } from "../voice-notes.js";
 
 const BOT = "xoxb-test-bot-token-000";
 const APP = "xapp-1-test-app-token-000";
@@ -119,5 +123,43 @@ describe("SlackAdapter against local Web API + Socket Mode servers", () => {
     const ok = await adapter.handleWebhook({ method: "POST", url: "/webhooks/slack", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": sig }, body });
     expect(ok.status).toBe(200);
     expect(JSON.parse(ok.body)).toEqual({ challenge: "abc123" });
+  });
+
+  it("carries an audio clip (file_share with an audio file) lazily, fetched from url_private_download with the bot token", async () => {
+    const M4A = new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34]);
+    http.on("GET", "/files-pri/T1-F1/download/audio_message.m4a", (_r, res) => { res.writeHead(200, { "content-type": "audio/mp4" }); res.end(Buffer.from(M4A)); });
+    const inbound: InboundMessage[] = [];
+    adapter.onMessage(async (m) => { inbound.push(m); });
+    const file = (id: string, url: string, mimetype: string) => ({ id, name: "audio_message.m4a", mimetype, filetype: "m4a", size: M4A.length, subtype: "slack_audio", duration_ms: 3200, url_private: url, url_private_download: url });
+    const post = async (event: Record<string, unknown>) => {
+      const ts = String(Math.floor(Date.now() / 1000));
+      const body = JSON.stringify({ type: "event_callback", event });
+      const sig = "v0=" + crypto.createHmac("sha256", SIGNING).update(`v0:${ts}:${body}`).digest("hex");
+      return adapter.handleWebhook({ method: "POST", url: "/webhooks/slack", headers: { "x-slack-request-timestamp": ts, "x-slack-signature": sig }, body });
+    };
+    expect((await post({ type: "message", subtype: "file_share", channel_type: "im", user: "U1", channel: "D1", text: "", ts: "1700000005.000100", files: [
+      file("F0", `${http.baseUrl}/files-pri/T1-F0/download/chart.png`, "image/png"),
+      file("F1", `${http.baseUrl}/files-pri/T1-F1/download/audio_message.m4a`, "audio/mp4"),
+    ] })).status).toBe(200);
+    expect((await post({ type: "message", subtype: "file_share", channel_type: "im", user: "U1", channel: "D1", text: "", ts: "1700000006.000100", files: [
+      file("F2", "https://attacker.example.test/audio_message.m4a", "audio/mp4"),
+    ] })).status).toBe(200);
+    expect(inbound).toHaveLength(2);
+    expect(inbound[0]).toEqual(expect.objectContaining({ id: "1700000005.000100", senderId: "U1", content: "", scope: "dm", attachments: [expect.objectContaining({ kind: "audio", mime: "audio/mp4", durationSeconds: 3.2, sizeBytes: M4A.length })] }));
+    expect(inbound[0].attachments).toHaveLength(1);
+    expect(http.find("GET", "/files-pri/")).toEqual([]);
+
+    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-slack-voice-"));
+    try {
+      const saved = await saveVoiceNote(inbound[0].attachments![0], { profileDir, platform: "slack", messageId: inbound[0].id, maxBytes: 1024 });
+      expect(path.dirname(saved)).toBe(path.join(profileDir, "inbox", "slack"));
+      expect(path.basename(saved)).toMatch(/^1700000005[_-]000100\.m4a$/);
+      expect(new Uint8Array(fs.readFileSync(saved))).toEqual(M4A);
+      expect(http.find("GET", "/files-pri/T1-F1/download/audio_message.m4a")[0].headers.authorization).toBe(`Bearer ${BOT}`);
+      // The bot token is only ever sent to files.slack.com (or this test's pinned base URL).
+      await expect(saveVoiceNote(inbound[1].attachments![0], { profileDir, platform: "slack", messageId: inbound[1].id, maxBytes: 1024 })).rejects.toThrow(/attacker\.example\.test/);
+    } finally {
+      fs.rmSync(profileDir, { recursive: true, force: true });
+    }
   });
 });

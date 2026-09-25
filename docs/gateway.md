@@ -95,6 +95,7 @@ exits; otherwise it stays up, and Ctrl+C, SIGTERM or SIGHUP stops the heartbeat,
 the adapters, the proxy and the sandboxes before the process exits with 130. The command claims the
 interrupt (`apps/cli/src/signals.ts`), so the binary's own Ctrl+C handler waits for that release
 instead of exiting on top of it; a second Ctrl+C exits at once.
+To keep it up across reboots, with the cron runner and the heartbeat, install it as one supervised launchd or systemd service: `trent service install` ([service.md](service.md)).
 
 ## One gateway per profile
 
@@ -270,6 +271,43 @@ passes the pairing gate through it. What the second message does is `gateway.dou
 
 A message whose text is exactly `/stop` aborts the running turn under every policy and starts no
 turn of its own. The REPL applies the same three modes from `repl.double_text_policy`.
+
+## Voice notes
+
+A voice note (or an audio file) sent to Trent on Telegram, WhatsApp, Signal, Discord or Slack is
+transcribed, and the run sees text: `[voice note, <n>s] <transcript>`, with any caption on the next
+line. From there it is an ordinary message, so a spoken reply can also answer an `ask_human`
+question. `packages/trent-core/src/gateway/voice-notes.ts` does the work, called once from
+`GatewayManager.handleInbound` **after** the pairing gate: an unpaired sender's audio is never
+downloaded or transcribed, it gets the pairing code like any other message.
+
+| Platform | What the adapter carries | Fetched with |
+|---|---|---|
+| telegram | `voice` and `audio` messages (duration and size declared) | `getFile`, then `/file/bot<token>/<file_path>` |
+| whatsapp | `type: "audio"` messages | `GET /<media-id>`, then the returned URL on `lookaside.fbsbx.com`, with the bearer token |
+| signal | attachments with an `audio/*` content type (a voice note has no text) | JSON-RPC `getAttachment` from signal-cli's store |
+| discord | attachments with an `audio/*` content type (a voice message has `duration_secs`) | the attachment URL on `cdn.discordapp.com` / `media.discordapp.net`, no token |
+| slack | shared files with an `audio/*` mimetype (`duration_ms`) | `url_private_download` on `files.slack.com`, with the bot token |
+
+An adapter only declares the attachment and a lazy `open()`; it downloads nothing in its own
+dispatch, which runs before pairing. A credential goes only to that platform's own file host (or
+the adapter's configured base URL); a URL anywhere else is refused before any request is made. The
+bytes land in `<profile>/inbox/<platform>/<message-id>.<ext>` (file 0600, directory 0700) and stay
+there; the path rides on the message's attachment and in `metadata.voiceNotes`.
+
+Transcription uses the media toolset's engines, resolved as `media_transcribe` resolves them
+(`tools/media/transcribe.ts`, see [media.md](media.md)): whisper.cpp or faster-whisper, on the host
+or in the `trent-sandbox-media` image. The hosted path is never used here, because it needs a
+per-call approval and a run to bill, and an inbound note has neither yet. With no local engine the
+sender gets one reply naming what to install (the doctor's hint) and nothing runs.
+
+Refusals are one reply each, and the message does not run: a note longer than
+`gateway.voice_notes.max_seconds` (default 300; checked on the declared length before download, else
+on ffprobe's length after it), a download over `gateway.voice_notes.max_bytes` (default 20 MiB),
+a failed download, a failed transcription, or a note with no speech. `gateway.voice_notes.enabled:
+false` refuses voice notes (a caption still runs as text). Email, Teams and Home Assistant carry no
+audio. Tests: one voice case in each of the five `*.wire.test.ts` files, and
+`gateway/voice-notes.test.ts` for the dispatch order and every refusal.
 
 ## Not yet implemented
 

@@ -7,12 +7,15 @@
 import crypto from "node:crypto";
 import {
   baseUrlFor,
+  INBOUND_DOWNLOAD_TIMEOUT_MS,
+  isPinnedDownloadUrl,
   readSetting,
   type AdapterContext,
   type ButtonCallback,
   type CallbackHandler,
   type Capabilities,
   type HealthStatus,
+  type InboundAttachment,
   type InboundHandler,
   type InboundMessage,
   type OutboundMessage,
@@ -21,15 +24,17 @@ import {
   type WebhookRequest,
   type WebhookResponse,
 } from "../transport/types.js";
-import { toBlobPart, buttonsAsText, expectOk, httpRequest, nowIso, TransportError } from "../transport/http.js";
+import { toBlobPart, buttonsAsText, expectOk, httpRequest, nowIso, redact, TransportError } from "../transport/http.js";
 
 export const WHATSAPP_GRAPH = "https://graph.facebook.com";
 export const WHATSAPP_GRAPH_VERSION = "v22.0";
 /** Reply buttons: at most three, titles at most 20 characters. */
 const MAX_REPLY_BUTTONS = 3;
+/** Where the Graph API's media URLs point; the token is sent to no other host. */
+export const WHATSAPP_MEDIA_HOSTS = ["lookaside.fbsbx.com"] as const;
 
 interface WaSendResponse { messages?: Array<{ id: string }> }
-interface WaMessage { from: string; id: string; timestamp: string; type: string; text?: { body: string }; interactive?: { type: string; button_reply?: { id: string; title: string } }; image?: { caption?: string }; document?: { caption?: string } }
+interface WaMessage { from: string; id: string; timestamp: string; type: string; text?: { body: string }; interactive?: { type: string; button_reply?: { id: string; title: string } }; image?: { caption?: string }; document?: { caption?: string }; audio?: { id: string; mime_type?: string; sha256?: string; voice?: boolean } }
 interface WaWebhook { object: string; entry?: Array<{ changes?: Array<{ field: string; value: { contacts?: Array<{ profile?: { name?: string }; wa_id: string }>; messages?: WaMessage[] } }> }> }
 
 export class WhatsAppAdapter implements TransportAdapter {
@@ -171,7 +176,33 @@ export class WhatsAppAdapter implements TransportAdapter {
       return;
     }
     const content = m.text?.body ?? m.image?.caption ?? m.document?.caption ?? "";
-    const msg: InboundMessage = { id: m.id, platform: "whatsapp", channelId: m.from, senderId: m.from, senderName, content, timestamp, scope: "dm", metadata: { type: m.type } };
+    const attachments = this.audioAttachments(m);
+    const msg: InboundMessage = { id: m.id, platform: "whatsapp", channelId: m.from, senderId: m.from, senderName, content, timestamp, scope: "dm", metadata: { type: m.type }, ...(attachments ? { attachments } : {}) };
     await this.messageHandler?.(msg);
+  }
+
+  /** [P2-3] A voice note or audio message, carried lazily: the media lookup and download run only when the gateway opens it. */
+  private audioAttachments(m: WaMessage): InboundAttachment[] | undefined {
+    const media = m.type === "audio" ? m.audio : undefined;
+    if (!media?.id) return undefined;
+    return [{ kind: "audio", mime: media.mime_type ?? "audio/ogg", open: () => this.openMedia(media.id) }];
+  }
+
+  /** GET /{media-id} for the short-lived URL, then GET that URL with the same bearer token, on Meta's media host only. */
+  private async openMedia(mediaId: string): Promise<Response> {
+    if (!/^[A-Za-z0-9_-]+$/.test(mediaId)) throw new TransportError("whatsapp: malformed media id", "whatsapp");
+    const info = await this.graph<{ url?: string }>("GET", `/${mediaId}`);
+    const url = info.url ?? "";
+    if (!isPinnedDownloadUrl(url, baseUrlFor(this.ctx, "whatsapp", WHATSAPP_GRAPH), WHATSAPP_MEDIA_HOSTS)) {
+      let host = "an unparseable URL";
+      try { host = new URL(url).hostname; } catch { /* keep the placeholder */ }
+      throw new TransportError(`whatsapp: refusing to fetch a voice note from ${host}: not a WhatsApp media host`, "whatsapp");
+    }
+    const token = this.token();
+    try {
+      return await this.fetch(url, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(INBOUND_DOWNLOAD_TIMEOUT_MS) });
+    } catch (err) {
+      throw new TransportError(`whatsapp: voice note download failed: ${redact(err instanceof Error ? err.message : String(err), [token])}`, "whatsapp");
+    }
   }
 }

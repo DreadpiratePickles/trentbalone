@@ -91,6 +91,10 @@ gateway:
   email:
     require_authenticated_from: true # inbound mail needs the server's DMARC, or aligned SPF/DKIM, pass
     # authserv_id: mx.example.com    # recommended: read only your server's Authentication-Results
+  voice_notes:
+    enabled: true             # a paired sender's voice note is transcribed locally before the run
+    max_seconds: 300          # a longer note is refused with a reply naming the cap
+    max_bytes: 20971520       # download cap (20 MiB); a larger file is refused the same way
 
 repl:
   double_text_policy: enqueue # the same three modes for input typed during a REPL turn
@@ -669,6 +673,17 @@ to `false` only for a mail server that strips or never writes `Authentication-Re
 the header (RFC 8601 authserv-id); set, only its own header is read and a message without one is
 refused, so a header the sender wrote can never vouch for them. Unset, the topmost header is read.
 See [gateway.md](gateway.md), "Email: only an authenticated From gets through".
+
+### Voice notes
+
+`gateway.voice_notes.enabled` (default `true`) transcribes a voice note or audio file sent on
+Telegram, WhatsApp, Signal, Discord or Slack, after pairing, with the same local engines as
+`media_transcribe` (whisper.cpp or faster-whisper, on the host or in the media image; never the
+hosted path), and the run sees `[voice note, <n>s] <transcript>`. `max_seconds` (default 300) and
+`max_bytes` (default 20971520, 20 MiB) are the caps; a note over either is refused with a reply
+naming it. With no local engine installed the sender is told what to install and nothing runs.
+Set `enabled: false` to refuse voice notes (a caption still runs). See [gateway.md](gateway.md),
+"Voice notes".
 
 ### Conversation history
 

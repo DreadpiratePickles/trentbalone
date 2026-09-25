@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { ConfigManager } from "../../config/ConfigManager.js";
 import { DiscordAdapter, DISCORD_INTENTS } from "./discord.js";
 import { MemoryGatewayStore } from "../store/GatewayStore.js";
 import { FakeServer, json, waitFor } from "../testing/fakeServer.js";
 import { FakeSocketServer } from "../testing/fakeSocket.js";
 import type { InboundMessage, ButtonCallback, InboundReaction } from "../transport/types.js";
+import { saveVoiceNote } from "../voice-notes.js";
 
 const TOKEN = "MTIzNDU2Nzg5MDEyMzQ1Njc4.GhIjKl.mnopqrstuvwxyz1234567890ABCDEF";
 
@@ -112,5 +116,47 @@ describe("DiscordAdapter against local REST v10 + gateway servers", () => {
     expect((identify.d.intents as number) & (1 << 13)).toBe(1 << 13); // DIRECT_MESSAGE_REACTIONS
     expect(reactions[0]).toEqual({ platform: "discord", channelId: "C1", messageId: "M100", emoji: "\u{1F44D}", senderId: "U1", scope: "group" });
     expect(reactions[1]).toEqual({ platform: "discord", channelId: "D9", messageId: "M101", emoji: "custom_yes:123456789012345678", senderId: "U1", scope: "dm" });
+  });
+
+  it("carries a voice message's audio attachment lazily, fetched from the attachment URL without the bot token", async () => {
+    const OGG = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0, 2, 0, 0, 0, 3]);
+    http.on("GET", "/attachments/D9/A1/voice-message.ogg", (_r, res) => { res.writeHead(200, { "content-type": "audio/ogg" }); res.end(Buffer.from(OGG)); });
+    const inbound: InboundMessage[] = [];
+    adapter.onMessage(async (m) => { inbound.push(m); });
+    const attachment = (id: string, url: string, contentType: string) => ({ id, filename: "voice-message.ogg", content_type: contentType, size: OGG.length, url, proxy_url: url, duration_secs: 2.5, waveform: "AAAA" });
+    socket.whenConnected((s) => {
+      s.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 60 } }));
+      s.on("message", (raw) => {
+        const frame = JSON.parse(raw.toString()) as { op: number };
+        if (frame.op === 2) {
+          s.send(JSON.stringify({ op: 0, t: "READY", s: 1, d: { v: 10, user: { id: "BOT1", username: "trent" }, session_id: "sess", resume_gateway_url: socket.url } }));
+          s.send(JSON.stringify({ op: 0, t: "MESSAGE_CREATE", s: 2, d: { id: "M7", channel_id: "D9", author: { id: "U1", username: "ada" }, content: "", flags: 8192, timestamp: "2024-01-01T00:00:00.000Z", attachments: [
+            attachment("A0", `${http.baseUrl}/attachments/D9/A0/photo.png?ex=1`, "image/png"),
+            attachment("A1", `${http.baseUrl}/attachments/D9/A1/voice-message.ogg?ex=65a&is=65b&hm=abc`, "audio/ogg"),
+          ] } }));
+          s.send(JSON.stringify({ op: 0, t: "MESSAGE_CREATE", s: 3, d: { id: "M8", channel_id: "D9", author: { id: "U1", username: "ada" }, content: "", flags: 8192, timestamp: "2024-01-01T00:00:01.000Z", attachments: [
+            attachment("A2", "https://attacker.example.test/voice-message.ogg", "audio/ogg"),
+          ] } }));
+        }
+        if (frame.op === 1) s.send(JSON.stringify({ op: 11 }));
+      });
+    });
+    await adapter.start();
+    await waitFor(() => inbound.length === 2);
+    expect(inbound[0]).toEqual(expect.objectContaining({ id: "M7", senderId: "U1", content: "", scope: "dm", attachments: [expect.objectContaining({ kind: "audio", mime: "audio/ogg", durationSeconds: 2.5, sizeBytes: OGG.length })] }));
+    expect(inbound[0].attachments).toHaveLength(1); // the image is not carried
+    expect(http.find("GET", "/attachments/")).toEqual([]);
+
+    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-discord-voice-"));
+    try {
+      const file = await saveVoiceNote(inbound[0].attachments![0], { profileDir, platform: "discord", messageId: inbound[0].id, maxBytes: 1024 });
+      expect(file).toBe(path.join(profileDir, "inbox", "discord", "M7.ogg"));
+      expect(new Uint8Array(fs.readFileSync(file))).toEqual(OGG);
+      const [download] = http.find("GET", "/attachments/D9/A1/voice-message.ogg");
+      expect(download.headers.authorization).toBeUndefined();
+      await expect(saveVoiceNote(inbound[1].attachments![0], { profileDir, platform: "discord", messageId: inbound[1].id, maxBytes: 1024 })).rejects.toThrow(/attacker\.example\.test/);
+    } finally {
+      fs.rmSync(profileDir, { recursive: true, force: true });
+    }
   });
 });

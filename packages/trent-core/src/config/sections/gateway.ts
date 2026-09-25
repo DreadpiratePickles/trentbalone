@@ -27,4 +27,17 @@ export const GatewayConfigSchema = z.object({
     require_authenticated_from: z.boolean().default(true),
     authserv_id: z.string().trim().min(1).optional(),
   }).default({}),
+  // [P2-3] voice notes
+  /**
+   * An inbound voice note (Telegram, WhatsApp, Signal, Discord, Slack) from a paired sender is
+   * downloaded into `<profile>/inbox/<platform>/` and transcribed locally before the run, which
+   * sees `[voice note, <n>s] <transcript>` (`gateway/voice-notes.ts`). A note longer than
+   * `max_seconds`, or a download past `max_bytes`, is refused with a reply naming the cap.
+   * Optional so a profile without the block (and `DEFAULT_CONFIG`) gets these defaults.
+   */
+  voice_notes: z.object({
+    enabled: z.boolean().default(true),
+    max_seconds: z.number().int().positive().default(300),
+    max_bytes: z.number().int().positive().default(20 * 1024 * 1024),
+  }).optional(),
 });

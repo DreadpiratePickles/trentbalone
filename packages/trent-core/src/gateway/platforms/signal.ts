@@ -7,26 +7,30 @@
 import crypto from "node:crypto";
 import {
   baseUrlFor,
+  INBOUND_DOWNLOAD_TIMEOUT_MS,
   readSetting,
   SILENT_LOGGER,
   type AdapterContext,
   type CallbackHandler,
   type Capabilities,
   type HealthStatus,
+  type InboundAttachment,
   type InboundHandler,
   type InboundMessage,
   type OutboundMessage,
   type SendReceipt,
   type TransportAdapter,
 } from "../transport/types.js";
-import { buttonsAsText, expectOk, httpRequest, nowIso, TransportError } from "../transport/http.js";
+import { buttonsAsText, expectOk, httpRequest, nowIso, toBlobPart, TransportError } from "../transport/http.js";
 
 export const SIGNAL_CLI_DEFAULT_URL = "http://127.0.0.1:8080";
 export const SIGNAL_JSONRPC_VERSION = "2.0";
 const GROUP_PREFIX = "group:";
 
 interface RpcResponse<T> { jsonrpc: string; id: string; result?: T; error?: { code: number; message: string } }
-interface Envelope { source?: string; sourceNumber?: string; sourceUuid?: string; sourceName?: string; timestamp: number; dataMessage?: { timestamp: number; message?: string | null; groupInfo?: { groupId: string } } }
+/** signal-cli's JSON attachment: the bytes stay in its store until `getAttachment`. */
+interface SignalAttachment { contentType?: string; filename?: string | null; id: string; size?: number }
+interface Envelope { source?: string; sourceNumber?: string; sourceUuid?: string; sourceName?: string; timestamp: number; dataMessage?: { timestamp: number; message?: string | null; groupInfo?: { groupId: string }; attachments?: SignalAttachment[] } }
 interface ReceiveEvent { method?: string; params?: { envelope?: Envelope; account?: string } }
 
 export class SignalAdapter implements TransportAdapter {
@@ -124,20 +128,37 @@ export class SignalAdapter implements TransportAdapter {
     }
     const env = ev.params?.envelope;
     const dm = env?.dataMessage;
-    if (!env || !dm || dm.message === undefined || dm.message === null) return; // receipts, typing, sync
+    if (!env || !dm) return; // receipts, typing, sync
     const sender = env.sourceNumber ?? env.source ?? env.sourceUuid ?? "";
     const group = dm.groupInfo?.groupId;
+    const attachments = this.audioAttachments(dm.attachments, group ? { groupId: group } : { recipient: sender });
+    if ((dm.message === undefined || dm.message === null) && !attachments) return; // no text and no audio: nothing to run
     const msg: InboundMessage = {
       id: String(dm.timestamp ?? env.timestamp),
       platform: "signal",
       channelId: group ? `${GROUP_PREFIX}${group}` : sender,
       senderId: sender,
       senderName: env.sourceName,
-      content: dm.message,
+      content: dm.message ?? "",
       timestamp: new Date(env.timestamp).toISOString(),
       scope: group ? "group" : "dm",
+      ...(attachments ? { attachments } : {}),
     };
     await this.messageHandler?.(msg);
+  }
+
+  /** [P2-3] Audio attachments (a voice note arrives as one with no text), fetched with `getAttachment` only when the gateway opens one. */
+  private audioAttachments(list: SignalAttachment[] | undefined, target: Record<string, string>): InboundAttachment[] | undefined {
+    const audio = (list ?? []).filter((a) => a.id && a.contentType?.toLowerCase().startsWith("audio/"));
+    if (audio.length === 0) return undefined;
+    return audio.map((a): InboundAttachment => ({ kind: "audio", mime: a.contentType ?? "audio/aac", ...(a.size !== undefined ? { sizeBytes: a.size } : {}), open: () => this.openAttachment(a.id, target) }));
+  }
+
+  /** JSON-RPC `getAttachment` answers `{ data: <base64> }` from signal-cli's local store. */
+  private async openAttachment(id: string, target: Record<string, string>): Promise<Response> {
+    const result = await this.rpc<{ data?: string }>("getAttachment", { account: this.account(), id, ...target }, INBOUND_DOWNLOAD_TIMEOUT_MS);
+    if (typeof result?.data !== "string") throw new TransportError("signal: getAttachment returned no data", "signal");
+    return new Response(new Blob([toBlobPart(Buffer.from(result.data, "base64"))]));
   }
 
   private target(channelId: string): Record<string, unknown> {

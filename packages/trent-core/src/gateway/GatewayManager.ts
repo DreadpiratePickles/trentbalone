@@ -17,6 +17,7 @@ import { PairingManager } from "./security/PairingManager.js";
 import { MessageQueue, type MessageQueueOptions } from "./queue/MessageQueue.js";
 import { FileGatewayStore, type GatewayStore } from "./store/GatewayStore.js";
 import { createAllAdapters, PLATFORM_REGISTRY } from "./registry.js";
+import { prepareVoiceNote, type VoiceNoteOptions } from "./voice-notes.js";
 import type {
   AdapterContext,
   ButtonCallback,
@@ -46,6 +47,8 @@ export interface GatewayManagerOptions {
   drainIntervalMs?: number;
   /** Overrides `gateway.double_text_policy` from config. */
   doubleTextPolicy?: DoubleTextPolicy;
+  /** [P2-3] The voice-note engine and its environment; defaults to the media toolset's local engines. */
+  voiceNotes?: VoiceNoteOptions;
 }
 
 export interface PlatformStatus {
@@ -76,6 +79,7 @@ export class GatewayManager {
   private drainTimer?: ReturnType<typeof setInterval>;
   private lastHealth = new Map<string, HealthStatus>();
   private readonly drainIntervalMs: number;
+  private readonly voiceNotes: VoiceNoteOptions;
   /** Releases this profile's gateway lock and writer registration; set while started. */
   private releaseProfileLocks?: () => void;
 
@@ -86,6 +90,7 @@ export class GatewayManager {
     this.approvalBridge = new ApprovalBridge({ store: this.store, pairing: this.pairing, storePort: options.storePort });
     this.agentHandler = options.agentHandler;
     this.drainIntervalMs = options.drainIntervalMs ?? 1000;
+    this.voiceNotes = options.voiceNotes ?? {};
     this.doubleTextPolicy = options.doubleTextPolicy ?? this.configManager.loadConfig().gateway?.double_text_policy ?? "enqueue";
     const ctx: AdapterContext = { config: this.configManager, store: this.store, ...(options.adapterContext ?? {}) };
     this.adapters = createAllAdapters(ctx);
@@ -257,6 +262,14 @@ export class GatewayManager {
       }
       return; // rate-limited, group-not-paired, or repeat: silence
     }
+
+    // [P2-3] Only past the pairing gate is a voice note downloaded and transcribed; the run sees its text.
+    const prepared = await prepareVoiceNote(message, this.configManager, this.voiceNotes);
+    if (!prepared.ok) {
+      await this.send(message.platform, { channelId: message.channelId, threadId: message.threadId, text: prepared.reply, metadata: { subject: "Re: Voice note" } });
+      return;
+    }
+    message = prepared.message;
 
     // A text reply carrying a decision (email, Signal, Teams, Home Assistant) is a callback.
     const asDecision = this.decisionFromText(message.content);

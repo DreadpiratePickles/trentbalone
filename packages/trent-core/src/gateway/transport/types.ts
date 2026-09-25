@@ -23,6 +23,28 @@ export type Capabilities = Record<CapabilityKey, boolean>;
 
 export type Scope = "dm" | "group";
 
+/**
+ * [P2-3] A file that arrived with an inbound message. Only audio is carried (voice notes and audio
+ * files), for `gateway/voice-notes.ts`. An adapter never downloads in its dispatch, which runs
+ * before the pairing gate: it declares what the platform said about the file and sets `open`, and
+ * the gateway calls `open` only for a paired sender, reading at most `gateway.voice_notes.max_bytes`.
+ */
+export interface InboundAttachment {
+  kind: "audio";
+  /** The MIME type the platform declared, e.g. `audio/ogg`; parameters may follow a `;`. */
+  mime: string;
+  /** Length the platform declared, in seconds, known before any download. */
+  durationSeconds?: number;
+  /** Size the platform declared, in bytes, known before any download. */
+  sizeBytes?: number;
+  /** Set by the gateway once the bytes are on disk: `<profile>/inbox/<platform>/<message-id>.<ext>`. */
+  path?: string;
+  /** Bytes a platform delivered inline, when there is nothing to download. */
+  bytes?: Uint8Array;
+  /** Starts the download through the adapter's own HTTP client, with its auth, on its pinned host. */
+  open?: () => Promise<Response>;
+}
+
 export interface InboundMessage {
   id: string;
   platform: string;
@@ -34,6 +56,8 @@ export interface InboundMessage {
   scope: Scope;
   threadId?: string;
   metadata?: Record<string, unknown>;
+  /** [P2-3] Audio that came with the message; see {@link InboundAttachment}. */
+  attachments?: InboundAttachment[];
 }
 
 export interface OutboundButton {
@@ -182,4 +206,23 @@ export function readSetting(ctx: AdapterContext, key: string): string | undefine
 
 export function baseUrlFor(ctx: AdapterContext, platformId: string, fallback: string): string {
   return (ctx.baseUrls?.[platformId] ?? fallback).replace(/\/+$/, "");
+}
+
+/** [P2-3] How long one inbound attachment download may take, body included. */
+export const INBOUND_DOWNLOAD_TIMEOUT_MS = 60_000;
+
+/**
+ * [P2-3] May an adapter fetch this attachment URL, with its credentials? Only over https on one of
+ * the platform's own file hosts, or on the origin of the adapter's API base (the pinned base a
+ * test or a self-hosted bridge sets). A URL anywhere else is refused before any request is made.
+ */
+export function isPinnedDownloadUrl(url: string, apiBase: string, hosts: readonly string[]): boolean {
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    return false;
+  }
+  if (target.origin === new URL(apiBase).origin) return true;
+  return target.protocol === "https:" && hosts.includes(target.hostname.toLowerCase());
 }

@@ -1,11 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { ConfigManager } from "../../config/ConfigManager.js";
 import { SignalAdapter } from "./signal.js";
 import { MemoryGatewayStore } from "../store/GatewayStore.js";
 import { FakeServer, json, waitFor } from "../testing/fakeServer.js";
 import type { InboundMessage } from "../transport/types.js";
+import { saveVoiceNote } from "../voice-notes.js";
 
 const ACCOUNT = "+15550001111";
+const AAC = new Uint8Array([0xff, 0xf1, 0x50, 0x80, 0, 0x1f, 0xfc, 0, 0, 3]);
 
 describe("SignalAdapter against a local signal-cli JSON-RPC daemon", () => {
   let server: FakeServer;
@@ -21,6 +26,7 @@ describe("SignalAdapter against a local signal-cli JSON-RPC daemon", () => {
         if (rpc.method === "send") return json(res, 200, { jsonrpc: "2.0", id: rpc.id, result: { timestamp: 1700000000123, results: [{ recipientAddress: { number: "+15557654321" }, type: "SUCCESS" }] } });
         if (rpc.method === "version") return json(res, 200, { jsonrpc: "2.0", id: rpc.id, result: { version: "0.13.12" } });
         if (rpc.method === "sendTyping") return json(res, 200, { jsonrpc: "2.0", id: rpc.id, result: {} });
+        if (rpc.method === "getAttachment") return json(res, 200, { jsonrpc: "2.0", id: rpc.id, result: { data: Buffer.from(AAC).toString("base64") } });
         return json(res, 200, { jsonrpc: "2.0", id: rpc.id, error: { code: -32601, message: "Method not found" } });
       })
       .on("GET", "/api/v1/events", (_r, res) => {
@@ -67,5 +73,38 @@ describe("SignalAdapter against a local signal-cli JSON-RPC daemon", () => {
     expect(h.state).toBe("up");
     expect(h.detail).toContain("0.13.12");
     expect(server.find("GET", "/api/v1/events")[0].path).toBe(`/api/v1/events?account=${encodeURIComponent(ACCOUNT)}`);
+  });
+
+  it("carries a voice note (no text, an audio attachment) as a lazy attachment, fetched with getAttachment only when opened", async () => {
+    server.on("GET", "/api/v1/events", (_r, res) => {
+      sse = res;
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      res.write(`data: ${JSON.stringify({ jsonrpc: "2.0", method: "receive", params: { envelope: { source: "+15557654321", sourceNumber: "+15557654321", sourceName: "Ada", timestamp: 1700000002000, dataMessage: { timestamp: 1700000002000, message: null, attachments: [
+        { contentType: "image/jpeg", filename: "photo.jpg", id: "ImgAbCd.jpg", size: 999 },
+        { contentType: "audio/aac", filename: null, id: "Xy12AbCd.aac", size: AAC.length },
+      ] } }, account: ACCOUNT } })}\n\n`);
+      res.write(`data: ${JSON.stringify({ jsonrpc: "2.0", method: "receive", params: { envelope: { source: "+15557654321", sourceNumber: "+15557654321", timestamp: 1700000003000, dataMessage: { timestamp: 1700000003000, message: null, attachments: [{ contentType: "image/png", id: "only-image.png", size: 5 }] } }, account: ACCOUNT } })}\n\n`);
+    });
+    const inbound: InboundMessage[] = [];
+    adapter.onMessage(async (m) => { inbound.push(m); });
+    await adapter.start();
+    await waitFor(() => inbound.length === 1);
+    await new Promise((r) => setTimeout(r, 50)); // the image-only envelope is not a message
+    expect(inbound).toHaveLength(1);
+    expect(inbound[0]).toEqual(expect.objectContaining({ id: "1700000002000", senderId: "+15557654321", content: "", scope: "dm", attachments: [expect.objectContaining({ kind: "audio", mime: "audio/aac", sizeBytes: AAC.length })] }));
+    expect(inbound[0].attachments).toHaveLength(1);
+    const rpcMethods = () => server.find("POST", "/api/v1/rpc").map((r) => (r.json as { method: string }).method);
+    expect(rpcMethods()).not.toContain("getAttachment");
+
+    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-signal-voice-"));
+    try {
+      const file = await saveVoiceNote(inbound[0].attachments![0], { profileDir, platform: "signal", messageId: inbound[0].id, maxBytes: 1024 });
+      expect(file).toBe(path.join(profileDir, "inbox", "signal", "1700000002000.aac"));
+      expect(new Uint8Array(fs.readFileSync(file))).toEqual(AAC);
+      const fetch = server.find("POST", "/api/v1/rpc").find((r) => (r.json as { method: string }).method === "getAttachment");
+      expect((fetch?.json as { params: unknown }).params).toEqual({ account: ACCOUNT, id: "Xy12AbCd.aac", recipient: "+15557654321" });
+    } finally {
+      fs.rmSync(profileDir, { recursive: true, force: true });
+    }
   });
 });

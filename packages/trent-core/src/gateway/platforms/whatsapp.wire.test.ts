@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { ConfigManager } from "../../config/ConfigManager.js";
 import { WhatsAppAdapter, WHATSAPP_GRAPH_VERSION } from "./whatsapp.js";
 import { MemoryGatewayStore } from "../store/GatewayStore.js";
 import { FakeServer, json, waitFor } from "../testing/fakeServer.js";
 import type { InboundMessage, ButtonCallback } from "../transport/types.js";
+import { saveVoiceNote } from "../voice-notes.js";
 
 const TOKEN = "EAAGm0PX4ZCpsBO_wa_cloud_test_token";
 const PHONE_ID = "106540352242922";
@@ -86,5 +90,44 @@ describe("WhatsAppAdapter against a local Graph API server", () => {
     const h = await adapter.health();
     expect(h.state).toBe("up");
     expect(h.detail).toContain("Trent");
+  });
+
+  it("carries an inbound voice note as a lazy audio attachment, fetched from the media URL with the token only when opened", async () => {
+    const OGG = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0, 2, 0, 0, 0, 2]);
+    server
+      .on("GET", `/${WHATSAPP_GRAPH_VERSION}/1480373982931120`, (_r, res) => json(res, 200, { messaging_product: "whatsapp", url: `${server.baseUrl}/whatsapp_business/attachments/?mid=1480373982931120&ext=1700000000&hash=ATtest`, mime_type: "audio/ogg", sha256: "c2hh", file_size: OGG.length, id: "1480373982931120" }))
+      .on("GET", `/${WHATSAPP_GRAPH_VERSION}/2222`, (_r, res) => json(res, 200, { messaging_product: "whatsapp", url: "https://attacker.example.test/steal", mime_type: "audio/ogg", file_size: 4, id: "2222" }))
+      .on("GET", "/whatsapp_business/attachments/", (_r, res) => { res.writeHead(200, { "content-type": "audio/ogg" }); res.end(Buffer.from(OGG)); });
+    const inbound: InboundMessage[] = [];
+    adapter.onMessage(async (m) => { inbound.push(m); });
+    await adapter.start();
+    const body = JSON.stringify({ object: "whatsapp_business_account", entry: [{ id: "WABA", changes: [{ field: "messages", value: {
+      messaging_product: "whatsapp", metadata: { display_phone_number: "15551234567", phone_number_id: PHONE_ID },
+      contacts: [{ profile: { name: "Ada" }, wa_id: "15557654321" }],
+      messages: [
+        { from: "15557654321", id: "wamid.voice1", timestamp: "1700000002", type: "audio", audio: { mime_type: "audio/ogg; codecs=opus", sha256: "c2hh", id: "1480373982931120", voice: true } },
+        { from: "15557654321", id: "wamid.voice2", timestamp: "1700000003", type: "audio", audio: { mime_type: "audio/ogg; codecs=opus", id: "2222", voice: true } },
+      ] } }] }] });
+    const sig = "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(body).digest("hex");
+    expect((await adapter.handleWebhook({ method: "POST", url: "/webhooks/whatsapp", headers: { "x-hub-signature-256": sig }, body })).status).toBe(200);
+    await waitFor(() => inbound.length === 2);
+    expect(inbound[0]).toEqual(expect.objectContaining({ id: "wamid.voice1", senderId: "15557654321", content: "", attachments: [expect.objectContaining({ kind: "audio", mime: "audio/ogg; codecs=opus" })] }));
+    expect(server.find("GET", `/${WHATSAPP_GRAPH_VERSION}/1480373982931120`)).toEqual([]);
+
+    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-wa-voice-"));
+    try {
+      const file = await saveVoiceNote(inbound[0].attachments![0], { profileDir, platform: "whatsapp", messageId: inbound[0].id, maxBytes: 1024 });
+      expect(path.dirname(file)).toBe(path.join(profileDir, "inbox", "whatsapp"));
+      expect(path.basename(file)).toMatch(/^wamid[A-Za-z0-9_-]*voice1\.ogg$/);
+      expect(new Uint8Array(fs.readFileSync(file))).toEqual(OGG);
+      const [lookup] = server.find("GET", `/${WHATSAPP_GRAPH_VERSION}/1480373982931120`);
+      const [download] = server.find("GET", "/whatsapp_business/attachments/");
+      expect(lookup.headers.authorization).toBe(`Bearer ${TOKEN}`);
+      expect(download.headers.authorization).toBe(`Bearer ${TOKEN}`);
+      // A media URL off Meta's hosts (or this test's pinned base) is refused before the token is sent anywhere.
+      await expect(saveVoiceNote(inbound[1].attachments![0], { profileDir, platform: "whatsapp", messageId: inbound[1].id, maxBytes: 1024 })).rejects.toThrow(/attacker\.example\.test/);
+    } finally {
+      fs.rmSync(profileDir, { recursive: true, force: true });
+    }
   });
 });

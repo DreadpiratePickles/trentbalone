@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { ConfigManager } from "../../config/ConfigManager.js";
 import { TelegramAdapter } from "./telegram.js";
 import { MemoryGatewayStore } from "../store/GatewayStore.js";
 import { FakeServer, json, waitFor } from "../testing/fakeServer.js";
 import type { InboundMessage, ButtonCallback, InboundReaction } from "../transport/types.js";
+import { saveVoiceNote } from "../voice-notes.js";
 
 const TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11";
 
@@ -113,6 +117,45 @@ describe("TelegramAdapter against a local Bot API server", () => {
     expect(removed.status).toBe(200);
     await waitFor(() => reactions.length === 1);
     expect(reactions).toEqual([{ platform: "telegram", channelId: "555", messageId: "99", emoji: "\u{1F44D}", senderId: "555", scope: "dm" }]);
+  });
+
+  it("carries a voice note and an audio file as lazy audio attachments, fetched via getFile only when opened", async () => {
+    const OGG = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0, 2, 0, 0, 0, 1]);
+    server
+      .on("POST", `/bot${TOKEN}/getFile`, (req, res) => {
+        const id = (req.json as { file_id: string }).file_id;
+        json(res, 200, { ok: true, result: { file_id: id, file_unique_id: "AgADGQ", file_size: OGG.length, file_path: id === "VOICE31" ? "voice/file_3.oga" : "music/missing.mp3" } });
+      })
+      .on("GET", `/file/bot${TOKEN}/voice/file_3.oga`, (_r, res) => { res.writeHead(200, { "content-type": "application/octet-stream" }); res.end(Buffer.from(OGG)); });
+    const inbound: InboundMessage[] = [];
+    adapter.onMessage(async (m) => { inbound.push(m); });
+    const headers = { "x-telegram-bot-api-secret-token": "whsec" };
+    const from = { id: 555, first_name: "Ada" };
+    const chat = { id: 555, type: "private" };
+    const voice = { update_id: 20, message: { message_id: 31, from, chat, date: 1_700_000_000, voice: { file_id: "VOICE31", file_unique_id: "AgADGQ", duration: 4, mime_type: "audio/ogg", file_size: OGG.length } } };
+    const music = { update_id: 21, message: { message_id: 32, from, chat, date: 1_700_000_001, caption: "the demo", audio: { file_id: "AUDIO32", file_unique_id: "AgADGR", duration: 95, mime_type: "audio/mpeg", file_size: 2048, file_name: "demo.mp3" } } };
+    for (const update of [voice, music]) {
+      expect((await adapter.handleWebhook({ method: "POST", url: "/webhooks/telegram", headers, body: JSON.stringify(update) })).status).toBe(200);
+    }
+    await waitFor(() => inbound.length === 2);
+    expect(inbound[0]).toEqual(expect.objectContaining({ id: "31", senderId: "555", content: "", attachments: [expect.objectContaining({ kind: "audio", mime: "audio/ogg", durationSeconds: 4, sizeBytes: OGG.length })] }));
+    expect(inbound[1]).toEqual(expect.objectContaining({ id: "32", content: "the demo", attachments: [expect.objectContaining({ kind: "audio", mime: "audio/mpeg", durationSeconds: 95, sizeBytes: 2048 })] }));
+    expect(server.find("POST", `/bot${TOKEN}/getFile`)).toEqual([]); // nothing is fetched before the gateway asks
+
+    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-tg-voice-"));
+    try {
+      const file = await saveVoiceNote(inbound[0].attachments![0], { profileDir, platform: "telegram", messageId: inbound[0].id, maxBytes: 1024 });
+      expect(file).toBe(path.join(profileDir, "inbox", "telegram", "31.ogg"));
+      expect(new Uint8Array(fs.readFileSync(file))).toEqual(OGG);
+      expect(server.find("POST", `/bot${TOKEN}/getFile`).map((r) => r.json)).toEqual([{ file_id: "VOICE31" }]);
+      // A failed download names the status, never the token that sits in the file URL.
+      const failed = await saveVoiceNote(inbound[1].attachments![0], { profileDir, platform: "telegram", messageId: inbound[1].id, maxBytes: 4096 }).catch((err: unknown) => err);
+      expect(failed).toBeInstanceOf(Error);
+      expect((failed as Error).message).toMatch(/404/);
+      expect((failed as Error).message).not.toContain(TOKEN);
+    } finally {
+      fs.rmSync(profileDir, { recursive: true, force: true });
+    }
   });
 
   it("never puts the token in an error message", async () => {

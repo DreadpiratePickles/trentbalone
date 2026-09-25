@@ -19,7 +19,8 @@
     "double_text_policy": "interrupt",
     "owner": { "platform": "slack", "channelId": "C0FIXTURE" },
     "alerts": { "approval_wait_minutes": 15 },
-    "email": { "require_authenticated_from": false, "authserv_id": "mx.fixture.test" }
+    "email": { "require_authenticated_from": false, "authserv_id": "mx.fixture.test" },
+    "voice_notes": { "enabled": false, "max_seconds": 120, "max_bytes": 5242880 }
   },
   "repl": { "double_text_policy": "reject", "history_turns": 12, "history_chars": 9000 },
   "context": { "ceiling_chars": 90000, "compact_after_chars": 18000 },

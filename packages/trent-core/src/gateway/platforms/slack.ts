@@ -8,6 +8,8 @@
 import crypto from "node:crypto";
 import {
   baseUrlFor,
+  INBOUND_DOWNLOAD_TIMEOUT_MS,
+  isPinnedDownloadUrl,
   readSetting,
   SILENT_LOGGER,
   type AdapterContext,
@@ -15,6 +17,7 @@ import {
   type CallbackHandler,
   type Capabilities,
   type HealthStatus,
+  type InboundAttachment,
   type InboundHandler,
   type InboundMessage,
   type InboundReaction,
@@ -25,13 +28,17 @@ import {
   type WebhookRequest,
   type WebhookResponse,
 } from "../transport/types.js";
-import { expectOk, httpRequest, nowIso, TransportError } from "../transport/http.js";
+import { expectOk, httpRequest, nowIso, redact, TransportError } from "../transport/http.js";
 
 export const SLACK_API = "https://slack.com";
 export const SLACK_SIGNATURE_MAX_AGE_S = 300;
+/** Where `url_private_download` points; the bot token is sent to no other host. */
+export const SLACK_FILE_HOSTS = ["files.slack.com"] as const;
 
 interface SlackEnvelope<T = unknown> { ok: boolean; error?: string; ts?: string; url?: string; user?: string; team?: string; data?: T }
-interface SlackEvent { type: string; subtype?: string; user?: string; bot_id?: string; channel: string; channel_type?: string; text?: string; ts: string; thread_ts?: string }
+/** A shared file; an audio clip has an `audio/*` mimetype and `duration_ms`. */
+interface SlackFile { id: string; name?: string; mimetype?: string; size?: number; url_private_download?: string; url_private?: string; duration_ms?: number }
+interface SlackEvent { type: string; subtype?: string; user?: string; bot_id?: string; channel: string; channel_type?: string; text?: string; ts: string; thread_ts?: string; files?: SlackFile[] }
 /** `reaction_added`: https://api.slack.com/events/reaction_added */
 interface SlackReactionEvent { type: "reaction_added"; user: string; reaction: string; item: { type: string; channel?: string; ts?: string } }
 interface BlockActions { type: "block_actions"; user: { id: string }; channel?: { id: string }; actions: Array<{ action_id: string; value?: string }>; response_url?: string }
@@ -125,6 +132,7 @@ export class SlackAdapter implements TransportAdapter {
   private async dispatchEvent(ev: SlackEvent): Promise<void> {
     if (ev.type === "reaction_added") { await this.dispatchReaction(ev as unknown as SlackReactionEvent); return; }
     if (ev.type !== "message" || ev.bot_id || ev.subtype === "bot_message" || !ev.user) return;
+    const attachments = this.audioAttachments(ev.files);
     const msg: InboundMessage = {
       id: ev.ts,
       platform: "slack",
@@ -134,8 +142,34 @@ export class SlackAdapter implements TransportAdapter {
       timestamp: new Date(Number(ev.ts.split(".")[0]) * 1000).toISOString(),
       scope: ev.channel_type === "im" ? "dm" : "group",
       threadId: ev.thread_ts,
+      ...(attachments ? { attachments } : {}),
     };
     await this.messageHandler?.(msg);
+  }
+
+  /** [P2-3] Audio files (a recorded clip is one), downloaded with the bot token only when the gateway opens one. */
+  private audioAttachments(files: SlackFile[] | undefined): InboundAttachment[] | undefined {
+    const audio = (files ?? []).filter((f) => (f.url_private_download ?? f.url_private) && f.mimetype?.toLowerCase().startsWith("audio/"));
+    if (audio.length === 0) return undefined;
+    return audio.map((f): InboundAttachment => ({
+      kind: "audio", mime: f.mimetype ?? "audio/mp4",
+      ...(f.duration_ms !== undefined ? { durationSeconds: f.duration_ms / 1000 } : {}),
+      ...(f.size !== undefined ? { sizeBytes: f.size } : {}),
+      open: () => this.openFile(f.url_private_download ?? f.url_private ?? ""),
+    }));
+  }
+
+  private async openFile(url: string): Promise<Response> {
+    if (!isPinnedDownloadUrl(url, baseUrlFor(this.ctx, "slack", SLACK_API), SLACK_FILE_HOSTS)) {
+      let host = "an unparseable URL";
+      try { host = new URL(url).hostname; } catch { /* keep the placeholder */ }
+      throw new TransportError(`slack: refusing to fetch a voice note from ${host}: not a Slack file host`, "slack");
+    }
+    try {
+      return await this.fetch(url, { headers: { authorization: `Bearer ${this.botToken()}` }, signal: AbortSignal.timeout(INBOUND_DOWNLOAD_TIMEOUT_MS) });
+    } catch (err) {
+      throw new TransportError(`slack: voice note download failed: ${redact(err instanceof Error ? err.message : String(err), this.secrets())}`, "slack");
+    }
   }
 
   /** Only reactions on messages carry a channel and ts. Whether the reactor may decide is the bridge's call. */

@@ -5,6 +5,8 @@
 
 import {
   baseUrlFor,
+  INBOUND_DOWNLOAD_TIMEOUT_MS,
+  isPinnedDownloadUrl,
   readSetting,
   SILENT_LOGGER,
   type AdapterContext,
@@ -12,6 +14,7 @@ import {
   type CallbackHandler,
   type Capabilities,
   type HealthStatus,
+  type InboundAttachment,
   type InboundHandler,
   type InboundMessage,
   type InboundReaction,
@@ -28,9 +31,13 @@ export const DISCORD_API_VERSION = "v10";
 export const DISCORD_INTENTS = (1 << 0) | (1 << 9) | (1 << 10) | (1 << 12) | (1 << 13) | (1 << 15);
 const USER_AGENT = "DiscordBot (https://github.com/trent-fleet/trent, 1.0.0)";
 const STYLE: Record<string, number> = { primary: 1, default: 2, danger: 4 };
+/** Where attachment URLs point; their query carries Discord's own signature, so no token is sent. */
+export const DISCORD_CDN_HOSTS = ["cdn.discordapp.com", "media.discordapp.net"] as const;
 
 interface DcUser { id: string; username?: string; bot?: boolean }
-interface DcMessage { id: string; channel_id: string; guild_id?: string; author: DcUser; content: string; timestamp: string }
+/** A voice message is one `audio/ogg` attachment with `duration_secs`, on a message flagged IS_VOICE_MESSAGE. */
+interface DcAttachment { id: string; filename?: string; content_type?: string; size?: number; url: string; duration_secs?: number }
+interface DcMessage { id: string; channel_id: string; guild_id?: string; author: DcUser; content: string; timestamp: string; attachments?: DcAttachment[] }
 interface DcInteraction { id: string; token: string; type: number; channel_id?: string; guild_id?: string; member?: { user: DcUser }; user?: DcUser; data?: { custom_id?: string; component_type?: number } }
 /** MESSAGE_REACTION_ADD: a unicode emoji has `id: null`; a custom emoji carries its snowflake. */
 interface DcReactionAdd { user_id: string; channel_id: string; message_id: string; guild_id?: string; emoji: { id: string | null; name: string | null } }
@@ -131,10 +138,12 @@ export class DiscordAdapter implements TransportAdapter {
     if (event === "MESSAGE_CREATE") {
       const m = d as DcMessage;
       if (m.author.bot || m.author.id === this.selfId) return;
+      const attachments = this.audioAttachments(m.attachments);
       const msg: InboundMessage = {
         id: m.id, platform: "discord", channelId: m.channel_id, senderId: m.author.id, senderName: m.author.username,
         content: m.content, timestamp: m.timestamp, scope: m.guild_id ? "group" : "dm",
         metadata: m.guild_id ? { guildId: m.guild_id } : undefined,
+        ...(attachments ? { attachments } : {}),
       };
       await this.messageHandler?.(msg);
       return;
@@ -161,6 +170,31 @@ export class DiscordAdapter implements TransportAdapter {
       const ack = (await this.callbackHandler?.(cb)) ?? { ok: false, text: "No handler." };
       // CHANNEL_MESSAGE_WITH_SOURCE, ephemeral. Must answer within 3 s or Discord shows a failure.
       await this.rest("POST", `/interactions/${i.id}/${i.token}/callback`, { type: 4, data: { content: ack.text, flags: 64 } });
+    }
+  }
+
+  /** [P2-3] Audio attachments (a voice message is one), fetched from the CDN only when the gateway opens one. */
+  private audioAttachments(list: DcAttachment[] | undefined): InboundAttachment[] | undefined {
+    const audio = (list ?? []).filter((a) => a.url && a.content_type?.toLowerCase().startsWith("audio/"));
+    if (audio.length === 0) return undefined;
+    return audio.map((a): InboundAttachment => ({
+      kind: "audio", mime: a.content_type ?? "audio/ogg",
+      ...(a.duration_secs !== undefined ? { durationSeconds: a.duration_secs } : {}),
+      ...(a.size !== undefined ? { sizeBytes: a.size } : {}),
+      open: () => this.openAttachment(a.url),
+    }));
+  }
+
+  private async openAttachment(url: string): Promise<Response> {
+    if (!isPinnedDownloadUrl(url, baseUrlFor(this.ctx, "discord", DISCORD_API), DISCORD_CDN_HOSTS)) {
+      let host = "an unparseable URL";
+      try { host = new URL(url).hostname; } catch { /* keep the placeholder */ }
+      throw new TransportError(`discord: refusing to fetch a voice note from ${host}: not a Discord CDN host`, "discord");
+    }
+    try {
+      return await this.fetch(url, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(INBOUND_DOWNLOAD_TIMEOUT_MS) });
+    } catch (err) {
+      throw new TransportError(`discord: voice note download failed: ${err instanceof Error ? err.message : String(err)}`, "discord");
     }
   }
 

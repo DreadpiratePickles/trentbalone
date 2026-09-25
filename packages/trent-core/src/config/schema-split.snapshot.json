@@ -304,6 +304,11 @@
       "email": {
         "require_authenticated_from": false,
         "authserv_id": "mx.fixture.test"
+      },
+      "voice_notes": {
+        "enabled": false,
+        "max_seconds": 120,
+        "max_bytes": 5242880
       }
     },
     "repl": {

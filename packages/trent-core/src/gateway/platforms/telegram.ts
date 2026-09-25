@@ -8,6 +8,7 @@
 
 import {
   baseUrlFor,
+  INBOUND_DOWNLOAD_TIMEOUT_MS,
   readSetting,
   SILENT_LOGGER,
   type AdapterContext,
@@ -15,6 +16,7 @@ import {
   type CallbackHandler,
   type Capabilities,
   type HealthStatus,
+  type InboundAttachment,
   type InboundHandler,
   type InboundMessage,
   type InboundReaction,
@@ -25,11 +27,14 @@ import {
   type WebhookRequest,
   type WebhookResponse,
 } from "../transport/types.js";
-import { toBlobPart, expectOk, httpRequest, nowIso, TransportError } from "../transport/http.js";
+import { toBlobPart, expectOk, httpRequest, nowIso, redact, TransportError } from "../transport/http.js";
 
 interface TgUser { id: number; first_name?: string; username?: string }
 interface TgChat { id: number; type: "private" | "group" | "supergroup" | "channel" }
-interface TgMessage { message_id: number; from?: TgUser; chat: TgChat; date: number; text?: string; caption?: string; message_thread_id?: number }
+/** A `voice` note or an `audio` file; the bytes are fetched with getFile. */
+interface TgAudio { file_id: string; file_unique_id: string; duration: number; mime_type?: string; file_size?: number }
+interface TgFile { file_id: string; file_size?: number; file_path?: string }
+interface TgMessage { message_id: number; from?: TgUser; chat: TgChat; date: number; text?: string; caption?: string; message_thread_id?: number; voice?: TgAudio; audio?: TgAudio }
 interface TgCallbackQuery { id: string; from: TgUser; message?: { message_id: number; chat: TgChat }; data?: string }
 interface TgReactionType { type: "emoji" | "custom_emoji" | "paid"; emoji?: string; custom_emoji_id?: string }
 /** A user changed their reaction on a message; `user` is absent when an anonymous chat reacted. */
@@ -141,8 +146,9 @@ export class TelegramAdapter implements TransportAdapter {
   }
 
   private async dispatch(update: TgUpdate): Promise<void> {
-    if (update.message?.text !== undefined || update.message?.caption !== undefined) {
-      const m = update.message;
+    const m = update.message;
+    const attachments = m ? this.audioAttachments(m) : undefined;
+    if (m && (m.text !== undefined || m.caption !== undefined || attachments)) {
       const msg: InboundMessage = {
         id: String(m.message_id),
         platform: "telegram",
@@ -153,6 +159,7 @@ export class TelegramAdapter implements TransportAdapter {
         timestamp: new Date(m.date * 1000).toISOString(),
         scope: m.chat.type === "private" ? "dm" : "group",
         threadId: m.message_thread_id !== undefined ? String(m.message_thread_id) : undefined,
+        ...(attachments ? { attachments } : {}),
       };
       await this.messageHandler?.(msg);
     }
@@ -172,6 +179,28 @@ export class TelegramAdapter implements TransportAdapter {
       await this.call("answerCallbackQuery", { callback_query_id: q.id, text: ack.text });
     }
     if (update.message_reaction) await this.dispatchReaction(update.message_reaction);
+  }
+
+  /** [P2-3] A voice note or audio file, carried lazily: getFile and the download run only when the gateway opens it. */
+  private audioAttachments(m: TgMessage): InboundAttachment[] | undefined {
+    const file = m.voice ?? m.audio;
+    if (!file) return undefined;
+    const mime = file.mime_type ?? (m.voice ? "audio/ogg" : "audio/mpeg");
+    return [{ kind: "audio", mime, durationSeconds: file.duration, ...(file.file_size !== undefined ? { sizeBytes: file.file_size } : {}), open: () => this.openFile(file.file_id) }];
+  }
+
+  /** getFile, then GET `<base>/file/bot<token>/<file_path>`. The token sits in that URL, so no error may carry it. */
+  private async openFile(fileId: string): Promise<Response> {
+    const file = await this.call<TgFile>("getFile", { file_id: fileId });
+    if (!file.file_path || !/^[A-Za-z0-9_./-]+$/.test(file.file_path) || file.file_path.includes("..")) {
+      throw new TransportError("telegram: getFile returned no usable file_path", "telegram");
+    }
+    const token = this.token();
+    try {
+      return await this.fetch(`${baseUrlFor(this.ctx, "telegram", TELEGRAM_API)}/file/bot${token}/${file.file_path}`, { signal: AbortSignal.timeout(INBOUND_DOWNLOAD_TIMEOUT_MS) });
+    } catch (err) {
+      throw new TransportError(`telegram: voice note download failed: ${redact(err instanceof Error ? err.message : String(err), [token])}`, "telegram");
+    }
   }
 
   /** Each newly added unicode emoji is one reaction; removals, custom and paid reactions are not decisions. */
