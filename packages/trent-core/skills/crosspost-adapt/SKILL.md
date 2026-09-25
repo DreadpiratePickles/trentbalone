@@ -1,135 +1,55 @@
 ---
 name: crosspost-adapt
-description: Take one post and rewrite it for each platform it is going to, within that platform's limits and habits, instead of pasting the same text five times. Use when a post is approved for one platform and the owner wants it on others. The owner posts.
+description: Take one approved post and rewrite it for each platform it is going to, within that platform's limits and habits, instead of pasting the same text five times; then publish or queue each version with social_post or social_schedule where the social toolset reaches (Bluesky directly; X, LinkedIn, Threads or a Facebook Page through Buffer, text only; Instagram, TikTok and YouTube when connected), each only after the owner approves that exact version.
 category: social
 trust: official
-version: 1.0.0
+version: 2.0.0
 author: trent
-tags: social, crosspost, instagram, linkedin, x, threads, bluesky, facebook, tiktok, youtube
+tags: social, crosspost, bluesky, buffer, linkedin, x, threads, facebook, instagram, tiktok, youtube
 ---
 # Crosspost Adapt
 
-The same text on five platforms reads as an ad on four of them. One idea, five rewrites: each
-in the length, shape and manners of the place it is going, with one link and one ask apiece.
+The Maker turns one idea into the post itself, three variants before one; the Voice keeps each
+version in the owner's words. The same text on five platforms reads as an ad on four of them:
+one idea, rewritten in the length, shape and manners of each place, one link and one ask apiece.
 
-## When to use
+Who runs it: `content` writes the versions and makes the calls; `growth` says what each version
+is for. Both seats carry the social toolset.
 
-- A post is approved for its first platform and the owner wants it everywhere.
-- A newsletter section, a blog post or a video description needs social versions.
+## What you need
+The source post (text, link, the image or clip it goes with), the target platforms, the voice
+file (`brand/voice.md`), and what the post is for: booking, reading, replying, watching.
 
-## What you need before you write
-
-1. The source post: text, any link, the image or clip it goes with (described).
-2. The target platforms.
-3. The voice file (`brand/voice.md`) if it exists; otherwise the owner's notes.
-4. What the post is for (booking, reading, replying, watching), so each version can ask for
-   the platform's version of it.
-
-## Platform rules
-
-Read `references/platform-limits.md` for the numbers. The short form:
-
-- X: 280 characters, hook in the first line, no hashtag inside a sentence, a thread for anything
-  longer than two ideas (first post stands alone), one link at the end or in a reply.
-- LinkedIn: the first two lines show before "see more", so they carry the point; no external
-  link in the body (put it in the first comment and say so); up to three hashtags at the end;
-  paragraphs of one or two lines.
-- Instagram: a hook line, a blank line, short lines, the ask, then up to five hashtags at the
-  end; no clickable links in captions, so "link in bio" or a booking phrase; alt text required.
-- Threads: 500 characters, conversational, a question works, at most one hashtag-style topic.
-- Bluesky: 300 characters, no algorithmic feed to game, written to be replied to; links show as
-  cards.
-- Facebook: longer is fine, a question or invitation at the end, at most two hashtags, the
-  link inline.
-- TikTok caption: short, three to five hashtags, and a line of on-screen text for the video.
-- YouTube Shorts: a title under 60 characters and a two-line description; hashtags in the
-  description.
-
-## Rules of the trade
-
-- One link per version, and the platform's own way of carrying it.
-- One ask per version, in the platform's idiom: "reply", "save this", "link in bio", "book".
-- Never the identical first line on two platforms; the hook is rewritten each time.
-- Keep the facts identical: a price, a date or a claim never changes between versions.
-- Say what changed and why in one line per version, so the owner learns the platform's
-  manners instead of trusting the tool.
+## Steps
+1. What each platform can take here: `social_platforms_list {}` (route, connection, limits).
+   The numbers and manners per platform are in `references/platform-limits.md`.
+2. Write every version into the file (Output format), then say in one line per version what
+   changed and why, so the owner learns the platform instead of trusting the tool.
+3. After the owner approves the versions, one call each, text only:
+   `social_post {"platform": "bluesky", "text": "We moved the evening. Thursdays at Lark now run to 8 pm, for everyone who can't get here before six. What would you book first?"}`
+   `social_schedule {"platform": "x", "text": "Thursdays at Lark Day Spa now run to 8 pm. Same team, same prices, more evening left. Book: larkdayspa.example/book", "at": "2026-10-01T16:00:00Z"}`
+   `social_schedule {"platform": "linkedin", "text": "Our quietest hour was 4 pm; our longest waiting list was after six. So from 1 October, Thursdays run to 8 pm. The link to book is in the first comment.", "at": "2026-10-01T13:30:00Z"}`
+4. Each version goes out only after the owner approves that exact platform, text and time; a
+   changed word is a new approval. Buffer publishes at the channel's next slot and says so. A
+   queued version publishes once while `trent cron start` runs.
+5. Versions that need media (an Instagram image, a TikTok video, a YouTube Short) wait: the
+   Bluesky path attaches no image and Buffer refuses a media URL. Instagram goes direct only
+   when connected (Meta, its App Review, a hosted image); TikTok and YouTube have no public
+   publish path here. Mark them "owner posts" in the file.
 
 ## Output format
-
-Write `posts/<YYYY-MM-DD>-<slug>-crosspost.md`:
-
+`posts/<YYYY-MM-DD>-<slug>-crosspost.md`:
 ```
 # Crosspost: <the one thing>
-
-Source: <platform the approved post came from>
-Facts that must not change: <list>
-
+Source: <platform the approved post came from>   Facts that must not change: <price, date, claim>
 ## <Platform>
-<the version, exactly as it should be posted>
-Changed: <one line: what and why>
-Ask: <the one call to action>
-Link: <where it goes: body, first comment, bio, none>
-
-## <Next platform> ...
+<the version, exactly as it should go out>
+Changed: <what and why, one line>   Ask: <the one call to action>
+Status: <posted <id> | queued <job> | owner posts | not posted: why>
 ```
-
 Then `Before posting:` with anything to confirm, or `nothing`.
 
-## Worked example
-
-Input: the approved Instagram post "Thursdays until 8 pm from 2 October" (see the
-`local-business-post` example), targets: Facebook, LinkedIn (the owner's personal profile),
-Threads, Bluesky.
-
-```
-# Crosspost: Thursday evenings, open until 8 pm from 2 October
-
-Source: Instagram
-Facts that must not change: Thursday; until 8 pm; from 2 October; same prices;
-larkdayspa.example/book
-
-## Facebook
-From Thursday 2 October, Lark Day Spa on Elm Street stays open until 8 pm. If your week never
-leaves room for a facial or a massage before six, this is the evening for it. Same team, same
-prices. Book at larkdayspa.example/book. Which time would you take, six or seven?
-Changed: longer, link inline, ends with a question because Facebook rewards replies.
-Ask: answer the question, or book
-Link: body
-
-## LinkedIn
-I have run Lark Day Spa for six years and every October the same thing happens: bookings
-before six dry up because nobody's week has room.
-
-So from 2 October we are open until 8 pm on Thursdays. Same team, same prices.
-
-If you are the person whose calendar never has a gap before six, this evening is for you.
-Booking link in the first comment.
-
-#smallbusiness #elmstreet #localbusiness
-Changed: first person, the reason before the news, link moved to the comment, three hashtags.
-Ask: book through the comment link
-Link: first comment
-
-## Threads
-Thursdays until 8 pm at Lark Day Spa from 2 October. Same team, same prices. For the people
-who cannot get here before six: which hour would you take, six or seven?
-Changed: cut to 500 characters, conversational, one question.
-Ask: reply with an hour
-Link: none
-
-## Bluesky
-Lark Day Spa on Elm Street is open until 8 pm on Thursdays from 2 October. Same team, same
-prices, more daylight when you come out. larkdayspa.example/book
-Changed: under 300 characters, the link as a card, no hashtags.
-Ask: book
-Link: body (card)
-```
-
-Before posting: nothing.
-
-## Approval
-
-This skill writes versions into a file. It posts nothing. The owner posts each version; when
-the social toolset lands, each version goes out only with the owner's approval, and the tool
-will name what a platform needs first (a hosted image for Instagram, an audited app for a
-public TikTok post).
+## Rules of the trade
+- One link and one ask per version, in the platform's own way ("link in bio", "reply", "book").
+- Never the identical first line on two platforms. Facts never change between versions.
+- Bluesky 300 graphemes, X 280 characters, Threads 500; LinkedIn's first two lines carry the point.

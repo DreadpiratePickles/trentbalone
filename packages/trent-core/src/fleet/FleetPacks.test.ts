@@ -62,9 +62,10 @@ describe("FLEET_PACKS", () => {
 });
 
 /**
- * The three market packs (design v2, decision A3). A pack is a grouping, a persona and a set of
- * skills over the existing seats; it is not a runnable agent, and its `state` line says exactly
- * what executes today and what stays a draft until a toolset lands.
+ * The three market packs (design v2, decision A3). A pack is a grouping, a persona, a set of
+ * skills and the toolsets those skills call, over the existing seats; it is not a runnable agent,
+ * and its `state` line says exactly what runs once a provider is connected, which platforms wait
+ * for an application, and what stays a draft. `pack-skills.test.ts` reads the skills themselves.
  */
 describe("the small-business, social and creator packs", () => {
   const sourceNames = new Set(listSourceSkills().map((entry) => entry.name));
@@ -107,6 +108,20 @@ describe("the small-business, social and creator packs", () => {
     const social = FLEET_PACKS.social?.state.toLowerCase() ?? "";
     expect(social).toContain("published");
     expect(social).toContain("toolset");
+    // Scorecard 2026-09-25, retraction 4: both toolsets landed in fd51f62. The states name the
+    // providers, the per-call approval and the platforms that still wait for an application.
+    for (const state of [business, social]) {
+      expect(state).not.toMatch(/until the (business|social) toolset .*lands|toolset lands/);
+      expect(state).toContain("until the owner approves that exact call");
+      expect(state).toContain("bluesky");
+      expect(state).toContain("buffer");
+    }
+    for (const provider of ["stripe", "google calendar", "square", "twilio", "outbound-only"]) expect(business).toContain(provider);
+    expect(business).toContain("when meta is connected");
+    expect(business).toContain("google business profile");
+    expect(social).toMatch(/when meta or google is connected/);
+    expect(social).toContain("no dms");
+    expect(social).toContain("analyst seat has no social toolset");
     // Decision 4 (2026-09-20): the creator pack clips when a media backend is installed, and
     // says which doctor line proves it; without one it still works in text, and it never uploads.
     const creator = FLEET_PACKS.creator?.state.toLowerCase() ?? "";
@@ -129,6 +144,19 @@ describe("the small-business, social and creator packs", () => {
     expect(persona).not.toContain("arrive with the media toolset");
     // The Thumbnail Hand spends money on media_image and says so.
     expect(persona.toLowerCase()).toMatch(/cents|costs|approval/);
+  });
+
+  it("the business and social personas name the calls their seats make and the approval each waits for", () => {
+    const business = packPersona(FLEET_PACKS["small-business"]!)!;
+    for (const tool of ["sms_send", "stripe_quote_create", "stripe_invoice_create", "stripe_invoice_send", "social_schedule", "social_reply"]) expect(business).toContain(tool);
+    const social = packPersona(FLEET_PACKS.social!)!;
+    for (const tool of ["social_schedule", "social_insights_read", "social_inbox_list"]) expect(social).toContain(tool);
+    for (const persona of [business, social]) {
+      expect(persona).toMatch(/approves that exact (call|post)|owner's yes/);
+      expect(persona).not.toMatch(/toolset lands|until the (business|social) toolset/);
+    }
+    // The analyst seat denies `social` (seat-capabilities), so its persona reads what others pull.
+    expect(social).toContain("the analyst's seat does not");
   });
 
   it("carry a persona that names every member, fits the stable tier, and is the same bytes every read", () => {

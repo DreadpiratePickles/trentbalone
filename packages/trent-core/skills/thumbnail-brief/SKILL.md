@@ -3,7 +3,7 @@ name: thumbnail-brief
 description: Three thumbnail briefs for one video: composition, three words or fewer of text, the emotion on the face, the colours by name from the creator's palette, a shoot list for a real photo and a prompt for later image generation. Use when a video needs its thumbnail. Pulls the real frame with media_thumbnail and, after the owner approves the cents, renders one variant with media_image when the media backend and an image key are configured.
 category: creator
 trust: official
-version: 1.0.0
+version: 1.1.0
 author: trent
 tags: creator, thumbnails, youtube, design, image-brief, testing
 ---
@@ -12,6 +12,9 @@ tags: creator, thumbnails, youtube, design, image-brief, testing
 A thumbnail is read at 120 pixels wide on a phone, in under a second, next to eleven others.
 One idea, three words at most, a face that feels what the title promises, and contrast that
 survives being tiny. Three briefs, so the creator can test rather than guess.
+
+Who runs it: `content`, briefing as the Thumbnail Hand (`design-image-prompt-engineer`, a
+profile the planner does not schedule on its own); every seat carries the media toolset.
 
 ## When to use
 

@@ -1,9 +1,9 @@
 ---
 name: hook-lab
-description: Ten opening lines for a short video, across five patterns, each speakable in three seconds and paired with on-screen text, then the three to shoot and the re-hook for the middle. Use when a clip, a short or a video needs its first three seconds. When the media backend is installed the chosen opening is cut with media_clip for review; no views are predicted.
+description: Ten opening lines for a short video, across five patterns, each speakable in three seconds and paired with on-screen text, then the three to shoot and the re-hook for the middle. Use when a clip, a short or a video needs its first three seconds. When the media backend is installed the three shortlisted openings are cut with media_clip for review and their first frames checked with media_thumbnail; no views are predicted.
 category: creator
 trust: official
-version: 1.0.0
+version: 1.1.0
 author: trent
 tags: creator, hooks, shorts, reels, tiktok, youtube, retention, scripting
 ---
@@ -29,6 +29,9 @@ five patterns, then pick three and shoot.
 
 ## With the media tools
 
+Who runs it: `content`; every seat carries the media toolset. `mkt-short-video-editing-coach`
+and the other specialists are profiles the planner does not schedule on their own.
+
 These steps run when the media backend is installed (the Media Pipeline line of `trent doctor`
 says whether it is, and how to install one or run `trent sandbox build --media`). Without a
 backend, skip them and work from the transcript the owner supplies; say which you did.
@@ -38,13 +41,14 @@ backend, skip them and work from the transcript the owner supplies; say which yo
 2. When the owner gave a recording and no transcript: `media_transcribe` with
    `{"input": "recordings/<file>.mp4", "language": "en"}`; it saves
    `media-out/<file>.transcript.json`, and the hooks quote it, not a paraphrase.
-3. Check the first frame: `media_thumbnail` with `{"input": "recordings/<file>.mp4", "at": <second the clip starts>, "width": 640}`.
-   The rule says the first frame shows the subject, not a title card; look before writing
-   "First frame" in the table.
-4. After the owner picks one of the three: cut its opening for review with `media_clip` and
+3. Cut the opening of each of the three shortlisted hooks for review with `media_clip` and
    `{"input": "recordings/<file>.mp4", "start": <in>, "end": <in + 8>, "crop": "face", "captions": true}`
-   so the spoken hook is heard against the frame it opens on. The MP4 lands under `media-out/`.
-   The on-screen text is not burned in by the tool; it is written in the table for the editor.
+   so the spoken hook is heard against the frame it opens on. The MP4 lands at
+   `media-out/<file>.clip-<in>-<in + 8>.mp4`. The on-screen text is not burned in by the tool;
+   it is written in the table for the editor.
+4. Check each cut's first frame: `media_thumbnail` with `{"input": "media-out/<file>.clip-<in>-<in + 8>.mp4", "at": 0, "width": 640}`.
+   The rule says the first frame shows the subject, not a title card; look before writing
+   "First frame" in the table. This is the docs/media.md order: probe, transcribe, clip, frame.
 
 ## The first-three-seconds rule
 

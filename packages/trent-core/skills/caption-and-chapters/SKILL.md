@@ -3,7 +3,7 @@ name: caption-and-chapters
 description: From a transcript with timestamps, write the YouTube chapters, the description whose first 150 characters carry the promise, three titles, the short-form caption, a pinned comment and subtitle cues cut to two lines. Use when a video is edited and needs its words. Needs a transcript with timestamps, from media_transcribe when the media backend is installed or from the owner's editor; burns the cues into a cut with media_clip.
 category: creator
 trust: official
-version: 1.0.0
+version: 1.1.0
 author: trent
 tags: creator, captions, chapters, youtube, subtitles, srt, descriptions, titles
 ---
@@ -11,6 +11,9 @@ tags: creator, captions, chapters, youtube, subtitles, srt, descriptions, titles
 
 The words around a video are read by two audiences: the viewer deciding whether to click, and
 the search engine deciding whether to show it. Write for the viewer; the engine follows.
+
+Who runs it: `content`, the Wordsmith; every seat carries the media toolset, and
+`mkt-video-optimization-specialist` orders the chapters as a profile the seat reads.
 
 ## When to use
 

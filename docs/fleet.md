@@ -97,14 +97,16 @@ are not configured".
 | `Steel Browser`, `steel:sessions`, `steel:screenshot` | `browser` |
 | `steel:scrape`, `steel:pdf`, `prospects:research` | `web` |
 | `approvals:request`, `approvals:create` | `human` |
-| `Email`, `Stripe`, `GitHub`, `github:*`, `X`, `PostHog`, `Sentry`, `crm:read`, `crm:update_draft`, `email:draft`, `social:draft`, `ads:draft`, `analytics:read`, `usage:read`, `billing:read`, `support:inbound_email`, `tasks:create`, `tasks:block`, `audit:create` | none — `unavailable` |
+| `social:draft`, `X` | `social` ([social.md](social.md)) |
+| `Stripe`, `billing:read`, `crm:read`, `crm:update_draft`, `support:inbound_email` | `business` ([business.md](business.md)) |
+| `Email`, `GitHub`, `github:*`, `PostHog`, `Sentry`, `email:draft`, `ads:draft`, `analytics:read`, `usage:read`, `tasks:create`, `tasks:block`, `audit:create` | none — `unavailable` |
 
-`skills`, `delegation`, `cron`, `plugins`, `mcp`, `vision`, `human` and `memory` are the wrapper's
-own capabilities, which the application's manifests do not model at all; every seat may use them
-when they are enabled. The five the manifests DO decide — `file_ops`, `terminal`, `code`, `web`,
-`browser` — are the capability differences between seats, and `fleet show` prints the ones a seat
-is denied. The finance seat's manifest names no sandbox, so finance cannot run a shell; the
-engineer's does, so it can.
+`skills`, `delegation`, `cron`, `plugins`, `mcp`, `vision`, `human`, `memory` and `media` are the
+wrapper's own capabilities, which the manifests do not model; every seat may use them when enabled.
+The seven the manifests DO decide — `file_ops`, `terminal`, `code`, `web`, `browser`, `social`,
+`business` — are the differences between seats, and `fleet show` prints the ones a seat is denied:
+support, sales, finance and analyst carry `business` and not `social`; content and growth carry
+`social` and not `business`; finance has no sandbox, so it cannot run a shell.
 
 ### Approval floors are absolute; a seat may be stricter
 
@@ -227,24 +229,22 @@ exactly 164 long and that its name contains the number it promises.
 
 ### The three market packs
 
-A market pack is a crew over existing seats, a set of trade skills, and a persona; it is not a
-new agent, and the planner still routes work to the nine seats. Installing one does three things:
-installs the members, installs the pack's skills into the profile store (every seat sees them
-through `skills_list`; uninstalling a member leaves them), and writes the persona to
-`brain/system/persona-<pack>.md` through the brain's own write path (committed when the brain is
-versioned, left alone when the bytes are unchanged, skipped when `brain.enabled` is false). The
-persona rides the stable tier of every prompt, so it is bounded at 1,800 characters and its bytes
-never change between runs.
+A market pack is a crew over existing seats, trade skills, the toolsets those skills call, and a
+persona; the planner still routes work to the nine seats. Installing one installs the members, the
+skills into the profile store (every seat sees them through `skills_list`; uninstalling a member
+leaves them), and the persona at `brain/system/persona-<pack>.md` through the brain's write path
+(committed when versioned, untouched when unchanged, skipped when `brain.enabled` is false). It
+rides the stable tier of every prompt, so it is bounded at 1,800 characters and never changes.
 
-| Pack | Members | Skills | State today |
-|---|---|---|---|
-| `small-business` | `support`, `sales`, `finance`, `content` | `quote-estimate`, `invoice-draft`, `booking-followup`, `review-response`, `local-business-post` | Drafts only. Quotes, invoices, follow-ups, review replies and posts are written as files for the owner to send. Nothing is sent, booked, invoiced or posted until the business toolset (Stripe, Google Calendar, Square, Twilio) lands; each of those will then need the owner's approval. |
-| `social` | `content`, `growth`, `analyst`, `mkt-social-media-strategist`, `mkt-content-creator` | `content-calendar`, `brand-voice-capture`, `crosspost-adapt`, `comment-triage` | Drafts and plans only. No account is connected and nothing is published or replied to until the social toolset lands, after the business and media toolsets; publishing will need approval per post. |
-| `creator` | `content`, `mkt-short-video-editing-coach`, `mkt-video-optimization-specialist`, `design-image-prompt-engineer` | `hook-lab`, `caption-and-chapters`, `repurpose-plan`, `clip-plan`, `thumbnail-brief` | Clipping, transcription and thumbnails work when a media backend is installed (ffmpeg on PATH or `trent sandbox build --media`; the Media Pipeline line of `trent doctor` says which) and the `media` toolset is on: the skills call `media_probe`, `media_transcribe`, `media_scenes`, `media_clip`, `media_thumbnail` and `media_image` with the arguments spelled out, and `clip-plan` ranks a long recording into clip candidates with the exact `media_clip` call each. A `media_image` render costs cents and asks. Without a backend the crew works in text from a transcript the owner supplies. Nothing is uploaded or published. |
+| Pack | Members | Toolsets | Skills | State today |
+|---|---|---|---|---|
+| `small-business` | `support`, `sales`, `finance`, `content` | `business` (support, sales, finance), `social` (content) | `quote-estimate`, `invoice-draft`, `booking-followup`, `review-response`, `local-business-post` | Real calls once the owner connects a provider ([connect.md](connect.md)): Stripe quotes, invoices and payment links, Google Calendar and Square appointments, Square invoices and outbound-only Twilio texts ([business.md](business.md)); posts and comment replies on Bluesky and through Buffer, Facebook and Instagram when Meta is connected and its review passes ([social.md](social.md)). Google Business Profile review replies wait for Basic Access. Nothing is sent, booked, invoiced or posted until the owner approves that exact call. With no provider connected the skills write the same drafts as files. |
+| `social` | `content`, `growth`, `analyst`, `mkt-social-media-strategist`, `mkt-content-creator` | `social` (content, growth) | `content-calendar`, `brand-voice-capture`, `crosspost-adapt`, `comment-triage` | Posts, the post queue, replies, the inbox and post numbers through the social toolset: Bluesky directly and any channel Buffer holds (X, LinkedIn, Threads, a Facebook Page; text only) today; Facebook and Instagram directly, and YouTube replies and numbers, when Meta or Google is connected and its review passes (the direct paths also need the app store). No DMs, no YouTube publishing. Each post and reply is published only after the owner approves that exact call. The analyst seat has no social toolset, so content and growth make the calls and the analyst reads what they pull. |
+| `creator` | `content`, `mkt-short-video-editing-coach`, `mkt-video-optimization-specialist`, `design-image-prompt-engineer` | `media` (every seat) | `hook-lab`, `caption-and-chapters`, `repurpose-plan`, `clip-plan`, `thumbnail-brief` | Clipping, transcription and thumbnails work when a media backend is installed (ffmpeg on PATH or `trent sandbox build --media`; the Media Pipeline line of `trent doctor` says which) and the `media` toolset is on: the skills call `media_probe`, `media_transcribe`, `media_scenes`, `media_clip`, `media_thumbnail` and `media_image` in that order ([media.md](media.md)), and `clip-plan` ranks a long recording into clip candidates with the exact `media_clip` call each. A `media_image` render costs cents and asks. Without a backend the crew works in text from a transcript the owner supplies. Nothing is uploaded or published. |
 
 The personas ("The Counter Crew", "The Signal Crew", "The Cutting Room") give each member a voice,
-a signature move, a refusal and a handoff, all within what the seats can do today: they draft,
-the owner sends. Read one with `trent brain show system/persona-small-business.md`.
+a signature move, a refusal, a handoff and the calls its seat makes (`sms_send`, `stripe_quote_create`,
+`social_schedule`), each waiting for the owner's approval. Read one: `trent brain show system/persona-small-business.md`.
 
 ### Skill sources
 
@@ -253,10 +253,10 @@ Skills come from two directories in a fixed order: the app bundle `apps/web/.age
 (`<name>/SKILL.md` with `name`, `description`, `category`, `trust`, `version`, `author` and `tags`
 in the frontmatter, `references/` beside it). The app is read first, so on a name collision its
 copy wins and nothing in core can shadow a catalog skill. The fourteen pack skills live in the
-core source; each one says when to use it, what it needs, the exact output format, a worked
-example, and, wherever money, publishing or customer contact is involved, that the seat drafts
-and a human sends. The five creator skills name the media tool calls they make when the media
-backend is installed (docs/media.md) and say what they do without one.
+core source. Each names who runs it (a seat that carries the toolset), the steps as `<tool> {json}`
+calls with the arguments the tool's schema declares, the output format, and that every send,
+charge, booking or post waits for the owner's approval; `fleet/pack-skills.test.ts` checks each
+tool name, argument, seat, live platform and the docs/media.md call order against the registries.
 
 ## Custom agents
 

@@ -1,4 +1,5 @@
 import { AGENT_CATALOG } from "../agents/index.js";
+import type { Toolset } from "../config/schema.js";
 import { CORE_ROLE_IDS } from "./AgentInstaller.js";
 import { PACK_PERSONAS } from "./pack-personas.js";
 
@@ -7,11 +8,17 @@ export interface FleetPack {
   name: string;
   description: string;
   /**
-   * What executes today and what stays a draft until a toolset lands. Rendered by `fleet packs`,
-   * so it is the one line a user reads before installing; it must never promise more than the
-   * members can do.
+   * What executes today, what waits for a provider the owner connects or an application a platform
+   * reviews, and what stays a draft. Rendered by `fleet packs`, so it is the one line a user reads
+   * before installing; it must never promise more than the members can do.
    */
   state: string;
+  /**
+   * The toolsets the pack's skills call (`fleet/pack-skills.test.ts` reads every skill against
+   * them): each is carried by at least one member seat, every tool a skill names belongs to one of
+   * them, and the skills together call at least one tool of each. Empty for a grouping.
+   */
+  toolsets: readonly Toolset[];
   /** Every id here is installed by `installPack`. The label must match this length. */
   agents: string[];
   /**
@@ -40,8 +47,8 @@ function groupingState(agents: readonly string[]): string {
   return "The seats run in the planner; the specialists install profiles and skills the seats can read and are not scheduled on their own.";
 }
 
-function grouping(pack: Omit<FleetPack, "state" | "skills">): FleetPack {
-  return { ...pack, state: groupingState(pack.agents), skills: [] };
+function grouping(pack: Omit<FleetPack, "state" | "skills" | "toolsets">): FleetPack {
+  return { ...pack, state: groupingState(pack.agents), skills: [], toolsets: [] };
 }
 
 export const FLEET_PACKS: Record<string, FleetPack> = {
@@ -146,18 +153,20 @@ export const FLEET_PACKS: Record<string, FleetPack> = {
   // ---------------------------------------------------------------------------------------
   // The three market packs (upgrade round, decision A3). Each is a crew over existing seats
   // plus the trade skills in `packages/trent-core/skills/`; the persona in `pack-personas.ts`
-  // is written to `brain/system/` on install. The `state` line is the honest one: what the
-  // CLI executes today (the creator crew's media tools, when a backend is installed) and what
-  // stays a draft until a toolset lands or the owner acts.
+  // is written to `brain/system/` on install. The skills call the pack's toolsets (business
+  // and social landed in fd51f62, media before them), every write behind the per-call bound
+  // approval. The `state` line is the honest one: what runs once a provider is connected,
+  // which platforms still wait for an application, and what stays a draft without either.
   "small-business": {
     id: "small-business",
     name: "Small Business Crew",
     description:
       "Front desk, quotes, invoices and the sign in the window for a spa, a salon or a trade: support, sales, finance and content over the owner's numbers.",
     state:
-      "Drafts only: quotes, invoices, follow-ups, review replies and posts are written as files for the owner to send. Nothing is sent, booked, invoiced or posted until the business toolset (Stripe, Google Calendar, Square, Twilio) lands; every one of those will then need the owner's approval.",
+      "Real calls once the owner connects a provider (trent connect stripe, google, square, twilio; bluesky or buffer for posts): Stripe quotes, invoices and payment links, Google Calendar and Square appointments, Square invoices and outbound-only Twilio texts run through the business toolset (support, sales, finance), and posts and comment replies through the social toolset (content): Bluesky and Buffer today, Facebook and Instagram when Meta is connected and its review passes; Google Business Profile review replies wait for Basic Access. Nothing is sent, booked, invoiced or posted until the owner approves that exact call. Drafts only where no provider is connected: the skills write the same quote, invoice, message or post as a file for the owner to send.",
     agents: ["support", "sales", "finance", "content"],
     skills: ["quote-estimate", "invoice-draft", "booking-followup", "review-response", "local-business-post"],
+    toolsets: ["business", "social"],
   },
   social: {
     id: "social",
@@ -165,9 +174,10 @@ export const FLEET_PACKS: Record<string, FleetPack> = {
     description:
       "A content calendar, the brand's own voice, one idea adapted per platform and a comment triage: content, growth and analyst with the social strategist and content creator.",
     state:
-      "Drafts and plans only: the calendar, posts, adaptations and comment triage are written as files. No account is connected and nothing is published or replied to until the social toolset lands, after the business and media toolsets; publishing will need the owner's approval per post.",
+      "Posts, scheduled posts, replies, the comment inbox and post numbers run through the social toolset once an account is connected: Bluesky directly (trent connect bluesky) and any channel Buffer holds (X, LinkedIn, Threads, a Facebook Page; text only) today; Facebook and Instagram directly, and YouTube replies and numbers, when Meta or Google is connected and its review passes (the direct paths also need the app store). No DMs and no YouTube publishing. Nothing is published or replied to until the owner approves that exact call. The content and growth seats make the calls; the analyst seat has no social toolset and reads what they pull. Without a connection the calendar, posts and triage are written as files.",
     agents: ["content", "growth", "analyst", "mkt-social-media-strategist", "mkt-content-creator"],
     skills: ["content-calendar", "brand-voice-capture", "crosspost-adapt", "comment-triage"],
+    toolsets: ["social"],
   },
   creator: {
     id: "creator",
@@ -178,6 +188,7 @@ export const FLEET_PACKS: Record<string, FleetPack> = {
       "Clipping, transcription and thumbnails work when a media backend is installed (ffmpeg on PATH, or the image from `trent sandbox build --media`; the Media Pipeline line of `trent doctor` says which) and the media toolset is on (quick setup turns it on when it finds a backend): the crew probes, transcribes, finds the cuts, clips to 9:16 with burned captions and extracts frames into the workspace; a generated thumbnail image costs cents and asks first. Without a backend it works in text from a transcript the owner supplies. Nothing is uploaded or published; the owner posts.",
     agents: ["content", "mkt-short-video-editing-coach", "mkt-video-optimization-specialist", "design-image-prompt-engineer"],
     skills: ["hook-lab", "caption-and-chapters", "repurpose-plan", "clip-plan", "thumbnail-brief"],
+    toolsets: ["media"],
   },
 };
 

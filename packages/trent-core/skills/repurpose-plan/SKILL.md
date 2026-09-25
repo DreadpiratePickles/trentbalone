@@ -3,7 +3,7 @@ name: repurpose-plan
 description: From one long-form transcript, name five to eight clip candidates with in and out timestamps, a hook and a platform each, plus the text derivatives (a thread, a LinkedIn post, a newsletter section) and a publishing order. Use when a long video or a podcast episode is done. Names the cuts and, when the media backend is installed, makes them with media_clip through the clip-plan skill; the owner posts.
 category: creator
 trust: official
-version: 1.0.0
+version: 1.1.0
 author: trent
 tags: creator, repurposing, clips, shorts, podcast, long-form, thread, newsletter
 ---
@@ -13,6 +13,9 @@ One hour of talking holds five to eight clips and three written pieces. The plan
 names the exact seconds, and says what goes out first. When the media backend is installed the
 cuts are made from this plan (the `media_clip` calls below, or `clip-plan` for the ranked
 cutting list); without one the owner cuts in their editor from the timestamps here.
+
+Who runs it: `content`; every seat carries the media toolset. `mkt-short-video-editing-coach`
+and `mkt-video-optimization-specialist` are profiles the seat reads, not scheduled on their own.
 
 ## When to use
 

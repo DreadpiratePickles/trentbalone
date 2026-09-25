@@ -3,7 +3,7 @@ name: clip-plan
 description: From one long-form recording, a ranked list of clip candidates with in and out timestamps, a hook, a caption and the exact media_clip call for each, cut in the workspace when the media backend is installed; thumbnails through media_thumbnail and, with the owner's approval of the cents, media_image. Use when a long video or a podcast episode needs its shorts. Cuts nothing without a backend; uploads nothing ever.
 category: creator
 trust: official
-version: 1.0.0
+version: 1.1.0
 author: trent
 tags: creator, clips, shorts, reels, tiktok, long-form, podcast, media_clip, transcription, thumbnails
 ---
@@ -14,6 +14,9 @@ seconds, writes the hook and the caption for each, and, when the media backend i
 makes the cuts with `media_clip` so the owner reviews files instead of timestamps. The
 `repurpose-plan` skill is the wider plan (text derivatives, publishing order); this one is
 the cutting list.
+
+Who runs it: `content`, cutting as the Cutter (`mkt-short-video-editing-coach`, a profile the
+planner does not schedule on its own); every seat carries the media toolset.
 
 ## Which backend, and what that changes
 
