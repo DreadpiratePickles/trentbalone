@@ -4,7 +4,10 @@
  * (the hostname resolves nowhere), so a recorded request proves the tunnel was the path taken and
  * that the broker stripped the opaque token before forwarding.
  *
- * Skipped, not passed, when no Chromium is installed.
+ * Skipped, not passed, when no Chromium is installed. The two navigating tests carry a runner-sized
+ * timeout and one retry: on shared CI runners the first Chromium launch through the TLS proxy has
+ * exceeded 60 s once and the runner's network changed under a request once. The retry inside
+ * `navigate` covers the second case for users; the test retry covers the first for CI.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
@@ -87,7 +90,7 @@ describe.skipIf(!chromiumPath)("browser toolset (real Chromium through a real Eg
     expect(seen.length).toBeGreaterThan(0);
     expect(seen[0]?.host).toBe(HOST);
     expect(seen[0]?.token).toBeUndefined();
-  }, 60_000);
+  }, { timeout: 120_000, retry: 1 });
 
   it("reads the page text and writes a real PNG under the profile", async () => {
     const text = await adapter.execute("browser_get_text {}", {});
@@ -99,7 +102,7 @@ describe.skipIf(!chromiumPath)("browser toolset (real Chromium through a real Eg
     expect(file?.startsWith(path.join(profileDir, "browser", "run_chromium"))).toBe(true);
     const head = fs.readFileSync(file!).subarray(0, 4);
     expect([...head]).toEqual([0x89, 0x50, 0x4e, 0x47]);
-  }, 60_000);
+  }, { timeout: 120_000, retry: 1 });
 
   it("refuses a host the proxy does not allowlist, so the browser cannot leave the tunnel", async () => {
     const result = await adapter.execute('browser_navigate {"url":"https://not-allowlisted.example/"}', {});
