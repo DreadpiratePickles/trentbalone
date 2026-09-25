@@ -22,6 +22,15 @@ import {
 } from "./page-types.js";
 import { ACTION_TIMEOUT_MS, MAX_CONSOLE_MESSAGES, MAX_IMAGES, NAVIGATION_TIMEOUT_MS, SCROLL_STEP } from "./schemas.js";
 
+const TRANSIENT_RETRY_DELAY_MS = 250;
+/** Chromium net errors that mean "the network moved under us", not "this page is bad". */
+const TRANSIENT_NET_ERRORS = ["net::ERR_NETWORK_CHANGED", "net::ERR_CONNECTION_RESET", "net::ERR_CONNECTION_CLOSED", "net::ERR_CONNECTION_ABORTED"];
+
+function isTransientNetworkError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return TRANSIENT_NET_ERRORS.some((code) => message.includes(code));
+}
+
 export interface SessionOptions {
   readonly launcher: BrowserLauncher;
   /** The opaque broker token, sent as `x-trent-proxy-token` on every request. */
@@ -102,11 +111,22 @@ export class BrowserSession {
     if (this.consoleLog.length > MAX_CONSOLE_MESSAGES) this.consoleLog.splice(0, this.consoleLog.length - MAX_CONSOLE_MESSAGES);
   }
 
-  /** Loads `url` (already floor-checked by the adapter) and returns the compact snapshot. */
+  /**
+   * Loads `url` (already floor-checked by the adapter) and returns the compact snapshot. One
+   * transient network error from Chromium (the network interface changed, the connection was
+   * reset or closed under the request) is retried once after a short pause; a second failure, or
+   * any other error, is the caller's. CI saw `net::ERR_NETWORK_CHANGED` on a shared runner twice.
+   */
   async navigate(url: string): Promise<string> {
     const page = await this.ensurePage();
     this.consoleLog.length = 0;
-    await page.goto(url, { timeout: NAVIGATION_TIMEOUT_MS, waitUntil: "domcontentloaded" });
+    try {
+      await page.goto(url, { timeout: NAVIGATION_TIMEOUT_MS, waitUntil: "domcontentloaded" });
+    } catch (error) {
+      if (!isTransientNetworkError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_DELAY_MS));
+      await page.goto(url, { timeout: NAVIGATION_TIMEOUT_MS, waitUntil: "domcontentloaded" });
+    }
     return this.snapshot(false);
   }
 

@@ -19,6 +19,8 @@ interface FakeState {
   contextOptions: unknown[];
   headers: Record<string, string>[];
   gotos: string[];
+  /** Messages the next gotos throw, in order; empty = succeed. */
+  gotoErrors: string[];
   clicked: string[];
   filled: { ref: string; text: string }[];
   pressed: string[];
@@ -47,6 +49,8 @@ function fakeBrowser(state: FakeState): BrowserLike {
   const page: PageLike = {
     goto: async (url: string) => {
       state.gotos.push(url);
+      const error = state.gotoErrors.shift();
+      if (error) throw new Error(error);
       return null;
     },
     goBack: async () => null,
@@ -94,6 +98,7 @@ function freshState(): FakeState {
     contextOptions: [],
     headers: [],
     gotos: [],
+    gotoErrors: [],
     clicked: [],
     filled: [],
     pressed: [],
@@ -169,6 +174,26 @@ describe("browser toolset (fake Playwright browser)", () => {
     // A second navigation reuses the session.
     await adapter.execute('browser_navigate {"url":"https://example.org/"}', {});
     expect(state.launches).toBe(1);
+  });
+
+  it("retries a navigation once when Chromium reports a transient network error (CI saw net::ERR_NETWORK_CHANGED)", async () => {
+    state.gotoErrors.push("page.goto: net::ERR_NETWORK_CHANGED at https://example.com/");
+    const result = await adapter.execute('browser_navigate {"url":"https://example.com/"}', {});
+    expect(result.status).toBe("completed");
+    expect(state.gotos).toEqual(["https://example.com/", "https://example.com/"]);
+  });
+
+  it("does not retry a second transient failure, nor a non-transient one", async () => {
+    state.gotoErrors.push("page.goto: net::ERR_NETWORK_CHANGED at https://example.com/", "page.goto: net::ERR_CONNECTION_RESET at https://example.com/");
+    const twice = await adapter.execute('browser_navigate {"url":"https://example.com/"}', {});
+    expect(twice.status).toBe("failed");
+    expect(twice.summary).toContain("ERR_CONNECTION_RESET");
+    expect(state.gotos).toHaveLength(2);
+    state.gotos.length = 0;
+    state.gotoErrors.push("page.goto: net::ERR_NAME_NOT_RESOLVED at https://example.com/");
+    const once = await adapter.execute('browser_navigate {"url":"https://example.com/"}', {});
+    expect(once.status).toBe("failed");
+    expect(state.gotos).toHaveLength(1);
   });
 
   it("requires browser_navigate before the other tools", async () => {
