@@ -11,7 +11,7 @@ import { randomBytes } from "node:crypto";
 import { openCheckpointSession, type CheckpointSession } from "@trent/core/checkpoints/index.js";
 import { currentSpendLedger, installSpendLedger, openSpendLedger, type SpendLedger } from "@trent/core/governance/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
-import { recordRunSpend } from "@trent/core/orchestrator/run-hooks.js";
+import { CONSOLIDATION_FRAME, recordRunSpend } from "@trent/core/orchestrator/run-hooks.js";
 import type { MemoryBlock } from "@trent/core/fleet-memory/index.js";
 import type { HooksConfig, SessionHookReport } from "@trent/core/hooks/index.js";
 import { loadWorkspaceContext } from "@trent/core/workspace-context/index.js";
@@ -202,6 +202,11 @@ const UNATTRIBUTED = "unattributed";
  * snapshot names the seat and the model but not the provider, so the session's configured provider
  * is recorded — that is what billed it. A frame with no integer cost is not a charge and is left
  * alone rather than rounded, estimated or recorded as zero.
+ *
+ * [P2-8] The orchestrator now meters every model call itself, at the answering model's list price
+ * with its token split (`orchestrator/spend-meter.ts`), and the frames carry that meter's cents.
+ * The frame names its step (or `CONSOLIDATION_FRAME`), so `recordRunSpend` skips a frame whose calls
+ * the meter already holds; a frame nothing metered (an injected executor) is charged as before.
  */
 export function wireRunSpend(provider: string): (event: OrcEvent) => void {
   return (event) => {
@@ -209,12 +214,14 @@ export function wireRunSpend(provider: string): (event: OrcEvent) => void {
     const cents = event.step?.costCents;
     if (typeof cents !== "number" || !Number.isInteger(cents) || cents <= 0) return;
     const seat = event.step?.agentRole;
+    const stepId = event.kind === "consolidate_end" ? CONSOLIDATION_FRAME : event.step?.id;
     recordRunSpend(event.runId, {
       model: event.step?.model ?? UNATTRIBUTED,
       provider,
       cents,
       tokens: Math.trunc(event.step?.tokens ?? 0),
       ...(seat === undefined ? {} : { seat }),
+      ...(stepId === undefined ? {} : { stepId }),
     });
   };
 }

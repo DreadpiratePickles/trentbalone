@@ -51,6 +51,17 @@ export interface SpendRow {
    * before the field existed and a row with no cache hits read the same.
    */
   readonly cachedInputTokens?: number;
+  /**
+   * [P2-8] The token split of a model row, when the charge was metered per call. `tokens` is their
+   * sum, and `cents` is those tokens at the answering model's list price (`model-gateway/pricing.ts`),
+   * so a reader can re-derive the charge. Absent on a row charged from a frame or before the field.
+   */
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  /** [P2-8] The provider reported no usage for at least one call on this row: the tokens are chars/4 estimates. Written only when true. */
+  readonly estimated?: boolean;
+  /** [P2-8] Nothing prices this model: `cents` is the app's tier stand-in, not a list price. Written only when true. */
+  readonly unpriced?: boolean;
   /** [U1] The tool that spent it, on a `surface: "tool"` row. */
   readonly tool?: string;
   /** [U1] What was bought, when the provider bills per unit rather than per token: messages, images, seconds. */
@@ -125,9 +136,11 @@ export class SpendLedger implements SpendLedgerReader {
     if (!Number.isInteger(charge.cents)) {
       throw new TypeError(`spend must be integer cents, received ${charge.cents}`);
     }
-    const { cachedInputTokens: rawCached, ...rest } = charge;
-    if (rawCached !== undefined && !(Number.isFinite(rawCached) && rawCached >= 0)) {
-      throw new TypeError(`cached input tokens must be a non-negative count, received ${rawCached}`);
+    const { cachedInputTokens: rawCached, inputTokens: rawInput, outputTokens: rawOutput, estimated, unpriced, ...rest } = charge;
+    for (const [name, count] of [["cached input", rawCached], ["input", rawInput], ["output", rawOutput]] as const) {
+      if (count !== undefined && !(Number.isFinite(count) && count >= 0)) {
+        throw new TypeError(`${name} tokens must be a non-negative count, received ${count}`);
+      }
     }
     const cached = Math.trunc(rawCached ?? 0);
     const row: SpendRow = {
@@ -135,6 +148,11 @@ export class SpendLedger implements SpendLedgerReader {
       at: charge.at ?? this.#now().toISOString(),
       tokens: Math.trunc(charge.tokens),
       ...(cached > 0 ? { cachedInputTokens: cached } : {}),
+      // [P2-8] The split is written whenever it is known, zero included: 0 output tokens is a fact.
+      ...(rawInput === undefined ? {} : { inputTokens: Math.trunc(rawInput) }),
+      ...(rawOutput === undefined ? {} : { outputTokens: Math.trunc(rawOutput) }),
+      ...(estimated === true ? { estimated: true as const } : {}),
+      ...(unpriced === true ? { unpriced: true as const } : {}),
     };
     fs.mkdirSync(path.dirname(this.path), { recursive: true, mode: DIR_MODE });
     // The mode is only honoured at creation, so an existing file keeps whatever it has; create it

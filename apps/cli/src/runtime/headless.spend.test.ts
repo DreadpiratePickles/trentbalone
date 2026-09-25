@@ -19,7 +19,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { ConfigManager } from "@trent/core";
 import { currentSpendLedger, openSpendLedger, spendLedgerPath } from "@trent/core/governance/index.js";
 import type { OrcEvent, Orchestrator, OrchestratorDepsWithImprove } from "@trent/core/orchestrator/index.js";
-import { closeRunScope, openRunScope } from "@trent/core/orchestrator/run-hooks.js";
+import { closeRunScope, openRunScope, recordRunModelCall } from "@trent/core/orchestrator/run-hooks.js";
 import type { TrentToolAdapter } from "@trent/core/tools/index.js";
 import { MemoryStore } from "../repl/__tests__/harness.js";
 import type { ReplStore } from "../repl/types.js";
@@ -223,6 +223,42 @@ describe("the headless runtime on the one daily spend ledger", () => {
       [undefined, "claude-opus-4", 40, 100],
     ]);
     expect(openSpendLedger({ profileDir: f.profileDir }).runTotalCents("run_1")).toBe(55);
+  });
+
+  it("[P2-8] does not charge a step's frame again when the run meter already priced that step's model calls", async () => {
+    // The orchestrator meters every seat call at the answering model's list price, per call, with
+    // its token split; the step_end frame then carries the same cents for the surfaces' tickers.
+    // Charging the frame too would bill the seat twice.
+    const f = fakes(
+      (runId) => {
+        recordRunModelCall(runId, {
+          seat: "ceo",
+          stepId: "stp_1",
+          model: "gemini-3.5-flash-lite",
+          provider: "google",
+          inputTokens: 40_000,
+          outputTokens: 4_000,
+          estimated: false,
+          costCents: 3,
+        });
+        return [billedStep(runId, 3, "ceo", "gemini-3.5-flash-lite"), billedStep(runId, 5, "analyst", "claude-haiku-4")].map((event, index) =>
+          index === 1 ? { ...event, step: { ...event.step, id: "stp_2" } } : event,
+        );
+      },
+      { surface: "run" },
+    );
+    const runtime = await createHeadlessRuntime(f.deps);
+    runtimes.push(runtime);
+
+    await drain(runtime.run("a tagline"));
+
+    const rows = rowsOf(f.profileDir);
+    expect(rows.filter((row) => row.seat === "ceo")).toEqual([
+      expect.objectContaining({ model: "gemini-3.5-flash-lite", provider: "google", cents: 3, inputTokens: 40_000, outputTokens: 4_000, tokens: 44_000 }),
+    ]);
+    // A step nothing metered (here a fake frame) is still charged from its frame, as before.
+    expect(rows.filter((row) => row.seat === "analyst")).toEqual([expect.objectContaining({ cents: 5, model: "claude-haiku-4" })]);
+    expect(openSpendLedger({ profileDir: f.profileDir }).runTotalCents("run_1")).toBe(8);
   });
 
   it("ignores a step that carries no integer cost rather than charging a guess", async () => {

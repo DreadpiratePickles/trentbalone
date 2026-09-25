@@ -151,3 +151,34 @@ describe("spend ledger", () => {
     expect(currentSpendLedger()).toBeUndefined();
   });
 });
+
+/**
+ * [P2-8] A model row carries its token split and says when the provider reported no usage, so a
+ * reader can re-derive the cents from tokens x list price and can tell an estimate from a bill.
+ */
+describe("the token split and the estimate flag on a model row", () => {
+  it("keeps inputTokens, outputTokens and estimated, and leaves them off a row that has none", () => {
+    const ledger = openSpendLedger({ profileDir });
+    ledger.append(row({ inputTokens: 40_000, outputTokens: 4_000, tokens: 44_000, cents: 3, estimated: true }));
+    ledger.append(row({ run_id: "run_2" }));
+    const [split, plain] = ledger.rows();
+    expect(split).toMatchObject({ inputTokens: 40_000, outputTokens: 4_000, tokens: 44_000, cents: 3, estimated: true });
+    expect(plain).not.toHaveProperty("inputTokens");
+    expect(plain).not.toHaveProperty("outputTokens");
+    expect(plain).not.toHaveProperty("estimated");
+  });
+
+  it("writes estimated only when true, and truncates a fractional token count", () => {
+    const ledger = openSpendLedger({ profileDir });
+    ledger.append(row({ inputTokens: 10.9, outputTokens: 2.2, estimated: false }));
+    const [only] = ledger.rows();
+    expect(only).toMatchObject({ inputTokens: 10, outputTokens: 2 });
+    expect(only).not.toHaveProperty("estimated");
+  });
+
+  it("refuses a negative token count rather than writing a row that under-reports", () => {
+    const ledger = openSpendLedger({ profileDir });
+    expect(() => ledger.append(row({ inputTokens: -1 }))).toThrow(TypeError);
+    expect(() => ledger.append(row({ outputTokens: Number.NaN }))).toThrow(TypeError);
+  });
+});

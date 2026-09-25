@@ -52,6 +52,7 @@ import { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots, type ReleaseSlot } from "./run-s
 import { closeRunScope, createContextNoticeBus, openRunScope } from "./run-hooks.js";
 import { applyConsolidation, finishRunVerification, type RunVerificationPort } from "./run-verification.js";
 import { SeatTally, applyStepFailures, shapeEvent, type SeatModelFn } from "./seat-guard.js";
+import { createRunSpendMeter, createSeatChatPort, type RunSpendMeter } from "./spend-meter.js"; // [P2-8] seats through the gateway, every call metered at list price
 import { AutoRecovery, DEFAULT_AUTO_RECOVERY_CYCLES } from "./auto-recovery.js";
 import { guardedSeatModel } from "./seat-guard-budget.js";
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
@@ -197,15 +198,15 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
 
   const seatInstructions = toolInstructions(allTools);
 
-  function installPorts(libs: Libs, gateway: ModelGateway, tally: SeatTally, ports: PortTally, recovery: AutoRecovery, emit: (event: OrcEvent) => void): void {
-    const underlying = (deps.executeSeatModelFn as SeatModelFn | undefined) ?? libs.gateway.executeSeatModel;
-    const chat = deps.executeSeatModelFn ? undefined : deps.createChatCompletion;
+  function installPorts(libs: Libs, gateway: ModelGateway, tally: SeatTally, ports: PortTally, recovery: AutoRecovery, emit: (event: OrcEvent) => void, meter: RunSpendMeter): void {
+    const underlying = meter.seatModel((deps.executeSeatModelFn as SeatModelFn | undefined) ?? libs.gateway.executeSeatModel);
+    const chat = deps.createChatCompletion ? (deps.executeSeatModelFn ? undefined : deps.createChatCompletion) : gateway.configuredProviders().length > 0 ? createSeatChatPort(gateway) : undefined;
     // B2: provider guard inside, spend cap outside; [X5] the recovery wrapper outside both, so a thrown transient error is seen and a budget refusal is not retried.
     const seat = recovery.wrapSeatModel(guardedSeatModel({ underlying, chat, tally, instructions: seatInstructions, emit }));
     libs.overrides.setRuntimeEvalOverrides({
       orchestration: {
         // Default, not test-only: the planner and the critic reach the configured provider.
-        createCompletion: deps.createCompletion ?? createCompletionPort(gateway, { onCall: (call) => ports.record(call) }),
+        createCompletion: deps.createCompletion ?? createCompletionPort(meter.portGateway(gateway), { onCall: (call) => ports.record(call) }),
         executeSeatModelFn: human.wrapSeatModel(withDelegateCaller(withFleetPrelude(seat))),
       },
     });
@@ -276,6 +277,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
     let shaper: PortShaper | undefined;
     let recovery: AutoRecovery | undefined;
     let runId: string | undefined;
+    const meter = createRunSpendMeter(() => runId);
     let scope: { companyId: string; objective: string } | undefined;
     let cancelRequested = false;
 
@@ -310,7 +312,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       const prepared = await prepare(libs);
       scope = { companyId: prepared.companyId, objective: prepared.objective };
       recovery = new AutoRecovery({ cycles: deps.autoRecoveryCycles ?? DEFAULT_AUTO_RECOVERY_CYCLES, tally, persistStep: libs.runPersist.persistStep });
-      installPorts(libs, gateway, tally, ports, recovery, (event) => deliver({ ...event, runId: runId ?? event.runId }));
+      installPorts(libs, gateway, tally, ports, recovery, (event) => deliver({ ...event, runId: runId ?? event.runId }), meter);
       // The seats' tools exist before the plan is made: registry, router catalog, seat environments.
       await wireSeatTools(libs, prepared.companyId, allTools);
       try {
@@ -354,7 +356,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       try {
         const id = await started;
         const { companyId, objective } = scope!;
-        const portShaper = new PortShaper(ports, gateway, {
+        const portShaper = new PortShaper(ports, meter.consolidatorGateway(gateway), {
           objective,
           liveRun: () => libs.orchestrator.getOrchestrationRun(id),
           persistSummary: (summary) => applyConsolidation(libs, id, summary),
@@ -370,7 +372,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
               const withPorts = await portShaper.shape(event);
               if (!withPorts) return;
               const shaped = shapeEvent(withPorts, tally, portShaper.fallbackPlan);
-              if (shaped) deliver(shaped);
+              if (shaped) deliver(meter.stamp(shaped));
             });
           }
         });

@@ -269,6 +269,46 @@ export function priceCall(input: PriceCallInput, tierDefault: TierPricer): Price
   };
 }
 
+/** [P2-8] One call's exact list price, before any rounding to cents. */
+export interface PricedMicroCents {
+  /** Whole MICRO-cents (1 cent = 1,000,000), rounded up per call: never below the bill. */
+  readonly microCents: number;
+  readonly source: PriceSource;
+}
+
+/**
+ * [P2-8] The exact price of one call in micro-cents, from the same override, table and local rules
+ * `priceCall` uses, WITHOUT the round-up to a whole cent. A meter that adds many sub-cent calls sums
+ * these and rounds once; rounding each call up on its own is what made a ten-call flash-lite run
+ * meter ten cents for one cent of list price. Undefined when nothing prices the model: the caller
+ * then keeps the tier figure and must say it is unpriced.
+ */
+export function priceCallMicroCents(input: Omit<PriceCallInput, "modelTier">): PricedMicroCents | undefined {
+  const override = overrideFor(input.model, input.overrides);
+  if (override && (typeof override.input_cents_per_million === "number" || typeof override.output_cents_per_million === "number")) {
+    const ratio = priceRowFor(input.model, input.alias)?.cachedInputRatio;
+    const overrideRow: ModelPriceRow = {
+      inputMicroCentsPerMillion: Math.round((override.input_cents_per_million ?? 0) * 1_000_000),
+      outputMicroCentsPerMillion: Math.round((override.output_cents_per_million ?? 0) * 1_000_000),
+      source: "override",
+      ...(ratio === undefined ? {} : { cachedInputRatio: ratio }),
+    };
+    return { microCents: microCentsFrom(overrideRow, input.inputTokens, input.outputTokens, input.cachedInputTokens), source: "override" };
+  }
+  const priceRow = priceRowFor(input.model, input.alias);
+  if (!priceRow) return undefined;
+  return { microCents: microCentsFrom(priceRow, input.inputTokens, input.outputTokens, input.cachedInputTokens), source: priceRow.source };
+}
+
+/** `centsFrom` without the last division and round-up: whole micro-cents, rounded up. */
+function microCentsFrom(row: ModelPriceRow, inputTokens: number, outputTokens: number, cachedInputTokens?: number): number {
+  const { uncached, cached } = cachedShare(inputTokens, cachedInputTokens);
+  const cachedRate = Math.round(row.inputMicroCentsPerMillion * (row.cachedInputRatio ?? DEFAULT_CACHED_INPUT_RATIO));
+  const inputMicro = uncached * row.inputMicroCentsPerMillion + cached * cachedRate;
+  const outputMicro = Math.max(0, outputTokens) * row.outputMicroCentsPerMillion;
+  return Math.ceil((inputMicro + outputMicro) / 1_000_000);
+}
+
 /** The env bridge for `model_overrides`, mirroring `applyPrivacyEnv` for the privacy block. */
 export const MODEL_OVERRIDES_ENV = "TRENT_MODEL_OVERRIDES";
 

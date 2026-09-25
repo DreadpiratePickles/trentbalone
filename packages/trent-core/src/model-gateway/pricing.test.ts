@@ -16,6 +16,7 @@ import {
   contextWindowFor,
   modelOverridesFromEnv,
   priceCall,
+  priceCallMicroCents,
   priceRowFor,
 } from "./pricing.js";
 import type { GatewayStreamEvent, ProviderStreamFn } from "./types.js";
@@ -284,5 +285,58 @@ describe("the gateway meter row carries the overlay", () => {
     if (usage?.type !== "usage") throw new Error("no usage event");
     expect(usage.costCents).toBe(5);
     expect(usage.unpriced).toBe(false);
+  });
+});
+
+/**
+ * [P2-8] Exact micro-cents for one call, so a meter that adds up many sub-cent calls can round ONCE
+ * instead of once per call (a 10-call flash-lite run otherwise meters ~10 cents for ~1 cent of list).
+ */
+describe("priceCallMicroCents — the exact list price before any rounding", () => {
+  it("prices gemini-3.5-flash-lite at $0.30 in / $2.50 out per million, with no rounding", () => {
+    // 40,000 x $0.30/1M = 1.2 cents; 4,000 x $2.50/1M = 1.0 cent.
+    expect(priceCallMicroCents({ model: "gemini-3.5-flash-lite", inputTokens: 40_000, outputTokens: 4_000 })).toEqual({
+      microCents: 2_200_000,
+      source: "google-list-2026-09",
+    });
+    // One tagline-sized call: 1,000 in, 200 out = 0.03 + 0.05 cents.
+    expect(priceCallMicroCents({ model: "gemini-3.5-flash-lite", inputTokens: 1_000, outputTokens: 200 })?.microCents).toBe(80_000);
+  });
+
+  it("prices the cached share at the row's cached ratio (a tenth on Gemini)", () => {
+    // 30,000 uncached x 30 + 10,000 cached x 3 + 4,000 out x 250 micro-cents per token.
+    expect(
+      priceCallMicroCents({ model: "gemini-3.5-flash-lite", inputTokens: 40_000, outputTokens: 4_000, cachedInputTokens: 10_000 })?.microCents,
+    ).toBe(1_930_000);
+  });
+
+  it("agrees with priceCall once rounded up, for priced rows, overrides and local aliases", () => {
+    const cases = [
+      { model: "gemini-3.5-flash-lite", inputTokens: 13_677, outputTokens: 411 },
+      { model: "gemini-3.6-flash", inputTokens: 10_543, outputTokens: 142, cachedInputTokens: 8_164 },
+      { model: "claude-sonnet-4-6", inputTokens: 2_000, outputTokens: 700 },
+      { model: "my-model", inputTokens: 1_000_000, outputTokens: 0, overrides: { "my-model": { input_cents_per_million: 7 } } },
+    ];
+    for (const call of cases) {
+      const micro = priceCallMicroCents(call);
+      expect(micro).toBeDefined();
+      expect(Math.ceil((micro?.microCents ?? 0) / 1_000_000)).toBe(priceCall({ ...call, modelTier: "sonnet" }, () => 999).costCents);
+    }
+    expect(priceCallMicroCents({ model: "llama3.2", alias: "ollama", inputTokens: 5_000, outputTokens: 5_000 })).toEqual({ microCents: 0, source: "local" });
+    expect(priceCallMicroCents({ model: "my-model", inputTokens: 1_000_000, outputTokens: 0, overrides: { "my-model": { input_cents_per_million: 7 } } })).toEqual({
+      microCents: 7_000_000,
+      source: "override",
+    });
+  });
+
+  it("returns nothing for a model no row, prefix or override prices, so the caller keeps the tier figure and says so", () => {
+    expect(priceCallMicroCents({ model: "totally-unknown-model", inputTokens: 100, outputTokens: 100 })).toBeUndefined();
+  });
+
+  it("is always a whole number of micro-cents, rounded up, never below the bill", () => {
+    // $0.075 cached rate on 3.6-flash is 7.5 micro-cents per token: 3 cached tokens = 22.5 -> 23.
+    const micro = priceCallMicroCents({ model: "gemini-3.6-flash", inputTokens: 3, outputTokens: 0, cachedInputTokens: 3 });
+    expect(micro?.microCents).toBe(23);
+    expect(Number.isInteger(micro?.microCents)).toBe(true);
   });
 });

@@ -709,6 +709,18 @@ Each total carries `cachedInputTokens`, the prompt tokens a provider served from
 text output names it only when it is not zero.
 Both go through the one spend report (`packages/trent-core/src/governance/spend-report.ts`), so the two never disagree about a number.
 
+Every model row is the list price of the model that answered (`Model pricing` below). Seat calls go
+through the wrapper's model gateway (the app still builds the seat prompt and parses the reply), so
+a row carries the provider's real `inputTokens`, `outputTokens` and `cachedInputTokens`, not the
+app's Anthropic-tier estimate; the planner, the critic and the consolidator have rows of their own
+(`seat: planner`, `critic`, `consolidator`). Cents are rounded up once per run, not once per call:
+a run's rows add up to its exact cost rounded up to the next cent (largest remainder, so a sub-cent
+row can read 0 cents beside its tokens), and the cost line `trent run` prints, the sum of its
+`step_end` and `consolidate_end` frames, is the same number. A row whose provider reported no usage
+says `estimated: true` (chars/4 tokens) and one no table prices says `unpriced: true`; the text of
+`trent usage` does not name either flag yet. Still not metered: with an `OPENAI_API_KEY` the app's
+own consolidator answers through `callText` and its usage never leaves the app.
+
 ### Money is integer cents
 
 Every monetary field in the schema is `z.number().int()`. `daily_cap: 1000` is ten dollars.
