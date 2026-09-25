@@ -123,7 +123,7 @@ function scriptedPlanner(objective: string) {
   };
 }
 
-type SeatInput = { subtask: { seat: string }; dynamicPrompt?: string };
+type SeatInput = { subtask: { seat: string }; systemPrompt?: string; dynamicPrompt?: string };
 
 describe("ClassicRepl wires fleet memory into the orchestrator", () => {
   it("registers fleet_search and memory next to the toolsets, and /tools lists them", async () => {
@@ -182,7 +182,7 @@ describe("ClassicRepl wires fleet memory into the orchestrator", () => {
 
     expect(s.out.join("\n")).toContain("Run complete");
     expect(seatInputs.length).toBeGreaterThan(0);
-    const prelude = seatInputs[0]?.dynamicPrompt ?? "";
+    const prelude = seatInputs[0]?.systemPrompt ?? "";
     expect(prelude).toContain("## Company memory");
     expect(seatInputs[0]?.subtask.seat).toBe("engineer");
   }, 180_000);

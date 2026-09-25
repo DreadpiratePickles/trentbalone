@@ -123,6 +123,7 @@ function scriptedPlanner(objective: string) {
 type ToolCall = { adapter: string; action: string; status: string; summary: string };
 type SeatInput = {
   subtask: { id: string; seat: string; objective: string };
+  systemPrompt?: string;
   dynamicPrompt?: string;
   toolLoopContext?: { step: number; toolHistory: Array<{ adapter: string; result: ToolCall }> };
 };
@@ -211,7 +212,7 @@ describe("ClassicRepl binds delegate_task to the orchestrator's delegated child 
     expect(analyst?.output).toContain(CHILD_OUTPUT);
 
     const childInput = seatInputs.find((input) => input.subtask.objective.startsWith("[delegated]"));
-    expect(childInput?.dynamicPrompt).toContain("## Company memory");
+    expect(childInput?.systemPrompt).toContain("## Company memory");
 
     const parent = steps.find((step) => step.id === "s1");
     expect(parent?.status).toBe("completed");

@@ -83,8 +83,9 @@ createOrchestrator({ fleetMemory, tools, ... });
 ```
 
 The hook contributes the `memory` and `fleet_search` adapters to seat wiring, wraps the seat
-executor so the run's injection rides in `dynamicPrompt` (after the pipeline's own "Previous step
-outputs"), and is told `runStarted` / `runFinished` by the wrapper. The REPL builds the hook in
+executor so the run's injection rides in the seat call (the STABLE tier at the head of the system
+prompt, the CONTEXT and VOLATILE tiers in `dynamicPrompt` after the pipeline's own "Previous step
+outputs"; `tiers.ts` `placeTiers`), and is told `runStarted` / `runFinished` by the wrapper. The REPL builds the hook in
 `apps/cli/src/repl/fleet-memory.ts` (`wireFleetMemory`) and passes it to `createOrchestrator`.
 
 ## Three tiers, and what "frozen" means now

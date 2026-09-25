@@ -31,9 +31,9 @@
  * and volatile tiers are trimmed oldest-first and the stable tier is never touched; at 80 percent
  * one `context_pressure` notice is emitted per run, not per seat call.
  *
- * It is appended to `dynamicPrompt`, the seat prompt field the pipeline already reserves for
- * per-step context (`apps/web/lib/model-gateway.ts` `buildSeatUserPrompt`), after the pipeline's
- * own text.
+ * [P2-7] Where it lands (`tiers.ts` `placeTiers`): STABLE at the head of the seat's system prompt,
+ * the request's first bytes for every objective; CONTEXT and VOLATILE appended to `dynamicPrompt`
+ * after the pipeline's own text, so after the objective (apps/web `buildSeatUserPrompt`).
  */
 
 import { createMemoryAdapter, type MemoryAdapter, type MemoryBlock } from "../tools/memory/index.js";
@@ -68,6 +68,8 @@ import {
   PRESSURE_WARNING_RATIO,
   assembleContext,
   estimateTokens,
+  placeTiers,
+  stableVersionBlock,
   type AssembledContext,
   type ContextBlock,
 } from "./tiers.js";
@@ -78,10 +80,12 @@ export type { StepSettled };
 /**
  * The slice of the pipeline's `SeatModelExecutionInput` the hook reads and extends. `objective`
  * is optional only because the seat guard's structural slice omits it; the pipeline always sets it.
+ * [P2-7] So is `systemPrompt`: a seat input without one keeps the whole injection in `dynamicPrompt`.
  */
 export interface FleetSeatInput {
   readonly companyId?: string;
   readonly subtask: { readonly id: string; readonly seat: string; readonly objective?: string; readonly contextBundle?: unknown };
+  readonly systemPrompt?: string;
   readonly dynamicPrompt?: string;
 }
 
@@ -362,8 +366,8 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
       ...(options.embed === undefined ? {} : { embed: options.embed }),
     });
     if (recall.block) blocks.push(block("context", CONTEXT_BLOCKS.recall, recall.block));
-    // [C5] Failures last in the CONTEXT tier, which is also last to be trimmed: the block is the
-    // smallest thing here and the only one that says what NOT to try again (audit 3.5).
+    // [C5] Failures last of the recalled blocks, so the last of them trimmed (only the one-line stable
+    // tier version follows): the smallest, and the only one saying what NOT to try again (audit 3.5).
     if (brain !== undefined) {
       try {
         const failures = await recallFailures({
@@ -395,7 +399,7 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
     run.stable ??= buildStable(run);
     const stable = await run.stable;
     stableText.set(run.runId, stable.map((b) => b.text).join("\n\n"));
-    const blocks = [...stable, ...(await buildSeatBlocks(run, seat)), ...buildVolatile(run)];
+    const blocks = [...stable, ...(await buildSeatBlocks(run, seat)), stableVersionBlock(stable), ...buildVolatile(run)];
     const context = assembleContext(blocks, { ceilingChars });
     assembled.set(`${run.runId} ${seat}`, { blocks, assembled: context });
     if (!firstSeat.has(run.runId)) firstSeat.set(run.runId, seat);
@@ -434,17 +438,13 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
         caller = { seat: input.subtask.seat, delegated: isDelegatedObjective(input.subtask.objective ?? ""), ...(run === undefined ? {} : { runId: run.runId }) };
         if (!run) return fn(input);
         const seat = input.subtask.seat;
-        let pending = run.seats.get(seat);
-        if (!pending) {
-          pending = buildFor(run, seat);
-          run.seats.set(seat, pending);
-        }
-        const context = await pending;
-        const dynamicPrompt = [input.dynamicPrompt, context.assembled.text].filter((s): s is string => !!s && s.trim() !== "").join("\n\n");
+        const pending = run.seats.get(seat) ?? buildFor(run, seat);
+        run.seats.set(seat, pending);
+        const placed = placeTiers(input, (await pending).assembled);
         const stepId = input.subtask.id;
         interrupted.begin(run.runId, stepId, seat);
         try {
-          const result = await fn({ ...input, dynamicPrompt });
+          const result = await fn({ ...input, ...placed });
           interrupted.settle(run.runId, stepId, true);
           return result;
         } catch (error) {

@@ -19,6 +19,7 @@ type StepWithTools = OrchestrationRunSnapshot["steps"][number] & { toolCalls?: T
 type SeatInput = {
   companyId: string;
   subtask: { id: string; seat: string; objective: string };
+  systemPrompt?: string;
   dynamicPrompt?: string;
   toolLoopContext?: { step: number; availableTools: string[]; toolHistory: Array<{ adapter: string; action: string; result: ToolCall }> };
 };
@@ -57,6 +58,7 @@ describe("fleet memory through the real wrapper: run 1 (engineer) feeds run 2 (s
   let first: OrchestrationRunSnapshot;
   let second: OrchestrationRunSnapshot;
   let preludes: Array<string | undefined> = [];
+  const stables: Array<string | undefined> = [];
 
   beforeAll(async () => {
     for (const key of ENV_KEYS) {
@@ -103,6 +105,7 @@ describe("fleet memory through the real wrapper: run 1 (engineer) feeds run 2 (s
     }
     first = await h1.result();
     preludes.push(fleetMemory.preludeFor(h1.runId));
+    stables.push(fleetMemory.stablePreludeFor(h1.runId));
 
     const objective2 = "answer the customer's question about partner API rate limits";
     const orc2 = createOrchestrator({ fleetMemory, createCompletion: scriptedPlanner(objective2, "support", "Answer the rate-limit question") as never, executeSeatModelFn: seat });
@@ -112,6 +115,7 @@ describe("fleet memory through the real wrapper: run 1 (engineer) feeds run 2 (s
     }
     second = await h2.result();
     preludes.push(fleetMemory.preludeFor(h2.runId));
+    stables.push(fleetMemory.stablePreludeFor(h2.runId));
   }, 120_000);
 
   afterAll(() => {
@@ -142,20 +146,33 @@ describe("fleet memory through the real wrapper: run 1 (engineer) feeds run 2 (s
     const write = child!.toolCalls?.find((c) => c.adapter === "memory");
     expect(write?.status).toBe("blocked");
     const childInput = seatInputs.find((i) => i.subtask.objective.startsWith("[delegated]"));
-    expect(childInput?.dynamicPrompt).toContain("Company memory");
+    // [P2-7] The shared prelude's STABLE tier heads the child's system prompt, the same bytes as run 1's.
+    expect(childInput?.systemPrompt?.startsWith(`${stables[0] ?? "<no stable tier>"}\n\n`)).toBe(true);
+    expect(childInput?.systemPrompt).toContain("Company memory");
+    expect(childInput?.dynamicPrompt ?? "").not.toContain("## Company memory");
   });
 
   it("run 2: the support seat's prelude carries the engineer's fact and the engineer's step output, within budget", () => {
     const supportInput = seatInputs.find((i) => i.subtask.seat === "support" && !i.subtask.objective.startsWith("[delegated]"));
     expect(supportInput).toBeDefined();
+    const system = supportInput!.systemPrompt ?? "";
     const prelude = supportInput!.dynamicPrompt ?? "";
-    expect(prelude).toContain(RATE_LIMIT_FACT);
+    // The engineer's memory write is company memory: STABLE, so it now heads the system prompt.
+    expect(system).toContain(RATE_LIMIT_FACT);
     expect(prelude).toContain("Fleet recall");
     expect(prelude).toContain("[engineer | Integrate the partner API");
     expect(prelude).toContain("token bucket");
     const recall = prelude.slice(prelude.indexOf("## Fleet recall"));
     expect(recall.length).toBeLessThanOrEqual(3000);
-    expect(preludes[1]).toBe(prelude.slice(prelude.indexOf("## Company memory")));
+    // [P2-7] The run's whole injection, split at the tier boundary: the STABLE tier heads the system
+    // prompt and the rest of it ends dynamicPrompt, after the pipeline's own text. Nothing is copied.
+    const stable = stables[1] ?? "";
+    const rest = (preludes[1] ?? "").slice(stable.length + 2);
+    expect(stable).toContain("## Company memory");
+    expect(preludes[1]).toBe(`${stable}\n\n${rest}`);
+    expect(system.startsWith(`${stable}\n\n`)).toBe(true);
+    expect(prelude.endsWith(rest)).toBe(true);
+    expect(prelude).not.toContain("## Company memory");
   });
 
   it("run 2: fleet_search returned the engineer's output tagged [engineer], and the seat's answer used it", () => {

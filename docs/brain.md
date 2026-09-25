@@ -69,8 +69,14 @@ What reaches a prompt, and what does not:
   deliberately absent from the stable tier's tree: a document drop never changes the stable bytes.
   Measured on 2026-09-25, the second of two calls sharing the stable tier had 0 cached tokens on
   `gemini-3.5-flash-lite` and 8,164 of 10,543 cached on `gemini-3.6-flash`. In seat prompts the
-  stable tier follows the objective today, so it is not a shared prefix; that is a recorded
-  follow-up (docs/sessions/2026-09-25-p1c-model-cost.md).
+  stable tier heads the system message, ahead of the objective, so two objectives on the same seat
+  share it as a prefix: 8,164 of 10,808 input tokens cached on `gemini-3.6-flash` in the seat
+  layout, where it had 0 when it followed the objective (one of two runs missed; the cache is
+  best-effort; docs/sessions/2026-09-25-p2-7-stable-first.md). Company memory therefore carries
+  system-message weight, which is accepted because its writes are provenance-tagged and held: a
+  write made from untrusted context waits on an approval and lands tagged
+  `[provenance: untrusted via <tools>]` (`tools/memory/holds.ts`), and every write reaches a prompt
+  only from the next run.
 
 ## 3. Writes, and the gates over them
 

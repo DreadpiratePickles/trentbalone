@@ -18,6 +18,7 @@
  * A failure to build the prelude leaves the prompt unchanged and the step unapplied.
  */
 
+import { insertAfterStableTier } from "../fleet-memory/tiers.js"; // [P2-7]
 import type { SkillDraftStore } from "../skills/foundry.js";
 import type { ImproveStorePort } from "../store/StorePort.js";
 
@@ -110,7 +111,9 @@ export function createSkillInjector(options: SkillInjectorOptions): SkillInjecto
           return underlying(input);
         }
         applied.set(stepId, true);
-        return underlying({ ...input, systemPrompt: `${prelude}\n\n${input.systemPrompt}` });
+        // [P2-7] After the fleet-memory STABLE tier, never in front of it: that tier is the request's
+        // provider-cacheable first bytes, and this prelude is ranked against the step.
+        return underlying({ ...input, systemPrompt: insertAfterStableTier(input, prelude) });
       };
     },
     appliedTo(stepId) {

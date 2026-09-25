@@ -758,10 +758,16 @@ The tiers are ordered so a provider's prompt cache can hit the stable tier, whic
 that depends on the objective, the seat or the turn may live in it. Measured on 2026-09-25
 (`packages/trent-core/src/model-gateway/prompt-cache.live.test.ts`, two calls sharing a ~10.5k-token
 stable tier as their prefix), the second call had 0 cached tokens on `gemini-3.5-flash-lite`, the
-default model, and 8,164 of 10,543 cached on `gemini-3.6-flash`. In seat prompts the stable tier
-follows the objective today (the wrapped app renders `Company`/`Seat`/`Objective`/... before the
-injection), so across two objectives it is not a shared prefix; moving it ahead of the objective is
-a recorded follow-up (docs/sessions/2026-09-25-p1c-model-cost.md). Before 2026-09-18 the whole
+default model, and 8,164 of 10,543 cached on `gemini-3.6-flash`. In a seat call the stable tier is
+the head of the system message, ahead of the seat's own prompt and so ahead of the objective, while
+the `context` and `volatile` tiers follow the objective in the user message (`placeTiers`, same
+file). The `context` tier ends with one `Stable tier version: <12 hex>` line, a hash of the stable
+tier, so the wrapped app's analyst answer cache, which keys on the user message only, still sees a
+memory change. Two objectives on the same seat therefore share the stable tier as a prefix: in that seat
+layout the second call had 8,164 of 10,808 input tokens cached on `gemini-3.6-flash`, where the
+earlier layout (stable tier after the objective) had 0 in both runs. Google's implicit cache is
+best-effort, and one of the two runs after the change missed on both calls
+(docs/sessions/2026-09-25-p2-7-stable-first.md). Before 2026-09-18 the whole
 prelude was memoised with the *first* seat's scope, which handed every later seat of a run the first
 seat's recall and the first seat's skills; the freeze now sits on the stable tier and on the run's
 view of the company, and each seat gets its own `context` tier.
