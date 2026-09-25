@@ -6,12 +6,14 @@
  * Plus the exit-code contract, the error envelope, first-run setup, and the `serve` shim.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import type { DoctorCheck, DoctorReport } from "@trent/core/doctor/index.js";
+import { PROVIDER_ENV_VARS } from "@trent/core/setup/index.js";
+import type { SetupSummary } from "../context.js";
 import { runCli } from "../index.js";
 
 const LIVE_KEY = "sk-live-abcdefghijklmnopqrstuvwxyz012345";
@@ -227,6 +229,128 @@ describe("first run", () => {
     const result = await runCli(["--version", "--json"]);
     expect(result.exitCode).toBe(EXIT.OK);
     expect(JSON.parse(result.stdout)).toHaveProperty("version");
+  });
+});
+
+const NO_KEY: SetupSummary = { mode: "quick", success: false, reason: "no-key", message: "No provider key found.", secretsConfigured: [] };
+const CANCELLED: SetupSummary = { mode: "quick", success: false, reason: "cancelled", message: "Setup cancelled.", secretsConfigured: [] };
+const DONE: SetupSummary = { mode: "quick", success: true, message: "Quick setup complete.", secretsConfigured: [] };
+
+describe("first run without a provider key", () => {
+  it("says setup did not complete and opens the REPL in degraded mode", async () => {
+    let opened = false;
+    const result = await runCli([], {
+      overrides: { runSetup: async () => NO_KEY, startRepl: async () => void (opened = true) },
+    });
+    expect(opened).toBe(true);
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(result.stdout).toContain("Setup did not complete: No provider key found.");
+    expect(result.stdout).not.toContain("Setup complete");
+  });
+
+  it("hands the REPL to the binary entry point when no harness drives it", async () => {
+    const result = await runCli([], { overrides: { runSetup: async () => NO_KEY } });
+    expect(result.launch).toBe("repl");
+    expect(result.exitCode).toBe(EXIT.OK);
+  });
+
+  it("stopping for any other reason exits 3 and opens nothing", async () => {
+    const result = await runCli([], {
+      overrides: { runSetup: async () => CANCELLED, startRepl: async () => { throw new Error("no REPL after a cancelled setup"); } },
+    });
+    expect(result.exitCode).toBe(EXIT.CONFIG);
+    expect(result.launch).toBeUndefined();
+    expect(result.stdout).toContain("Setup did not complete: Setup cancelled.");
+  });
+
+  it("under --json prints one JSON document, exits 3 and opens nothing", async () => {
+    const result = await runCli(["--json"], { overrides: { runSetup: async () => NO_KEY } });
+    expect(result.exitCode).toBe(EXIT.CONFIG);
+    expect(result.launch).toBeUndefined();
+    expect((JSON.parse(result.stdout) as { setup: SetupSummary }).setup.reason).toBe("no-key");
+  });
+});
+
+describe("trent setup", () => {
+  it("exits 3 and prints `Setup did not complete: <reason>` when it did not complete", async () => {
+    const result = await runCli(["setup"], { overrides: { runSetup: async () => NO_KEY } });
+    expect(result.exitCode).toBe(EXIT.CONFIG);
+    expect(result.stdout).toContain("Setup did not complete: No provider key found.");
+  });
+
+  it("--json prints exactly one JSON document in every outcome", async () => {
+    const cases: [string, string[], SetupSummary | undefined, number][] = [
+      ["complete", ["setup", "--json"], DONE, EXIT.OK],
+      ["no key", ["setup", "--json"], NO_KEY, EXIT.CONFIG],
+      ["cancelled", ["setup", "--json"], CANCELLED, EXIT.CONFIG],
+      ["dry run", ["setup", "--json", "--dry-run"], DONE, EXIT.OK],
+      ["bad mode", ["setup", "--json", "--mode", "nope"], DONE, EXIT.USAGE],
+    ];
+    for (const [name, argv, summary, code] of cases) {
+      const result = await runCli(argv, { overrides: { runSetup: async () => summary as SetupSummary } });
+      expect(result.exitCode, name).toBe(code);
+      expect(() => JSON.parse(result.stdout), name).not.toThrow();
+    }
+  });
+
+  describe("the real wizard on a profile with no provider key", () => {
+    beforeEach(() => {
+      for (const name of Object.values(PROVIDER_ENV_VARS).flat()) vi.stubEnv(name, "");
+    });
+    afterEach(() => vi.unstubAllEnvs());
+
+    /** Run with the binary's tee, capturing what reaches the real stdout and stderr. */
+    async function teed(argv: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+      const out: string[] = [];
+      const err: string[] = [];
+      const o = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        out.push(String(chunk));
+        return true;
+      });
+      const e = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+        err.push(String(chunk));
+        return true;
+      });
+      try {
+        const result = await runCli(argv, { tee: true });
+        return { exitCode: result.exitCode, stdout: out.join(""), stderr: err.join("") };
+      } finally {
+        o.mockRestore();
+        e.mockRestore();
+      }
+    }
+
+    it("text: exit 3, the guidance, and the reason exactly once", async () => {
+      const result = await teed(["setup"]);
+      expect(result.exitCode).toBe(EXIT.CONFIG);
+      expect(result.stdout).toContain("GEMINI_API_KEY");
+      expect(result.stdout).toContain("Setup did not complete: No provider key found.");
+      expect(result.stdout.match(/No provider key found\./g)).toHaveLength(1);
+    });
+
+    it("--json: stdout is one JSON document; the guidance goes to stderr", async () => {
+      const result = await teed(["setup", "--json"]);
+      expect(result.exitCode).toBe(EXIT.CONFIG);
+      const doc = JSON.parse(result.stdout) as SetupSummary;
+      expect(doc.success).toBe(false);
+      expect(doc.reason).toBe("no-key");
+      expect(result.stderr).toContain("GEMINI_API_KEY");
+    });
+
+    it("blank-slate with no terminal: one readable error line, exit 2, no config written", async () => {
+      const saved = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+      Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+      try {
+        const result = await teed(["setup", "--mode", "blank-slate"]);
+        expect(result.exitCode).toBe(EXIT.USAGE);
+        expect(result.stderr.split("\n")[0]).toMatch(/^error: setup\.blank-slate: stdin is not a terminal/);
+        expect(result.stderr).not.toContain("force closed");
+        expect(fs.existsSync(path.join(home, "config.yaml"))).toBe(false);
+      } finally {
+        if (saved === undefined) delete (process.stdin as { isTTY?: boolean }).isTTY;
+        else Object.defineProperty(process.stdin, "isTTY", saved);
+      }
+    }, 15_000);
   });
 });
 

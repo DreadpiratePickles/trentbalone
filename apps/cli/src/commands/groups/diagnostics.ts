@@ -16,10 +16,10 @@ import {
   type DoctorRunnerOptions,
   type DoctorMode,
 } from "@trent/core/doctor/index.js";
-import { SetupWizard, type SetupMode } from "@trent/core/setup/index.js";
+import { InquirerPrompts, SetupWizard, type SetupMode } from "@trent/core/setup/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { refuseUnderLiveWriters } from "@trent/core/profile/locks.js";
-import type { CommandContext } from "../context.js";
+import type { CommandContext, SetupSummary } from "../context.js";
 import type { CommandSpec, JsonData } from "../registry.js";
 import { GLYPHS, type AgentState } from "../../ui/index.js";
 
@@ -181,7 +181,8 @@ export const setupSpec: CommandSpec = {
     }
 
     const summary = await runSetup(ctx, mode, opts);
-    return { data: { ...summary } };
+    // A setup that did not complete is a configuration failure a script must see: exit 3.
+    return { data: { ...summary }, ...(summary.success ? {} : { exitCode: EXIT.CONFIG }) };
   },
   render(data, ctx) {
     if ((data as { dryRun?: boolean }).dryRun === true) {
@@ -191,10 +192,11 @@ export const setupSpec: CommandSpec = {
         ...d.wouldWrite.map((p) => `  ${ctx.theme.meta("would write")} ${ctx.theme.value(p)}`),
       ];
     }
-    const d = data as unknown as { success: boolean; message: string; secretsConfigured: string[] };
+    const d = data as unknown as SetupSummary;
     return [
-      d.success ? ctx.theme.success("Setup complete") : ctx.theme.error("Setup did not complete"),
-      `  ${ctx.theme.body(d.message)}`,
+      ...(d.success
+        ? [ctx.theme.success("Setup complete"), `  ${ctx.theme.body(d.message)}`]
+        : [ctx.theme.error(`Setup did not complete: ${d.message}`)]),
       d.secretsConfigured.length > 0
         ? `  ${ctx.theme.meta("secrets configured")} ${ctx.theme.value(d.secretsConfigured.join(", "))}`
         : `  ${ctx.theme.meta("no secrets written")}`,
@@ -202,15 +204,24 @@ export const setupSpec: CommandSpec = {
   },
 };
 
-/** Shared by `trent setup` and the first-run path in `../index.ts`. */
+/**
+ * Shared by `trent setup` and the first-run path in `../index.ts`.
+ *
+ * The wizard speaks through the command context, not straight to `process.stdout`: under `--json`
+ * its lines and its prompts go to stderr, so stdout carries exactly one JSON document.
+ */
 export async function runSetup(
   ctx: CommandContext,
   mode: SetupMode,
   opts: Record<string, unknown>,
-): Promise<{ mode: SetupMode; success: boolean; message: string; secretsConfigured: string[] }> {
+): Promise<SetupSummary> {
   if (ctx.overrides.runSetup) return await ctx.overrides.runSetup(mode, opts);
 
-  const wizard = new SetupWizard({ configManager: ctx.config() });
+  const wizard = new SetupWizard({
+    configManager: ctx.config(),
+    output: { write: (line) => (ctx.json ? ctx.err(line) : ctx.out(line)) },
+    prompts: new InquirerPrompts(ctx.json ? { output: process.stderr } : {}),
+  });
   const setupOptions: Parameters<SetupWizard["run"]>[0] = { mode };
   if (typeof opts.provider === "string") {
     setupOptions.provider = opts.provider as NonNullable<typeof setupOptions.provider>;
@@ -222,6 +233,7 @@ export async function runSetup(
     mode: result.mode,
     success: result.success,
     message: result.message,
+    ...(result.reason === undefined ? {} : { reason: result.reason }),
     // Names only. A value never leaves the secrets file.
     secretsConfigured: result.secretsConfigured,
   };

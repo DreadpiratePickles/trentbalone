@@ -5,6 +5,7 @@ export * from "./detect.js";
 export * from "./steps.js";
 export * from "./ScriptedPrompts.js";
 export * from "./InquirerPrompts.js";
+export * from "./no-terminal.js";
 export * from "./SetupRun.js";
 export * from "./SetupWizard.js";
 export * from "./QuickSetup.js";

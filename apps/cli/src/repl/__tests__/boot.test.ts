@@ -6,10 +6,11 @@
  */
 
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { PROVIDER_ENV_VARS } from "@trent/core/setup/index.js";
 import { createTheme } from "../../ui/index.js";
 import { PROMPT } from "../engine.js";
 import { ClassicRepl } from "../index.js";
@@ -91,5 +92,38 @@ describe("the boot sequence before the first prompt", () => {
     const everything = s.out.join("");
     expect(everything.indexOf("OPERATING")).toBeGreaterThan(-1);
     expect(everything.indexOf("OPERATING")).toBeLessThan(everything.indexOf(PROMPT));
+  }, 20_000);
+});
+
+describe("first launch with no provider key and no config", () => {
+  it("boots to the prompt with the degraded paragraph above it, and writes no config", async () => {
+    for (const name of Object.values(PROVIDER_ENV_VARS).flat()) vi.stubEnv(name, "");
+    const fresh = mkdtempSync(path.join(os.tmpdir(), "trent-boot-nokey-"));
+    vi.stubEnv("TRENT_HOME", fresh);
+    try {
+      const s = session();
+      setTimeout(() => s.stdin.emit("data", "x"), 50);
+      const started = s.repl.start();
+      const deadline = Date.now() + 15_000;
+      while (!s.out.some((chunk) => chunk.includes(PROMPT))) {
+        if (Date.now() > deadline) throw new Error("no prompt appeared");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      s.stdin.emit("end");
+      await started;
+
+      const everything = s.out.join("");
+      // eslint-disable-next-line no-control-regex
+      const text = everything.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\s+/g, " ");
+      expect(text).toContain("DEGRADED MODE");
+      expect(text).toContain("then run: trent setup");
+      expect(everything.indexOf("DEGRADED MODE")).toBeLessThan(everything.lastIndexOf(PROMPT));
+      // Nothing in the fresh home is a config, so the next launch runs the first-run setup again.
+      const written = readdirSync(fresh, { recursive: true }).map(String);
+      expect(written.filter((file) => path.basename(file) === "config.yaml")).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(fresh, { recursive: true, force: true });
+    }
   }, 20_000);
 });

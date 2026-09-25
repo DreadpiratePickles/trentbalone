@@ -95,7 +95,7 @@ export class FullSetup extends SetupRun {
       message: "Write this configuration?",
       default: true,
     });
-    if (!proceed) return this.abort("full", "Setup cancelled. No configuration was written.");
+    if (!proceed) return this.abort("full", "Setup cancelled. No configuration was written.", "cancelled");
 
     const base = { ...current, provider, model };
     const config = withBudget(

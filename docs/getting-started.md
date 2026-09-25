@@ -99,8 +99,8 @@ queue fallback races the CLI's own drain loop and every job executes twice. Meas
 run: 31 worker invocations, 13 step executions, `run_done` emitted ten times, nothing on stderr, final
 status `completed`. You would only find out from the bill.
 
-Put those lines in your shell profile, or in a `.envrc`, so a second terminal does not silently lose
-them.
+If a shell profile or a `.envrc` sets any of those variables for another project, remove them there
+rather than in one terminal, so a second terminal does not behave differently from the first.
 
 ## 5. Run setup
 
@@ -110,10 +110,14 @@ npm run cli -- setup --mode quick
 
 Three modes exist:
 
-- `--mode quick` writes a default provider and model, the starter seats, and all thirteen toolsets.
-  With no keys present it names the environment variables and the `.env` path and writes no
-  credentials. It does not fake an OAuth flow.
-- `--mode full` walks every provider, messaging platform and toolset interactively.
+- `--mode quick` detects a key already in your shell or in `~/.trent/.env`, then writes that
+  provider, its default model, the starter seats and every toolset whose backend is present (`media`,
+  `social` and `business` stay off until ffmpeg or a `trent connect` provider exists). It asks one
+  confirmation before writing. With no key present it names the environment variables and the
+  `.env` path, writes nothing, prints `Setup did not complete: No provider key found. ...` and exits
+  3. It does not fake an OAuth flow.
+- `--mode full` walks every provider, messaging platform and toolset interactively, and offers to
+  store a key through a masked prompt.
 - `--mode blank-slate` keeps `file_ops` and `terminal` and writes every other toolset name into
   `disabled_toolsets`, `agent.disabled_toolsets` and `platform_toolsets.cli`, so a later update
   reading any of the three cannot re-enable something you never asked for.
@@ -131,8 +135,22 @@ directly; MCP, plugin and app-catalog tools are behind those bridges at any coun
 [tools.md](tools.md).
 
 Setup writes `~/.trent/config.yaml`. Bare `npm run cli --` with no config on disk runs quick setup
-automatically. `doctor`, `setup`, `config` and `uninstall` never do, because those are what you run
-when the config is the broken thing.
+automatically. When that finds no key it prints `Setup did not complete: ...`, writes no config and
+opens the REPL anyway, in degraded mode (section 7), so the next launch runs setup again and picks
+up a key once there is one. `doctor`, `setup`, `config` and `uninstall` never run setup, because
+those are what you run when the config is the broken thing.
+
+Setup exits 0 when it wrote a configuration and 3 when it did not. `--json` prints exactly one JSON
+document on stdout in every outcome, with `"reason": "no-key"` or `"cancelled"` when it did not
+complete, and sends the wizard's own lines and prompts to stderr. The prompts need a terminal: with
+stdin redirected, `full` and `blank-slate` refuse before touching the profile, and `quick` refuses at
+its confirmation, each with one line and exit 2:
+
+```
+$ npm run cli -- setup --mode blank-slate </dev/null
+error: setup.blank-slate: stdin is not a terminal, so nothing here can answer the blank-slate setup questions; run trent setup --mode blank-slate in a terminal
+  exit code: 2
+```
 
 ## 6. Add a model key
 
@@ -180,19 +198,36 @@ reporting a guess as measured.
 
 ## 7. What happens with no key
 
-Trent still starts, and it tells you loudly what you are looking at. With no provider key present in
-any of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY` or
-`OPENROUTER_API_KEY`, the planner falls back to deterministic plans and the critic auto-passes. Both
-are silent upstream, so the REPL prints a banner before the first turn and marks every agent line
-`DEGRADED` for the rest of the session:
+Trent still starts, and it tells you loudly what you are looking at. With no provider key present
+under any name setup detects (the list `trent setup` prints: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`GOOGLE_API_KEY` or `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`,
+`GROQ_API_KEY`), the planner falls back to a deterministic plan, the critic auto-passes and every
+model call is refused, so a run ends `Run failed: every model call failed`. The REPL prints one
+paragraph before the first turn and marks every agent line `DEGRADED` for the rest of the session.
+A first launch on a clean profile with no key, driven from a pipe (`\r` submits a line; the REPL
+ends when stdin does):
 
 ```
-◆ DEGRADED MODE — no provider key is configured.
-  Plans are deterministic fallbacks and the critic auto-passes.
-  Nothing below is real model output. Run `trent doctor` to fix it.
+$ printf '/help\r' | npm run --silent cli --
+No provider API key was found.
+Trent has no hosted sign-in. A key is read from one of two places:
+  1. your shell environment
+  2. the profile env file at ~/.trent/.env
+Set one of these variables, then run setup again:
+  ...
+Setup did not complete: No provider key found. Set OPENAI_API_KEY (or another provider variable listed above) in your environment or in ~/.trent/.env, then run setup again.
+  (the boot banner)
+◆ DEGRADED MODE — no model provider key was found, so nothing typed here reaches
+  a model: an objective gets a deterministic fallback plan, the critic
+  auto-passes, and the run fails when its model calls are refused. Without a key
+  these still work: /help, trent doctor, trent config get|set, trent fleet list
+  and trent brain status|log|show. To fix it, put a provider key
+  (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY; trent setup lists every
+  one) in your shell or in the profile .env file, then run: trent setup
 ```
 
-If you see `DEGRADED`, nothing on the screen came from a model.
+If you see `DEGRADED`, nothing on the screen came from a model. `trent connect` does not add a model
+key: it connects business and social providers (see [connect.md](connect.md)).
 
 ## 8. Start a conversation
 

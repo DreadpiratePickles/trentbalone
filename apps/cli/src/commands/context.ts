@@ -9,7 +9,7 @@
 import { ConfigManager } from "@trent/core/config/index.js";
 import type { DoctorCheck, DoctorReport } from "@trent/core/doctor/index.js";
 import type { GatewayManager, GatewayManagerOptions } from "@trent/core/gateway/index.js";
-import type { SetupMode } from "@trent/core/setup/index.js";
+import type { SetupIncompleteReason, SetupMode } from "@trent/core/setup/index.js";
 import type { HeadlessRuntime, HeadlessRuntimeDeps } from "../runtime/headless.js";
 import type { SignalTarget } from "../signals.js";
 import { createTheme, detectColorMode, type Theme } from "../ui/index.js";
@@ -18,6 +18,8 @@ export interface SetupSummary {
   mode: SetupMode;
   success: boolean;
   message: string;
+  /** Why it did not complete; absent on success. The first run opens the REPL only for `no-key`. */
+  reason?: SetupIncompleteReason;
   secretsConfigured: string[];
 }
 

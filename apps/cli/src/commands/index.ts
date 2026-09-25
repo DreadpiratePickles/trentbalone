@@ -7,7 +7,8 @@
  *
  * First-run behaviour: bare `trent` with no config launches the setup wizard. `trent doctor` and
  * `trent --version` deliberately do not, because they are exactly what a user runs when the config is
- * the thing that is broken.
+ * the thing that is broken. A first run that finds no provider key still opens the REPL, in DEGRADED
+ * mode (`../repl/degraded.ts`), and writes no config, so the next launch runs the wizard again.
  */
 
 import { Command } from "commander";
@@ -289,12 +290,19 @@ async function handleTopLevel(
   if (!manager.exists()) {
     // First run: the wizard, not a failure.
     const summary = await runSetup(ctx, "quick", {});
-    ctx.out(
-      globals.json
-        ? JSON.stringify({ firstRun: true, setup: summary }, null, 2)
-        : ctx.theme.success(`Setup complete: ${summary.message}`),
-    );
-    return { exitCode: summary.success ? EXIT.OK : EXIT.CONFIG };
+    if (globals.json) {
+      // Machine mode opens nothing interactive: one document, and the exit code says what happened.
+      ctx.out(JSON.stringify({ firstRun: true, setup: summary }, null, 2));
+      return { exitCode: summary.success ? EXIT.OK : EXIT.CONFIG };
+    }
+    if (summary.success) {
+      ctx.out(ctx.theme.success(`Setup complete: ${summary.message}`));
+      return { exitCode: EXIT.OK };
+    }
+    ctx.out(ctx.theme.error(`Setup did not complete: ${summary.message}`));
+    // No key is not a reason to see nothing: the REPL opens degraded and its banner says what works
+    // without a key and the one command that adds one. Any other stop (a declined confirmation) exits.
+    if (summary.reason !== "no-key") return { exitCode: EXIT.CONFIG };
   }
 
   if (ctx.overrides.startRepl) {

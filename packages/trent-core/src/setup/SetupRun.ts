@@ -1,5 +1,5 @@
 import type { TrentConfig } from "../config/schema.js";
-import type { SetupContext, SetupMode, SetupResult } from "./types.js";
+import type { SetupContext, SetupIncompleteReason, SetupMode, SetupResult } from "./types.js";
 
 /** Shared plumbing for the three modes: line capture, secret writing, result shaping. */
 export abstract class SetupRun {
@@ -47,12 +47,17 @@ export abstract class SetupRun {
     };
   }
 
-  protected abort(mode: SetupMode, message: string): SetupResult {
-    this.say(message);
+  /**
+   * A run that did not complete. The verdict is the caller's to print (the CLI prints
+   * `Setup did not complete: <message>`), so it is returned rather than said: said here as well, the
+   * reason reached the terminal twice.
+   */
+  protected abort(mode: SetupMode, message: string, reason: SetupIncompleteReason): SetupResult {
     return {
       mode,
       success: false,
       message,
+      reason,
       config: null,
       secretsConfigured: [...this.secretsConfigured],
       output: [...this.lines],

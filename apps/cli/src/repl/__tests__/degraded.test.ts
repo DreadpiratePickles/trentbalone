@@ -10,6 +10,7 @@ import { describe, it, expect } from "vitest";
 import { createTheme, EMBER_SGR, sgrCodesIn } from "../../ui/index.js";
 import { isDegraded, renderDegradedBanner, DEGRADED_MARK } from "../degraded.js";
 import { makeHarness } from "./harness.js";
+import { PROVIDER_ENV_VARS } from "@trent/core/setup/index.js";
 
 const plain = createTheme("none");
 
@@ -20,6 +21,12 @@ describe("degraded detection", () => {
 
   it("is not degraded once any provider key is configured", () => {
     for (const name of ["GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY"]) {
+      expect(isDegraded({ [name]: "x" }), name).toBe(false);
+    }
+  });
+
+  it("counts every key name setup detects, so a key setup accepted never leaves the REPL degraded", () => {
+    for (const name of Object.values(PROVIDER_ENV_VARS).flat()) {
       expect(isDegraded({ [name]: "x" }), name).toBe(false);
     }
   });
@@ -57,6 +64,24 @@ describe("the banner", () => {
         expect(line.length).toBeLessThanOrEqual(width);
       }
     }
+  });
+});
+
+describe("the no-key paragraph", () => {
+  const paragraph = (width: number): string => renderDegradedBanner(plain, width).join(" ").replace(/\s+/g, " ").trim();
+
+  it("says no model key was found, what works without one, and ends on the one command that fixes it", () => {
+    const text = paragraph(80);
+    expect(text).toMatch(/no model provider key was found/i);
+    for (const works of ["/help", "trent doctor", "trent config get|set", "trent fleet list", "trent brain status|log|show"]) {
+      expect(text, works).toContain(works);
+    }
+    expect(text).toMatch(/then run: trent setup$/);
+  });
+
+  it("wraps rather than truncates: every word survives at every width", () => {
+    const words = paragraph(1000);
+    for (const width of [40, 72, 120]) expect(paragraph(width), String(width)).toBe(words);
   });
 });
 

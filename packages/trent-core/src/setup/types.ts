@@ -5,6 +5,13 @@ import type { OutputPort, PromptPort } from "./ports.js";
 export type SetupMode = "quick" | "full" | "blank-slate";
 
 /**
+ * Why a run did not complete. `no-key`: quick setup found no provider key, so there was nothing to
+ * configure (the first launch still opens the REPL, degraded). `cancelled`: the user declined the
+ * confirmation. A caller branches on this, never on the wording of `message`.
+ */
+export type SetupIncompleteReason = "no-key" | "cancelled";
+
+/**
  * Non-interactive overrides. Anything left undefined is prompted for (Full and Blank Slate) or
  * detected (Quick).
  *
@@ -59,12 +66,21 @@ export interface SetupContext {
    * decides; defaults to reading the profile's connect state by name.
    */
   businessProviderConnected?: () => boolean;
+  /**
+   * Whether anything can answer a prompt. Defaults to `process.stdin.isTTY` for the terminal adapter
+   * and to true for any other injected port. When false, full and blank-slate refuse before they
+   * touch the profile, and a quick run that reaches its confirmation refuses there, each with one
+   * readable line and exit 2, instead of an inquirer error from a closed stdin.
+   */
+  interactive?: boolean;
 }
 
 export interface SetupResult {
   mode: SetupMode;
   success: boolean;
   message: string;
+  /** Set only when `success` is false. */
+  reason?: SetupIncompleteReason;
   /** `null` when the run deliberately wrote nothing. */
   config: TrentConfig | null;
   /** Names of secrets written to the profile `.env`. Never their values. */

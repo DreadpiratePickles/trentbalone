@@ -4,6 +4,7 @@ import { BlankSlate } from "./BlankSlate.js";
 import { FullSetup } from "./FullSetup.js";
 import { QuickSetup } from "./QuickSetup.js";
 import { InquirerPrompts } from "./InquirerPrompts.js";
+import { NoTerminalPrompts, noTerminalForMode } from "./no-terminal.js";
 import { ConsoleOutput } from "./ports.js";
 import { writeDefaultHeartbeatChecklist } from "../heartbeat/checklist.js";
 import type { SetupContext, SetupOptions, SetupResult } from "./types.js";
@@ -19,9 +20,12 @@ export class SetupWizard {
   private readonly ctx: SetupContext;
 
   constructor(context: Partial<SetupContext> = {}) {
+    const prompts = context.prompts ?? new InquirerPrompts();
     this.ctx = {
       configManager: context.configManager ?? new ConfigManager(),
-      prompts: context.prompts ?? new InquirerPrompts(),
+      prompts,
+      // The terminal adapter needs a terminal; a scripted or injected port answers for itself.
+      interactive: context.interactive ?? (prompts instanceof InquirerPrompts ? process.stdin.isTTY === true : true),
       output: context.output ?? new ConsoleOutput(),
       env: context.env ?? process.env,
       ...(context.runDoctor ? { runDoctor: context.runDoctor } : {}),
@@ -32,17 +36,25 @@ export class SetupWizard {
   }
 
   async run(options: SetupOptions): Promise<SetupResult> {
-    this.ctx.configManager.ensureDirs();
+    // Without a terminal: full and blank-slate refuse before touching the profile; quick runs, and
+    // needs none when there is no key (it asks nothing), refusing only at its one confirmation.
+    const interactive = this.ctx.interactive !== false;
+    if (!interactive && (options.mode === "full" || options.mode === "blank-slate")) {
+      throw noTerminalForMode(options.mode);
+    }
+    const ctx: SetupContext = interactive ? this.ctx : { ...this.ctx, prompts: new NoTerminalPrompts(options.mode) };
+
+    ctx.configManager.ensureDirs();
     // The heartbeat checklist is the founder's file: written once, never rewritten by setup.
-    writeDefaultHeartbeatChecklist(this.ctx.configManager.getProfileDir());
+    writeDefaultHeartbeatChecklist(ctx.configManager.getProfileDir());
 
     switch (options.mode) {
       case "quick":
-        return await new QuickSetup(this.ctx).execute(options);
+        return await new QuickSetup(ctx).execute(options);
       case "full":
-        return await new FullSetup(this.ctx).execute(options);
+        return await new FullSetup(ctx).execute(options);
       case "blank-slate":
-        return await new BlankSlate(this.ctx).execute(options);
+        return await new BlankSlate(ctx).execute(options);
       default:
         throw new TrentError({
           code: EXIT.USAGE,

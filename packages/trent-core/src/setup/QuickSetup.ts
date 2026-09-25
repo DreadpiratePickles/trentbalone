@@ -38,6 +38,7 @@ export class QuickSetup extends SetupRun {
         options.provider
           ? `No key found for ${options.provider}. Set ${primaryEnvVar(options.provider)} in your environment or in ${configManager.getSecretsPath()}, then run setup again.`
           : `No provider key found. Set OPENAI_API_KEY (or another provider variable listed above) in your environment or in ${configManager.getSecretsPath()}, then run setup again.`,
+        "no-key",
       );
     }
 
@@ -85,7 +86,7 @@ export class QuickSetup extends SetupRun {
     });
 
     if (!proceed) {
-      return this.abort("quick", "Setup cancelled. No configuration was written.");
+      return this.abort("quick", "Setup cancelled. No configuration was written.", "cancelled");
     }
 
     const base = { ...configManager.loadConfig(), provider, model };

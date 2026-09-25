@@ -9,6 +9,9 @@ import { ScriptedPrompts } from "./ScriptedPrompts.js";
 import { CollectingOutput } from "./ports.js";
 import { PROVIDER_ENV_VARS } from "./detect.js";
 import { DEFAULT_HEARTBEAT_MD, HEARTBEAT_MD } from "../heartbeat/checklist.js";
+import { EXIT, TrentError } from "../errors/index.js";
+import { InquirerPrompts } from "./InquirerPrompts.js";
+import { PassThrough } from "node:stream";
 
 const EMOJI = /\p{Extended_Pictographic}/u;
 
@@ -357,6 +360,76 @@ describe("SetupWizard", () => {
       }
       expect(PROVIDER_ENV_VARS.openai).toContain("OPENAI_API_KEY");
       expect(PROVIDER_ENV_VARS.anthropic).toContain("ANTHROPIC_API_KEY");
+    });
+  });
+
+  // ------------------------------------------------- without a terminal
+
+  describe("without a terminal", () => {
+    it("refuses blank-slate and full before asking or writing anything: one line, exit 2", async () => {
+      for (const mode of ["blank-slate", "full"] as const) {
+        const prompts = new ScriptedPrompts({ provider: "anthropic", model: "claude-sonnet-4-6", walkthrough: false, confirm: true });
+        const wizard = new SetupWizard({ configManager, prompts, output, env: { ANTHROPIC_API_KEY: "sk-a" }, interactive: false });
+        const failure: unknown = await wizard.run({ mode }).then(() => undefined, (error: unknown) => error);
+        expect(failure, mode).toBeInstanceOf(TrentError);
+        expect((failure as TrentError).code, mode).toBe(EXIT.USAGE);
+        expect((failure as TrentError).message, mode).toMatch(/not a terminal/);
+        expect((failure as TrentError).message, mode).not.toContain("\n");
+        expect(prompts.asked, mode).toHaveLength(0);
+        expect(fs.existsSync(configManager.getConfigPath()), mode).toBe(false);
+        expect(fs.existsSync(path.join(configManager.getProfileDir(), HEARTBEAT_MD)), mode).toBe(false);
+      }
+    });
+
+    it("quick with a key refuses at its one confirmation, naming it, and writes no config", async () => {
+      const wizard = new SetupWizard({ configManager, prompts: new ScriptedPrompts({ confirm: true }), output, env: { OPENAI_API_KEY: "sk-x" }, interactive: false });
+      await expect(wizard.run({ mode: "quick" })).rejects.toMatchObject({
+        code: EXIT.USAGE,
+        message: expect.stringContaining("Write this configuration?"),
+      });
+      expect(fs.existsSync(configManager.getConfigPath())).toBe(false);
+    });
+
+    it("quick with no key needs no terminal: it reports the missing key", async () => {
+      const res = await new SetupWizard({ configManager, output, env: {}, interactive: false }).run({ mode: "quick" });
+      expect(res.success).toBe(false);
+      expect(res.reason).toBe("no-key");
+    });
+
+    it("the terminal adapter draws its prompts on the stream it is given (stderr under --json)", async () => {
+      const seen: unknown[] = [];
+      const answer = <T>(value: T) => async (_question: unknown, context?: unknown): Promise<T> => {
+        seen.push(context);
+        return value;
+      };
+      const fake = { input: answer("x"), select: answer("openai"), checkbox: answer([]), confirm: answer(true), password: answer("") };
+      const sink = new PassThrough();
+      const prompts = new InquirerPrompts({ output: sink, load: async () => fake as never });
+      await prompts.confirm({ id: "confirm", message: "Write this configuration?", default: true });
+      await prompts.select({ id: "provider", message: "Provider", choices: [{ name: "openai", value: "openai" }], default: "openai" });
+      expect(seen).toHaveLength(2);
+      for (const context of seen) expect(context).toMatchObject({ output: sink });
+    });
+  });
+
+  // ------------------------------------------------- why it did not complete
+
+  describe("a run that did not complete", () => {
+    it("says why: no-key, cancelled, and no reason on success", async () => {
+      expect((await wizardWith({}, {}).wizard.run({ mode: "quick" })).reason).toBe("no-key");
+      expect((await wizardWith({ confirm: false }, { OPENAI_API_KEY: "sk-x" }).wizard.run({ mode: "quick" })).reason).toBe("cancelled");
+      const full = { provider: "openai", model: "m", toolsets: ["file_ops"], agents: "ceo", daily_budget: "1.00", per_run_budget: "1.00", confirm: false };
+      expect((await wizardWith(full, { OPENAI_API_KEY: "sk-x" }).wizard.run({ mode: "full" })).reason).toBe("cancelled");
+      const done = await wizardWith({ confirm: true }, { OPENAI_API_KEY: "sk-x" }).wizard.run({ mode: "quick" });
+      expect(done.success).toBe(true);
+      expect(done.reason).toBeUndefined();
+    });
+
+    it("leaves the verdict line to the caller, so the reason is printed once, not twice", async () => {
+      const res = await wizardWith({}, {}).wizard.run({ mode: "quick" });
+      expect(res.message).toMatch(/No provider key found/);
+      expect(output.lines).not.toContain(res.message);
+      expect(output.lines.join("\n")).toContain("OPENAI_API_KEY");
     });
   });
 
