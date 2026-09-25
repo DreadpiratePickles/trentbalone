@@ -8,12 +8,21 @@
  * for mentions and replies, and `app.bsky.feed.getPosts` for the counts. The post record is
  * `app.bsky.feed.post` with `text` and `createdAt` required and `text` capped at 300 graphemes
  * (lexicons/app/bsky/feed/post.json). The session JWT lives in this closure and nowhere else.
+ *
+ * Media: `com.atproto.repo.uploadBlob` takes the raw bytes with the file's MIME as `Content-Type`
+ * and answers `{ blob }` (lexicons/com/atproto/repo/uploadBlob.json); the post then carries the
+ * blob in its `embed`, `app.bsky.embed.images` (`images: [{ image, alt, aspectRatio? }]`, at most
+ * four) or `app.bsky.embed.video` (`{ video, alt?, aspectRatio? }`), as the posts guide
+ * (https://docs.bsky.app/docs/advanced-guides/posts) and the video tutorial's simple method
+ * (https://docs.bsky.app/docs/tutorials/video) show. An unreferenced blob is deleted by the PDS.
  */
 import type { SocialFetch } from "./types.js";
 
 export const BLUESKY_DEFAULT_SERVICE = "https://bsky.social";
 export const BLUESKY_POST_COLLECTION = "app.bsky.feed.post";
 export const BLUESKY_MAX_GRAPHEMES = 300;
+export const BLUESKY_EMBED_IMAGES = "app.bsky.embed.images";
+export const BLUESKY_EMBED_VIDEO = "app.bsky.embed.video";
 
 export interface BlueskyClientOptions {
   readonly fetchImpl: SocialFetch;
@@ -46,6 +55,19 @@ export interface BlueskyCounts {
   readonly quotes: number;
 }
 
+/** A blob reference exactly as `uploadBlob` answered it; the post embeds it unchanged. */
+export type BlueskyBlob = Readonly<Record<string, unknown>> & { readonly $type?: string };
+
+export interface BlueskyAspectRatio {
+  readonly width: number;
+  readonly height: number;
+}
+
+/** The `embed` of a post record: uploaded images with alt text, or one uploaded video. */
+export type BlueskyEmbed =
+  | { readonly $type: typeof BLUESKY_EMBED_IMAGES; readonly images: ReadonlyArray<{ readonly image: BlueskyBlob; readonly alt: string; readonly aspectRatio?: BlueskyAspectRatio }> }
+  | { readonly $type: typeof BLUESKY_EMBED_VIDEO; readonly video: BlueskyBlob; readonly alt?: string; readonly aspectRatio?: BlueskyAspectRatio };
+
 export class BlueskyError extends Error {
   constructor(
     readonly operation: string,
@@ -72,12 +94,18 @@ export function createBlueskyClient(options: BlueskyClientOptions) {
   const now = options.now ?? (() => new Date());
   let session: (BlueskySession & { accessJwt: string }) | undefined;
 
-  async function xrpc<T>(operation: string, nsid: string, init: { method: "GET" | "POST"; query?: Record<string, string>; body?: unknown; auth?: boolean }): Promise<T> {
+  async function xrpc<T>(
+    operation: string,
+    nsid: string,
+    init: { method: "GET" | "POST"; query?: Record<string, string>; body?: unknown; raw?: { bytes: Uint8Array; contentType: string }; auth?: boolean },
+  ): Promise<T> {
     const query = init.query ? `?${new URLSearchParams(init.query).toString()}` : "";
     const headers: Record<string, string> = { accept: "application/json" };
     if (init.body !== undefined) headers["content-type"] = "application/json";
+    if (init.raw !== undefined) headers["content-type"] = init.raw.contentType;
     if (init.auth !== false && session !== undefined) headers.authorization = `Bearer ${session.accessJwt}`;
-    const res = await options.fetchImpl(`${service}/xrpc/${nsid}${query}`, { method: init.method, headers, ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }) });
+    const body = init.raw !== undefined ? init.raw.bytes : init.body === undefined ? undefined : JSON.stringify(init.body);
+    const res = await options.fetchImpl(`${service}/xrpc/${nsid}${query}`, { method: init.method, headers, ...(body === undefined ? {} : { body: body as BodyInit }) });
     const text = await res.text();
     if (!res.ok) {
       const scrubbed = session === undefined ? text : text.split(session.accessJwt).join("[token]");
@@ -103,10 +131,25 @@ export function createBlueskyClient(options: BlueskyClientOptions) {
     return session;
   }
 
-  async function createPost(text: string, reply?: { root: BlueskyRef; parent: BlueskyRef }): Promise<BlueskyRef> {
+  /** Uploads one file's bytes; the answer is the blob reference a post's embed carries. */
+  async function uploadBlob(bytes: Uint8Array, mimeType: string): Promise<BlueskyBlob> {
+    requireSession();
+    const data = await xrpc<{ blob?: unknown }>("uploadBlob", "com.atproto.repo.uploadBlob", { method: "POST", raw: { bytes, contentType: mimeType } });
+    const blob = data.blob;
+    if (blob === null || typeof blob !== "object" || (blob as { ref?: unknown }).ref === undefined) throw new BlueskyError("uploadBlob", 200, "the PDS answered without a blob reference");
+    return blob as BlueskyBlob;
+  }
+
+  async function createPost(text: string, extra: { reply?: { root: BlueskyRef; parent: BlueskyRef }; embed?: BlueskyEmbed } = {}): Promise<BlueskyRef> {
     const current = requireSession();
     if (graphemeCount(text) > BLUESKY_MAX_GRAPHEMES) throw new BlueskyError("createRecord", 400, `a post is at most ${BLUESKY_MAX_GRAPHEMES} graphemes; this one is ${graphemeCount(text)}`);
-    const record = { $type: BLUESKY_POST_COLLECTION, text, createdAt: now().toISOString(), ...(reply === undefined ? {} : { reply }) };
+    const record = {
+      $type: BLUESKY_POST_COLLECTION,
+      text,
+      createdAt: now().toISOString(),
+      ...(extra.reply === undefined ? {} : { reply: extra.reply }),
+      ...(extra.embed === undefined ? {} : { embed: extra.embed }),
+    };
     const data = await xrpc<{ uri?: string; cid?: string }>("createRecord", "com.atproto.repo.createRecord", {
       method: "POST",
       body: { repo: current.did, collection: BLUESKY_POST_COLLECTION, record },
@@ -129,7 +172,7 @@ export function createBlueskyClient(options: BlueskyClientOptions) {
 
   async function reply(parentUri: string, text: string): Promise<BlueskyRef> {
     const parent = await getRecord(parentUri);
-    return createPost(text, { root: parent.root, parent: parent.ref });
+    return createPost(text, { reply: { root: parent.root, parent: parent.ref } });
   }
 
   async function notifications(limit: number): Promise<BlueskyNotification[]> {
@@ -155,7 +198,7 @@ export function createBlueskyClient(options: BlueskyClientOptions) {
     return { likes: post.likeCount ?? 0, reposts: post.repostCount ?? 0, replies: post.replyCount ?? 0, quotes: post.quoteCount ?? 0 };
   }
 
-  return { login, createPost, reply, notifications, counts };
+  return { login, uploadBlob, createPost, reply, notifications, counts };
 }
 
 export type BlueskyClient = ReturnType<typeof createBlueskyClient>;

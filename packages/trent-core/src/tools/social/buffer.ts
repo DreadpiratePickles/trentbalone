@@ -5,11 +5,16 @@
  * `account { organizations { id name } }` names the organization, `channels(input: {
  * organizationId })` lists the channels with their `service`, and `createPost(input: { text,
  * channelId, schedulingType: automatic, mode: addToQueue | customScheduled, dueAt })` answers a
- * `PostActionSuccess { post { id text dueAt } }` or a `MutationError { message }`. The media
- * input of `createPost` is not on the documented guide pages (the reference page answered 404
- * on 2026-09-20), so this client sends text only and the toolset refuses a media URL on this
- * path with a typed error rather than dropping it. The founder connects each channel inside
- * Buffer first; the token reaches only channels Buffer already holds.
+ * `PostActionSuccess { post { id text dueAt } }` or a `MutationError { message }`. The founder
+ * connects each channel inside Buffer first; the token reaches only channels Buffer already holds.
+ *
+ * Media (read 2026-09-25): `createPost` takes `assets: [AssetInput!]`, an ordered list whose
+ * entries hold exactly one of `image: { url }` or `video: { url }` (https://developers.buffer.com/reference.md
+ * AssetInput, ImageAssetInput, VideoAssetInput; https://developers.buffer.com/examples/create-image-post.md,
+ * .../create-video-post.md). "The Buffer API doesn't accept a file upload - there's no upload
+ * endpoint" (https://developers.buffer.com/guides/hosting-media.md): Buffer fetches each URL when
+ * the post goes out, so the URL must be public, direct, https and still live then. This client
+ * sends the one hosted URL it is given; it never uploads a file.
  */
 import type { SocialToolPlatform } from "./schemas.js";
 import type { SocialFetch } from "./types.js";
@@ -38,6 +43,28 @@ export interface BufferPost {
   readonly id: string;
   readonly dueAt: string | null;
   readonly channel: BufferChannel;
+}
+
+/** One `AssetInput`: a hosted image or video URL that Buffer fetches when the post goes out. */
+export interface BufferAsset {
+  readonly kind: "image" | "video";
+  readonly url: string;
+}
+
+const ASSET_EXTENSIONS: Readonly<Record<string, BufferAsset["kind"]>> = { jpg: "image", jpeg: "image", png: "image", gif: "image", webp: "image", mp4: "video", mov: "video", m4v: "video" };
+export const BUFFER_ASSET_EXTENSIONS: readonly string[] = Object.keys(ASSET_EXTENSIONS).map((ext) => `.${ext}`);
+
+/** The asset a hosted URL is, by the extension of its path; nothing when the path names neither. */
+export function bufferAssetOf(url: string): BufferAsset | undefined {
+  let pathname: string;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    return undefined;
+  }
+  const ext = /\.([a-z0-9]+)$/i.exec(pathname)?.[1]?.toLowerCase();
+  const kind = ext === undefined ? undefined : ASSET_EXTENSIONS[ext];
+  return kind === undefined ? undefined : { kind, url };
 }
 
 export class BufferError extends Error {
@@ -107,12 +134,13 @@ export function createBufferClient(options: BufferClientOptions) {
     return found;
   }
 
-  /** Text only (see the module comment). `dueAt` schedules through Buffer; absent, the post joins the queue's next slot. */
-  async function createPost(platform: SocialToolPlatform, text: string, dueAt?: string): Promise<BufferPost> {
+  /** `dueAt` schedules through Buffer; absent, the post joins the queue's next slot. `asset` is one hosted URL (see the module comment). */
+  async function createPost(platform: SocialToolPlatform, text: string, extra: { dueAt?: string; asset?: BufferAsset } = {}): Promise<BufferPost> {
     const channel = await channelFor(platform);
-    const mode = dueAt === undefined ? "mode: addToQueue" : `mode: customScheduled, dueAt: ${literal(dueAt)}`;
+    const mode = extra.dueAt === undefined ? "mode: addToQueue" : `mode: customScheduled, dueAt: ${literal(extra.dueAt)}`;
+    const assets = extra.asset === undefined ? "" : `, assets: [{ ${extra.asset.kind}: { url: ${literal(extra.asset.url)} } }]`;
     const query =
-      `mutation CreatePost { createPost(input: { text: ${literal(text)}, channelId: ${literal(channel.id)}, schedulingType: automatic, ${mode} }) ` +
+      `mutation CreatePost { createPost(input: { text: ${literal(text)}, channelId: ${literal(channel.id)}, schedulingType: automatic, ${mode}${assets} }) ` +
       "{ ... on PostActionSuccess { post { id text dueAt } } ... on MutationError { message } } }";
     const data = await graphql<{ createPost?: { post?: { id?: string; dueAt?: string | null }; message?: string } }>("createPost", query);
     const post = data.createPost?.post;

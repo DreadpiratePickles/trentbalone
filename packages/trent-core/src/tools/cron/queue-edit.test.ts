@@ -102,7 +102,7 @@ describe("queue edit", () => {
 
   it("refuses an edit the social toolset would refuse, leaving the job and its approval alone", async () => {
     const { id, call } = queued();
-    await expect(editQueuedPost(deps(), id, { mediaUrl: "https://example.test/a.png" })).rejects.toThrow(/buffer_media_unsupported/);
+    await expect(editQueuedPost(deps(), id, { mediaUrl: "https://example.test/share?id=1" })).rejects.toThrow(/buffer_media_kind_unknown/);
     expect(rowsFor(call).map((row) => row.status)).toEqual(["approved"]);
     expect((readCronJobs(profileDir)[0]!.payload as SocialQueueEntry).request.mediaUrl).toBeUndefined();
   });

@@ -10,7 +10,8 @@
  *   social_schedule        the post queue on the cron job file (`queue.ts`)
  *
  * Every write calls `requireBoundApproval` inside `execute` with the exact platform, text, media
- * URL and time as the preview, under the classes `external_send` and `customer_facing`, so a
+ * URL or files (each path, size, type, sha256 prefix and alt text; `media-files.ts`) and time as
+ * the preview, under the classes `external_send` and `customer_facing`, so a
  * post runs only against an approval bound to that call (docs/security.md "Side-effecting tools:
  * the gate"); the wrapper chain performs the same check outside, and a reply in a step that read
  * the inbox is asked again by the shipped `send-after-untrusted` rule. Buffer spend lands on the
@@ -20,11 +21,12 @@ import { parseAction, record, stringArg } from "../action.js";
 import { fitSummary } from "../spillover.js";
 import type { ToolCallRecord, ToolContext, TrentToolAdapter } from "../types.js";
 import { renderToolInstructions } from "../web/schemas.js";
-import { requireBoundApproval, type BoundCall } from "../../governance/bound-approvals.js";
+import { requireBoundApproval, type BoundApprovalRow, type BoundCall } from "../../governance/bound-approvals.js";
 import { toolNameOf } from "../../governance/idempotent-dispatch.js";
 import { currentToolCallContext } from "../../governance/tool-call-context.js";
 import type { PolicyClass } from "../../governance/policy-rules.js";
 import { adapterBlockedReason, CAVEATS, platformEntry, renderPlatformLine } from "./matrix.js";
+import { describeMediaFile, parseMediaArg, renderMediaPreview, resolveMediaFiles } from "./media-files.js";
 import { checkPostRequest, createSocialPorts, publishSocialPost, readSocialInbox, readSocialInsights, replySocial, type SocialAdapterOptions } from "./publish.js";
 import { parseQueueTime, queueSlot, queueSocialPost, queuedSummary, type SocialQueueEntry } from "./queue.js";
 import { SOCIAL_ADAPTER_NAME, SOCIAL_ROUTING_TEXT, SOCIAL_SPECS, SOCIAL_TOOL_NAMES, SOCIAL_TOOL_PLATFORMS, SOCIAL_TOOL_SCHEMAS, type SocialToolPlatform } from "./schemas.js";
@@ -71,9 +73,14 @@ function requestOf(args: Record<string, unknown>): SocialPostRequest {
   return { platform: platformOf(args), text, ...(mediaUrl ? { mediaUrl } : {}), ...(accountId ? { accountId } : {}) };
 }
 
-/** What the human approves: the platform, the exact text, the media URL, the time, and the platform's own limit. */
+/** What the human approves: the platform, the exact text, the media (each file, or the URL), the time, and the platform's own limit. */
 function renderPreview(tool: string, request: SocialPostRequest, extra: { threadId?: string; at?: Date }): string {
-  const media = request.mediaUrl === undefined ? "no media" : `media ${request.mediaUrl}`;
+  const media =
+    request.media !== undefined && request.media.length > 0
+      ? renderMediaPreview(request.media)
+      : request.mediaUrl === undefined
+        ? "no media"
+        : `media ${request.mediaUrl}, fetched from there by the platform or Buffer when the post goes out, so it must stay public until then`;
   const head =
     tool === "social_reply"
       ? `reply on ${request.platform} to ${extra.threadId ?? "?"}: ${JSON.stringify(request.text)}`
@@ -92,14 +99,28 @@ export function createSocialAdapter(ctx: ToolContext, options: SocialAdapterOpti
     return record(SOCIAL_ADAPTER_NAME, action, "failed", error instanceof Error ? error.message.split("\n")[0] ?? "" : String(error));
   };
 
+  /**
+   * The files a post attaches, resolved under the workspace and hashed now, so the preview names
+   * exactly what would leave. The route is checked first: a file bound for Buffer or a direct API
+   * is refused before any file is read.
+   */
+  function withMedia(request: SocialPostRequest, raw: unknown): SocialPostRequest {
+    const inputs = parseMediaArg(raw);
+    if (inputs === undefined) return request;
+    checkPostRequest(request, portsNow(), inputs.length);
+    return { ...request, media: resolveMediaFiles(ctx.workspace, inputs) };
+  }
+
   /** The preview of a write, or the typed refusal that makes it pointless to ask. */
   function previewOf(tool: string, args: Record<string, unknown>): { preview: string; request: SocialPostRequest; threadId?: string; at?: Date } {
-    const request = requestOf(args);
+    const base = requestOf(args);
     if (tool === "social_reply") {
+      const request = base;
       const threadId = stringArg(args, "thread_id")?.trim();
       if (!threadId) throw new SocialToolError("social_thread_id_required", "thread_id is required");
       return { preview: renderPreview(tool, request, { threadId }), request, threadId };
     }
+    const request = withMedia(base, args.media);
     if (tool === "social_schedule") {
       const at = parseQueueTime(stringArg(args, "at"), portsNow().now());
       return { preview: renderPreview(tool, request, { at: queueSlot(at) }), request, at };
@@ -119,6 +140,22 @@ export function createSocialAdapter(ctx: ToolContext, options: SocialAdapterOpti
       ...(context === undefined ? {} : { runId: context.runId, stepId: context.stepId }),
       ...(options.seat === undefined ? {} : { seat: options.seat }),
     };
+  }
+
+  /**
+   * The approval is keyed on the call's arguments, not its preview, so a file rewritten between the
+   * card and the send would still be granted. Each file's line, digest included, must be on the
+   * card the human approved.
+   */
+  function requireApprovedMedia(request: SocialPostRequest, row: BoundApprovalRow): void {
+    for (const file of request.media ?? []) {
+      if (!row.details.preview.includes(describeMediaFile(file))) {
+        throw new SocialToolError(
+          "social_media_changed",
+          `${file.path} is not the file that was approved (now ${describeMediaFile(file)}); nothing was sent. Save the new file under a new name, since the same arguments are the same approval`,
+        );
+      }
+    }
   }
 
   async function platformsList(action: string): Promise<ToolCallRecord> {
@@ -141,6 +178,7 @@ export function createSocialAdapter(ctx: ToolContext, options: SocialAdapterOpti
     checkPostRequest(request, portsNow());
     const decision = requireBoundApproval(boundCall(action), preview);
     if (!decision.granted) return decision.record;
+    requireApprovedMedia(request, decision.row);
     const result = await publishSocialPost(request, portsNow(), options.seat);
     return record(SOCIAL_ADAPTER_NAME, action, "completed", `published ${request.platform} post ${result.externalId} via ${result.route}${result.note === undefined ? "" : `. ${result.note}`}`);
   }
@@ -159,6 +197,7 @@ export function createSocialAdapter(ctx: ToolContext, options: SocialAdapterOpti
     const call = boundCall(action);
     const decision = requireBoundApproval(call, preview);
     if (!decision.granted) return decision.record;
+    requireApprovedMedia(request, decision.row);
     const entry: SocialQueueEntry = { call, preview, request, at: (at ?? portsNow().now()).toISOString() };
     const job = queueSocialPost(ctx.profileDir, entry, portsNow().now());
     return record(SOCIAL_ADAPTER_NAME, action, "completed", queuedSummary(job, entry, ctx.profileDir));

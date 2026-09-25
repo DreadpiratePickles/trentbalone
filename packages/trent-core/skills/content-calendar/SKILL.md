@@ -3,7 +3,7 @@ name: content-calendar
 description: Plan four weeks of posts as a grid the owner can actually approve: pillars before posts, a cadence per platform the social toolset reaches (social_platforms_list), last month's numbers (social_insights_read), slack for the reactive post, and each approved slot queued with social_schedule only after the owner approves that exact post. Use when the owner asks what to post this month or the calendar is empty.
 category: social
 trust: official
-version: 2.0.0
+version: 2.0.1
 author: trent
 tags: social, calendar, planning, pillars, cadence, bluesky, buffer, linkedin, x, threads
 ---
@@ -23,7 +23,8 @@ hand, and the voice file (`brand/voice.md`).
 
 ## Steps
 1. Where posts can go: `social_platforms_list {}`. Plan only for platforms with a live route:
-   Bluesky directly, and X, LinkedIn, Threads or a Facebook Page through Buffer (text only).
+   Bluesky directly (images or a clip attached from the workspace), and X, LinkedIn, Threads or
+   a Facebook Page through Buffer (media only from a hosted URL).
    Instagram, TikTok and YouTube go on the grid as "owner posts"; they join the queue
    when connected and their reviews pass. Say so in the header.
 2. What worked last month, per post the owner names:

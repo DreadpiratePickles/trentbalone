@@ -1,9 +1,9 @@
 ---
 name: local-business-post
-description: The post a neighbourhood actually reads for a spa, salon, shop or trade: one thing, a local hook, a real way to book, alt text, and a version per platform. Publishes or queues each version with social_post or social_schedule where the social toolset reaches (Bluesky, and Facebook, X, LinkedIn or Threads through Buffer, text only; Instagram and Facebook directly when connected), each only after the owner approves that exact call. Use when the owner has an offer, an opening, a before-and-after or news.
+description: The post a neighbourhood actually reads for a spa, salon, shop or trade: one thing, a local hook, a real way to book, alt text, and a version per platform. Publishes or queues each version with social_post or social_schedule where the social toolset reaches (Bluesky with the photo attached from the workspace, and Facebook, X, LinkedIn or Threads through Buffer with a photo only from a hosted URL; Instagram and Facebook directly when connected), each only after the owner approves that exact call. Use when the owner has an offer, an opening, a before-and-after or news.
 category: small-business
 trust: official
-version: 2.0.0
+version: 2.1.0
 author: trent
 tags: social, local, posts, bluesky, buffer, facebook, instagram, google-business-profile, spa, salon, contractors
 ---
@@ -24,16 +24,21 @@ written consent to the photo.
 1. See what this install reaches: `social_platforms_list {}`. It names each platform's route
    (direct, Bluesky, or Buffer), what is connected and the limits the owner must hear.
 2. Write the file (Output format): one version per platform, rewritten, not pasted.
-3. Publish now, or queue for the best time; one call per platform, text only:
+3. Publish now, or queue for the best time; one call per platform:
    `social_post {"platform": "bluesky", "text": "Elm Street: from Thu 1 Oct we're open until 8 pm on Thursdays. Facials, massage and the quiet room for people who can't get here before six. Book at larkdayspa.example/book"}`
    `social_schedule {"platform": "facebook", "text": "From Thursday 1 October, Lark Day Spa on Elm Street stays open until 8 pm. Same team, same prices, more evening left when you come out. Book at larkdayspa.example/book. Six or seven, which would you take?", "at": "2026-09-29T16:30:00Z"}`
 4. Each post goes out only after the owner approves that exact call: the card shows the platform,
    the text and the time. A yes covers that one post; an edit is a new approval. A queued post
    publishes once when `trent cron start` (or `trent cron run <id>`) ticks past its time; `trent
    cron remove <id>` withdraws it. A Facebook Page goes through Buffer until Meta is connected.
-5. Photos: the Bluesky path attaches no image and Buffer refuses a media URL, so a post with a
-   photo is posted by the owner from the phone, or for Instagram sent directly
-   when connected (`trent connect meta`, its App Review, a publicly hosted image). Say which.
+5. Photos: Bluesky attaches the photo itself from a file under the workspace, with the alt text
+   from the file below (up to four images, at most 2,000,000 bytes each; the card names each file,
+   its size and its alt text):
+   `social_post {"platform": "bluesky", "text": "Thursdays on Elm Street now run to 8 pm. Book at larkdayspa.example/book", "media": [{"path": "photos/lark-evening.jpg", "alt": "The Lark Day Spa front desk at dusk, lamps on"}]}`
+   Buffer has no upload endpoint and fetches a photo from a public URL when the post goes out, so
+   a Facebook, X, LinkedIn or Threads version carries one only when the owner has hosted it at a
+   stable https link (media_url); otherwise the owner adds it from the phone. Instagram goes
+   directly when connected (`trent connect meta`, its App Review, a publicly hosted image). Say which.
 6. Google Business Profile: no tool posts there yet; the owner pastes the version below.
 7. A week on, the numbers: `social_insights_read {"platform": "bluesky", "post_id": "at://did:plc:larkspa/app.bsky.feed.post/3kx2late"}`.
 

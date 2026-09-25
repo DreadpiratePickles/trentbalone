@@ -85,7 +85,7 @@ export const CAVEATS: Readonly<Record<SocialToolPlatform, readonly string[]>> = 
     "unaudited projects upload private-only; audits have no SLA",
   ],
   threads: ["no direct path in the adapter; Buffer when a Threads channel is connected there"],
-  bluesky: ["AT Protocol directly with an app password; no review, no fee; 300 graphemes per post; images are not attached on this path"],
+  bluesky: ["AT Protocol directly with an app password; no review, no fee; 300 graphemes per post; up to four images (2,000,000 bytes each) or one MP4 video (300,000,000 bytes) uploaded from files under the workspace, alt text required; no media URL"],
 };
 
 export const REVIEW: Readonly<Record<SocialToolPlatform, string>> = {

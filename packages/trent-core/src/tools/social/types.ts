@@ -7,6 +7,7 @@
 import type { ConnectProviderId } from "../../connect/providers.js";
 import type { PlatformTokenResolver, ResolvedToken } from "../../connect/resolver.js";
 import type { AppStoreState } from "../../fleet-memory/app-store.js";
+import type { SocialMediaFile } from "./media-files.js";
 import type { SocialToolPlatform } from "./schemas.js";
 
 export type SocialFetch = (
@@ -38,6 +39,8 @@ export interface SocialPostRequest {
   readonly platform: SocialToolPlatform;
   readonly text: string;
   readonly mediaUrl?: string;
+  /** Files under the workspace, resolved and hashed when the preview was made (`media-files.ts`); Bluesky only. */
+  readonly media?: readonly SocialMediaFile[];
   readonly accountId?: string;
 }
 

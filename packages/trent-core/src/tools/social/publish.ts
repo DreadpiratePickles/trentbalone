@@ -22,8 +22,9 @@ import { platformTokenResolver, tokenResolver, type ResolvedToken } from "../../
 import { describeAppStore, type AppStoreEnv } from "../../fleet-memory/app-store.js";
 import { recordToolSpend } from "../../governance/spend-ledger.js";
 import { currentToolCallContext } from "../../governance/tool-call-context.js";
-import { BLUESKY_DEFAULT_SERVICE, createBlueskyClient, type BlueskyClient } from "./bluesky.js";
-import { BUFFER_DEFAULT_ENDPOINT, createBufferClient } from "./buffer.js";
+import { BLUESKY_DEFAULT_SERVICE, BLUESKY_EMBED_IMAGES, BLUESKY_EMBED_VIDEO, BLUESKY_MAX_GRAPHEMES, BlueskyError, createBlueskyClient, graphemeCount, type BlueskyBlob, type BlueskyClient, type BlueskyEmbed } from "./bluesky.js";
+import { BUFFER_ASSET_EXTENSIONS, BUFFER_DEFAULT_ENDPOINT, bufferAssetOf, createBufferClient } from "./buffer.js";
+import { readMediaForSend, type SocialMediaFile } from "./media-files.js";
 import { adapterBlockedReason, directRouteFor, noDirectReason, noRouteReason, postRouteFor, type SocialRoute } from "./matrix.js";
 import type { SocialToolPlatform } from "./schemas.js";
 import { SocialToolError, type SocialFetch, type SocialPorts, type SocialPostRequest } from "./types.js";
@@ -115,36 +116,85 @@ async function buffer(ports: SocialPorts) {
   return createBufferClient({ fetchImpl: ports.fetchImpl, accessToken: token.accessToken, endpoint: ports.endpoints.buffer });
 }
 
-/** The typed refusals that need no network: named before any approval is asked, so a call that cannot succeed never asks. */
-export function checkPostRequest(request: SocialPostRequest, ports: SocialPorts): SocialRoute {
+export const BUFFER_HOSTING_MEDIA_DOCS = "https://developers.buffer.com/guides/hosting-media.md";
+
+/**
+ * Where media can go: files are uploaded on the Bluesky path only; a hosted URL goes to the direct
+ * APIs (the app's adapter) and to Buffer as an asset, never to Bluesky, which takes no URL.
+ */
+function checkMediaRoute(route: SocialRoute, request: SocialPostRequest, files: number): void {
+  if (files > 0 && request.mediaUrl !== undefined) throw new SocialToolError("social_media_conflict", "pass media (files under the workspace) or media_url (one hosted URL), not both");
+  if (files > 0 && route === "buffer") {
+    throw new SocialToolError(
+      "buffer_media_needs_url",
+      `${request.platform} goes through Buffer, whose API has no upload endpoint and fetches each asset from a public URL when the post goes out (${BUFFER_HOSTING_MEDIA_DOCS}). ` +
+        "Trent runs on this machine and has no public URL to give it: host the file at a stable public https URL (Cloudinary, Cloudflare R2 or your own site) and pass it as media_url, or the owner attaches it inside Buffer",
+    );
+  }
+  if (files > 0 && route === "direct") {
+    throw new SocialToolError("social_media_file_unsupported", `the direct ${request.platform} path takes a publicly hosted media_url, not a local file: the platform fetches the URL itself`);
+  }
+  if (route === "bluesky" && request.mediaUrl !== undefined) {
+    throw new SocialToolError("bluesky_media_url_unsupported", `Bluesky takes uploaded files, not a URL: pass media [{"path": "<file under the workspace>", "alt": "<alt text>"}] and each file is uploaded with the post`);
+  }
+  if (route === "buffer" && request.mediaUrl !== undefined && bufferAssetOf(request.mediaUrl) === undefined) {
+    throw new SocialToolError("buffer_media_kind_unknown", `Buffer is told whether a URL is an image or a video, and ${request.mediaUrl} does not say: its path must end in ${BUFFER_ASSET_EXTENSIONS.join(", ")}`);
+  }
+}
+
+/**
+ * The typed refusals that need no network: named before any approval is asked, so a call that
+ * cannot succeed never asks. `files` is how many local files the call attaches; it defaults to the
+ * resolved ones, and the preview passes the count it is about to resolve so the route is refused
+ * before any file is read.
+ */
+export function checkPostRequest(request: SocialPostRequest, ports: SocialPorts, files = request.media?.length ?? 0): SocialRoute {
   const appStore = ports.appStore();
   const route = postRouteFor(request.platform, ports.connected(), appStore);
   if (route === undefined) throw new SocialToolError("social_no_route", noRouteReason(request.platform, appStore));
   if (request.mediaUrl !== undefined && !/^https:\/\/\S+$/.test(request.mediaUrl)) throw new SocialToolError("social_media_url_invalid", "media_url must be a publicly hosted https URL");
+  checkMediaRoute(route, request, files);
   if (route === "direct" && request.platform === "instagram" && request.mediaUrl === undefined) {
     throw new SocialToolError("instagram_media_url_required", "Instagram publishing requires a publicly hosted image or video URL in media_url; text alone cannot be published");
   }
-  if (route === "buffer" && request.mediaUrl !== undefined) {
-    throw new SocialToolError("buffer_media_unsupported", "the Buffer path sends text only: its media input is not on Buffer's documented API pages, so the URL would be dropped; attach the media inside Buffer or use a direct path");
-  }
   if (route === "direct") requireAccount(request.platform, request.accountId);
   return route;
+}
+
+/** Uploads each approved file's bytes, in order, and builds the post's embed from the blobs. */
+async function blueskyEmbed(client: BlueskyClient, payloads: ReadonlyArray<{ file: SocialMediaFile; bytes: Buffer }>): Promise<BlueskyEmbed | undefined> {
+  if (payloads.length === 0) return undefined;
+  const blobs: BlueskyBlob[] = [];
+  for (const { file, bytes } of payloads) blobs.push(await client.uploadBlob(bytes, file.mime));
+  const aspect = (file: SocialMediaFile) => (file.aspectRatio === undefined ? {} : { aspectRatio: file.aspectRatio });
+  const first = payloads[0]!.file;
+  if (first.kind === "video") return { $type: BLUESKY_EMBED_VIDEO, video: blobs[0]!, alt: first.alt, ...aspect(first) };
+  return { $type: BLUESKY_EMBED_IMAGES, images: payloads.map(({ file }, i) => ({ image: blobs[i]!, alt: file.alt, ...aspect(file) })) };
 }
 
 export async function publishSocialPost(request: SocialPostRequest, ports: SocialPorts, seat?: string): Promise<PublishResult> {
   const route = checkPostRequest(request, ports);
   try {
     if (route === "bluesky") {
-      const ref = await (await bluesky(ports)).createPost(request.text);
-      return { route, externalId: ref.uri, ...(request.mediaUrl === undefined ? {} : { note: "the media URL was not attached: this path posts text only" }) };
+      const files = request.media ?? [];
+      // The text limit createRecord enforces, checked before a file is uploaded for a post that cannot be made.
+      if (graphemeCount(request.text) > BLUESKY_MAX_GRAPHEMES) throw new BlueskyError("createRecord", 400, `a post is at most ${BLUESKY_MAX_GRAPHEMES} graphemes; this one is ${graphemeCount(request.text)}`);
+      // Every file read and re-checked before the login: one gone or changed stops the post before anything leaves.
+      const payloads = files.map((file) => ({ file, bytes: readMediaForSend(file) }));
+      const client = await bluesky(ports);
+      const embed = await blueskyEmbed(client, payloads);
+      const ref = await client.createPost(request.text, embed === undefined ? {} : { embed });
+      return { route, externalId: ref.uri, ...(files.length === 0 ? {} : { note: `attached ${files.map((f) => f.path).join(", ")}` }) };
     }
     if (route === "buffer") {
-      const post = await (await buffer(ports)).createPost(request.platform, request.text);
+      const asset = request.mediaUrl === undefined ? undefined : bufferAssetOf(request.mediaUrl);
+      const post = await (await buffer(ports)).createPost(request.platform, request.text, asset === undefined ? {} : { asset });
       const cents = ports.pricing.buffer_cents_per_post;
       const context = currentToolCallContext();
       const row = recordToolSpend({ run_id: context?.runId ?? "no-run", tool: "social_post", provider: "buffer", cents, units: 1, ...(seat === undefined ? {} : { seat }) });
       const ledgerNote = row === undefined ? "no spend ledger is open in this process, so the Buffer charge was not recorded" : `${cents} cents recorded on the ledger as buffer spend`;
-      return { route, externalId: post.id, note: `queued in Buffer for channel ${post.channel.name} (${post.channel.service}); Buffer publishes at its next slot. ${ledgerNote}` };
+      const media = asset === undefined ? "" : ` Buffer fetches the ${asset.kind} at ${asset.url} when the post goes out; keep it public until then.`;
+      return { route, externalId: post.id, note: `queued in Buffer for channel ${post.channel.name} (${post.channel.service}); Buffer publishes at its next slot.${media} ${ledgerNote}` };
     }
     const account = requireAccount(request.platform, request.accountId);
     const published = await (await liveAdapter(request.platform, ports)).publishPost({

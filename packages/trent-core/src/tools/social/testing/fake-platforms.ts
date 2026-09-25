@@ -18,6 +18,8 @@ export interface RecordedRequest {
   readonly host: string;
   readonly headers: http.IncomingHttpHeaders;
   readonly body: string;
+  /** The body as bytes: what a blob upload sent, unmangled by a text decode. */
+  readonly raw: Buffer;
 }
 
 export interface FakePlatforms {
@@ -58,7 +60,12 @@ function graphAnswer(method: string, path: string): unknown {
   return method === "GET" ? { data: [] } : { id: "graph_1" };
 }
 
-function blueskyAnswer(path: string, body: string): { status: number; body: unknown } {
+function blueskyAnswer(path: string, body: string, raw: Buffer, contentType: string, blobs: { count: number }): { status: number; body: unknown } {
+  if (path.startsWith("/xrpc/com.atproto.repo.uploadBlob")) {
+    // https://github.com/bluesky-social/atproto/blob/main/lexicons/com/atproto/repo/uploadBlob.json: `{ blob }`, the blob as the posts guide shows it.
+    blobs.count += 1;
+    return { status: 200, body: { blob: { $type: "blob", ref: { $link: `bafkreifakeblob${blobs.count}` }, mimeType: contentType, size: raw.length } } };
+  }
   if (path.startsWith("/xrpc/com.atproto.server.createSession")) {
     const parsed = JSON.parse(body || "{}") as { identifier?: string; password?: string };
     if (!parsed.identifier || !parsed.password) return { status: 401, body: { error: "AuthenticationRequired" } };
@@ -80,15 +87,18 @@ function blueskyAnswer(path: string, body: string): { status: number; body: unkn
 export async function startFakePlatforms(): Promise<FakePlatforms> {
   const requests: RecordedRequest[] = [];
   const failures: Array<{ prefix: string; status: number; body: string }> = [];
+  const blobs = { count: 0 };
   const server = http.createServer((req, res) => {
-    let body = "";
+    const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => {
-      body += chunk.toString("utf8");
+      chunks.push(chunk);
     });
     req.on("end", () => {
+      const raw = Buffer.concat(chunks);
+      const body = raw.toString("utf8");
       const path = req.url ?? "/";
       const host = req.headers["x-fake-host"];
-      requests.push({ method: req.method ?? "GET", path, host: typeof host === "string" ? host : "", headers: req.headers, body });
+      requests.push({ method: req.method ?? "GET", path, host: typeof host === "string" ? host : "", headers: req.headers, body, raw });
       const failure = failures.findIndex((f) => path.startsWith(f.prefix));
       if (failure !== -1) {
         const [f] = failures.splice(failure, 1);
@@ -97,7 +107,7 @@ export async function startFakePlatforms(): Promise<FakePlatforms> {
         return;
       }
       if (path.startsWith("/xrpc/")) {
-        const answer = blueskyAnswer(path, body);
+        const answer = blueskyAnswer(path, body, raw, req.headers["content-type"] ?? "", blobs);
         json(res, answer.status, answer.body);
         return;
       }

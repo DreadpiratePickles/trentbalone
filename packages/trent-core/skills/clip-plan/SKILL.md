@@ -3,7 +3,7 @@ name: clip-plan
 description: From one long-form recording, a ranked list of clip candidates with in and out timestamps, a hook, a caption and the exact media_clip call for each, cut in the workspace when the media backend is installed; thumbnails through media_thumbnail and, with the owner's approval of the cents, media_image. Use when a long video or a podcast episode needs its shorts. Cuts nothing without a backend; uploads nothing ever.
 category: creator
 trust: official
-version: 1.1.0
+version: 1.2.0
 author: trent
 tags: creator, clips, shorts, reels, tiktok, long-form, podcast, media_clip, transcription, thumbnails
 ---
@@ -168,5 +168,8 @@ Backend: docker; probe, transcribe, scenes and four cuts ran; covers: frames ext
 Cutting, transcribing and extracting frames run without asking when the media backend is
 installed: they read and write files under the workspace and nothing leaves the machine. A
 `media_image` render costs money and asks for approval per image with the prompt and the price.
-Hosted transcription is off unless the owner set it. Nothing is uploaded or published; the
-owner posts each clip.
+Hosted transcription is off unless the owner set it. Nothing is uploaded or published by this
+skill. A cut clip can go to Bluesky from media-out/ as its own approved post where the social
+toolset is on and Bluesky is connected (one MP4 of at most 300,000,000 bytes, with alt text);
+Buffer takes a clip only from a public URL, and Instagram, TikTok and YouTube have no upload path
+here, so there the owner posts each clip.

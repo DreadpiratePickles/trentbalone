@@ -1,9 +1,9 @@
 ---
 name: repurpose-plan
-description: From one long-form transcript, name five to eight clip candidates with in and out timestamps, a hook and a platform each, plus the text derivatives (a thread, a LinkedIn post, a newsletter section) and a publishing order. Use when a long video or a podcast episode is done. Names the cuts and, when the media backend is installed, makes them with media_clip through the clip-plan skill; the owner posts.
+description: From one long-form transcript, name five to eight clip candidates with in and out timestamps, a hook and a platform each, plus the text derivatives (a thread, a LinkedIn post, a newsletter section) and a publishing order. Use when a long video or a podcast episode is done. Names the cuts and, when the media backend is installed, makes them with media_clip through the clip-plan skill; a clip goes to Bluesky from media-out/ through the social toolset after the owner approves that post, and the owner posts elsewhere.
 category: creator
 trust: official
-version: 1.1.0
+version: 1.2.0
 author: trent
 tags: creator, repurposing, clips, shorts, podcast, long-form, thread, newsletter
 ---
@@ -186,5 +186,9 @@ with the timestamps for each, one link to the episode)
 
 A plan, in a file, and the cuts as files under the workspace once the owner approves the plan
 and the media backend is installed; nothing leaves the machine. Without a backend the owner
-cuts from the timestamps in their editor. Nothing is uploaded or posted; the owner posts each
-piece.
+cuts from the timestamps in their editor. Nothing is uploaded or posted by this skill. Posting
+is a separate, approved call: where the social toolset is on and Bluesky is connected, the
+`content` seat can post a clip straight from media-out/ (one MP4 of at most 300,000,000 bytes,
+with alt text; the card names the file, its size and its alt text). Buffer takes a clip only from
+a public URL, and Instagram, TikTok and YouTube have no upload path here, so there the owner
+posts each piece.

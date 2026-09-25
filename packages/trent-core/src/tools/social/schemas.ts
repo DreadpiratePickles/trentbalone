@@ -34,8 +34,24 @@ const TEXT = { type: "string", description: "The exact text to publish. It is sh
 const MEDIA_URL = {
   type: "string",
   description:
-    "A publicly hosted image or video URL (https). Instagram and TikTok require one; Facebook and LinkedIn attach it as a link. " +
-    "The Buffer path takes text only.",
+    "One publicly hosted image or video URL (https). Instagram and TikTok require one; Facebook and LinkedIn attach it as a link. " +
+    "On the Buffer path it goes out as an image or video asset, told apart by the path's extension (.jpg, .jpeg, .png, .gif, .webp, .mp4, .mov, .m4v); " +
+    "Buffer fetches it when the post goes out, so it must stay public until then. Not used on Bluesky: pass media.",
+};
+const MEDIA = {
+  type: "array",
+  description:
+    "Files under the workspace to upload with the post, on the Bluesky path only: up to four images (JPEG, PNG, GIF or WebP, " +
+    "at most 2,000,000 bytes each) or one MP4 video (at most 300,000,000 bytes). The type is read from the file's bytes. " +
+    "Alt text is required on every file. Buffer and the direct APIs take no local file: host it and pass media_url.",
+  items: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "The file, relative to the workspace (media-out/<file> for what the media tools made)." },
+      alt: { type: "string", description: "What the image or video shows, in one sentence, for people who cannot see it. Required." },
+    },
+    required: ["path", "alt"],
+  },
 };
 
 export const SOCIAL_TOOL_SCHEMAS: ToolSchema[] = [
@@ -50,12 +66,12 @@ export const SOCIAL_TOOL_SCHEMAS: ToolSchema[] = [
   {
     name: "social_post",
     description:
-      "Publish a post now. Asks a human for approval at every autonomy level, bound to exactly this platform, text and media URL; " +
+      "Publish a post now. Asks a human for approval at every autonomy level, bound to exactly this platform, text and media (each file's path, size, digest and alt text, or the URL); " +
       "sends once. Facebook and Instagram go through the Meta Graph API, Bluesky through the AT Protocol, and any platform Buffer holds " +
       "a channel for goes through Buffer when the direct path is unreviewed or has no token.",
     parameters: {
       type: "object",
-      properties: { platform: PLATFORM, text: TEXT, media_url: MEDIA_URL, account_id: ACCOUNT_ID },
+      properties: { platform: PLATFORM, text: TEXT, media: MEDIA, media_url: MEDIA_URL, account_id: ACCOUNT_ID },
       required: ["platform", "text"],
     },
   },
@@ -106,13 +122,14 @@ export const SOCIAL_TOOL_SCHEMAS: ToolSchema[] = [
   {
     name: "social_schedule",
     description:
-      "Queue a post for a later time. The human approves the exact platform, text, media URL and time now; the queued job publishes it " +
-      "once when `trent cron` ticks past that time, with no model in the loop. Writes to the profile's cron job file.",
+      "Queue a post for a later time. The human approves the exact platform, text, media and time now; the queued job publishes it " +
+      "once when `trent cron` ticks past that time, with no model in the loop, and a file that is gone or changed by then is not sent. Writes to the profile's cron job file.",
     parameters: {
       type: "object",
       properties: {
         platform: PLATFORM,
         text: TEXT,
+        media: MEDIA,
         media_url: MEDIA_URL,
         account_id: ACCOUNT_ID,
         at: { type: "string", description: "When to publish, ISO 8601 with a zone (2026-10-01T15:00:00Z). Must be in the future and within a year." },

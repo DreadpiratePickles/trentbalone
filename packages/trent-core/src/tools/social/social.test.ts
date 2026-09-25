@@ -240,14 +240,16 @@ describe("Bluesky direct and Buffer as the publisher", () => {
     expect(JSON.stringify(rows[0])).toContain("buffer");
   });
 
-  it("a media URL on the Buffer path is refused with a typed error rather than dropped", async () => {
+  it("a media URL on the Buffer path is sent as Buffer's image asset, never dropped (media-on-posts cases: social-media.test.ts)", async () => {
     const { social } = build(["buffer"]);
     const action = 'social_post {"platform":"x","text":"look","media_url":"https://cdn.example/a.jpg"}';
     await inStep(() => social.dryRun!(action, {}));
     const result = await inStep(() => social.execute(action, {}));
-    expect(result.status).toBe("failed");
-    expect(result.summary).toContain("buffer_media_unsupported");
-    expect(platforms.requests.filter((r) => r.body.includes("createPost("))).toEqual([]);
+    expect(result.status, result.summary).toBe("completed");
+    expect(result.summary).toContain("https://cdn.example/a.jpg");
+    const creates = platforms.requests.filter((r) => r.body.includes("createPost("));
+    expect(creates).toHaveLength(1);
+    expect((JSON.parse(creates[0]!.body) as { query: string }).query).toContain('assets: [{ image: { url: "https://cdn.example/a.jpg" } }]');
   });
 });
 
