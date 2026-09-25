@@ -23,6 +23,7 @@
  * mode, which keeps the deterministic fallback for a user with no key and nothing else.
  */
 
+import { PROVIDER_ENV_VARS } from "../setup/detect.js";
 import type { GatewayMessage, ModelGateway, StreamRole } from "./types.js";
 
 /** The `messages` shape `callJson` builds (OpenAI `ChatCompletionMessageParam`, narrowed). */
@@ -56,8 +57,10 @@ export interface CompletionPortOptions {
 const JSON_INSTRUCTION =
   "Respond with exactly one JSON object and nothing else: no prose before or after it and no markdown fences.";
 
-export const NOT_CONFIGURED_MESSAGE =
-  "model provider is not configured: no API key found (GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, MISTRAL_API_KEY or OPENROUTER_API_KEY)";
+/** Every provider key variable, from the one table `trent setup` detects keys with, so the two cannot drift. */
+const PROVIDER_KEY_NAMES: readonly string[] = [...new Set(Object.values(PROVIDER_ENV_VARS).flat())];
+
+export const NOT_CONFIGURED_MESSAGE = `model provider is not configured: no API key found (${PROVIDER_KEY_NAMES.slice(0, -1).join(", ")} or ${PROVIDER_KEY_NAMES[PROVIDER_KEY_NAMES.length - 1] ?? ""})`;
 
 function contentToString(content: unknown): string {
   if (typeof content === "string") return content;

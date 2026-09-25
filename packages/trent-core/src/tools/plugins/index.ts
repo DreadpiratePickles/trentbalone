@@ -18,6 +18,7 @@ import { fitSummary } from "../spillover.js";
 import type { ToolCallRecord, ToolContext, TrentToolAdapter } from "../types.js";
 import { renderToolInstructions, type ToolSchema } from "../web/schemas.js";
 import { loadPluginManifests, type PluginLoadReport, type PluginTool } from "./manifest.js";
+import { PLUGINS_ADAPTER_NAME, PLUGINS_LIST_TOOL } from "./names.js";
 
 export {
   loadPluginManifests,
@@ -31,8 +32,7 @@ export {
   type RefusedPlugin,
 } from "./manifest.js";
 
-export const PLUGINS_ADAPTER_NAME = "plugins";
-export const PLUGINS_LIST_TOOL = "plugins_list";
+export { PLUGINS_ADAPTER_NAME, PLUGINS_LIST_TOOL } from "./names.js";
 const DEFAULT_TIMEOUT_S = 120;
 const ROUTING_TEXT = "installed plugin tools, third-party plugin, list plugins, run a plugin command";
 

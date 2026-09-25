@@ -12,6 +12,7 @@ import type { createOrchestrator as createRealOrchestrator } from "@trent/core/o
 import { createModelGateway } from "@trent/core/model-gateway/index.js";
 import { InMemoryTraceStore } from "@trent/core/traces/index.js";
 import { acquireProfileWriter } from "@trent/core/profile/locks.js";
+import { diagnoseStoreFailure } from "@trent/core/store/durability.js";
 import { autoTheme, canUseRawMode, terminalWidth, type Theme } from "../ui/index.js";
 import { playBoot, type BootStdin } from "../ui/boot.js";
 import { ReplEngine, bindApprovalAnswers, type ReplRunner } from "./engine.js";
@@ -263,7 +264,8 @@ export class ClassicRepl {
       const runner: ReplRunner = ({ objective, signal, history }) =>
         runtime.run(objective, { trigger: "manual", signal, ...(history === undefined ? {} : { history }) });
 
-      const engine = new ReplEngine({
+      // Typed: the `/exit` port below reads `engine.busy` from inside the engine's own options.
+      const engine: ReplEngine = new ReplEngine({
         theme,
         config,
         store,
@@ -290,15 +292,15 @@ export class ClassicRepl {
           skills: new SkillsHub(this.#configManager),
           personalities: new PersonalityManager(this.#configManager),
           sessions: this.#sessions,
+          // `/exit` is Ctrl+D as a command: the same `exit(0)`, and refused mid-run as Ctrl+D is.
+          session: { end: () => (engine.busy ? "busy" : (exit(0), "ended")) },
         },
       });
 
       if (!durable) {
-        writeLine(
-          theme.needsApproval(
-            "This session is not durable: the SQLite store needs Bun. Approvals will not survive a restart.",
-          ),
-        );
+        // Bun under Node; under Bun, the generated client or the database (store/durability.ts).
+        const why = await diagnoseStoreFailure();
+        writeLine(theme.needsApproval(`This session is not durable: ${why.reason}. Approvals will not survive a restart.`));
       }
 
       await this.#drive(engine);

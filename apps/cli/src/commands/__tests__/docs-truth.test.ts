@@ -23,7 +23,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { STOP_COMMAND } from "@trent/core/gateway/index.js";
-import { TrentConfigSchema } from "@trent/core/config/schema.js";
+import { TrentConfigSchema, ToolsetSchema } from "@trent/core/config/schema.js";
+import { DEFAULT_CONFIG } from "@trent/core/config/index.js";
 import { DEFAULT_CHECKS } from "@trent/core/doctor/DoctorRunner.js";
 import { COMMAND_SPECS } from "../index.js";
 import type { CommandSpec } from "../registry.js";
@@ -337,5 +338,38 @@ describe("the documents state the doctor's real check count", () => {
       }
     }
     expect(wrong).toEqual([]);
+  });
+});
+
+/**
+ * Pages that state which names `toolsets` accepts and what a config without the key gets. README
+ * belongs in this list too; it says "thirteen" where the schema has more, and joins once it is
+ * corrected (P2-5a reported the line to the README owner).
+ */
+const TOOLSET_PAGES: readonly string[] = ["docs/getting-started.md"];
+
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"];
+
+/** `sixteen` or `16` as a number; NaN for anything else. */
+function countWord(word: string): number {
+  return /^\d+$/.test(word) ? Number(word) : NUMBER_WORDS.indexOf(word.toLowerCase()) === -1 ? Number.NaN : NUMBER_WORDS.indexOf(word.toLowerCase());
+}
+
+const codeNames = (text: string): string[] => [...text.matchAll(/`([a-z_]+)`/g)].map((match) => match[1]!);
+
+describe("the documents state the toolsets the schema accepts", () => {
+  it("list every ToolsetSchema name with its count, and what a config with no toolsets key gets", () => {
+    for (const page of TOOLSET_PAGES) {
+      const prose = withoutFences(read(page)).replace(/\s+/g, " ");
+      const accepts = /accepts (\w+) names: ([^.]*)\./.exec(prose);
+      expect(accepts, `${page} must say how many names toolsets accepts, and list them`).not.toBeNull();
+      expect(countWord(accepts![1]!), `${page}: "accepts ${accepts![1]} names"`).toBe(ToolsetSchema.options.length);
+      expect(codeNames(accepts![2]!), page).toEqual([...ToolsetSchema.options]);
+      const defaults = /no `toolsets` key gets (\w+) of them\W+everything except ([^.]*)\./.exec(prose);
+      expect(defaults, `${page} must say what a config with no toolsets key gets`).not.toBeNull();
+      expect(countWord(defaults![1]!), `${page}: "gets ${defaults![1]} of them"`).toBe(DEFAULT_CONFIG.toolsets.length);
+      const off = ToolsetSchema.options.filter((name) => !(DEFAULT_CONFIG.toolsets as readonly string[]).includes(name));
+      expect(codeNames(defaults![2]!).sort(), page).toEqual([...off].sort());
+    }
   });
 });

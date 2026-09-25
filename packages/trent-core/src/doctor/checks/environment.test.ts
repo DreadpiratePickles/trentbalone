@@ -34,7 +34,27 @@ describe("environment contract check", () => {
     expect(result.message).toContain("TRENT_QUEUE_FALLBACK");
     expect(result.message).toMatch(/twice/i);
     expect(result.message).toMatch(/bill/i);
-    expect(result.fixHint).toContain("TRENT_QUEUE_FALLBACK=disabled");
+    expect(result.fixHint).toMatch(/^Unset TRENT_QUEUE_FALLBACK or set it to disabled/);
+  });
+
+  // Since 499cd14 the CLI sets TRENT_QUEUE_FALLBACK=disabled itself when it is unset
+  // (apps/cli/src/env-defaults.ts), so a failure here means an explicit value: "Export" was wrong.
+  it("tells an explicit bad TRENT_QUEUE_FALLBACK to unset it or set it to disabled, never to export it", async () => {
+    vi.stubEnv("TRENT_QUEUE_FALLBACK", "inline");
+    vi.stubEnv("REDIS_URL", "");
+    vi.stubEnv("TRENT_EVAL_SYNC_QUEUE", "");
+    const result = await checkEnvironment.run(context());
+    expect(result.status).toBe("fail");
+    expect(result.fixHint).toBe("Unset TRENT_QUEUE_FALLBACK or set it to disabled (the CLI sets disabled itself when it is unset) before running Trent.");
+    expect(result.fixHint).not.toMatch(/export/i);
+  });
+
+  it("names only the variables that are wrong", async () => {
+    vi.stubEnv("TRENT_QUEUE_FALLBACK", "disabled");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+    vi.stubEnv("TRENT_EVAL_SYNC_QUEUE", "1");
+    const result = await checkEnvironment.run(context());
+    expect(result.fixHint).toBe("Unset TRENT_EVAL_SYNC_QUEUE and REDIS_URL before running Trent.");
   });
 
   it("fails when a Redis variable is set", async () => {

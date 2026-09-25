@@ -122,10 +122,11 @@ Three modes exist:
   `disabled_toolsets`, `agent.disabled_toolsets` and `platform_toolsets.cli`, so a later update
   reading any of the three cannot re-enable something you never asked for.
 
-The `toolsets` list in `config.yaml` is what the seats get, and it accepts thirteen names:
+The `toolsets` list in `config.yaml` is what the seats get, and it accepts sixteen names:
 `file_ops`, `terminal`, `web`, `browser`, `code`, `vision`, `memory`, `delegation`, `cron`,
-`skills`, `plugins`, `mcp` and `human`. A `config.yaml` with no `toolsets` key gets nine of them —
-everything except `browser`, `vision`, `memory` and `mcp`. `web` needs the egress proxy, and when it
+`skills`, `plugins`, `mcp`, `human`, `media`, `social` and `business`. A `config.yaml` with no
+`toolsets` key gets nine of them — everything except `browser`, `vision`, `memory`, `mcp`, `media`,
+`social` and `business`. `web` needs the egress proxy, and when it
 is off the banner says `skipped web (...)` instead of dropping it silently. `memory` rides in
 through the fleet-memory hook whether or not the list names it, and the run's `todo`, `clarify` and
 `session_search` tools are registered on every build rather than enabled here. Above
@@ -239,7 +240,8 @@ npm run cli -- --continue
 ```
 
 Both surfaces run on the same session engine and the same model gateway. In the REPL, Ctrl+C aborts
-the in-flight stream and leaves the process alive; Ctrl+J inserts a newline.
+the in-flight stream and leaves the process alive; Ctrl+J inserts a newline; `/exit` or Ctrl+D ends
+the session once nothing is running.
 
 A REPL session is a conversation, not a series of unrelated runs: your line and the run's own
 consolidated output are appended to a session under `~/.trent/sessions/`, and the last few turns
@@ -295,8 +297,8 @@ field switches every line. Nothing is renamed, dropped or invented here: a tool 
 `step.toolCalls` of a `step_output` event, a step's cost is `step.costCents`, a run's summary is
 `run.summary` on `run_done`. The kinds are listed in `packages/trent-core/src/orchestrator/types.ts`.
 
-The last line is `{"type":"result","status":"completed","cost_cents":0,"duration_ms":0,"run_id":"..."}`,
-whose keys are the session store's own (`run_id`, `cost_cents`, `duration_ms`). `status` is
+The last line is `{"type":"result","status":"completed","cost_cents":0,"duration_ms":0,"run_id":"...","model":"...","models":[...]}`,
+whose first keys are the session store's own (`run_id`, `cost_cents`, `duration_ms`). `status` is
 `completed`, `failed`, `paused` (an approval, and then `approval_id` names it) or `cancelled` (the
 cost cap, or Ctrl+C), and `error` carries the reason when there is one. `model` is the model the run
 was asked to run on (the `--model` pin, else the configured model) and `models` the distinct models

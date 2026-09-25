@@ -248,6 +248,16 @@ export interface ReplContext {
   sessions?: ReplSessionsPort;
   /** E1: the agent-write ledger this session records into (`/checkpoints`, `/rollback`). */
   checkpoints?: ReplCheckpointsPort;
+  /** Ends this session the way Ctrl+D does (`/exit`). Absent where there is no session to end. */
+  session?: ReplSessionControl;
+}
+
+/**
+ * `/exit`'s way out: the same `exit(0)` Ctrl+D calls, so the proxy and the sandboxes are released
+ * first. `busy` means a run is in flight and nothing was ended, as Ctrl+D is ignored then too.
+ */
+export interface ReplSessionControl {
+  end(): "ended" | "busy";
 }
 
 // ── the ports the commands merged out of `apps/cli/src/slash/` read ──────────

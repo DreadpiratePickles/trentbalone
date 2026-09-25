@@ -19,6 +19,7 @@ import type {
   ReplFleetPort,
   ReplPersonalityPort,
   ReplSandbox,
+  ReplSessionControl,
   ReplSessionsPort,
   ReplSkillsPort,
   ReplStore,
@@ -33,6 +34,8 @@ export interface ReplSessionPorts {
   skills?: ReplSkillsPort;
   personalities?: ReplPersonalityPort;
   sessions?: ReplSessionsPort;
+  /** `/exit`: ends this session, or says a run is in flight. */
+  session?: ReplSessionControl;
 }
 
 /** The half of the context that is configuration and ports, as the engine was constructed with. */

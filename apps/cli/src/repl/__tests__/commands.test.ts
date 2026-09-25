@@ -264,6 +264,7 @@ describe("every command, without exception", () => {
     const unchanged: string[] = [];
     for (const name of commandNames()) {
       if (name === "help") continue; // /help documents the registry, not mutable state
+      if (name === "exit") continue; // /exit ends the session; it reports no state (exit.test.ts)
       if ((await runCommand(name, [], ctx)) === before.get(name)) unchanged.push(name);
     }
     expect(unchanged).toEqual([]);

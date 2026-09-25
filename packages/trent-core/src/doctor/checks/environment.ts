@@ -15,6 +15,27 @@ const NAME = "Standalone Environment Contract";
 export const DOUBLE_EXECUTION_CONSEQUENCE =
   "every job runs twice, silently, roughly quadrupling the model bill while the run still reports success";
 
+/** `a`, `a and b`, `a, b and c`. */
+function listNames(names: readonly string[]): string {
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * The fix for exactly the variables that are wrong. Each violation line starts with its variable's
+ * name (`runtime/env.ts`). Since 499cd14 the CLI sets `TRENT_QUEUE_FALLBACK=disabled` itself when
+ * it is unset (`apps/cli/src/env-defaults.ts`), so a queue violation means an explicit other value:
+ * unsetting it is as good as setting it, and "export" was advice for a step that no longer exists.
+ */
+function fixHintFor(violations: readonly string[]): string {
+  const names = violations.map((line) => line.split(/\s/)[0] ?? "").filter((name) => name !== "");
+  const parts: string[] = [];
+  if (names.includes("TRENT_QUEUE_FALLBACK")) parts.push("unset TRENT_QUEUE_FALLBACK or set it to disabled (the CLI sets disabled itself when it is unset)");
+  const unset = names.filter((name) => name !== "TRENT_QUEUE_FALLBACK");
+  if (unset.length > 0) parts.push(`unset ${listNames(unset)}`);
+  const hint = parts.join(", and ");
+  return `${hint.charAt(0).toUpperCase()}${hint.slice(1)} before running Trent.`;
+}
+
 export const checkEnvironment: DoctorCheck = {
   id: "check_environment",
   name: NAME,
@@ -38,8 +59,7 @@ export const checkEnvironment: DoctorCheck = {
         name: NAME,
         status: "fail",
         message: `The standalone environment contract is violated (${violations.join("; ")}). Consequence: ${DOUBLE_EXECUTION_CONSEQUENCE}.`,
-        fixHint:
-          "Export TRENT_QUEUE_FALLBACK=disabled and unset TRENT_EVAL_SYNC_QUEUE, REDIS_URL, UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN before running Trent.",
+        fixHint: fixHintFor(violations),
         details: { inspected, violations },
       };
     }

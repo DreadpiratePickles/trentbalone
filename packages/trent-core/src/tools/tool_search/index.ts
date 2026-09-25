@@ -24,15 +24,12 @@ import { record as toRecord, type ToolSpec } from "../action.js";
 import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
 import { isBuiltinToolName } from "../tool-names.js";
 import { renderToolInstructions, type ToolSchema } from "../web/schemas.js";
+import { TOOL_BRIDGE_ADAPTER_NAME, TOOL_BRIDGE_SCOPES, TOOL_CALL_TOOL, TOOL_DESCRIBE_TOOL, TOOL_SEARCH_TOOL } from "./names.js";
 import { rankDocuments } from "./rank.js";
 
 export { rankDocuments, tokenize, type RankableDocument, type RankedDocument } from "./rank.js";
 
-export const TOOL_BRIDGE_ADAPTER_NAME = "tools";
-export const TOOL_SEARCH_TOOL = "tool_search";
-export const TOOL_DESCRIBE_TOOL = "tool_describe";
-export const TOOL_CALL_TOOL = "tool_call";
-export const TOOL_BRIDGE_SCOPES = [TOOL_BRIDGE_ADAPTER_NAME, TOOL_SEARCH_TOOL, TOOL_DESCRIBE_TOOL, TOOL_CALL_TOOL];
+export { TOOL_BRIDGE_ADAPTER_NAME, TOOL_BRIDGE_SCOPES, TOOL_CALL_TOOL, TOOL_DESCRIBE_TOOL, TOOL_SEARCH_TOOL } from "./names.js";
 
 /** Mirrors `config.tools.disclosure_threshold`; `config/schema.ts` holds the same number. */
 export const DEFAULT_DISCLOSURE_THRESHOLD = 24;

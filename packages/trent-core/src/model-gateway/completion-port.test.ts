@@ -85,6 +85,17 @@ describe("createCompletionPort", () => {
     expect(calls).toHaveLength(0);
   });
 
+  // P2-5a item 5: the message named five key variables while `trent setup` detects eight
+  // (GOOGLE_API_KEY, DEEPSEEK_API_KEY and GROQ_API_KEY were missing). Both read one table now.
+  it("names exactly the provider key variables setup detects, read from setup's own table", async () => {
+    const { NOT_CONFIGURED_MESSAGE } = await import("./completion-port.js");
+    const { PROVIDER_ENV_VARS } = await import("../setup/detect.js");
+    const detected = new Set(Object.values(PROVIDER_ENV_VARS).flat());
+    const named = new Set(NOT_CONFIGURED_MESSAGE.match(/\b[A-Z][A-Z0-9_]*_API_KEY\b/g) ?? []);
+    expect([...named].sort()).toEqual([...detected].sort());
+    expect(NOT_CONFIGURED_MESSAGE).toMatch(/not configured/);
+  });
+
   it("reports every call and its outcome to the observer, without the prompt contents", async () => {
     const { createCompletionPort } = await import("./completion-port.js");
     const seen: Array<{ ok: boolean; error?: string; offline: boolean }> = [];

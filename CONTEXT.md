@@ -30,9 +30,9 @@ Two gates need a human: design approval, and anything that leaves this machine
 | Which env vars must be set? | `AGENTS.md`, "standalone environment contract" |
 | Can I ship X in the binary? | `01_discovery/output/distribution-feasibility.md`, `spike-prisma-results.md`, `spike-serve-results.md` |
 | What does the baseline actually pass? | `01_discovery/output/baseline-report.md` |
-| What is the current design? | `02_plan/output/design-doc.md` |
+| What is the current design? | `02_plan/output/upgrade-round-design.md` (v2; Bobby's gate decisions of 2026-09-20 are in `docs/sessions/2026-09-19-upgrade-round.md`); where Trent stands against Hermes: `02_plan/output/hermes-parity-scorecard-2026-09-25.md`. `design-doc.md` is the superseded 2026-09-12 design |
 | What was wrong with the last design? | `02_plan/output/design-review-v1.md` |
-| What is the task list? | `02_plan/output/implementation-plan.md` |
+| What is the task list? | `docs/sessions/2026-09-25-parity-push.md` ("Wave P2 plan" and the P2 reports after it), ranked by `02_plan/output/hermes-parity-scorecard-2026-09-25.md` §2 "Top 15 gaps"; `implementation-plan.md` and `implementation-plan-hermes-parity.md` are done or superseded |
 | What did the previous agent get wrong? | `docs/sessions/2026-09-12-antigravity-audit.md` |
 
 ## Layer discipline

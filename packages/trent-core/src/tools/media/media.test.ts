@@ -194,7 +194,12 @@ describe("media toolset over fake binaries", () => {
   it("chooses the docker backend when the media image exists and the host backend when it does not", async () => {
     const host = await selectMediaBackend({ workspace, env, backend: "auto" });
     expect(host.kind).toBe("host");
-    expect(lastArgv(bin, "docker")).toEqual(["inspect", "--type", "image", "--format", "{{.Id}}", MEDIA_IMAGE]);
+    // Absent means inspect said no AND the image list said no (backend.test.ts has why both are asked).
+    const probes = fs.readFileSync(path.join(bin, "docker.log"), "utf8").split("--\n").filter((c) => c.trim() !== "").slice(-2);
+    expect(probes.map((c) => c.split("\n").filter((line) => line !== ""))).toEqual([
+      ["inspect", "--type", "image", "--format", "{{.Id}}", MEDIA_IMAGE],
+      ["image", "ls", "--filter", `reference=${MEDIA_IMAGE}`, "--format", "{{.ID}}"],
+    ]);
     fs.writeFileSync(path.join(bin, "image-present"), "");
     try {
       const docker = await selectMediaBackend({ workspace, env, backend: "auto" });

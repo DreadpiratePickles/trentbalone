@@ -6,7 +6,7 @@
  *           is ever resolved: there is no way to hand this backend an arbitrary program.
  *   docker  `docker run --rm --network none --cap-drop=ALL ... trent-sandbox-media:<v> <binary>
  *           [args]` with the workspace bind-mounted at /workspace. Chosen when the image exists
- *           (`docker inspect --type image`), the same probe the doctor and the test gate use.
+ *           ({@link mediaImagePresent}: inspect, then the image list when inspect says absent).
  *
  * Every argument array is built by `commands.ts` from validated values and paths RELATIVE to the
  * workspace, and both backends run with the workspace as the working directory, so the argv a
@@ -170,16 +170,34 @@ export function createDockerMediaBackend(options: MediaBackendOptions & { readon
   };
 }
 
-/** `docker inspect --type image` exits 0 with an id when the image is present; the form the 29.x daemon answers. */
+/** `name[:tag]` as the list filter matches it: a reference naming no tag means `:latest`, as inspect reads it. */
+function listReference(image: string): string {
+  const last = image.slice(image.lastIndexOf("/") + 1);
+  return last.includes(":") || last.includes("@") ? image : `${image}:latest`;
+}
+
+/**
+ * Whether the media image exists. `docker inspect --type image` first: it exits 0 with an id when
+ * the image is present, on every daemon version. When it says absent, `docker image ls --filter
+ * reference=<ref>` is asked before the answer is no, because the two are different daemon
+ * endpoints and inspect has answered "No such image" for an image the list shows and `docker run`
+ * runs (Docker 29.5.3, 2026-09-25); `auto` then chose the host without a word. The list filter is
+ * Docker 1.13+; on a daemon older than that inspect is the only answer, which is why it goes first.
+ */
 export async function mediaImagePresent(env: NodeJS.ProcessEnv = process.env, exec: MediaExec = execMedia, image: string = MEDIA_IMAGE): Promise<boolean> {
   const docker = findOnPath("docker", env);
   if (docker === undefined) return false;
-  try {
-    const result = await exec(docker, ["inspect", "--type", "image", "--format", "{{.Id}}", image], { cwd: process.cwd(), timeoutMs: 15_000, env: { ...scrubChildEnv(env), PATH: env.PATH ?? "" } });
-    return result.code === 0 && result.stdout.trim() !== "";
-  } catch {
-    return false;
-  }
+  const options = { cwd: process.cwd(), timeoutMs: 15_000, env: { ...scrubChildEnv(env), PATH: env.PATH ?? "" } };
+  const answers = async (args: readonly string[]): Promise<boolean> => {
+    try {
+      const result = await exec(docker, args, options);
+      return result.code === 0 && result.stdout.trim() !== "";
+    } catch {
+      return false;
+    }
+  };
+  if (await answers(["inspect", "--type", "image", "--format", "{{.Id}}", image])) return true;
+  return answers(["image", "ls", "--filter", `reference=${listReference(image)}`, "--format", "{{.ID}}"]);
 }
 
 export interface SelectMediaBackendInput extends MediaBackendOptions {

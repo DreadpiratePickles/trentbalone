@@ -79,14 +79,27 @@ Money is **integer cents**, never floats. Tenant data access goes through `withR
    writes goldens 0644 (the 0700 directory is the boundary). `executeSeatModel` logs the raw
    objective text inside its provider-error line, so an objective containing a secret is echoed
    to stderr unredacted.
-9. Wrapper-side, recorded 2026-09-18 (audits in `01_discovery/output/`): under Node every durable
-   layer is `EphemeralStore` (`apps/cli/src/runtime/headless.ts:110-119`), so durability holds under
-   Bun only; two divergent skill stores (`packages/trent-core/src/tools/skills/store.ts:1-9`); the
-   memory-draft lock bypass (`fleet-memory/memory-draft.ts:109-114`); the dead
-   `TRENT_FLEET_RECALL_BUDGET_CHARS` reader (`fleet-memory/config.ts:34-38`); the fleet-memory
-   prelude is memoised with the first seat's scope (`fleet-memory/orchestrator-hook.ts:127`); a host
-   that minted an egress root with a non-minimal serial before 8b369d6 keeps it in
-   `~/.trent/egress/ca.crt` until the file is deleted.
+9. Wrapper-side, recorded 2026-09-18 (audits in `01_discovery/output/`). **Still open:** under Node
+   every durable layer is `EphemeralStore` (`apps/cli/src/runtime/headless.ts`, `openStore`), so
+   durability holds under Bun only; the not-durable line names the cause since 2026-09-25
+   (`packages/trent-core/src/store/durability.ts`). **Mitigated:** a host that minted an egress root
+   with a non-minimal serial before 8b369d6 keeps it in `~/.trent/egress/ca.crt` until it is
+   deleted; `trent doctor` names it and `trent doctor --fix` deletes it (4f9f3f4,
+   `doctor/checks/egress-ca.test.ts`). **Fixed**, each re-verified 2026-09-25 by running its test
+   (P2-5a; the six files named here exit 0, 40 tests):
+   - two divergent skill stores: one store since 5f9e149 (`skills/skill-store.ts`, of which
+     `tools/skills/store.ts` is the tool view); `tools/skills/skills.test.ts` "a flat skill left by
+     the CLI is migrated on first list, stays readable, and can then be edited",
+     `skills/skill-store.test.ts`.
+   - the memory-draft lock bypass: every write path takes the one `mkdir` lock since 9f63c7a;
+     `fleet-memory/memory-draft.test.ts` "a block holding byte-identical duplicates waits for the
+     lock instead of writing through it".
+   - the dead `TRENT_FLEET_RECALL_BUDGET_CHARS` reader: deleted in 9f63c7a, no reader remains outside
+     comments; `fleet-memory/config.test.ts` "ignores the environment variable that used to be
+     advertised and never worked".
+   - the prelude memoised with the first seat's scope: per seat since e7bfd4e;
+     `fleet-memory/per-seat-prelude.test.ts` "gives each seat of one run its OWN recall and its OWN
+     skills index".
 
 ## Deferred work — registered, not hidden
 Nothing is currently deferred out of `packages/trent-core/src` or `apps/cli/src`.

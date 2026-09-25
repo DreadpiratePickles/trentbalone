@@ -24,6 +24,7 @@
 import path from "node:path";
 import type { ConfigManager } from "@trent/core/config/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
+import { explainStoreFailure } from "@trent/core/store/durability.js";
 import {
   InMemoryImproveStore,
   createFrozenSurface,
@@ -158,7 +159,8 @@ async function openStore(ctx: SweepContext, companyId: string): Promise<OpenedSt
     return {
       store: fallbackStore,
       durable: false,
-      reason: `bun:sqlite unavailable under this runtime (${error instanceof Error ? error.message.split("\n")[0] : String(error)})`,
+      // Needs Bun under Node; under Bun, a missing generated client or the database itself (store/durability.ts).
+      reason: explainStoreFailure(error).reason,
       close: async () => undefined,
     };
   }

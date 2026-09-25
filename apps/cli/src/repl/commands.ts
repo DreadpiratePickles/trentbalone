@@ -7,7 +7,7 @@
  * change.
  */
 
-import { activeCheckpointSession } from "@trent/core/checkpoints/index.js";
+import { CHECKPOINT_COMMANDS } from "./checkpoint-commands.js";
 import { GOAL_COMMANDS } from "./goal-commands.js";
 import { decideHeldWrite, heldWriteLines, heldWrites } from "./held-writes.js";
 import { GLYPHS, fadingRule, type Theme } from "../ui/index.js";
@@ -15,7 +15,7 @@ import { formatCents } from "./budget.js";
 import { contextReport, contextReportLines } from "./context-report.js";
 import { listRememberedRuns, searchRuns } from "./memory.js";
 import { DEGRADED_MARK } from "./degraded.js";
-import type { McpServerConfig, ReplCheckpointsPort, ReplContext } from "./types.js";
+import type { McpServerConfig, ReplContext } from "./types.js";
 
 export interface ReplCommand {
   name: string;
@@ -50,22 +50,6 @@ function sandboxLabel(ctx: ReplContext): string {
   const image = sandbox.image === undefined ? "" : ` ${sandbox.image}`;
   const note = sandbox.note === undefined || sandbox.note === "configured" ? "" : ` (${sandbox.note})`;
   return `${sandbox.backend}${image}${note}`;
-}
-
-/**
- * E1: the ledger these two commands read. The wired port wins; otherwise the process's open
- * checkpoint session, so the runtime that opens one gets `/checkpoints` and `/rollback` for free.
- */
-function checkpointPort(ctx: ReplContext): ReplCheckpointsPort | undefined {
-  return ctx.checkpoints ?? activeCheckpointSession();
-}
-
-const NO_LEDGER = "This session has no checkpoint ledger, so nothing it writes can be rolled back.";
-
-/** The clock part of an ISO timestamp; the date is the session's own and adds nothing here. */
-function clock(at: string): string {
-  const parsed = Date.parse(at);
-  return Number.isNaN(parsed) ? "" : new Date(parsed).toISOString().slice(11, 19);
 }
 
 function egressLabel(ctx: ReplContext): string {
@@ -377,84 +361,8 @@ export const REPL_COMMANDS: Record<string, ReplCommand> = {
     },
   },
 
-  checkpoints: {
-    name: "checkpoints",
-    description: "The turns this session wrote files in, and what each one touched",
-    async run(_args, ctx) {
-      const port = checkpointPort(ctx);
-      const lines = [heading("checkpoints", ctx.theme)];
-      if (port === undefined) {
-        lines.push(empty(ctx.theme, NO_LEDGER));
-        return lines.join("\n");
-      }
-      const turns = port.listCheckpoints();
-      const files = new Set(turns.flatMap((turn) => [...turn.files]));
-      lines.push(bullet(ctx.theme, "Run", port.runId));
-      lines.push(bullet(ctx.theme, "Turns", `${turns.length} with writes, ${files.size} file(s) touched`));
-      if (turns.length === 0) {
-        lines.push(empty(ctx.theme, "Nothing written yet. Every file a tool writes is ledgered before it lands."));
-        return lines.join("\n");
-      }
-      for (const turn of turns) {
-        lines.push(
-          `  ${ctx.theme.emphasis(String(turn.turn).padEnd(5))}${ctx.theme.meta(clock(turn.at).padEnd(10))}${ctx.theme.body(
-            turn.files.join(", "),
-          )}`,
-        );
-      }
-      lines.push(empty(ctx.theme, "/rollback [turn] undoes that turn and everything after it."));
-      return lines.join("\n");
-    },
-  },
-
-  rollback: {
-    name: "rollback",
-    description: "Undo a turn's file writes, restoring every file it touched byte-exact",
-    args: "[turn] [--force]",
-    async run(args, ctx) {
-      const port = checkpointPort(ctx);
-      const lines = [heading("rollback", ctx.theme)];
-      if (port === undefined) {
-        lines.push(empty(ctx.theme, NO_LEDGER));
-        return lines.join("\n");
-      }
-      const force = args.some((arg) => arg === "--force" || arg === "force");
-      const rest = args.filter((arg) => arg !== "--force" && arg !== "force");
-      const turns = port.listCheckpoints();
-      const last = turns[turns.length - 1];
-      if (last === undefined) {
-        lines.push(empty(ctx.theme, "No turn has written a file this session, so there is nothing to undo."));
-        return lines.join("\n");
-      }
-      const wanted = rest[0] === undefined ? last.turn : Number(rest[0]);
-      if (!Number.isInteger(wanted) || wanted < 1) {
-        lines.push(empty(ctx.theme, `Not a turn number: ${rest[0]}. /checkpoints lists the turns this session has.`));
-        return lines.join("\n");
-      }
-      // `to` keeps the turns up to the one BEFORE the turn being undone.
-      const result = port.rollback({ to: wanted - 1, force });
-      if (!result.ok) {
-        lines.push(bullet(ctx.theme, "Refused", `turn ${wanted} was not undone; nothing on disk was changed`));
-        for (const refusal of result.refused) {
-          lines.push(`  ${ctx.theme.error(GLYPHS.failed)} ${ctx.theme.emphasis(refusal.path || port.runId)} ${ctx.theme.meta(refusal.reason)}`);
-        }
-        lines.push(empty(ctx.theme, `/rollback ${wanted} --force restores them anyway, overwriting those edits.`));
-        return lines.join("\n");
-      }
-      lines.push(
-        bullet(ctx.theme, "Undone", `turn ${wanted} and after${result.forced ? ", forced" : ""}: ${result.restored.length} file(s)`),
-      );
-      for (const item of result.restored) {
-        lines.push(
-          `  ${ctx.theme.success(GLYPHS.done)} ${ctx.theme.body(item.path)} ${ctx.theme.meta(
-            item.hash === null ? "removed; the agent had created it" : "restored byte-exact",
-          )}`,
-        );
-      }
-      if (result.restored.length === 0) lines.push(empty(ctx.theme, "That turn wrote no file, so nothing was restored."));
-      return lines.join("\n");
-    },
-  },
+  // [E1] `/checkpoints` and `/rollback` (./checkpoint-commands.ts, docs/checkpoints.md).
+  ...CHECKPOINT_COMMANDS,
 
   traces: {
     name: "traces",
@@ -483,6 +391,17 @@ export const REPL_COMMANDS: Record<string, ReplCommand> = {
   },
   // [D4] `/goal` and `/goals` (./goal-commands.ts, docs/goals.md).
   ...GOAL_COMMANDS,
+
+  exit: {
+    name: "exit",
+    description: "End this session, as Ctrl+D does",
+    async run(_args, ctx) {
+      // P2-5a: there was no way to leave by command. The port is the same `exit(0)` Ctrl+D calls.
+      if (ctx.session === undefined) return empty(ctx.theme, "This surface has no session to end from a command; press Ctrl+D.");
+      if (ctx.session.end() === "busy") return empty(ctx.theme, "A run is in flight: /stop it (or press Ctrl+C), then /exit.");
+      return empty(ctx.theme, "Session ended.");
+    },
+  },
 };
 
 export function commandNames(): string[] {
