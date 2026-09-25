@@ -39,6 +39,7 @@ import { improveSpec } from "./improve.js";
 import { sandboxSpec } from "./groups/sandbox.js";
 import { cronSpec } from "./groups/cron.js";
 import { heartbeatSpec } from "./groups/heartbeat.js";
+import { serviceSpec } from "./groups/service.js";
 import { auditSpec } from "./groups/audit.js";
 import { approvalsSpec } from "./groups/approvals.js";
 import { budgetSpec } from "./groups/budget.js";
@@ -73,6 +74,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   mcpSpec,
   cronSpec,
   heartbeatSpec,
+  serviceSpec,
   auditSpec,
   approvalsSpec,
   budgetSpec,
