@@ -125,7 +125,10 @@ function scratch(label) {
   env.TRENT_HOME = home;
   delete env.TRENT_PROFILE;
   delete env.DATABASE_URL;
-  return { home, cwd, env, dispose: () => { rmSync(home, { recursive: true, force: true }); rmSync(cwd, { recursive: true, force: true }); } };
+  // Windows: the binary's SQLite and lock handles can outlive its exit by a few hundred ms, and an
+  // immediate rmdir then fails with EBUSY (seen twice in CI on 2026-09-25). Node retries these.
+  const rm = (dir) => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+  return { home, cwd, env, dispose: () => { rm(home); rm(cwd); } };
 }
 
 /** The table names of a SQLite file, through node:sqlite so no sqlite3 CLI is needed on the runner. */
