@@ -16,6 +16,7 @@ import path from "node:path";
 import { createMemoryAdapter } from "../tools/memory/index.js";
 import { createBrain, type Brain, type BrainExec } from "./brain.js";
 import { brainIndexDir, buildBrainIndex, loadBrainIndex, recallFromBrain } from "./brain-index.js";
+import type { CalibratedEmbedFn } from "./lexical.js";
 import { createFleetMemoryHook } from "./orchestrator-hook.js";
 import { InMemoryFleetSource } from "./source.js";
 
@@ -101,6 +102,49 @@ describe("the brain index", () => {
     const result = await recallFromBrain({ profileDir, brain, seat: "analyst", objective: "self-serve churn cohorts retention", budgetChars: 600 });
     expect(result.block.length).toBeLessThanOrEqual(600);
     expect(result.dropped).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * [P2-6] Measured on real documents (improve/docs-corpus.test.ts): gemini-embedding-001 puts a
+ * question against a 1,200-character chunk at cosine 0.55-0.73, so a chunk that shares no word with
+ * the question earns 0.6 x (c - 0.6) / 0.4 and needs c >= 0.68 to reach `recallMinScore`. Seven
+ * answers the blend already ranked in its own top 8 — three of them FIRST — came back as nothing.
+ * A chunk whose cosine clears the embedder's own calibrated floor is related on that evidence
+ * alone, as a chunk whose TF-IDF alone reaches the minimum already is; the order is the blend's.
+ */
+describe("[P2-6] the embedder's own floor admits a chunk the blend scores under recallMinScore", () => {
+  /** Vectors built to have exactly `cosine(text)` against the query, calibrated like the Gemini route. */
+  const embedWith = (cosine: (text: string) => number): CalibratedEmbedFn =>
+    Object.assign(
+      async (texts: readonly string[]) =>
+        texts.map((text, i) => {
+          if (i === texts.length - 1) return [1, 0];
+          const c = cosine(text);
+          return [c, Math.sqrt(1 - c * c)];
+        }),
+      { vectorFloor: 0.6 },
+    );
+  // Shares no token with the decision, the note or the seat note: only the embedder can relate them.
+  const objective = "how do we count customers who leave";
+
+  it("recalls a chunk whose cosine clears the floor though its blended score is 0.06, and nothing at or under the floor", async () => {
+    const brain = brainWith();
+    const churn = (text: string): boolean => text.includes("Churn is measured on self-serve cohorts");
+    const above = await recallFromBrain({ profileDir, brain, seat: "analyst", objective, embed: embedWith((t) => (churn(t) ? 0.64 : 0.4)) });
+    expect(above.items.map((item) => item.title)).toEqual(["Churn is measured on self-serve cohorts"]);
+    expect(above.items[0]!.score).toBeCloseTo(0.06, 6);
+
+    const atFloor = await recallFromBrain({ profileDir, brain, seat: "analyst", objective, embed: embedWith((t) => (churn(t) ? 0.6 : 0.4)) });
+    expect(atFloor.block).toBe("");
+  });
+
+  it("keeps the blend's order: a chunk over the minimum still outranks one the floor admitted", async () => {
+    const brain = brainWith();
+    const cosine = (t: string): number => (t.includes("Churn is measured") ? 0.64 : t.includes("42 open invoices") ? 0.9 : 0.4);
+    const result = await recallFromBrain({ profileDir, brain, seat: "analyst", objective, embed: embedWith(cosine) });
+    expect(result.items.map((item) => item.path.split("/")[0])).toEqual(["memory", "decisions"]);
+    expect(result.items[0]!.score).toBeGreaterThanOrEqual(0.12);
   });
 });
 

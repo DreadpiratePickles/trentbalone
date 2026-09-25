@@ -18,7 +18,9 @@
  *
  * Ranking is the existing seam: `scoreAgainst(query, candidates, embed)` from `lexical.ts`, which
  * is TF-IDF alone without an embedder and the calibrated hybrid blend with one (`hybrid.ts`). The
- * brain needs no ranker of its own.
+ * brain needs no ranker of its own. What it adds is the relatedness rule: a chunk is related when
+ * its blended score reaches `recallMinScore` OR its cosine clears the embedder's own calibrated
+ * floor, and the blend orders both kinds ([P2-6], measured on real documents below).
  *
  * The cache key is the brain's VERSION: the git head hash when versioning is on — every brain
  * write commits, so the head moves whenever the content does — and a digest of each indexed file's
@@ -34,7 +36,7 @@ import { NODE_IO, atomicWriteFileSync } from "../config/atomic-fs.js";
 import { DEFAULT_FLEET_MEMORY_CONFIG, type FleetMemoryConfig } from "./config.js";
 import { chunkBrainFile } from "./ingest/brain-chunks.js";
 import { locationTag } from "./ingest/chunk.js";
-import { scoreAgainst, type EmbedFn } from "./lexical.js";
+import { scoreAgainstWithEvidence, type EmbedFn } from "./lexical.js";
 import {
   BRAIN_DECISIONS_DIR,
   BRAIN_DOCS_DIR,
@@ -243,10 +245,16 @@ export async function recallFromBrain(input: BrainRecallInput): Promise<BrainRec
   const candidates = index.entries.filter((e) => e.seat === undefined || e.seat === input.seat);
   if (candidates.length === 0) return { block: "", items: [], dropped: 0 };
 
-  const scores = await scoreAgainst(input.objective, candidates.map(scorable), input.embed);
+  // [P2-6] A question against a 1,200-character chunk sits at cosine 0.55-0.73 on
+  // gemini-embedding-001 (improve/docs-corpus.test.ts), so a chunk sharing no word with the
+  // objective needed 0.68 to reach `recallMinScore` through the blend alone, and answers the blend
+  // ranked FIRST came back as an empty block. The embedder's floor is its own "unrelated" line
+  // (`hybrid.ts`); a cosine above it admits the chunk as TF-IDF alone already can. Run recall
+  // (`recall.ts`), ranked over sentence-sized items the floor was calibrated on, is unchanged.
+  const { scores, vectorRelated } = await scoreAgainstWithEvidence(input.objective, candidates.map(scorable), input.embed);
   const related = candidates
-    .map((c, i) => ({ entry: c, score: scores[i] ?? 0 }))
-    .filter((c) => c.score >= config.recallMinScore)
+    .map((c, i) => ({ entry: c, score: scores[i] ?? 0, admitted: (scores[i] ?? 0) >= config.recallMinScore || vectorRelated[i] === true }))
+    .filter((c) => c.admitted)
     .sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id));
 
   const header =

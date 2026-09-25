@@ -10,7 +10,7 @@
  * rest of the module only ever sees scores.
  */
 
-import { blendScores } from "./hybrid.js";
+import { HYBRID_VECTOR_FLOOR, blendScores, vectorCredit } from "./hybrid.js";
 
 export type EmbedFn = (texts: readonly string[]) => Promise<number[][]>;
 
@@ -101,6 +101,17 @@ export function lexicalEmbed(texts: readonly string[]): number[][] {
 
 export const lexicalEmbedFn: EmbedFn = async (texts) => lexicalEmbed(texts);
 
+/** [P2-6] The scores, and which candidates the embedder on its own calls related. */
+export interface ScoredCandidates {
+  readonly scores: number[];
+  /**
+   * True where the embedding cosine clears the embedder's own calibrated floor (`hybrid.ts`,
+   * `vectorCredit > 0`): the line below which a cosine means "unrelated". All false with no
+   * embedder, or when it failed and the scores are the lexical ones.
+   */
+  readonly vectorRelated: boolean[];
+}
+
 /**
  * Similarity of `query` to each candidate, in candidate order. One pass per ranker, one corpus.
  *
@@ -109,28 +120,37 @@ export const lexicalEmbedFn: EmbedFn = async (texts) => lexicalEmbed(texts);
  * embedder that fails is NOT allowed to fail a run: recall degrades to the lexical order it
  * would have had, because a missing vector index is worse context, not a broken company.
  */
-export async function scoreAgainst(query: string, candidates: readonly string[], embed?: EmbedFn): Promise<number[]> {
-  if (candidates.length === 0) return [];
+export async function scoreAgainstWithEvidence(query: string, candidates: readonly string[], embed?: EmbedFn): Promise<ScoredCandidates> {
+  if (candidates.length === 0) return { scores: [], vectorRelated: [] };
   const corpus = [...candidates, query];
   const lexicalVectors = lexicalEmbed(corpus);
   const lexicalQuery = lexicalVectors[lexicalVectors.length - 1]!;
   const lexical = candidates.map((_, i) => cosine(lexicalVectors[i]!, lexicalQuery));
-  if (embed === undefined) return lexical;
+  const lexicalOnly = (): ScoredCandidates => ({ scores: lexical, vectorRelated: candidates.map(() => false) });
+  if (embed === undefined) return lexicalOnly();
 
   let vectors: number[][];
   try {
     vectors = await embed(corpus);
   } catch {
-    return lexical;
+    return lexicalOnly();
   }
   const vectorQuery = vectors[vectors.length - 1];
-  if (vectorQuery === undefined || vectorQuery.length === 0) return lexical;
+  if (vectorQuery === undefined || vectorQuery.length === 0) return lexicalOnly();
   const cosines = candidates.map((_, i) => {
     const v = vectors[i];
     return v === undefined || v.length === 0 ? undefined : cosineSimilarity(v, vectorQuery);
   });
   const floor = (embed as CalibratedEmbedFn).vectorFloor;
-  return floor === undefined ? blendScores(lexical, cosines) : blendScores(lexical, cosines, floor);
+  return {
+    scores: floor === undefined ? blendScores(lexical, cosines) : blendScores(lexical, cosines, floor),
+    vectorRelated: cosines.map((c) => c !== undefined && vectorCredit(c, floor ?? HYBRID_VECTOR_FLOOR) > 0),
+  };
+}
+
+/** The scores alone: what run recall and search rank by. */
+export async function scoreAgainst(query: string, candidates: readonly string[], embed?: EmbedFn): Promise<number[]> {
+  return (await scoreAgainstWithEvidence(query, candidates, embed)).scores;
 }
 
 /** Plain full-text score for search: how many distinct query tokens the text contains, then density. */
