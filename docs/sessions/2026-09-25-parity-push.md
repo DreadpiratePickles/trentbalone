@@ -258,3 +258,5 @@ check. 32 commits today. Everything left is Bobby's (default branch, tag, rename
 vulnerability reporting, platform applications) or waits on quota (task-type embeddings re-record,
 whole-chunk rerank measurement) or a real reboot (service). Tomorrow's 02:00 sweep resumes from
 here.
+- CI confirmed after close: f0d0ce4 36204031785, ccd9430 36205331142 and c9a5e12 36205351513 all
+  success.
