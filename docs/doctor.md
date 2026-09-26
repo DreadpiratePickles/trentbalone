@@ -87,7 +87,7 @@ the table below is the current list, and a run of `trent doctor` here today repo
 | 20 | Media Pipeline | Which backend the `media_*` tools would run on, chosen by the same probe the toolset uses (`tools/media/backend.ts`): the `trent-media` container when the image is built or `media.backend` forces docker, otherwise the host, naming which allowlisted binaries (ffmpeg, ffprobe, whisper-cli, scenedetect, python3) are present, which are missing with one install line per OS, and how transcription would run. Warns when neither backend can run. One more sentence names where `media_image` would send a prompt, what one image costs and whether it asks, resolved by the tool's own route; no key value is read. Says so when the profile opted into hosted transcription, which sends a file's audio to the model provider | no |
 | 21 | Business Providers | Reads the `trent connect` state of Stripe, Google, Square and Twilio by NAME (`ConnectStore.read`, which never returns a value) and prints one line per provider: connected, expired, or not connected with `trent connect <provider>`. A skip when none is connected; the business toolset is off until one is. See [business.md](business.md) | no |
 | 22 | Social Platforms | Reads the `trent connect` state of Meta, Google, Bluesky and Buffer by name (`ConnectStore.read`, never a value), builds the social toolset's own platform matrix from it (`tools/social/matrix.ts`) and reports which platforms a post reaches and by which route, the review each still needs, and whether the `social` toolset is enabled. Skips with nothing connected, warns when a provider is connected but the toolset is off | no |
-| 23 | Local Model | Runs only when the provider is local (`ollama`, `lmstudio`, or any provider whose base URL is a loopback host, which is how a llama.cpp `llama-server` is reached); a hosted provider is a skip. Identifies the runtime by what answers at the base URL (Ollama `/api/version`, llama.cpp `/props`, LM Studio `/api/v1/models`, otherwise a generic `/v1/models`) and names its version; nothing answering fails, naming the URL. Checks every configured model is present (`/api/tags` or `/v1/models`) and fails with the exact `ollama pull <tag>` when one is not; an Ollama cloud model is never sent a prompt. Runs a five-case tool-call smoke test through the wrapper's model gateway, scored N/5 with each failing case named. Measures the time to first token on a fresh 4K-token prompt. Reads the effective context window and the server's slots. See [below](#the-local-model-check) | no |
+| 23 | Local Model | Runs only when the provider is local (`ollama`, `lmstudio`, or any provider whose base URL is a loopback host, which is how a llama.cpp `llama-server` is reached); a hosted provider is a skip. Identifies the runtime by what answers at the base URL (Ollama `/api/version`, llama.cpp `/props`, LM Studio `/api/v1/models`, otherwise a generic `/v1/models`) and names its version; nothing answering fails, naming the URL. Checks every configured model is present (`/api/tags` or `/v1/models`) and fails with the exact `ollama pull <tag>` when one is not; an Ollama cloud model is never sent a prompt. Runs a five-case tool-call smoke test through the wrapper's model gateway, scored N/5 with each failing case named, then the same five cases on the solo format (the solo prompt, constrained output), also scored N/5. <!-- [C11] --> Measures the time to first token on a fresh 4K-token prompt. Reads the effective context window and the server's slots. See [below](#the-local-model-check) | no |
 
 Checks 6, 9 and 13 used to return hard-coded green from inside a try block that could not throw.
 Each now has a test that induces a real failure and asserts it is reported
@@ -108,6 +108,13 @@ pulled. Every request goes through the doctor's fetch seam, so its tests run aga
   is needed), `escaping` (an argument holding double quotes and a newline must survive JSON inside
   JSON), `required` (the required argument is supplied), `unknown-tool` (a task that tempts a tool
   that was not offered). Each case has 60 seconds. Below 5/5 warns; 0/5 fails.
+- **The same five cases on the solo format** (`solo-format smoke N/5`). Each case is sent again the way <!-- [C11] -->
+  a solo turn is sent: the solo system prompt (persona, the tool protocol, the case's tool in the one
+  call format), the case as the turn's opening, and the solo envelope as constrained output
+  (`response_format`: `{"tool_calls":[{"name","arguments"}]}` or `{"answer"}`, the tool names as an
+  enum), read back by the solo parser and scored by the same judge
+  (`packages/trent-core/src/doctor/checks/local-smoke-solo.ts`). It changes the verdict only for a
+  profile whose `agent.mode` is `solo`: 0/5 fails, below 5/5 warns. Each case has 60 seconds.
 - **Time to first token** on a 4K-token prompt led by a fresh id, so no prompt cache can flatter it;
   a thinking model's first reasoning token counts. Over 60 seconds warns.
 - **Effective context window**, read after the smoke test has loaded the model: Ollama `/api/ps`
@@ -115,7 +122,7 @@ pulled. Every request goes through the doctor's fetch seam, so its tests run aga
   training maximum is not the window in use and is never reported as one. Under 32768 warns, with how
   to raise it (`OLLAMA_CONTEXT_LENGTH` or `PARAMETER num_ctx`, https://docs.ollama.com/context-length):
   a seat prompt measured about 6.2k tokens and a seat reply may use 8192.
-- **Budget.** The check declares its own deadline (seven minutes at most: five cases, the first-token
+- **Budget.** The check declares its own deadline (twelve minutes at most: ten cases, the first-token <!-- [C11] -->
   limit and a minute of probes) and the doctor's run deadline grows by the same amount, so the checks
   after it still run. On a healthy machine it takes seconds to a minute.
 

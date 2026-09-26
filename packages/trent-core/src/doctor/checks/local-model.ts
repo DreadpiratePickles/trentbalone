@@ -12,10 +12,14 @@
  *     32768: seat prompts measured about 6.2k tokens plus an 8192-token reply budget (audit, G17);
  *   - the server's slots or parallel predictions when it exposes them;
  *   - a five-case tool-call smoke test through the wrapper's own model gateway, scored N/5;
+ *   - [C11] the same five cases on the solo format (the solo prompt, the solo envelope as constrained
+ *     output, the solo parser; `local-smoke-solo.ts`), scored N/5 by the same judge; it fails or warns
+ *     only a profile whose `agent.mode` is solo;
  *   - the time to first token at a 4K-token prompt, warned over 60 s.
  * Every request goes through the doctor's fetch seam. An Ollama cloud model is never sent a prompt.
  */
 import type { TrentConfig } from "../../config/schema.js";
+import { agentMode } from "../../config/sections/agent.js"; // [C11]
 import type { ReasoningEffort } from "../../model-gateway/call-policy.js";
 import { DEFAULT_PROBE_TIMEOUT_MS } from "../probe.js";
 import { doctorEnv, providerEndpoint, type ProviderEndpoint } from "../endpoint.js";
@@ -34,6 +38,7 @@ import {
   type RuntimeIdentity,
 } from "./local-runtime.js";
 import { SMOKE_CASES, firstTokenPrompt, runSmoke, type SmokeReport } from "./local-smoke.js";
+import { SOLO_SMOKE_FORMAT } from "./local-smoke-solo.js"; // [C11]
 import { measureFirstToken, type FirstTokenReading } from "./local-stream.js";
 
 export const LOCAL_MODEL_CATEGORY = "Local Model";
@@ -118,9 +123,9 @@ function slotsPhrase(kind: LocalRuntimeKind, slots: number | undefined): string 
   return kind === "ollama" ? "parallel slots not exposed (OLLAMA_NUM_PARALLEL, default 1)" : undefined;
 }
 
-function smokePhrase(smoke: SmokeReport): string {
+function smokePhrase(smoke: SmokeReport, label = "tool-call smoke"): string { // [C11] label: the solo format's line
   const failed = smoke.cases.filter((c) => !c.pass);
-  return `tool-call smoke ${smoke.score}/${smoke.total}${failed.length === 0 ? "" : ` (failed: ${failed.map((c) => `${c.id}: ${c.reason}`).join("; ")})`}`;
+  return `${label} ${smoke.score}/${smoke.total}${failed.length === 0 ? "" : ` (failed: ${failed.map((c) => `${c.id}: ${c.reason}`).join("; ")})`}`; // [C11]
 }
 
 function ttftPhrase(ttft: FirstTokenReading, warnMs: number): string {
@@ -193,14 +198,16 @@ async function run(ctx: DoctorContext, limits: Required<LocalModelCheckOptions>)
   const show = identity.kind === "ollama" ? await readOllamaShow(endpoint.url, primary, seam) : {};
   const route = { baseUrl: endpoint.url, ...(ctx.fetchImpl === undefined ? {} : { fetchImpl: ctx.fetchImpl }) };
   const effort: ReasoningEffort | undefined = config.models?.reasoning_effort;
-  const smoke = await runSmoke({
+  const smokeInput = { // [C11] one input, two formats
     route,
     provider: endpoint.alias?.provider ?? "openai",
     model: primary,
     caseTimeoutMs: limits.smokeCaseTimeoutMs,
     maxTokens: limits.smokeMaxTokens,
     ...(effort === undefined ? {} : { reasoningEffort: effort }),
-  });
+  };
+  const smoke = await runSmoke(smokeInput);
+  const soloSmoke = await runSmoke(smokeInput, SOLO_SMOKE_FORMAT); // [C11]
   const ttft = await measureFirstToken(route, {
     model: primary,
     messages: [{ role: "system", content: "Answer in one word." }, { role: "user", content: firstTokenPrompt(TTFT_PROMPT_TOKENS) }],
@@ -215,12 +222,15 @@ async function run(ctx: DoctorContext, limits: Required<LocalModelCheckOptions>)
   if (context.tokens === undefined || context.tokens < CONTEXT_FLOOR_TOKENS) findings.push({ level: "warn", hint: contextHint(identity.kind) });
   if (smoke.score === 0) findings.push({ level: "fail", hint: "The model never kept the fleet's tool-call contract, so every seat turn will fail the same way: choose a larger or tool-trained model, and check its chat template." });
   else if (smoke.score < smoke.total) findings.push({ level: "warn", hint: 'Seat turns use this same contract (`{"toolCall":{"name","action":"<tool> <json>"}}`), so they will fail in the same cases: a larger or tool-trained model usually closes them.' });
+  // [C11] The solo format decides only a solo profile's verdict; a fleet profile gets the score as information.
+  if (agentMode(config) === "solo" && soloSmoke.score === 0) findings.push({ level: "fail", hint: 'This profile runs `agent.mode: solo`, and the model never kept the solo envelope (`{"tool_calls":[{"name","arguments"}]}` or `{"answer"}`), so every solo turn will fail the same way: choose a larger or tool-trained model, or set `agent.mode: fleet`.' });
+  else if (agentMode(config) === "solo" && soloSmoke.score < soloSmoke.total) findings.push({ level: "warn", hint: "This profile runs `agent.mode: solo`, and solo turns use the solo-format envelope, so they will fail in the same cases: a larger or tool-trained model usually closes them." });
   if (ttft.timedOut || ttft.ms === undefined) findings.push({ level: "warn", hint: `Every seat turn sends a prompt of this size, so each will wait at least this long for its first token: use a smaller model or quantization, keep it loaded (OLLAMA_KEEP_ALIVE), or faster hardware.` });
 
   const contextPhrase = context.tokens === undefined
     ? `context window unknown (${context.source})`
     : `context ${context.tokens} tokens (${context.source})${context.tokens < CONTEXT_FLOOR_TOKENS ? `, under ${CONTEXT_FLOOR_TOKENS}` : ""}`;
-  const parts = [contextPhrase, slotsPhrase(identity.kind, slots), smokePhrase(smoke), ttftPhrase(ttft, limits.ttftWarnMs)].filter((p): p is string => p !== undefined);
+  const parts = [contextPhrase, slotsPhrase(identity.kind, slots), smokePhrase(smoke), smokePhrase(soloSmoke, "solo-format smoke") /* [C11] */, ttftPhrase(ttft, limits.ttftWarnMs)].filter((p): p is string => p !== undefined);
   const status = findings.some((f) => f.level === "fail") ? "fail" : findings.length > 0 ? "warn" : "ok";
   return result({
     status,
@@ -233,6 +243,7 @@ async function run(ctx: DoctorContext, limits: Required<LocalModelCheckOptions>)
       context: { ...context, floor: CONTEXT_FLOOR_TOKENS },
       slots: slots ?? null,
       smoke,
+      soloSmoke, // [C11]
       ttft: { ...ttft, deadlineMs: limits.ttftWarnMs, targetPromptTokens: TTFT_PROMPT_TOKENS },
     },
   });
@@ -248,7 +259,7 @@ export function createLocalModelCheck(options: LocalModelCheckOptions = {}): Doc
     id: "check_local_model",
     name: LOCAL_MODEL_CATEGORY,
     category: LOCAL_MODEL_CATEGORY,
-    timeoutMs: PROBE_ALLOWANCE_MS + SMOKE_CASES.length * limits.smokeCaseTimeoutMs + limits.ttftWarnMs,
+    timeoutMs: PROBE_ALLOWANCE_MS + 2 * SMOKE_CASES.length * limits.smokeCaseTimeoutMs + limits.ttftWarnMs, // [C11] two formats
     run: (ctx) => run(ctx, limits),
   };
 }

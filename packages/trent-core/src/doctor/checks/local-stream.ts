@@ -10,7 +10,7 @@
 import { buildCompatChatBody, parseCompatUsage, type CompatUsage } from "../../model-gateway/openai-compat.js";
 import { LOCAL_PLACEHOLDER_KEY } from "../../model-gateway/providers.js";
 import type { ReasoningEffort } from "../../model-gateway/call-policy.js";
-import type { GatewayMessage, ProviderStreamFn } from "../../model-gateway/types.js";
+import type { GatewayMessage, GatewayResponseFormat, ProviderStreamFn } from "../../model-gateway/types.js"; // [C11] GatewayResponseFormat
 import type { FetchLike } from "../types.js";
 
 export interface LocalChatRoute {
@@ -24,6 +24,8 @@ export interface LocalChatRequest {
   readonly temperature: number;
   readonly maxTokens: number;
   readonly reasoningEffort?: ReasoningEffort;
+  /** [C11] Constrained output (the solo-format smoke): sent as the body's `response_format`. */
+  readonly responseFormat?: GatewayResponseFormat;
 }
 
 type Delta = { content?: unknown; reasoning?: unknown; reasoning_content?: unknown; tool_calls?: unknown };
@@ -49,6 +51,7 @@ async function openChat(route: LocalChatRoute, request: LocalChatRequest, signal
     temperature: request.temperature,
     maxTokens: request.maxTokens,
     ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
+    ...(request.responseFormat === undefined ? {} : { responseFormat: request.responseFormat }), // [C11]
   });
   const doFetch = route.fetchImpl ?? ((url: string, init?: RequestInit) => fetch(url, init));
   const url = chatUrl(route.baseUrl);
@@ -131,6 +134,7 @@ export function localStreamProvider(route: LocalChatRoute): ProviderStreamFn {
         temperature: input.temperature,
         maxTokens: input.maxTokens,
         ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),
+        ...(input.responseFormat === undefined ? {} : { responseFormat: input.responseFormat }), // [C11] the solo-format smoke
       }, controller.signal);
       let usage: CompatUsage | undefined;
       for await (const chunk of chunksOf(response)) {

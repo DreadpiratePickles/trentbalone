@@ -80,10 +80,10 @@ npm run cli -- setup --mode local --base-url http://127.0.0.1:8080
 
 The first solo turn. Setup writes `agent.mode: solo`: one agent with one tool loop and no seats, so a
 turn prefills one prompt instead of the planner's, the critic's and nine seats'. The solo runner is
-built and tested (`packages/trent-core/src/solo/`), and the surfaces that read `agent.mode` (the
-REPL, `trent run`, the gateway, and `trent solo` / `--solo` for one launch) are the surfaces wave, S2,
-landing now: until it lands, every surface runs the fleet whatever `agent.mode` says
-([configuration.md](configuration.md), "Agent mode"). `--fleet` writes `agent.mode: fleet` instead.
+built and tested (`packages/trent-core/src/solo/`), the surfaces that read `agent.mode` (the REPL,
+`trent run`, the gateway, and `trent solo` / `--solo` for one launch) run it ([solo.md](solo.md)), and on a
+local model each of its calls is decoded under the solo envelope ([solo.md](solo.md), "Constrained output";
+measured below, "Solo on this machine"). `--fleet` writes `agent.mode: fleet` instead. <!-- [C11] -->
 
 ## What `setup --mode local` does
 
@@ -152,6 +152,7 @@ nearly full), so these are numbers under contention, not the model's best:
 | First token, seat prompt (5,935 tokens) | about 157 s | L0-2 log |
 | Thinking on a one-word answer | 201 tokens in 92 s by default; 2 tokens with thinking off (still 87 s under that load) | L0-3 log |
 | Doctor tool-call smoke test | 1/5 on the seat's `"<tool> <json>"` action format | L0-4 log |
+| Doctor smoke, solo format (constrained) | 4/5; the one failure wrapped the escaping case's content in `"""` | C11 log <!-- [C11] --> |
 | Effective context window | 32768 tokens (Ollama `/api/ps`) | L0-2, L0-4 logs |
 | A fleet run, "Say the word ready" | stopped by the app's 10-minute job timeout, 0 of 2 steps | L0-2, L0-3 logs |
 
@@ -159,12 +160,40 @@ The smoke failures were the model's: it wrote `"action": "read_file", {...}` ins
 string (L0-4). That format is why constrained output is the first item of the next wave, and why a
 9B is for short, explicit objectives today.
 
+### Solo on this machine <!-- [C11] -->
+
+Measured 2026-09-26 on the same machine: `qwen3.5:9b` Q4_K_M on Ollama 0.32.9, thinking off, context
+32768, load averages 42 to 168 during the session and up to 796 during the doctor run (other processes;
+the transcripts are in `docs/sessions/2026-09-26-c11-solo-live.md`). The session is
+`packages/trent-core/src/solo/solo.live.test.ts` (`TRENT_TEST_LIVE=1`): three turns on one conversation,
+each needing a real tool call on a temporary workspace (read a file, list a directory, write a summary),
+through the real gateway, the real `file_ops` tool and the run meter. Gemini is the hosted comparison.
+
+| What | `qwen3.5:9b`, constrained | `gemini-3.5-flash-lite`, hosted |
+|---|---|---|
+| Turns answered after a completed tool call | 3 of 3, answers right, `summary.md` written | 3 of 3, the same |
+| Model calls per turn | 2 | 2 |
+| First token, a turn's first call | 33.2, 36.9, 39.5 s | 0.97, 0.53, 0.79 s |
+| First token, after the tool result | 3.8, 3.6, 6.0 s | 0.64, 0.53, 0.56 s |
+| Whole turn | 64.0, 57.3, 77.9 s | 1.8, 1.3, 1.8 s |
+| Tokens in / out, the session | 7,514 / 250 | 6,939 / 293 |
+| Cents | 0: a local call is priced at zero | 3 charged (1 a turn); list price 0.28 |
+| Doctor smoke, solo format | 4/5 (every case under the 60 s limit) | not run on a hosted provider |
+
+Two faults were found and fixed on the way (both runs are in the log). The envelope as first written, a
+top-level `oneOf`, was not enforced by Ollama, so the model wrote free JSON (a tool outside the list, a bare
+number) and no tool ran. With the schema enforced but never explained, the model made the same read 26
+times and never answered. A solo call now sends the envelope as an `anyOf` of two complete objects and ends
+its system message with one paragraph naming it. These numbers say what a 9B does under load, not how fast
+it is on a quiet machine: the first call of every turn paid a full prefill.
+
 ## The doctor's Local Model check
 
 `npm run cli -- doctor` runs it whenever the provider is local ([doctor.md](doctor.md), "The Local
 Model check"): it names the runtime and its version, fails with the exact `ollama pull` line when a
 configured model is missing, runs a five-case tool-call smoke test through the wrapper's gateway
-(scored N/5, each failure named), times the first token on a fresh 4K-token prompt, and reads the
+(scored N/5, each failure named) and the same five cases on the solo format (`solo-format smoke N/5`,
+which fails or warns only a profile whose `agent.mode` is `solo`), times <!-- [C11] --> the first token on a fresh 4K-token prompt, and reads the
 effective context window and the server's slots. With the runtime stopped it exits 3 naming the URL.
 The Recall Embedder check reports the local embedder's dimensions and floor, or "lexical only".
 
@@ -193,7 +222,8 @@ The Recall Embedder check reports the local embedder's dimensions and floor, or 
   (`apps/web/lib/queue.ts`, `TRENT_JOB_TIMEOUT_MS`). At the speeds above a local seat can exceed that.
   Sizing it through `models.local` is planned for the next wave (L1), not built.
 - **The tool-call format.** The fleet's seats call tools with a JSON string inside JSON, a format no
-  model was trained on; constrained output with a flat `{tool, args}` is planned for L1, not built.
+  model was trained on. On a local model a seat turn is decoded under a flat `{tool, args}` schema (L1) and
+  a solo turn under the solo envelope (C11); `models.local.constrained_output: false` turns both off. <!-- [C11] -->
 - **Other paths.** `trent heartbeat` and `trent improve` build their own gateways and get the
   `models.local` defaults, not your values; the app's consolidator call keeps a 60 s timeout (L0-2 log).
 

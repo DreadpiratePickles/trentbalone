@@ -19,9 +19,23 @@ export type AgentMode = (typeof AGENT_MODES)[number];
 /** What a profile without `agent.mode` runs. */
 export const DEFAULT_AGENT_MODE: AgentMode = "fleet";
 
+// [C11] `agent.solo.max_tool_calls`: validated here, because until it had a schema any value parsed and
+// nothing read it (council C11). The runner's default (25, `solo/types.ts`) applies when it is absent;
+// above the ceiling a value is a typo, not a budget (`budget.per_run_cap` bounds the spend either way).
+// The object stays a passthrough: the other `agent.solo.*` keys are validated where they are read
+// (`apps/cli/src/runtime/solo-continuity.ts`).
+export const SOLO_MAX_TOOL_CALLS_CEILING = 500;
+
+export const AgentSoloConfigSchema = z
+  .object({
+    max_tool_calls: z.number().int().min(1).max(SOLO_MAX_TOOL_CALLS_CEILING).optional(),
+  })
+  .passthrough(); // [C11]
+
 export const AgentConfigSchema = RecoveryConfigSchema.extend({
   /** `fleet` (default) or `solo`; absent means `fleet`. */
   mode: z.enum(AGENT_MODES).optional(),
+  solo: AgentSoloConfigSchema.optional(), // [C11]
 });
 
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;

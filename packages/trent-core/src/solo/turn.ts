@@ -44,6 +44,7 @@ import type { RunFailureVerdict } from "../orchestrator/verdict.js";
 import { parseReply, TOOL_CALL_BODY_SHAPE, TOOL_CALL_CLOSE, TOOL_CALL_OPEN, type SoloAction } from "./parse.js";
 import { renderToolResult } from "./prompt.js";
 import { SOLO_MISUSE_REPEATS, SOLO_SEAT, type SoloGateway, type SoloGatewayRequest, type SoloMeter, type SoloSession } from "./types.js";
+import { withEnvelopeInstruction } from "./turn-settings.js"; // [C11] a constrained request tells the model its reply format
 
 /** Everything one run carries between model calls, and across a park. */
 export interface TurnState {
@@ -293,7 +294,7 @@ async function* loop(state: TurnState, deps: TurnDeps, signal: AbortSignal | und
     if (over !== undefined) return yield* fail(state, stopVerdict(over, state.costCents));
     let completion: GatewayCompletion;
     try {
-      completion = await deps.gateway.complete({ ...deps.request, messages: [...state.messages], ...(signal === undefined ? {} : { signal }) });
+      completion = await deps.gateway.complete({ ...deps.request, messages: withEnvelopeInstruction(state.messages, deps.request.responseFormat), ...(signal === undefined ? {} : { signal }) }); // [C11]
     } catch (error) {
       if (signal?.aborted) return yield* cancel(state, signal);
       return yield* fail(state, modelFailureVerdict(state.step, error, state.costCents));

@@ -18,6 +18,8 @@ export interface FakeChatRequest {
   readonly user: string;
   /** The smoke case this request is, when its user message is one of `SMOKE_CASES`. */
   readonly caseId?: SmokeCaseId;
+  /** [C11] The request is the solo-format smoke: it carries the solo envelope as `response_format`. */
+  readonly solo: boolean;
   readonly body: Record<string, unknown>;
 }
 
@@ -87,6 +89,25 @@ function toolTurn(action: string): string {
   return JSON.stringify({ toolCall: { name: "file_ops", action }, summary: null });
 }
 
+// [C11] What a model that keeps solo's constrained envelope answers to each smoke case.
+export function wellBehavedSoloReply(caseId: SmokeCaseId | undefined): string {
+  const call = (name: string, args: Record<string, unknown>): string => JSON.stringify({ tool_calls: [{ name, arguments: args }] });
+  switch (caseId) {
+    case "call":
+      return call("read_file", { path: "notes/todo.md" });
+    case "abstain":
+      return JSON.stringify({ answer: "17 + 25 = 42." });
+    case "escaping":
+      return call("write_file", { path: "quote.txt", content: 'She said "yes".\nThen she left.' });
+    case "required":
+      return call("search_files", { pattern: "invoice" });
+    case "unknown-tool":
+      return JSON.stringify({ answer: "No email tool is available, so nothing was sent." });
+    default:
+      return JSON.stringify({ answer: "OK" });
+  }
+}
+
 /** What a model that keeps the wrapper's tool-call contract answers to each smoke case. */
 export function wellBehavedReply(caseId: SmokeCaseId | undefined): string {
   switch (caseId) {
@@ -114,8 +135,11 @@ function chatRequest(body: Record<string, unknown>): FakeChatRequest {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const system = contentOf(messages.find((m) => (m as { role?: unknown }).role === "system"));
   const user = contentOf([...messages].reverse().find((m) => (m as { role?: unknown }).role === "user"));
-  const caseId = SMOKE_CASES.find((smoke) => smoke.user === user)?.id;
-  return { model: String(body.model), system, user, ...(caseId === undefined ? {} : { caseId }), body };
+  // [C11] A solo turn opens with its context tier, then the objective: the case is the message's end.
+  const caseId = SMOKE_CASES.find((smoke) => smoke.user === user || user.endsWith(`\n\n${smoke.user}`))?.id;
+  const format = body.response_format as { json_schema?: { name?: unknown } } | undefined;
+  const solo = format?.json_schema?.name === "solo_turn"; // [C11]
+  return { model: String(body.model), system, user, ...(caseId === undefined ? {} : { caseId }), solo, body };
 }
 
 function modelKey(id: string): string {
@@ -127,7 +151,7 @@ export function fakeRuntime(baseUrl: string, options: FakeRuntimeOptions): FakeR
   const calls: FakeRuntime["calls"] = [];
   const cloud = new Set(options.cloud ?? []);
   const served = [...options.models, ...cloud];
-  const reply = options.reply ?? ((request: FakeChatRequest) => wellBehavedReply(request.caseId));
+  const reply = options.reply ?? ((request: FakeChatRequest) => (request.solo ? wellBehavedSoloReply(request.caseId) : wellBehavedReply(request.caseId))); // [C11]
   let loaded = false;
 
   function chat(body: Record<string, unknown>, signal?: AbortSignal | null): Response {

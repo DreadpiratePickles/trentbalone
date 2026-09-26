@@ -112,8 +112,8 @@ describe("Local Model check", () => {
     expect(result.details).toMatchObject({ runtime: "ollama", version: "0.32.9", smoke: { score: 5, total: 5 }, ttft: { promptTokens: 4102, timedOut: false } });
 
     const chats = runtime.chatCalls();
-    expect(chats).toHaveLength(SMOKE_CASES.length + 1);
-    const smoke = chats.filter((chat) => chat.caseId !== undefined);
+    expect(chats).toHaveLength(2 * SMOKE_CASES.length + 1); // [C11] the five cases on the seat format, then on the solo format
+    const smoke = chats.filter((chat) => chat.caseId !== undefined && !chat.solo); // [C11] the seat format's
     expect(smoke.map((chat) => chat.caseId)).toEqual(SMOKE_CASES.map((c) => c.id));
     for (const chat of smoke) {
       // The configured model, streamed with usage, under the seat port's own JSON instruction.

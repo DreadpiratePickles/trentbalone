@@ -16,7 +16,7 @@
 import { randomUUID } from "node:crypto";
 import { extractJsonObject } from "../../model-gateway/completion-port.js";
 import type { ReasoningEffort } from "../../model-gateway/call-policy.js";
-import type { GatewayMessage, ModelProvider } from "../../model-gateway/types.js";
+import type { GatewayMessage, GatewayResponseFormat, ModelProvider } from "../../model-gateway/types.js"; // [C11] GatewayResponseFormat
 import { SEAT_JSON_INSTRUCTION } from "../../orchestrator/seat-gateway-port.js";
 import { parseAction, type ToolSpec } from "../../tools/action.js";
 import { renderToolInstructions, type ToolSchema } from "../../tools/web/schemas.js";
@@ -60,7 +60,7 @@ const SPECS: Readonly<Record<string, ToolSpec>> = {
 
 export const ESCAPING_CONTENT = 'She said "yes".\nThen she left.';
 
-type Turn =
+export type Turn = // [C11] exported: the solo variant reads its replies into the same turn
   | { kind: "finish"; summary: string }
   | { kind: "call"; tool: string; args: Record<string, unknown>; error?: string; offered: boolean }
   | { kind: "invalid"; reason: string };
@@ -205,8 +205,19 @@ function seconds(ms: number): string {
   return Number((ms / 1000).toFixed(2)).toString();
 }
 
+// [C11] How one format sends a case and reads the reply; the judge is the case's own, whatever the format.
+export interface SmokeFormat {
+  messages(smoke: SmokeCase): GatewayMessage[];
+  read(text: string, smoke: SmokeCase): Turn;
+  /** Constrained output for the case (the solo envelope); absent, the call is unconstrained. */
+  responseFormat?(smoke: SmokeCase): GatewayResponseFormat;
+}
+
+/** [C11] The fleet's seat format: the seat prompt, read the way the seat port and the tool bridge read it. */
+export const SEAT_SMOKE_FORMAT: SmokeFormat = { messages: smokeMessages, read: readTurn };
+
 /** Run the five cases in order, each through the gateway under its own deadline. */
-export async function runSmoke(input: SmokeInput): Promise<SmokeReport> {
+export async function runSmoke(input: SmokeInput, format: SmokeFormat = SEAT_SMOKE_FORMAT): Promise<SmokeReport> { // [C11] format
   // Loaded here, not at module scope: a hosted profile's doctor run never evaluates the gateway.
   const { createModelGateway } = await import("../../model-gateway/index.js");
   const gateway = await createModelGateway({
@@ -222,7 +233,8 @@ export async function runSmoke(input: SmokeInput): Promise<SmokeReport> {
     const started = performance.now();
     const reply = await withDeadline(async (signal) => {
       try {
-        const completion = await gateway.complete({ role: "executor", provider: input.provider, model: input.model, messages: smokeMessages(smoke), maxTokens: input.maxTokens, signal });
+        const responseFormat = format.responseFormat?.(smoke); // [C11]
+        const completion = await gateway.complete({ role: "executor", provider: input.provider, model: input.model, messages: format.messages(smoke), maxTokens: input.maxTokens, signal, ...(responseFormat === undefined ? {} : { responseFormat }) });
         return { text: completion.text };
       } catch (error) {
         return { error: (error instanceof Error ? error.message : String(error)).slice(0, 160) };
@@ -233,7 +245,7 @@ export async function runSmoke(input: SmokeInput): Promise<SmokeReport> {
     if (timedOut(reply)) reason = `no reply within ${seconds(input.caseTimeoutMs)} s`;
     else if ("error" in reply) reason = reply.error;
     else {
-      const turn = readTurn(reply.text, smoke);
+      const turn = format.read(reply.text, smoke); // [C11]
       reason = turn.kind === "invalid" ? turn.reason : smoke.judge(turn);
     }
     cases.push({ id: smoke.id, pass: reason === undefined, ...(reason === undefined ? {} : { reason }), ms });

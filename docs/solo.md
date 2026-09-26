@@ -24,6 +24,26 @@ the commands not listed above (`trent service daemon`, `trent heartbeat`, `trent
 The REPL's banner says which runner you are on: `solo · <model>` or `fleet · 9 seats`.
 `trent run --json` and the `system` line of `--format stream-json` carry `"mode"`.
 
+## Constrained output <!-- [C11] -->
+
+On a local model (the `ollama` and `lmstudio` providers) every solo model call is decoded under a JSON
+schema: the runtime sends the solo envelope as `response_format` (`solo/turn-settings.ts`, called from
+`apps/cli/src/runtime/runner-for-mode.ts`), so the reply is either `{"tool_calls": [{"name", "arguments"}]}`
+or `{"answer": "..."}`, with the conversation's tool names as an enum the server's grammar enforces
+(Ollama `format`, llama.cpp `json_schema`, LM Studio). The same parser reads it back, so a call still
+reaches the adapter, the idempotency key and the approval row as the `<tool> <json>` action it always
+was. A hosted provider gets no schema and keeps the `<tool_call>` text protocol. The switch is the seats'
+own, `models.local.constrained_output`: `false` turns it off for both, `all` also sends it to the hosted
+providers that take a schema. A delegated child is constrained over its own tools; compaction's summary
+calls never are. `agent.solo.max_tool_calls` (default 25, a whole number from 1 to 500, checked when the
+config loads) is the most tool calls one run may make before it stops with a verdict naming the cap.
+The prompt's own protocol (tag blocks, a plain-text answer) is impossible under that grammar, so the
+system message of a constrained call ends with one paragraph naming the envelope; without it a 9B repeated
+a read 26 times and never answered. The envelope is an `anyOf` of the two replies because Ollama did not
+enforce the first form, a top-level `oneOf`.
+`trent doctor` scores a local model on this format (`solo-format smoke N/5`, [doctor.md](doctor.md)), and
+[local-models.md](local-models.md), "Solo on this machine", has what a real session measured.
+
 ## The conversation
 
 In the REPL and in each gateway thread the conversation is that session's transcript
@@ -153,8 +173,9 @@ the app's database in connected mode, its in-process store in standalone mode.
 
 ## Limits
 
-- Solo on a local model depends on constrained output that has not landed; the live proof on a local
-  model and the fleet-against-solo cost table are still to come.
+- The live proof is one three-turn session on `qwen3.5:9b` and one on `gemini-3.5-flash-lite`
+  ([local-models.md](local-models.md), "Solo on this machine"); the fleet-against-solo cost table is still
+  to come. <!-- [C11] -->
 - `trent run --resume` resumes fleet runs only.
 - A delegated fleet child is not metered against its parent's per-run cap (it is its own run on the
   ledger); its cents are added to the parent's turn as it reports them.

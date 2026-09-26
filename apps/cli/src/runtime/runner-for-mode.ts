@@ -40,6 +40,8 @@ import { createRunLedgerMeter } from "@trent/core/solo/meter.js";
 import { sessionStoreState } from "@trent/core/solo/park.js";
 import { createSoloRouter, type SoloConversation, type SoloFrameSink } from "@trent/core/solo/router.js";
 import { createSoloRunner } from "@trent/core/solo/runner.js";
+import { childAdapters } from "@trent/core/solo/delegate.js"; // [C11] a child's enum is its own tools'
+import { soloTurnSettings } from "@trent/core/solo/turn-settings.js"; // [C11] constrained output and max_tool_calls
 import { memorySoloSession, profileSoloSession, savedSoloParks } from "@trent/core/solo/session-store.js";
 import type { SoloGateway, SoloParkedCall } from "@trent/core/solo/types.js";
 import type { TrentToolAdapter } from "@trent/core/tools/index.js";
@@ -277,7 +279,7 @@ function soloRunner(parts: RunnerParts, windowTokens: number | undefined, seeds?
   const settings = soloAgentSettings(config);
   const soloTools = [...parts.tools.adapters, ...soloMemoryAdapters(parts.fleetMemory, profileDir, config)];
   const skills = soloSkillsOf(profileDir);
-  const childConfig = { ...(parts.pin === undefined ? {} : { model: parts.pin }), ceilingChars: contextLimits(config).ceilingChars, ...(maxToolResultChars === undefined ? {} : { maxToolResultChars }), ...(windowTokens === undefined ? {} : { contextWindowTokens: windowTokens }) };
+  const childConfig = { ...(parts.pin === undefined ? {} : { model: parts.pin }), ceilingChars: contextLimits(config).ceilingChars, ...(maxToolResultChars === undefined ? {} : { maxToolResultChars }), ...(windowTokens === undefined ? {} : { contextWindowTokens: windowTokens }), ...soloTurnSettings(config, childAdapters(soloTools)) }; // [C11] a child runs on the same route
   const delegation = soloDelegationFor({
     settings,
     base: { gateway, memory, skills, profileDir, workspace: parts.workspace, companyId, config: childConfig, compaction: settings.compaction },
@@ -291,9 +293,10 @@ function soloRunner(parts: RunnerParts, windowTokens: number | undefined, seeds?
     // The chain's own approval rows travel with the adapters (the tool build `buildTrentTools` installed).
     const bindings = currentBoundApprovals();
     const sessionId = conversation.sessionId;
+    const adapters = seeding(applyHoldPolicy(soloTools, conversation.holds, conversation.surface ?? parts.surface)); // [C11] named: the enum is built from them
     return createSoloRunner({
       gateway,
-      tools: { adapters: seeding(applyHoldPolicy(soloTools, conversation.holds, conversation.surface ?? parts.surface)), ...(bindings === undefined ? {} : { bindings }) }, // [S3] memory gated
+      tools: { adapters, ...(bindings === undefined ? {} : { bindings }) }, // [S3] memory gated; [C11] the adapters named above
       session: sessionId === undefined ? memorySoloSession() : profileSoloSession(sessions, sessionId),
       // A profile session keeps the runner's taint and parks beside its transcript, so a restart continues them.
       ...(sessionId === undefined ? {} : { sessionId, state: sessionStoreState(sessions.getStore(), sessionId) }),
@@ -310,6 +313,7 @@ function soloRunner(parts: RunnerParts, windowTokens: number | undefined, seeds?
         ceilingChars: contextLimits(config).ceilingChars,
         ...(maxToolResultChars === undefined ? {} : { maxToolResultChars }),
         ...(windowTokens === undefined ? {} : { contextWindowTokens: windowTokens }),
+        ...soloTurnSettings(config, adapters), // [C11] response_format under a local alias; agent.solo.max_tool_calls
       },
       profileDir,
       workspace: parts.workspace,
