@@ -46,7 +46,7 @@ import { loadWorkspaceContext, type WorkspaceContext } from "@trent/core/workspa
 import { createVersionPinHook, type VersionPinHook } from "@trent/core/fleet/index.js";
 import type { AlertHook } from "@trent/core/gateway/index.js";
 import type { BusHook } from "@trent/core/improve/index.js";
-import { closeHeldWriteSession, openHeldWriteSession } from "@trent/core/tools/index.js";
+import { closeHeldWriteSession, openHeldWriteSession, type ProvenancePolicy } from "@trent/core/tools/index.js"; // [C2] the policy type
 import type { ImproveStorePort } from "@trent/core/store/index.js";
 import { composeBusHooks, type OTelBusHook } from "@trent/core/traces/index.js";
 import {
@@ -365,6 +365,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     // reads it, through a dep type that declares provider, model and prices only.
     // [P2-1] A pinned runtime carries its pin; an unpinned one sends exactly what it sent before.
     const model = { provider: config.provider, model: config.model, ...modelOverrides, ...modelTiers, ...(pin === undefined ? {} : { pin }), ...appEmbedder(config) }; // [L1] memory.embedder for L0-5's app env (G10)
+    const provenance = (config as { provenance?: ProvenancePolicy }).provenance; // [C2] absent: the gate's shipped default holds
     const orchestrator = createOrchestrator({
       // The APP's database, never the core store's: a usable postgres URL is handed on unchanged
       // and `applyStandaloneEnv` keeps it; anything else hands on nothing, so the app's
@@ -375,6 +376,8 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       model,
       tools: tools.adapters,
       fleetMemory,
+      // [C2] The hook's adapters behind the provenance hold, on the tool build's OWN ledger (taint is per instance).
+      memoryGate: { profileDir, ...(tools.provenance === undefined ? {} : { ledger: tools.provenance }), ...(provenance === undefined ? {} : { policy: provenance }) },
       delegate,
       // [C5 -> W3.1] The failure channel's only inlet. `FleetMemoryHook.traceSink` is what turns a
       // failed step into a redacted `[failure]` entry under the brain and records what each step's

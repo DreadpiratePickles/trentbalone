@@ -62,6 +62,7 @@ import { portGatewayWithEscalation } from "./port-escalation.js"; // [L1]
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
 import { drainRun } from "./drain.js";
 import type { FleetMemoryHook } from "../fleet-memory/orchestrator-hook.js";
+import { gatedMemoryAdapters, type MemoryGateOptions } from "../tools/memory/gate.js"; // [C2]
 import type { OrchestratorDelegatePort } from "./delegate-port.js";
 import { createHumanHook } from "./human-hook.js";
 import { describeResume, hydrateOrThrow, prepareResume } from "./resume.js";
@@ -120,6 +121,8 @@ export type OrchestratorDepsWithImprove = OrchestratorDeps & {
    * the next run sees this run's writes.
    */
   readonly fleetMemory?: FleetMemoryHook;
+  /** [C2] The gate on `fleetMemory.adapters`; its `ledger` must be the tool build's (`TrentToolBuild.provenance`): taint is per instance. */
+  readonly memoryGate?: MemoryGateOptions;
   /**
    * The `delegate_task` binding (`./delegate-port.ts`): the same port object handed to
    * `buildTrentToolAdapters({ delegate })`. Every seat call is wrapped so the port knows which
@@ -190,7 +193,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
   }
 
   // ── fleet-memory hook (owned by ../fleet-memory; the only lines here that know about it) ──────
-  const allTools: readonly TrentToolAdapter[] = [...(deps.tools ?? []), ...(deps.fleetMemory?.adapters ?? [])];
+  const allTools: readonly TrentToolAdapter[] = [...(deps.tools ?? []), ...gatedMemoryAdapters(deps.fleetMemory?.adapters ?? [], deps.memoryGate)]; // [C2] behind the provenance hold
   const withFleetPrelude = (seat: SeatModelFn): SeatModelFn => (deps.fleetMemory ? deps.fleetMemory.wrapSeatModel(seat) : seat);
   // ── end fleet-memory hook ────────────────────────────────────────────────────────────────────
   // ── delegate-port hook (owned by ./delegate-port.ts) ─────────────────────────────────────────

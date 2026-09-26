@@ -29,6 +29,7 @@ import {
   buildTrentTools,
   enabledToolsets,
   type DelegatePort,
+  type ProvenanceLedger, // [C2]
   type SkippedToolset,
   type ToolBuildConfig,
   type ToolBuildDeps,
@@ -129,6 +130,8 @@ export interface ToolWiring {
    * turn rather than at start-up — and the field stays live for exactly that reason.
    */
   readonly hookNotices: readonly string[];
+  /** [C2] The ledger the build's provenance gate writes to; the fleet's memory gate must share it (taint is per instance). Absent on the legacy seam. */
+  readonly provenance?: ProvenanceLedger;
   readonly sandbox: ReplSandbox;
   readonly egress: ReplEgressStatus;
   cleanup(): Promise<void>;
@@ -281,6 +284,7 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
     get hookNotices(): readonly string[] {
       return build.hookNotices;
     },
+    ...(build.provenance === undefined ? {} : { provenance: build.provenance }), // [C2]
     sandbox,
     egress,
     cleanup: async () => {

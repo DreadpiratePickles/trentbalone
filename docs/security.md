@@ -510,6 +510,16 @@ approvals list` and `/approvals` show each one's kind, the seat that made it and
 it came from, `approve <id>` replays the seat's own action with the provenance recorded in the
 entry, and `reject <id>` discards it, leaving the denied row behind as the record of the refusal.
 
+The hold also covers the fleet-memory hook's own `memory`, `fleet_search` and `brain_read` adapters in both
+modes: they are registered outside the toolset chain, so `packages/trent-core/src/tools/memory/gate.ts` wraps
+them with the very provenance ledger the chain writes to (a fleet run from `orchestrator/index.ts`, solo from
+the runtime), because taint is kept per ledger and a gate with a ledger of its own would never see the page.
+`apps/cli/src/runtime/headless.memory-gate.test.ts` proves it for a fleet run through the real runtime, tool
+chain and orchestrator (`web_extract` then `memory add` in one step returns `needs_approval`, files one pending
+row in `gateway.json`, leaves `MEMORY.md` byte-identical, and approving the row writes the entry tagged
+`[provenance: untrusted via web_extract]`); `apps/cli/src/runtime/solo-continuity.test.ts` proves the same for
+solo.
+
 ## Side-effecting tools: the gate
 
 A tool that posts, sends, books, invoices or charges is different in kind from one that writes a
