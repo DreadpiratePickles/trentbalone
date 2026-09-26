@@ -33,7 +33,7 @@ import type { GatewayCompletion, GatewayMessage, GatewayStreamRequest } from "..
 import { appendApprovalAudit, type ApprovalAuditAction } from "./auto-review-audit.js";
 import { AUTO_REVIEW_ACTOR_PREFIX, AUTO_REVIEW_FIELD, POLICY_ACTOR, autoReviewGrantUsedAt, isAutoReviewActor, type AutoReviewConfig } from "./auto-review-config.js";
 import { evaluateAutoReviewPolicy, type AutoReviewPolicyVerdict, type AutoReviewRule } from "./auto-review-policy.js";
-import { BOUND_CALL_KIND } from "./bound-approvals.js";
+import { BOUND_CALL_KIND, UNTRUSTED_INBOUND_FIELD } from "./bound-approvals.js"; // [P3] UNTRUSTED_INBOUND_FIELD
 import type { HardlineContext } from "./hardline.js";
 import type { SpendCharge } from "./spend-ledger.js";
 
@@ -260,6 +260,16 @@ async function askReviewer(
 }
 
 /**
+ * [P3] A row whose run had read text written outside this machine (`untrusted_inbound`, stamped by
+ * the row writer in `bound-approvals.ts`) is never the reviewer's, whatever the written policy says:
+ * an injected instruction may have steered the call, and only a person rules that out.
+ */
+function untrustedInboundVerdict(row: ApprovalRow): Extract<AutoReviewPolicyVerdict, { eligible: false }> | undefined {
+  if (row.details[UNTRUSTED_INBOUND_FIELD] !== true) return undefined;
+  return { eligible: false, rule: "untrusted_provenance", reason: "its run read text written outside this machine (untrusted_inbound), so a person rules out a call that text steered" };
+}
+
+/**
  * One pass over every pending bound-call row this profile holds that the reviewer has not already
  * decided, oldest first. With the policy off it returns at once and touches nothing.
  */
@@ -278,7 +288,7 @@ export async function reviewHeldApprovals(deps: AutoReviewDeps): Promise<ReviewP
   for (const row of rows) {
     const call = heldCallOf(row);
     if (call === undefined) continue;
-    const verdict = evaluateAutoReviewPolicy(row, deps.policy, context);
+    const verdict = untrustedInboundVerdict(row) ?? evaluateAutoReviewPolicy(row, deps.policy, context); // [P3] a stamped row is never in policy
     outcomes.push(verdict.eligible ? await askReviewer(deps, bridge, gateway, row, call, verdict, now()) : escalateByPolicy(deps, row, call, verdict, now()));
   }
   return { enabled: true, outcomes };

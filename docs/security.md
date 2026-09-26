@@ -630,12 +630,18 @@ is refused; after, the call has run and the reject is refused with the time it r
 reviewer altogether, set `enabled: false`: already-granted approvals stay granted, and the chain
 records every one.
 
-**Limits, stated.** Nothing runs the reviewer on its own yet: `trent approvals list --review` runs one
-pass over the held calls. Inside a seat turn the step itself still pauses for a person (the app's
-step gate, `seat-agent-loop.ts:209`); the reviewer's decision is what the replay then finds on the
-bound row, so a deny there blocks the call even after the step is approved. A bound row does not
-record whether its step read untrusted text, so the recipient allowlist and the money cap are what
-bound a send an injected instruction steered (`send-after-untrusted` still pauses such a step).
+**When it runs, and what it never decides.** `trent approvals list --review` runs one pass; while
+`enabled` is true, so does each tick of `trent service daemon` (its `auto-review` component, every
+60 seconds) and of the heartbeat `trent gateway start` carries, all through `reviewHeldApprovals`.
+A held row is stamped `untrusted_inbound: true` when its run read text written outside this machine
+(a run a signed webhook started, or an `inbound` entry in a ring the row writer sees: a solo
+conversation's, or a dispatcher ring handed to `createBoundApprovalStore`), and the reviewer escalates
+it under `untrusted_provenance` with no model asked, whatever the policy says. Not stamped yet: a
+fleet run that read an inbox or a page without a webhook, because the tool build does not hand its
+ring to the row writer; there the recipient allowlist and the money cap bound the send, and
+`send-after-untrusted` still pauses its step. Inside a seat turn the step still pauses for a person
+(`seat-agent-loop.ts:209`); a reviewer's deny on the bound row blocks the call even after the step is
+approved. Tests: `governance/untrusted-inbound.test.ts`, `heartbeat/auto-review-tick.test.ts`.
 
 Tested in `governance/auto-review-policy.test.ts` (each rule), `governance/auto-review.test.ts` (the
 reviewer against a fake model: approve, deny, escalate, malformed, absent; the chain; reversal; and

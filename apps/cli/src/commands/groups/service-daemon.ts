@@ -21,12 +21,23 @@
  * [P2-10] The cron runner is `./cron.ts`'s own (`buildCronRunner`: the run, each delivery, the
  * incident alert, the social publish handler), so a pinned job runs on its pin here exactly as under
  * `cron start`: a child `trent run - --model <pin>` (`../../runtime/child-run.ts`).
+ *
+ * [P3] While `governance.auto_review.enabled`, a fourth component runs the auto reviewer's pass
+ * every `AUTO_REVIEW_TICK_MS` (`autoReviewPass`, also handed to the heartbeat `gateway start` carries).
  */
+import os from "node:os";
+import path from "node:path";
 import process from "node:process";
 import type { TrentConfig } from "@trent/core";
+import type { ConfigManager } from "@trent/core/config/index.js";
+// [P3] the auto reviewer's automatic pass
+import { DEFAULT_AUTO_REVIEW } from "@trent/core/governance/auto-review-config.js";
+import { reviewHeldApprovals, type ReviewGateway, type ReviewPass } from "@trent/core/governance/auto-review.js";
+import { openSpendLedger } from "@trent/core/governance/spend-ledger.js";
+import type { ModelProvider } from "@trent/core/model-gateway/index.js";
 import { cronRunnerActive, cronRunnerLockPath, readCronRunnerLock } from "@trent/core/cron/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
-import { GatewayManager, linkRunApprovals, type RunApprovalLink } from "@trent/core/gateway/index.js";
+import { FileGatewayStore, GatewayManager, linkRunApprovals, type RunApprovalLink } from "@trent/core/gateway/index.js"; // [P3] FileGatewayStore
 import { heartbeatLockPath, heartbeatRunnerActive, type HeartbeatLoop } from "@trent/core/heartbeat/index.js";
 import { acquireProfileWriter, gatewayRunningError, liveGatewayHolder, profileLockPath } from "@trent/core/profile/locks.js";
 import { ServiceLog, ServiceSupervisor, serviceLogPaths, type ServiceComponentReport, type ServiceEntry } from "@trent/core/service/index.js";
@@ -53,8 +64,79 @@ export function daemonPlan(config: TrentConfig): DaemonPlanEntry[] {
     config.gateway.enabled ? { name: "gateway", state: "would-start" } : { name: "gateway", state: "skipped", detail: "gateway.enabled is false" },
     { name: "cron", state: "would-start" },
     config.heartbeat.enabled ? { name: "heartbeat", state: "would-start" } : { name: "heartbeat", state: "skipped", detail: "heartbeat.enabled is false" },
+    ...(autoReviewOn(config) ? [{ name: "auto-review", state: "would-start" as const }] : []), // [P3] listed only while the policy is on
   ];
 }
+
+// [P3] the auto reviewer's automatic pass
+/** How often the daemon runs the reviewer's pass while `governance.auto_review.enabled`. */
+export const AUTO_REVIEW_TICK_MS = 60_000;
+
+let reviewGatewayForTests: (() => Promise<ReviewGateway>) | undefined;
+
+/** Tests hand the pass a fake reviewer model; nothing else sets it. */
+export function setAutoReviewGatewayForTests(gateway: (() => Promise<ReviewGateway>) | undefined): void {
+  reviewGatewayForTests = gateway;
+}
+
+function autoReviewOn(config: TrentConfig): boolean {
+  return config.governance?.auto_review?.enabled === true;
+}
+
+/**
+ * One pass of `reviewHeldApprovals`, the function `trent approvals list --review` runs, with its deps
+ * built as that command builds them (`./approvals.ts` runReview): the profile's `gateway.json`, the
+ * written policy, the hardline, `approvals.deny`, the spend ledger, and a reviewer model built only
+ * when a row is inside the policy. The config is read per pass, so `enabled: false` stops it at the
+ * next tick. Single-flight: a tick that lands while a pass is running shares that pass.
+ */
+export function autoReviewPass(configManager: ConfigManager, log: (line: string) => void): () => Promise<ReviewPass> {
+  let running: Promise<ReviewPass> | undefined;
+  const once = async (): Promise<ReviewPass> => {
+    const config = configManager.loadConfig();
+    const policy = config.governance?.auto_review ?? DEFAULT_AUTO_REVIEW;
+    const profileDir = configManager.getProfileDir();
+    const gateway = async (): Promise<ReviewGateway> => {
+      configManager.loadSecrets();
+      const { createModelGateway } = await import("@trent/core/model-gateway/index.js");
+      return createModelGateway({ preferredProvider: config.provider as ModelProvider, models: { executor: policy.model ?? config.model } });
+    };
+    const pass = await reviewHeldApprovals({
+      store: new FileGatewayStore(path.join(profileDir, "gateway.json")),
+      profileDir,
+      policy,
+      hardline: { home: os.homedir(), profileDir },
+      deny: config.approvals?.deny ?? [],
+      gateway: reviewGatewayForTests ?? gateway,
+      spend: openSpendLedger({ profileDir }),
+    });
+    const decided = pass.outcomes.filter((outcome) => outcome.status !== "pending").length;
+    if (pass.outcomes.length > 0) log(`auto-review: ${String(decided)} decided, ${String(pass.outcomes.length - decided)} left for a human`);
+    return pass;
+  };
+  return () =>
+    (running ??= once().finally(() => {
+      running = undefined;
+    }));
+}
+
+/** The daemon's fourth component: the pass on its own interval, stopped with the others. */
+function autoReviewEntry(configManager: ConfigManager, log: (line: string) => void): ServiceEntry {
+  const pass = autoReviewPass(configManager, log);
+  let timer: ReturnType<typeof setInterval> | undefined;
+  return {
+    name: "auto-review",
+    start: () => {
+      timer = setInterval(() => void pass().catch((error: unknown) => log(`auto-review pass failed: ${reason(error)}`)), AUTO_REVIEW_TICK_MS);
+      return undefined;
+    },
+    stop: () => {
+      clearInterval(timer);
+      timer = undefined;
+    },
+  };
+}
+// [/P3]
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -179,6 +261,7 @@ export async function runServiceDaemon(ctx: CommandContext): Promise<CommandOutc
       stop: () => heartbeat.stop(),
     });
   } else entries.push({ name: "heartbeat", skipped: "heartbeat.enabled is false" });
+  if (autoReviewOn(config)) entries.push(autoReviewEntry(configManager, (line) => log.line(line))); // [P3] only while the policy is on
 
   const supervisor = new ServiceSupervisor({ components: entries, log: (line) => log.line(line) });
   // The writer registration and the last line happen whatever the runtime's cleanup does.

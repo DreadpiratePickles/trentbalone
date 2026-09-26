@@ -34,6 +34,7 @@ import { record } from "../tools/action.js";
 import type { ToolCallRecord } from "../tools/types.js";
 import { stampAutoReviewGrantUse } from "./auto-review-config.js"; // [H1] auto review
 import { toolCallKey } from "./IdempotencyManager.js";
+import { currentSessionTaint } from "./provenance.js"; // [P3] a solo conversation's ring
 
 export const BOUND_CALL_KIND = "bound_call";
 /** `decidedBy` on a row the step's own approval granted (see the module comment). */
@@ -71,6 +72,8 @@ export interface BoundApprovalDetails extends Record<string, unknown> {
   readonly classes: readonly string[];
   /** Set by `preview()`: the instant this preview was put in front of a human at a pause. */
   previewedAt?: string;
+  /** [P3] Set when the call's run had read text written outside this machine; the auto reviewer then leaves it to a human. */
+  untrusted_inbound?: true;
 }
 
 export interface BoundApprovalRow extends Omit<ApprovalRow, "details"> {
@@ -93,6 +96,34 @@ export interface BoundApprovalStore {
   /** The programmatic decision path; `trent approvals` reaches the same rows through the bridge. */
   decide(id: string, decision: "approved" | "denied", decidedBy: string): BoundApprovalRow | undefined;
 }
+
+// [P3] untrusted_inbound: whether the run that made a held call had read text written outside this machine
+export const UNTRUSTED_INBOUND_FIELD = "untrusted_inbound";
+/** A policy history ring as the row writer reads it: `PolicyDispatcher.history()`, or a session's `calls`. */
+export type InboundRing = () => ReadonlyArray<{ readonly classes: readonly string[] }>;
+
+/** Runs a surface noted as started by outside text (a webhook's seed, `servers.ts`), newest last. Bounded. */
+const INBOUND_RUNS = new Set<string>();
+const MAX_INBOUND_RUNS = 1024;
+
+/** Records that `runId` was started by text written outside this machine; its held calls are stamped. */
+export function noteInboundRun(runId: string): void {
+  INBOUND_RUNS.delete(runId);
+  if (INBOUND_RUNS.size >= MAX_INBOUND_RUNS) INBOUND_RUNS.delete(INBOUND_RUNS.values().next().value as string);
+  INBOUND_RUNS.add(runId);
+}
+
+const carriesInbound = (calls: ReadonlyArray<{ readonly classes: readonly string[] }> | undefined): boolean => (calls ?? []).some((call) => call.classes.includes("inbound"));
+
+/**
+ * True when the call's run has read untrusted text: the run was noted as seeded, its conversation's
+ * session ring (solo) carries an `inbound` entry, or the dispatcher ring handed to the store does.
+ */
+function readsInbound(call: BoundCall, ring: InboundRing | undefined): boolean {
+  if (call.runId !== undefined && INBOUND_RUNS.has(call.runId)) return true;
+  return carriesInbound(currentSessionTaint()?.calls) || (ring !== undefined && carriesInbound(ring()));
+}
+// [/P3]
 
 /** The idempotency key of a call, with the tool qualified by its adapter exactly as the idempotency wrapper does. */
 export function boundCallKey(call: BoundCall): string {
@@ -131,8 +162,13 @@ function deniedRecord(call: BoundCall, row: BoundApprovalRow): ToolCallRecord {
   return record(call.adapter, call.action, "blocked", `${call.adapter}: ${nameOf(call)} was rejected by ${row.decidedBy ?? "a human"} as ${row.id}; exactly this call does not run.`);
 }
 
-export function createBoundApprovalStore(options: { readonly profileDir: string } | { readonly store: GatewayStore }): BoundApprovalStore {
+// [P3] `ring`: the run's policy history, so a held call records whether the run read untrusted text.
+export function createBoundApprovalStore(options: ({ readonly profileDir: string } | { readonly store: GatewayStore }) & { readonly ring?: InboundRing }): BoundApprovalStore {
   const store: GatewayStore = "store" in options ? options.store : new FileGatewayStore(path.join(options.profileDir, "gateway.json"));
+  /** [P3] Stamps a pending row whose run read untrusted text; the stamp is only ever added. */
+  const stampInbound = (row: BoundApprovalRow | undefined, tainted: boolean): void => {
+    if (tainted && row !== undefined && row.status === "pending") row.details.untrusted_inbound = true;
+  };
 
   const newest = (rows: readonly BoundApprovalRow[]): BoundApprovalRow | undefined =>
     rows.reduce<BoundApprovalRow | undefined>((best, row) => (best === undefined || row.createdAt > best.createdAt ? row : best), undefined);
@@ -140,7 +176,7 @@ export function createBoundApprovalStore(options: { readonly profileDir: string 
   const findByKey = (approvals: Record<string, ApprovalRow>, key: string): BoundApprovalRow | undefined =>
     newest(Object.values(approvals).filter((row): row is BoundApprovalRow => isBoundRow(row) && row.details.key === key));
 
-  const insert = (approvals: Record<string, ApprovalRow>, call: BoundCall, key: string, preview: string, previewedAt?: string): BoundApprovalRow => {
+  const insert = (approvals: Record<string, ApprovalRow>, call: BoundCall, key: string, preview: string, previewedAt?: string, tainted = false): BoundApprovalRow => { // [P3] tainted
     const now = new Date();
     const id = `appr_${String(now.getTime())}_${crypto.randomBytes(3).toString("hex")}`;
     const details: BoundApprovalDetails = {
@@ -152,6 +188,7 @@ export function createBoundApprovalStore(options: { readonly profileDir: string 
       preview,
       classes: [...(call.classes ?? [])],
       ...(previewedAt === undefined ? {} : { previewedAt }),
+      ...(tainted ? { untrusted_inbound: true as const } : {}), // [P3]
     };
     const row: BoundApprovalRow = {
       id,
@@ -176,9 +213,11 @@ export function createBoundApprovalStore(options: { readonly profileDir: string 
     find,
     preview(call, preview) {
       const key = boundCallKey(call);
+      const tainted = readsInbound(call, options.ring); // [P3]
       return store.mutate((state) => {
         const existing = findByKey(state.approvals, key);
-        if (existing === undefined || existing.status === "expired") return insert(state.approvals, call, key, preview, new Date().toISOString());
+        if (existing === undefined || existing.status === "expired") return insert(state.approvals, call, key, preview, new Date().toISOString(), tainted);
+        stampInbound(existing, tainted); // [P3]
         // The human is being shown what the row already holds; only the stamp moves.
         if (existing.status === "pending") existing.details.previewedAt = new Date().toISOString();
         return structuredClone(existing);
@@ -187,12 +226,14 @@ export function createBoundApprovalStore(options: { readonly profileDir: string 
     require(call, preview) {
       const key = boundCallKey(call);
       const inStep = call.runId !== undefined && call.stepId !== undefined;
+      const tainted = readsInbound(call, options.ring); // [P3]
       return store.mutate((state): BoundApprovalDecision => {
         const existing = findByKey(state.approvals, key);
         if (existing === undefined || existing.status === "expired") {
-          const row = insert(state.approvals, call, key, preview);
+          const row = insert(state.approvals, call, key, preview, undefined, tainted); // [P3] tainted
           return { granted: false, row, record: parkedRecord(call, row) };
         }
+        stampInbound(existing, tainted); // [P3] before any grant: the row records what its run had read
         if (existing.status === "approved") {
           // [H1] auto review: a grant the reviewer decided is stamped the first time it is honoured (the call runs now), so a human's reversal can tell whether it ran. A human's grant is untouched.
           stampAutoReviewGrantUse(existing);

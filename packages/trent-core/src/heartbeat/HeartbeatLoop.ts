@@ -223,6 +223,7 @@ export class HeartbeatLoop {
   private timer: unknown;
   private ticking: Promise<HeartbeatRunRow> | undefined;
   private lastConsolidatedDay: string | undefined;
+  private tickHook: (() => Promise<unknown>) | undefined; // [P3] the auto reviewer's pass
 
   constructor(deps: HeartbeatLoopDeps) {
     this.deps = deps;
@@ -264,7 +265,20 @@ export class HeartbeatLoop {
     return this.ticking;
   }
 
+  /**
+   * [P3] Runs `hook` at the start of every tick, quiet or not: the surface that opened the loop hands
+   * it the auto reviewer's pass (`governance/auto-review.ts`). A failure is logged, never the tick's.
+   */
+  public beforeEachTick(hook: (() => Promise<unknown>) | undefined): void {
+    this.tickHook = hook;
+  }
+
   private async tickOnce(): Promise<HeartbeatRunRow> {
+    try {
+      await this.tickHook?.(); // [P3]
+    } catch (error) {
+      this.logger.error("heartbeat.tick_hook.failed", { reason: error instanceof Error ? error.message : String(error) });
+    }
     const startedAt = this.now();
     const quiet = isQuiet(startedAt, this.deps.config.active_hours);
     const consolidated = await this.maybeConsolidate(startedAt, quiet);

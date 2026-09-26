@@ -11,11 +11,11 @@
  */
 
 import { ConfigManager } from "@trent/core/config/index.js";
-import { GatewayManager, linkRunApprovals, type RunApprovalLink } from "@trent/core/gateway/index.js";
+import { GatewayManager, linkRunApprovals, readSetting, WebhookServer, webhookOnly, type RunApprovalLink } from "@trent/core/gateway/index.js"; // [P3] readSetting, WebhookServer, webhookOnly
 import { gatewayRunningError, liveGatewayHolder, profileLockPath, type ProfileLockHolder } from "@trent/core/profile/locks.js";
 import { egressBindHosts, TokenManager } from "@trent/core/egress/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
-import { openWebhookRoutes, webhookStatus, webhookStatusLines, type OpenedWebhookRoutes, type WebhookStatusView } from "@trent/core/webhooks/index.js"; // [H3] webhook routes
+import { openWebhookRoutes, webhookStatus, webhookStatusLines, WebhooksConfigSchema, type OpenedWebhookRoutes, type WebhooksConfig, type WebhookStatusView } from "@trent/core/webhooks/index.js"; // [H3] webhook routes; [P3] WebhooksConfigSchema, WebhooksConfig
 import type { CommandContext } from "../context.js";
 import type { CommandSpec } from "../registry.js";
 import { createAgentHandler, createRunResumer, createRunThreads } from "../../gateway/agent-handler.js"; // [S2] resumer, threads
@@ -25,6 +25,9 @@ import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime } from "../../runtime/headless.js";
 import { releaseOnSignal } from "../../signals.js";
 import { openHeartbeat } from "./heartbeat.js";
+import { gatewaySetupSpec } from "./gateway-setup.js"; // [P3]
+import { noteInboundRun } from "@trent/core/governance/bound-approvals.js"; // [P3]
+import { autoReviewPass } from "./service-daemon.js"; // [P3] the auto reviewer's pass on each heartbeat tick
 import { ACP_DEFAULT_PORT, listeningRender, parsePort, WEB_DEFAULT_PORT } from "./protocol-runtime.js";
 import {
   BUILD_HINT,
@@ -44,6 +47,21 @@ function gatewaysOnHost(manager: ConfigManager): Array<{ profile: string } & Pro
     const holder = liveGatewayHolder(new ConfigManager({ baseDir: manager.getBaseDir(), profile }).getProfileDir());
     return holder === null ? [] : [{ profile, ...holder }];
   });
+}
+
+// [P3] a webhook-only adapter needs the listener even when no signed route is configured
+/** The started platforms whose inbound arrives only at `/webhooks/<id>` under this profile's settings. */
+function webhookOnlyStarted(started: readonly string[], configManager: ConfigManager): string[] {
+  const setting = (key: string): string | undefined => readSetting({ config: configManager, store: undefined as never }, key);
+  return started.filter((id) => webhookOnly(id, setting));
+}
+
+/** The gateway's `WebhookServer` with no route mounted, serving `/webhooks/<platform>` where `gateway.webhooks` says. */
+async function openAdapterWebhooks(manager: GatewayManager, block: WebhooksConfig | undefined): Promise<OpenedWebhookRoutes> {
+  const where = block ?? WebhooksConfigSchema.parse({});
+  const server = new WebhookServer(manager);
+  const port = await server.listen(where.port, where.host);
+  return { host: where.host, port, routes: [], close: () => server.close() };
 }
 
 interface GatewayLockView {
@@ -101,33 +119,7 @@ export const gatewaySpec: CommandSpec = {
         return lines;
       },
     },
-    {
-      name: "setup <platform>",
-      description: "Store a messaging platform credential in the profile secrets file",
-      options: [{ flags: "--token <token>", description: "Bot token; stored, never echoed" }],
-      run(ctx, opts, args) {
-        const platform = String(args[0]);
-        const key = `${platform.toUpperCase()}_BOT_TOKEN`;
-        if (ctx.dryRun) {
-          return { data: { dryRun: true, command: "gateway setup", platform, wouldWriteSecret: key } };
-        }
-        if (typeof opts.token !== "string" || opts.token === "") {
-          throw new TrentError({
-            code: EXIT.AUTH,
-            operation: "gateway.setup",
-            message: "--token is required to configure a platform",
-            target: platform,
-          });
-        }
-        ctx.config().set(key, opts.token);
-        // The name of the secret, never its value.
-        return { data: { platform, secretConfigured: key } };
-      },
-      render(data, ctx) {
-        const d = data as { platform: string; secretConfigured?: string };
-        return [`  ${ctx.theme.success("configured")} ${ctx.theme.value(d.platform)}`];
-      },
-    },
+    gatewaySetupSpec, // [P3] the names each adapter reads, from the registry (./gateway-setup.ts)
     {
       name: "start",
       description: "Start listeners for every configured messaging platform",
@@ -196,6 +188,7 @@ export const gatewaySpec: CommandSpec = {
         const heartbeat = config.heartbeat.enabled
           ? openHeartbeat({ configManager, config, runtime, buildManager: () => manager as GatewayManager, now: ctx.overrides.now, log: (line) => ctx.err(line) })
           : undefined;
+        if (config.governance?.auto_review?.enabled === true) heartbeat?.loop.beforeEachTick(autoReviewPass(configManager, (line) => ctx.err(line))); // [P3]
         let webhooks: OpenedWebhookRoutes | undefined; // [H3] webhook routes
         const shutdown = async (): Promise<void> => {
           await webhooks?.close(); // [H3] no new run starts once shutdown begins
@@ -205,6 +198,7 @@ export const gatewaySpec: CommandSpec = {
           await runtime.cleanup();
         };
         let started: string[];
+        let hooked: string[] = []; // [P3] the started platforms that listen only on /webhooks/<id>
         try {
           started = await manager.startAllConfigured();
           // [H3] webhook routes: served under this profile's gateway lock, each run through this
@@ -216,9 +210,15 @@ export const gatewaySpec: CommandSpec = {
             // [S2] H3: a route's mode runs whatever the gateway's agent.mode; the seed lands in the ring the tools are judged against.
             // A runtime without the two seams (a test's partial fake) keeps the rule it had: its own mode only, no seed.
             runnerFor: (mode) => runtime.runnerFor?.(mode) ?? (mode === runtime.mode ? runtime.runner : undefined),
-            seedInbound: async (runId, source) => runtime.seedInbound?.(runId, source),
+            seedInbound: async (runId, source) => {
+              noteInboundRun(runId); // [P3] the run's held calls are stamped untrusted_inbound, whatever ring the tools use
+              await runtime.seedInbound?.(runId, source);
+            },
             log: (line) => ctx.err(line),
           });
+          // [P3] LINE, WhatsApp and the other webhook-only adapters are served by the same listener, route or none.
+          hooked = webhookOnlyStarted(started, configManager);
+          if (webhooks === undefined && hooked.length > 0) webhooks = await openAdapterWebhooks(manager, config.gateway.webhooks);
         } catch (error) {
           // Refused by the profile's gateway lock: nothing this command built may outlive the refusal.
           await shutdown();
@@ -246,13 +246,13 @@ export const gatewaySpec: CommandSpec = {
             agentHandler: true,
             approvalLink: link.active,
             heartbeat: heartbeat !== undefined && serving,
-            ...(webhooks === undefined ? {} : { webhooks: { listen: `${webhooks.host}:${String(webhooks.port)}`, routes: webhooks.routes } }), // [H3]
+            ...(webhooks === undefined ? {} : { webhooks: { listen: `${webhooks.host}:${String(webhooks.port)}`, routes: webhooks.routes, adapters: hooked } }), // [H3]; [P3] adapters
           },
           keepAlive: serving,
         };
       },
       render(data, ctx) {
-        const d = data as { started?: string[]; wouldStart?: string[]; dryRun?: boolean; approvalLink?: boolean; heartbeat?: boolean; webhooks?: { listen: string; routes: string[] } };
+        const d = data as { started?: string[]; wouldStart?: string[]; dryRun?: boolean; approvalLink?: boolean; heartbeat?: boolean; webhooks?: { listen: string; routes: string[]; adapters?: string[] } };
         const list = (d.dryRun === true ? d.wouldStart : d.started) ?? [];
         const lines = [
           `  ${ctx.theme.success(d.dryRun === true ? "would start" : "started")} ${ctx.theme.value(
@@ -260,7 +260,7 @@ export const gatewaySpec: CommandSpec = {
           )}`,
         ];
         if (d.heartbeat === true) lines.push(`  ${ctx.theme.meta("heartbeat loop running; history under <profile>/heartbeat/runs.jsonl")}`);
-        if (d.webhooks !== undefined) lines.push(`  ${ctx.theme.meta("webhook routes on")} ${ctx.theme.value(d.webhooks.listen)} ${ctx.theme.meta(d.webhooks.routes.join(", "))}`); // [H3]
+        if (d.webhooks !== undefined) lines.push(`  ${ctx.theme.meta("webhooks on")} ${ctx.theme.value(d.webhooks.listen)} ${ctx.theme.meta([...d.webhooks.routes, ...(d.webhooks.adapters ?? []).map((id) => `/webhooks/${id}`)].join(", "))}`); // [H3]; [P3] adapters
         if (d.approvalLink !== undefined) {
           lines.push(
             d.approvalLink

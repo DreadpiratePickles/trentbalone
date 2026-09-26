@@ -13,6 +13,7 @@ import { EXIT } from "@trent/core/errors/index.js";
 import { GatewayManager } from "@trent/core/gateway/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { openDeliveryStore } from "@trent/core/webhooks/store.js";
+import { createBoundApprovalStore, UNTRUSTED_INBOUND_FIELD } from "@trent/core/governance/bound-approvals.js"; // [P3]
 import { runCli } from "../index.js";
 import type { CliOverrides } from "../context.js";
 import type { HeadlessRuntime } from "../../runtime/headless.js";
@@ -61,7 +62,7 @@ function fakeSignals(order: string[]) {
   };
 }
 
-function fakes() {
+function fakes(started: readonly string[] = []) { // [P3] the platforms the manager reports as started
   const order: string[] = [];
   const inputs: Array<Record<string, unknown>> = [];
   const runtime = {
@@ -91,7 +92,7 @@ function fakes() {
     gatewayManager: (configManager, options) => {
       const manager = new GatewayManager(configManager, options);
       // No platform is configured: the webhook routes alone keep the gateway up.
-      vi.spyOn(manager, "startAllConfigured").mockImplementation(async () => []);
+      vi.spyOn(manager, "startAllConfigured").mockImplementation(async () => [...started]); // [P3]
       return manager;
     },
   };
@@ -137,5 +138,78 @@ describe("[H3] trent gateway start with webhook routes", () => {
     const text = await runCli(["gateway", "status"]);
     expect(text.stdout).toContain("last deliveries:");
     expect(text.stdout).toContain("gh-issues started 202 run_h3_status key cli-2");
+  });
+});
+
+// [P3] the listener opens for a webhook-only adapter too, not only for a signed route.
+const LINE_TEST_SECRET = "p3-line-channel-secret-test-value";
+
+function listenerBlockOnly(): ConfigManager {
+  const configManager = new ConfigManager({ profile: "default" });
+  const config = configManager.loadConfig();
+  (config.gateway as Record<string, unknown>).webhooks = { port: 0 };
+  configManager.saveConfig(config);
+  return configManager;
+}
+
+describe("[P3] trent gateway start opens the listener for a webhook-only adapter", () => {
+  it("LINE up and no route: the listener opens where gateway.webhooks says, and /webhooks/line reaches the adapter", async () => {
+    listenerBlockOnly().set("LINE_CHANNEL_SECRET", LINE_TEST_SECRET);
+    const f = fakes(["line"]);
+    const result = await runCli(["gateway", "start", "--json"], { overrides: f.overrides });
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(result.keepAlive).toBe(true);
+    const data = JSON.parse(result.stdout) as { started: string[]; webhooks?: { listen: string; routes: string[]; adapters?: string[] } };
+    expect(data.started).toEqual(["line"]);
+    expect(data.webhooks).toMatchObject({ routes: [], adapters: ["line"] });
+    const body = JSON.stringify({ destination: "U0", events: [] });
+    const signature = crypto.createHmac("sha256", LINE_TEST_SECRET).update(body).digest("base64");
+    const url = `http://${data.webhooks!.listen}/webhooks/line`;
+    const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-line-signature": signature }, body });
+    expect(res.status).toBe(200);
+    const forged = await fetch(url, { method: "POST", headers: { "x-line-signature": "forged" }, body });
+    expect(forged.status).toBe(401);
+    await f.signals.raise("SIGTERM");
+    expect(f.order).toContain("cleanup");
+    await expect(fetch(url, { method: "POST", body })).rejects.toThrow();
+  });
+
+  it("a route with no platform up still opens it (the route case), and the report names no adapter", async () => {
+    configureRoutes();
+    const f = fakes();
+    const result = await runCli(["gateway", "start", "--json"], { overrides: f.overrides });
+    const data = JSON.parse(result.stdout) as { webhooks?: { routes: string[]; adapters?: string[] } };
+    expect(data.webhooks).toMatchObject({ routes: ["gh-issues"], adapters: [] });
+    await f.signals.raise("SIGTERM");
+  });
+
+  it("a platform that is not webhook-only (telegram polling) and no route: nothing listens", async () => {
+    listenerBlockOnly();
+    const f = fakes(["telegram"]);
+    const result = await runCli(["gateway", "start", "--json"], { overrides: f.overrides });
+    expect(result.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as { started: string[]; webhooks?: unknown };
+    expect(data.started).toEqual(["telegram"]);
+    expect(data.webhooks).toBeUndefined();
+    await f.signals.raise("SIGTERM");
+  });
+});
+
+// [P3] a held call in a webhook-started run records that its run read outside text.
+describe("[P3] a webhook-started run's held calls carry untrusted_inbound", () => {
+  it("the gateway notes the seeded run, so a call it parks is stamped; a call from another run is not", async () => {
+    const configManager = configureRoutes();
+    const f = fakes();
+    const result = await runCli(["gateway", "start", "--json"], { overrides: f.overrides });
+    const data = JSON.parse(result.stdout) as { webhooks: { listen: string } };
+    const request = signed({ delivery: "p3-1", issue: { number: 7 } });
+    const res = await fetch(`http://${data.webhooks.listen}/hooks/gh-issues`, { method: "POST", headers: request.headers, body: request.body });
+    expect(((await res.json()) as { run_id: string }).run_id).toBe("run_h3_cli");
+    const bindings = createBoundApprovalStore({ profileDir: configManager.getProfileDir() });
+    const args = { to: "+15550100", body: "Issue 7 is triaged." };
+    const call = (runId: string) => ({ adapter: "business", action: `sms_send ${JSON.stringify(args)}`, tool: "sms_send", args, runId, stepId: "s1", classes: ["external_send"] });
+    expect(bindings.require(call("run_h3_cli"), "SMS to +15550100: Issue 7 is triaged.").row?.details[UNTRUSTED_INBOUND_FIELD]).toBe(true);
+    expect(bindings.require(call("run_other"), "SMS to +15550100: Issue 7 is triaged.").row?.details[UNTRUSTED_INBOUND_FIELD]).toBeUndefined();
+    await f.signals.raise("SIGTERM");
   });
 });

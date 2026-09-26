@@ -1,7 +1,8 @@
 /**
- * [P2-3] Voice notes on the gateway. A voice note sent on Telegram, WhatsApp, Signal, Discord or
- * Slack reaches `GatewayManager.handleInbound` as an `InboundMessage` whose `attachments` carry a
- * lazy `open()` (the adapter never downloads before the pairing gate). `prepareVoiceNote` is the one
+ * [P2-3] Voice notes on the gateway. A voice note sent on Telegram, WhatsApp, Signal, Discord,
+ * Slack, Matrix, Mattermost, LINE or ntfy ([P3] the nine adapters that attach audio; Email, Teams and
+ * Home Assistant carry none) reaches `GatewayManager.handleInbound` as an `InboundMessage` whose
+ * `attachments` carry a lazy `open()` (the adapter never downloads before the pairing gate). `prepareVoiceNote` is the one
  * call there, placed after that gate: for a paired sender it downloads the audio through the
  * adapter's own client into `<profile>/inbox/<platform>/<message-id>.<ext>` (0600, dir 0700), capped
  * at `gateway.voice_notes.max_bytes`, refuses a note longer than `gateway.voice_notes.max_seconds`,

@@ -53,9 +53,11 @@ restart resumes where it stopped and never hands the agent the same message twic
 
 - **LINE** checks `X-Line-Signature` (base64 HMAC-SHA256 of the raw body with the channel secret)
   before it parses anything: a bad or missing signature is 401 and nothing is routed or sent. The
-  webhook rides the same `WebhookServer` path as WhatsApp's. `gateway start` listens only when
-  `gateway.webhooks` has a route ([webhooks.md](webhooks.md)); without one, nothing receives LINE's
-  webhook yet, which is equally true of WhatsApp. Set the webhook URL in the LINE Developers Console
+  webhook rides the same `WebhookServer` path as WhatsApp's. `gateway start` opens that listener
+  when a webhook-only platform starts (LINE, WhatsApp, Home Assistant, Slack without
+  `SLACK_APP_TOKEN`, Telegram with `TELEGRAM_WEBHOOK_URL`) or `gateway.webhooks` has a route, on
+  `gateway.webhooks.host` and `port` (default `127.0.0.1:8644`, loopback: put a tunnel or a reverse
+  proxy in front, [webhooks.md](webhooks.md)). Set the webhook URL in the LINE Developers Console
   to `https://<your host>/webhooks/line`.
 - **ntfy has no sender identity.** Whoever can publish to the reply topic is the sender, so the
   reply topic is what gets paired (`trent gateway pair ntfy <code>`), and its name, or an access
@@ -119,8 +121,15 @@ MESSAGING GATEWAY
   ...
 ```
 
-`gateway setup <platform> --token <token>` writes the credential into the profile's `.env` and
-returns the name of the secret it configured, never the value.
+`gateway setup <platform>` writes the names that platform's adapter reads (its registry entry,
+`packages/trent-core/src/gateway/registry.ts`) into the profile's `.env`: `--token <token>` goes to
+the platform's token name (`TELEGRAM_BOT_TOKEN`, `MATRIX_ACCESS_TOKEN`, `LINE_CHANNEL_ACCESS_TOKEN`,
+`NTFY_TOKEN`, ...) and `--set NAME=value` to any other name it reads, e.g.
+`gateway setup matrix --token <token> --set MATRIX_HOMESERVER_URL=https://matrix.example.org`,
+`gateway setup line --token <token> --set LINE_CHANNEL_SECRET=<secret>` or
+`gateway setup ntfy --set NTFY_TOPIC=<topic>`; Signal has no token (`--set SIGNAL_NUMBER=<number>`).
+A name the platform does not read is refused. The reply names what was written and any required
+name still missing, never a value.
 
 Routing configuration is real. `gateway.routes` in `config.yaml` maps a platform id to an agent id,
 and `gateway.platforms` lists the enabled ones.

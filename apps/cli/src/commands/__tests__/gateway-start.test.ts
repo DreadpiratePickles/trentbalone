@@ -15,6 +15,11 @@ import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { runCli } from "../index.js";
 import type { CliOverrides } from "../context.js";
 import type { HeadlessRuntime, HeadlessRuntimeDeps } from "../../runtime/headless.js";
+// [P3] the heartbeat the gateway carries runs the auto reviewer's pass
+import { FileGatewayStore } from "@trent/core/gateway/index.js";
+import type { ReviewGateway } from "@trent/core/governance/auto-review.js";
+import { createBoundApprovalStore, type BoundCall } from "@trent/core/governance/bound-approvals.js";
+import { setAutoReviewGatewayForTests } from "../groups/service-daemon.js";
 
 let home: string;
 
@@ -243,5 +248,38 @@ describe("trent gateway start", () => {
     expect(f.runtimeDeps).toHaveLength(0);
     expect(f.managerOptions.every((o) => o.agentHandler === undefined)).toBe(true);
     expect(JSON.parse(result.stdout)).toMatchObject({ dryRun: true, command: "gateway start", wouldStart: [] });
+  });
+
+  // [P3] the heartbeat this command carries runs the auto reviewer's pass on each of its ticks.
+  it("with the heartbeat and governance.auto_review on, a held call inside the policy is decided on the heartbeat's next tick", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const configManager = new ConfigManager({ profile: "default" });
+      const config = configManager.loadConfig();
+      configManager.saveConfig({
+        ...config,
+        heartbeat: { ...config.heartbeat, enabled: true, interval_minutes: 15 },
+        governance: { ...config.governance, auto_review: { enabled: true, model: "fake-reviewer", max_class: "external_send", max_amount_cents: 0, currency: "usd", recipients: ["+15550100"] } },
+      } as typeof config);
+      const args = { to: "+15550100", from: "+15550000", body: "Your table is booked for 7pm tonight." };
+      const call: BoundCall = { adapter: "business", action: `sms_send ${JSON.stringify(args)}`, tool: "sms_send", args, classes: ["external_send", "customer_facing"] };
+      const id = createBoundApprovalStore({ profileDir: configManager.getProfileDir() }).require(call, "SMS to +15550100: Your table is booked for 7pm tonight.").row!.id;
+      const reviewer: ReviewGateway = {
+        complete: async () => ({ text: JSON.stringify({ decision: "approve", reason: "allowlisted number, booking text" }), provider: "openai", model: "fake-reviewer", modelTier: "haiku", inputTokens: 1, outputTokens: 1, costCents: 0, estimated: false, priced_as_default: false, finishReason: "stop" }),
+      };
+      setAutoReviewGatewayForTests(async () => reviewer);
+      const f = fakes();
+      f.listening.push("telegram");
+      const result = await runCli(["gateway", "start", "--json"], { overrides: f.overrides });
+      expect(JSON.parse(result.stdout)).toMatchObject({ heartbeat: true });
+      const status = () => new FileGatewayStore(path.join(configManager.getProfileDir(), "gateway.json")).snapshot().approvals[id];
+      expect(status()?.status).toBe("pending");
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(status()).toMatchObject({ status: "approved", decidedBy: "auto-review:fake-reviewer" });
+      await f.signals.raise("SIGTERM");
+    } finally {
+      setAutoReviewGatewayForTests(undefined);
+      vi.useRealTimers();
+    }
   });
 });
