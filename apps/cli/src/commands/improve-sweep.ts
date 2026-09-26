@@ -42,6 +42,7 @@ import {
   type SweepReport,
 } from "@trent/core/improve/index.js";
 import type { ModelProvider } from "@trent/core/model-gateway/index.js";
+import type { LocalModelConfig } from "@trent/core/model-gateway/local-runtime.js"; // [L1]
 import type { ImproveStorePort } from "@trent/core/store/index.js";
 import { loadGoldenIndex, reflectionFloor, reflectionRefusal, seatSuitesFor, type GoldenIndex, type ReflectionFloor } from "./improve-goldens.js";
 // [W3] the recall floor, bound to this profile's brain and promoted retrieval goldens.
@@ -88,6 +89,8 @@ export interface LoopConfig {
   model: string;
   /** [D1] `models.planner`, when the profile configures model tiers; the judge prefers it. */
   plannerModel?: string;
+  /** [L1] `models.local`, handed to the gateways `--live` builds (budgets, in-flight cap, constrained output). */
+  local?: LocalModelConfig;
   /** [D0] improvement gates, from `config.improve` (docs/improve.md). */
   gates: {
     sweepCapCents: number;
@@ -116,7 +119,7 @@ export function loopConfig(ctx: SweepContext): LoopConfig {
     fleet: { installed_agents?: string[]; active_agents?: string[] };
     budget: { per_run_cap: number };
     memory: { blocks: LoopConfig["gates"]["blocks"] };
-    models?: { planner?: string };
+    models?: { planner?: string; local?: LocalModelConfig }; // [L1] local
     improve: { sweep_cap_cents: number; pass_k: number; holdout_ratio: number; judge_min_tpr: number; judge_min_tnr: number; frozen_paths: string[]; judge_model?: string; min_goldens?: number };
     retrieval?: { min_recall?: number };
   };
@@ -127,6 +130,7 @@ export function loopConfig(ctx: SweepContext): LoopConfig {
     provider: config.provider,
     model: config.model,
     ...(planner === undefined ? {} : { plannerModel: planner }),
+    ...(config.models?.local === undefined ? {} : { local: config.models.local }), // [L1]
     gates: {
       // Decision 8: an unset cap is one run's cap, never "no cap".
       sweepCapCents: config.improve.sweep_cap_cents ?? config.budget.per_run_cap,
@@ -194,7 +198,8 @@ export async function liveModel(ctx: SweepContext, cfg: LoopConfig): Promise<{ a
   ctx.config().loadSecrets();
   const { createModelGateway } = await import("@trent/core/model-gateway/index.js");
   const preferredProvider = cfg.provider as ModelProvider;
-  const gateway = await createModelGateway({ preferredProvider, models: { executor: cfg.model } });
+  const local = cfg.local === undefined ? {} : { local: cfg.local }; // [L1] models.local reaches both gateways
+  const gateway = await createModelGateway({ preferredProvider, models: { executor: cfg.model }, ...local });
   if (gateway.configuredProviders().length === 0) {
     throw new TrentError({ code: EXIT.AUTH, operation: "improve.sweep", message: `no API key configured for provider ${cfg.provider}` });
   }
@@ -204,7 +209,7 @@ export async function liveModel(ctx: SweepContext, cfg: LoopConfig): Promise<{ a
     provider: cfg.provider, // [L0-3] G6: a local provider never falls back to a hosted judge
     ...(cfg.plannerModel === undefined ? {} : { planner: cfg.plannerModel }),
   });
-  const judgeGateway = await createModelGateway({ preferredProvider, models: { executor: judge.model } });
+  const judgeGateway = await createModelGateway({ preferredProvider, models: { executor: judge.model }, ...local });
   return {
     actuals: createGatewayActuals(gateway),
     judge: createGatewayJudge(judgeGateway),

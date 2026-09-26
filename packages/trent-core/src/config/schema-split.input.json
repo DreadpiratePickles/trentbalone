@@ -291,7 +291,18 @@
       "ttft_seconds": 600,
       "idle_seconds": 90,
       "context_tokens": 65536,
-      "max_in_flight": 2
+      "max_in_flight": 2,
+      "reasoning_effort": "none",
+      "constrained_output": "all",
+      "job_timeout_seconds": 3600
+    },
+    "escalate": {
+      "provider": "google",
+      "model": "fixture-escalate",
+      "on": [
+        "planner",
+        "step_failed"
+      ]
     }
   },
   "tools": {

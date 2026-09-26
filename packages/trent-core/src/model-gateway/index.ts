@@ -71,6 +71,8 @@ import { modelCallPolicyFromEnv, planAttempts, type ReasoningEffort } from "./ca
 import { collectCompletion } from "./complete.js";
 import { googleCompatRoute, streamGoogleCompatChat } from "./openai-compat.js";
 import { streamOpenAiRoute } from "./openai-route.js"; // [L0-2]
+import { createResponseFormatPolicy } from "./response-format.js"; // [L1]
+import { applyLocalModelEnv, localRoleEffort } from "./local-runtime.js"; // [L1]
 import { modelOverridesFromEnv, priceCall } from "./pricing.js";
 import {
   PROVIDER_ALIAS_ROUTES,
@@ -199,6 +201,7 @@ function seedEnv(config: ModelGatewayConfig): void {
   if (config.models?.executor) process.env.WORKBENCH_EXECUTOR_MODEL = config.models.executor;
   if (config.models?.planner) process.env.WORKBENCH_PLANNER_MODEL = config.models.planner;
   for (const [name, value] of Object.entries(config.env ?? {})) process.env[name] = value;
+  applyLocalModelEnv(config.local); // [L1] heartbeat and improve build their own gateway: models.local reaches it here
 }
 
 export async function createModelGateway(config: ModelGatewayConfig = {}): Promise<ModelGateway> {
@@ -228,20 +231,22 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
     retryLog("model_gateway.reasoning_effort_not_sent", fields);
   };
 
+  const formatFor = createResponseFormatPolicy((event, fields) => retryLog(event, fields)); // [L1] constrained output, per route
   const defaultStreamProvider: ProviderStreamFn = async function* (provider, model, input) {
+    const responseFormat = provider === "openai" ? undefined : formatFor(provider, input.responseFormat); // [L1] openai-route decides per alias
     if (provider === "google") {
       // [P1-C] The app's streamer asks Google for no usage and cannot carry reasoning_effort.
       const route = googleCompatRoute();
       if (!route.apiKey) throw new Error("GEMINI_API_KEY is not configured");
       yield* streamGoogleCompatChat(
-        { model, messages: input.messages, temperature: input.temperature, maxTokens: input.maxTokens, ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}), ...(input.signal ? { signal: input.signal } : {}) },
+        { model, messages: input.messages, temperature: input.temperature, maxTokens: input.maxTokens, ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}), ...(responseFormat ? { responseFormat } : {}) /* [L1] */, ...(input.signal ? { signal: input.signal } : {}) },
         { apiKey: route.apiKey, baseUrl: route.baseUrl, ...(config.fetchImpl ? { fetchImpl: config.fetchImpl } : {}) },
       );
       return;
     }
     if (provider === "openai") {
       // [L0-2] OpenAI and its aliases: the wrapper's client, with the app's per-model body tuning.
-      yield* streamOpenAiRoute(model, input, { tuning: clientModule.modelChatTuning, onEffortDropped: effortNotSent, ...(config.fetchImpl ? { fetchImpl: config.fetchImpl } : {}) });
+      yield* streamOpenAiRoute(model, input, { tuning: clientModule.modelChatTuning, onEffortDropped: effortNotSent, responseFormatFor: formatFor /* [L1] */, ...(config.fetchImpl ? { fetchImpl: config.fetchImpl } : {}) });
       return;
     }
     // The app's streamer for these providers has no field to carry reasoning_effort in.
@@ -352,7 +357,7 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
       fallbackOnPin,
     });
     const attempts = plan.attempts;
-    const reasoningEffort = req.reasoningEffort ?? configuredEffort;
+    const reasoningEffort = req.reasoningEffort ?? config.reasoningEffort ?? localRoleEffort(role, req.provider) ?? configuredEffort; // [L1] local seats: models.local.reasoning_effort
 
     if (attempts.length === 0) {
       throw new Error(
@@ -395,6 +400,7 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
         temperature,
         maxTokens,
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        ...(req.responseFormat === undefined ? {} : { responseFormat: req.responseFormat }), // [L1]
         retryPolicy,
         log: retryLog,
         logFields: aliasField,

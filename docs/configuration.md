@@ -292,8 +292,9 @@ paraphrase of the objective can outrank a candidate that merely shares four word
 ```yaml
 memory:
   embedder:
-    provider: auto            # auto | gemini | openai | none
+    provider: auto            # auto | gemini | google | openai | ollama | lmstudio | llamacpp | none
     # model: gemini-embedding-001   # route default when omitted
+    # base_url: http://127.0.0.1:11434   # moves the route's endpoint
     batch_size: 32            # inputs per request, 1-256
 ```
 
@@ -301,7 +302,7 @@ memory:
 |---|---|
 | `provider` | `auto` (default) takes the first provider that has a key, preferring the family the top-level `provider` already routes chat through, then Gemini, then OpenAI. `gemini` (or `google`) posts to Google's OpenAI-compatible surface (`https://generativelanguage.googleapis.com/v1beta/openai/embeddings`), `openai` to `https://api.openai.com/v1/embeddings` — or, when `provider` is one of the hosted aliases (`deepseek`, `groq`), to that alias's own base URL. `ollama`, `lmstudio` and `llamacpp` embed on this machine, need no key, and never ask for `text-embedding-3-small`: Ollama through its native `/api/embed` with `truncate: false` (an over-long chunk is split and averaged, never cut), LM Studio and llama.cpp through `/v1/embeddings`. Under a local chat `provider` (`ollama`, `lmstudio`), `auto` and `openai` mean that runtime's embedder. A named hosted provider with no key falls back to lexical rather than failing a run. `none` is lexical only; `trent doctor` says so. |
 | `model` | Overrides the route default (`gemini-embedding-001`, `text-embedding-3-small`; `qwen3-embedding:0.6b` on Ollama, `text-embedding-qwen3-embedding-0.6b` on LM Studio, `qwen3-embedding-0.6b` on llama.cpp). |
-| `base_url` | Moves the route's endpoint and wins over its variable. Local defaults: `http://127.0.0.1:11434` (Ollama; a trailing `"/v1"` is dropped, since its native `/api/embed` sits at the server root), `http://127.0.0.1:1234/v1` (LM Studio), `http://127.0.0.1:8080/v1` (llama.cpp). |
+| `base_url` | Moves the route's endpoint and wins over its variable. Local defaults: `http://127.0.0.1:11434` (Ollama; a trailing "/v1" is dropped, since its native `/api/embed` sits at the server root), `http://127.0.0.1:1234/v1` (LM Studio), `http://127.0.0.1:8080/v1` (llama.cpp). |
 | `batch_size` | Inputs per request. One recall corpus is split into batches of this size. |
 
 A local embedder's cosine floor is per model: recorded for `qwen3-embedding:0.6b` (0.46, and 0.32 with the
@@ -651,7 +652,8 @@ defaults to `budget.per_run_cap`; `frozen_paths` are extra paths the loop may ne
 the suites, the goldens, the judge prompt and the gate code. `judge_model` empty is not "no judge":
 it means resolve one at run time — the configured planner-tier model when it differs from the
 executor, else the strongest priced Gemini model that does — and a judge equal to the executor is a
-configuration error naming both. `min_goldens` (5) is how many promoted goldens a seat's suite must
+configuration error naming both. Under `ollama` or `lmstudio` neither fallback applies: set it to a
+second local model, or the sweep refuses. `min_goldens` (5) is how many promoted goldens a seat's suite must
 hold before `trent improve sweep --live` spends a model call reflecting for it. See
 [improve.md](improve.md).
 
@@ -893,11 +895,11 @@ The most recent turns are kept verbatim, and a tool call is never separated from
 ## Providers
 
 Nine names are accepted. Five are routed by the wrapped application itself; the other four are
-OpenAI-compatible endpoints that the gateway resolves at the boundary into the `openai` client plus
-a base URL, so the same streaming path serves all of them. The exception is `google`, whose
-calls stream through the gateway's own OpenAI-compatible client
-(`packages/trent-core/src/model-gateway/openai-compat.ts`), because the app's client asks Google
-for no usage frame and cannot send `reasoning_effort`.
+OpenAI-compatible endpoints that the gateway resolves at the boundary into `openai` plus a base URL.
+`google`, `openai` and those four stream through the gateway's own OpenAI-compatible client
+(`packages/trent-core/src/model-gateway/openai-compat.ts`), which asks for the usage frame, reads
+cached prompt tokens and can send `reasoning_effort`; `anthropic`, `mistral` and `openrouter` use the
+app's streamers.
 
 | `provider` | Key | Endpoint (override with) | Default model |
 |---|---|---|---|
@@ -997,11 +999,13 @@ pin the chain back. Today the request field is `GatewayStreamRequest.model`; sea
 and fall back inside the wrapped app (`apps/web/lib/model-gateway.ts` `executeSeatModel`), which
 this key does not reach.
 
-`reasoning_effort` is sent as `reasoning_effort` on Google calls only, and only when set. The values
-are Google's (https://ai.google.dev/gemini-api/docs/openai, "Thinking"): `none` is accepted for 2.5
-models only, and Gemini 3 models refuse it. The other providers go through the wrapped app's
-streamer, which cannot carry the field; the gateway logs `model_gateway.reasoning_effort_not_sent`
-once when that happens. Measured on `gemini-3.5-flash-lite` with one golden prompt: `low` 169
+`reasoning_effort` is sent only when set, and only where the provider documents it: Google (the
+values are Google's, https://ai.google.dev/gemini-api/docs/openai, "Thinking": `none` is accepted
+for 2.5 models only, and Gemini 3 models refuse it), OpenAI's reasoning models (`gpt-5*`, `o1`, `o3`,
+`o4`), and an Ollama model whose `/api/show` lists `thinking` (Ollama maps the value per model,
+https://docs.ollama.com/api/openai-compatibility). LM Studio, DeepSeek and Groq are not sent it, nor
+are the providers on the app's streamers; the gateway logs `model_gateway.reasoning_effort_not_sent`
+once when it drops the field. Measured on `gemini-3.5-flash-lite` with one golden prompt: `low` 169
 output tokens (168 of them thinking), `high` 321 (320 thinking).
 
 ### Local models
@@ -1016,6 +1020,9 @@ models:
     idle_seconds: 120      # the longest silence between tokens once they flow
     context_tokens: 32768  # the window assumed when the server cannot be asked
     max_in_flight: 1       # concurrent calls per endpoint; 1 on Ollama, 4 on LM Studio when unset
+    reasoning_effort: none # seats and the consolidator on this machine; none turns thinking off
+    constrained_output: true  # seat turns decoded under a JSON schema; all adds hosted providers; false: off
+    job_timeout_seconds: 1800 # the app's per-job timeout for a local run (its own default is 600)
 ```
 
 A local server sends nothing, headers included, until prefill ends, so a local call is not held to
@@ -1031,13 +1038,51 @@ effective window, read from the server (Ollama `/api/ps` for a loaded model or a
 model's trained maximum. A prompt that does not fit is refused with the sizes and the tier to trim,
 rather than cut silently by the server. Ollama's default window is 4k below 24 GiB of VRAM
 (https://docs.ollama.com/context-length); raise it with `OLLAMA_CONTEXT_LENGTH`. The block reaches a
-run through the session runtime (`TRENT_LOCAL_*` variables).
+run through the session runtime (`TRENT_LOCAL_*` variables), and `trent heartbeat` and
+`trent improve --live`, which build their own gateways, pass it too.
+
+**Small models.** A seat or the wrapper's consolidator on a local runtime sends `reasoning_effort:
+none` unless `reasoning_effort` above names another level; the planner and the critic keep
+`models.reasoning_effort`. On `qwen3.5:9b` one seat step spent 1,267 thinking tokens at 3 tok/s with
+thinking on. Ollama maps `none` to `think: false`, which every model accepts; LM Studio is not sent the
+field. With `constrained_output` on, a seat asks for one flat object, `{"thought"?, "tool"?, "args"?,
+"final"?}`, with `tool` an enum of the names the seat may call, sent as `response_format` (a JSON
+schema: Ollama, LM Studio, llama.cpp and vLLM decode under it; DeepSeek and Groq get JSON mode;
+Anthropic, Mistral and OpenRouter get nothing). The reply is rewritten into the `toolCall` shape the
+app reads, so nothing in the app changes. A reply that still cannot be used is repaired (a `<think>`
+block, a fence or a `<tool_call>` tag removed, a literal tab or newline inside a string escaped,
+closing braces a reply lost added once), then asked again ONCE with the error and the allowed names
+(the closest name for an unknown tool), then recorded as the seat's failure: a call cut off inside
+its arguments is never run with empty arguments. The second call is metered like the first.
+`job_timeout_seconds` is written to `TRENT_JOB_TIMEOUT_MS` for a local run unless the shell set it.
+
+### Hosted escalation
+
+A local profile may name one hosted model that only some roles may use, and only with your approval:
+
+```yaml
+models:
+  escalate:
+    provider: google          # google, anthropic, mistral or openrouter beside a local runtime
+    model: gemini-3.6-pro     # absent: the provider's strong-tier model
+    on: [planner, critic, step_failed]
+```
+
+Unset by default. Each call to it is held as an approval, like a send, whose card names exactly what
+would leave this machine: `send the planner's prompt (5231 bytes) to google gemini-3.6-pro: it would
+leave this machine`. Nothing is sent before `trent approvals approve <id>`; the approval covers that
+prompt to that model (the row holds its SHA-256, never its text), and a different prompt asks again.
+While a planner or critic call is held the local model answers it; a `step_failed` call (a seat call
+the local model could not answer after its re-ask) stays failed and its error names the approval.
+`openai`, `deepseek` and `groq` cannot be reached beside a local runtime, which owns the `OPENAI_*`
+variables in that process; the call is logged as `model_gateway.escalation_unavailable` instead.
 
 ## Retry and fallback
 
 Every provider attempt is bounded: **3 attempts**, exponential backoff with full jitter, 500 ms
 base, 8 s cap. Only transient failures are retried — HTTP 429, 5xx, 408 and transport errors
-(`ECONNRESET`, `ETIMEDOUT`, a failed fetch). A 400, 401, 403, 404 or 422 is never retried, because
+(`ECONNRESET`, `ETIMEDOUT`, a failed fetch). A timeout of any kind, the SDK's "Request timed out."
+included, is retried once: the same wait twice is the budget, not a blip. A 400, 401, 403, 404 or 422 is never retried, because
 the next attempt is the same request. A `Retry-After` header (seconds or an HTTP date) is obeyed
 instead of the curve, capped at 8 s. Every retry writes one line naming the provider, model,
 attempt, delay, error class and status — never a credential.

@@ -30,7 +30,7 @@
 
 import type { GatewayCompletion, ModelGateway } from "../model-gateway/types.js";
 import { recordRunModelCall, takeOrchestrationCharge } from "./run-hooks.js";
-import { isMeteredSeatPort, readSeatCallUsage, type SeatCallUsage } from "./seat-gateway-port.js";
+import { isMeteredSeatPort, readSeatCallUsages, type SeatCallUsage } from "./seat-gateway-port.js"; // [L1] readSeatCallUsages
 import type { SeatModelFn } from "./seat-guard.js";
 import type { OrcEvent, SeatChatCompletionFn } from "./types.js";
 
@@ -89,11 +89,17 @@ export function createRunSpendMeter(runId: () => string | undefined): RunSpendMe
       const port = input.createChatCompletion;
       if (!isMeteredSeatPort(port)) return underlying(input);
       const answered: SeatCallUsage[] = [];
+      // [L1] Every call one port call made (a constrained turn's re-ask too), from the reply or from a
+      // thrown `SeatTurnError`, which the app catches: nothing else would carry what those calls spent.
       const observed: SeatChatCompletionFn = async (request) => {
-        const reply = await port(request);
-        const usage = readSeatCallUsage(reply);
-        if (usage !== undefined) answered.push(usage);
-        return reply;
+        try {
+          const reply = await port(request);
+          answered.push(...readSeatCallUsages(reply));
+          return reply;
+        } catch (error) {
+          answered.push(...readSeatCallUsages(error));
+          throw error;
+        }
       };
       const result = await underlying({ ...input, createChatCompletion: observed });
       if (answered.length === 0) return priced.has(result) ? { ...result, costCents: 0 } : result;

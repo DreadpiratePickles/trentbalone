@@ -28,12 +28,16 @@ import https from "node:https";
 import { Readable } from "node:stream";
 
 import type { ProviderAlias } from "./providers.js";
+import { isReasoningEffort, type ReasoningEffort } from "./call-policy.js"; // [L1]
+import { PROVIDER_ALIAS_ROUTES, activeProviderAlias, isLocalAlias } from "./providers.js"; // [L1]
 
 export const LOCAL_MODEL_ENV = {
   ttftSeconds: "TRENT_LOCAL_TTFT_SECONDS",
   idleSeconds: "TRENT_LOCAL_IDLE_SECONDS",
   contextTokens: "TRENT_LOCAL_CONTEXT_TOKENS",
   maxInFlight: "TRENT_LOCAL_MAX_IN_FLIGHT",
+  reasoningEffort: "TRENT_LOCAL_REASONING_EFFORT", // [L1]
+  constrainedOutput: "TRENT_LOCAL_CONSTRAINED_OUTPUT", // [L1]
 } as const;
 
 export const LOCAL_MODEL_DEFAULTS = { ttftSeconds: 300, idleSeconds: 120, contextTokens: 32_768 } as const;
@@ -47,6 +51,9 @@ export const LOCAL_MODEL_SETTINGS = {
   idleSeconds: "models.local.idle_seconds",
   contextTokens: "models.local.context_tokens",
   maxInFlight: "models.local.max_in_flight",
+  reasoningEffort: "models.local.reasoning_effort", // [L1]
+  constrainedOutput: "models.local.constrained_output", // [L1]
+  jobTimeoutSeconds: "models.local.job_timeout_seconds", // [L1]
 } as const;
 
 /** The `models.local` config block. */
@@ -55,6 +62,10 @@ export interface LocalModelConfig {
   readonly idle_seconds?: number;
   readonly context_tokens?: number;
   readonly max_in_flight?: number;
+  // [L1] small models: see `LOCAL_SMALL_MODEL_DEFAULTS` below.
+  readonly reasoning_effort?: string;
+  readonly constrained_output?: boolean | "all";
+  readonly job_timeout_seconds?: number;
 }
 
 export interface LocalModelPolicy {
@@ -84,6 +95,16 @@ export function applyLocalModelEnv(local: LocalModelConfig | undefined, env: Nod
     env[name] = String(valid);
     written.push(name);
   }
+  // [L1] small models
+  if (isReasoningEffort(local?.reasoning_effort)) {
+    env[LOCAL_MODEL_ENV.reasoningEffort] = local.reasoning_effort;
+    written.push(LOCAL_MODEL_ENV.reasoningEffort);
+  }
+  if (local?.constrained_output === true || local?.constrained_output === false || local?.constrained_output === "all") {
+    env[LOCAL_MODEL_ENV.constrainedOutput] = String(local.constrained_output);
+    written.push(LOCAL_MODEL_ENV.constrainedOutput);
+  }
+  // [/L1]
   return written;
 }
 
@@ -98,6 +119,53 @@ export function localModelPolicy(alias: ProviderAlias, env: NodeJS.ProcessEnv = 
     maxInFlight: read(LOCAL_MODEL_ENV.maxInFlight, inFlightDefault),
   };
 }
+
+// [L1] small models ─────────────────────────────────────────────────────────────
+//
+// THINKING. qwen3.5:9b thinks by default: 1,267 thinking tokens at 3 tok/s on one seat step, and 2
+// tokens with thinking off (L0-2 and L0-3, docs/sessions/2026-09-26-harness-landscape.md). A seat or
+// the wrapper's consolidator (gateway role `executor`) on a local runtime therefore asks for
+// `reasoning_effort: none` unless `models.local.reasoning_effort` names another level; the planner and
+// the critic (role `planner`) keep `models.reasoning_effort`. Ollama maps `none` to `think: false`
+// (`openai/openai.go` `ThinkingFromReasoningEffort`); `openai-route.ts` still drops the field where the
+// provider does not take it.
+// CONSTRAINED OUTPUT. `true` (the default): local runtimes decode seat turns under a JSON schema;
+// `false`: off; `all`: hosted providers too (`response-format.ts` says which of them can).
+// JOB TIMEOUT. The app's per-job timeout (`apps/web/lib/queue.ts`, 10 min) ended a local seat mid-answer;
+// `job_timeout_seconds` is written to `TRENT_JOB_TIMEOUT_MS` for a local run (`orchestrator/model-env.ts`).
+
+export const LOCAL_SMALL_MODEL_DEFAULTS = { reasoningEffort: "none", constrainedOutput: true, jobTimeoutSeconds: 1800 } as const;
+
+/** The effort a local executor call asks for: the bridge when it holds a known level, else `none`. */
+export function localReasoningEffort(env: NodeJS.ProcessEnv = process.env): ReasoningEffort {
+  const value = env[LOCAL_MODEL_ENV.reasoningEffort]?.trim();
+  return isReasoningEffort(value) ? value : LOCAL_SMALL_MODEL_DEFAULTS.reasoningEffort;
+}
+
+/**
+ * The effort a call of `role` gets from the local default: executor calls on a local alias only, and
+ * not a call routed explicitly to another provider (a hosted escalation: Gemini 3 refuses `none`).
+ */
+export function localRoleEffort(role: "executor" | "planner", requestProvider?: string, env: NodeJS.ProcessEnv = process.env): ReasoningEffort | undefined {
+  const alias = activeProviderAlias(env);
+  if (role !== "executor" || alias === undefined || !isLocalAlias(alias)) return undefined;
+  return requestProvider === undefined || requestProvider === PROVIDER_ALIAS_ROUTES[alias].provider ? localReasoningEffort(env) : undefined;
+}
+
+/** True when seat turns should be decoded under a schema on the route this process uses. */
+export function constrainedOutputApplies(env: NodeJS.ProcessEnv = process.env): boolean {
+  const mode = env[LOCAL_MODEL_ENV.constrainedOutput]?.trim().toLowerCase();
+  if (mode === "all") return true;
+  if (mode === "false") return false;
+  const alias = activeProviderAlias(env);
+  return alias !== undefined && isLocalAlias(alias);
+}
+
+/** `models.local.job_timeout_seconds` in milliseconds, or the default. */
+export function localJobTimeoutMs(local: LocalModelConfig | undefined): number {
+  return (positiveInt(local?.job_timeout_seconds) ?? LOCAL_SMALL_MODEL_DEFAULTS.jobTimeoutSeconds) * 1_000;
+}
+// [/L1]
 
 // ── the in-flight cap ──────────────────────────────────────────────────────────
 

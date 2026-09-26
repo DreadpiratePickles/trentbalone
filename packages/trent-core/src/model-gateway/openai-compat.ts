@@ -27,7 +27,7 @@
 import { ProviderHttpError } from "./retry.js";
 import type { ReasoningEffort } from "./call-policy.js";
 import { LOCAL_MODEL_SETTINGS } from "./local-runtime.js";
-import type { GatewayMessage, ProviderStreamFrame } from "./types.js";
+import type { GatewayMessage, GatewayResponseFormat, ProviderStreamFrame } from "./types.js"; // [L1] GatewayResponseFormat
 
 export const GOOGLE_COMPAT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
 
@@ -45,6 +45,8 @@ export interface CompatChatInput {
   readonly signal?: AbortSignal;
   /** [L0-2] Replaces `max_tokens` and `temperature`: the app's `modelChatTuning` for this model. */
   readonly tuning?: Readonly<Record<string, unknown>>;
+  /** [L1] Already decided for this route (`response-format.ts`); sent verbatim as `response_format`. */
+  readonly responseFormat?: GatewayResponseFormat;
 }
 
 /** [L0-2] The two budgets of a model on the operator's own machine. */
@@ -75,6 +77,7 @@ export function buildCompatChatBody(input: Omit<CompatChatInput, "signal">): Rec
     messages: input.messages,
     ...(input.tuning ?? { max_tokens: input.maxTokens, temperature: input.temperature }),
     ...(input.reasoningEffort === undefined ? {} : { reasoning_effort: input.reasoningEffort }),
+    ...(input.responseFormat === undefined ? {} : { response_format: input.responseFormat }), // [L1]
   };
 }
 

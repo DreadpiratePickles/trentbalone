@@ -387,6 +387,8 @@ model by role, and writes the provider, the model, `memory.embedder`, `agent.mod
 only the runtime and the chat model.
 
 ```bash
+npm run cli -- setup --mode local --dry-run                   # the plan for this machine; writes nothing
+npm run cli -- setup --mode local                             # the local stack (--pull offers what is missing)
 ollama serve                                                  # if Ollama is not already running
 npm run cli -- setup --mode quick --provider ollama           # checks Ollama, proposes the model for this machine
 npm run cli -- setup --mode quick --provider ollama --pull    # the same, and offers to pull a missing model

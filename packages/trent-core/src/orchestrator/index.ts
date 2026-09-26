@@ -58,6 +58,7 @@ import { createRunSpendMeter, createSeatChatPort, type RunSpendMeter } from "./s
 import { AutoRecovery, DEFAULT_AUTO_RECOVERY_CYCLES } from "./auto-recovery.js";
 import { applyPlannerFailure, applySeatFailureOverride, VerdictBook } from "./verdict.js"; // [P2-11]
 import { guardedSeatModel } from "./seat-guard-budget.js";
+import { portGatewayWithEscalation } from "./port-escalation.js"; // [L1]
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
 import { drainRun } from "./drain.js";
 import type { FleetMemoryHook } from "../fleet-memory/orchestrator-hook.js";
@@ -210,7 +211,7 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
     libs.overrides.setRuntimeEvalOverrides({
       orchestration: {
         // Default, not test-only: the planner and the critic reach the configured provider.
-        createCompletion: deps.createCompletion ?? createCompletionPort(meter.portGateway(gateway), { onCall: (call) => ports.record(call) }),
+        createCompletion: deps.createCompletion ?? createCompletionPort(portGatewayWithEscalation(meter.portGateway(gateway), ports), { onCall: (call) => ports.record(call) }), // [L1] models.escalate
         executeSeatModelFn: human.wrapSeatModel(withDelegateCaller(withFleetPrelude(seat))),
       },
     });

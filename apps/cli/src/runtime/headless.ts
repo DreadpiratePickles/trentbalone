@@ -38,6 +38,7 @@ import {
 } from "@trent/core/orchestrator/index.js";
 import { parseModelPin } from "@trent/core/orchestrator/model-env.js";
 import { applyLocalModelEnv, type LocalModelConfig } from "@trent/core/model-gateway/local-runtime.js"; // [L0-2]
+import { appEmbedder } from "./headless-wiring.js"; // [L1]
 import { guardAppDatabase, type AppStoreState, type FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
 import { acquireProfileWriter } from "@trent/core/profile/locks.js";
 import { runSessionHooks } from "@trent/core/hooks/index.js";
@@ -363,7 +364,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     // A variable, not a literal in the call: the tier block is carried to `applyModelEnv`, which
     // reads it, through a dep type that declares provider, model and prices only.
     // [P2-1] A pinned runtime carries its pin; an unpinned one sends exactly what it sent before.
-    const model = { provider: config.provider, model: config.model, ...modelOverrides, ...modelTiers, ...(pin === undefined ? {} : { pin }) };
+    const model = { provider: config.provider, model: config.model, ...modelOverrides, ...modelTiers, ...(pin === undefined ? {} : { pin }), ...appEmbedder(config) }; // [L1] memory.embedder for L0-5's app env (G10)
     const orchestrator = createOrchestrator({
       // The APP's database, never the core store's: a usable postgres URL is handed on unchanged
       // and `applyStandaloneEnv` keeps it; anything else hands on nothing, so the app's

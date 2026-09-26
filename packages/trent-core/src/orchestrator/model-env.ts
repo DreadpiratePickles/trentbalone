@@ -28,6 +28,8 @@ import { applyModelCallEnv } from "../model-gateway/call-policy.js";
 import { applyModelOverridesEnv } from "../model-gateway/pricing.js";
 import { aliasEnvKeys, applyProviderAliasEnv, resolveProviderAlias } from "../model-gateway/providers.js";
 import { applyAppEmbeddingEnv } from "../fleet-memory/embedder-local.js"; // [L0-5]
+import { localJobTimeoutMs, type LocalModelConfig } from "../model-gateway/local-runtime.js"; // [L1]
+import { applyEscalationEnv, type EscalateConfig } from "../model-gateway/escalation.js"; // [L1]
 // [L0-1] The app-free half moved to `./model-env-early.ts` so the CLI entry can apply the model names
 // before any app module loads (G1); this module keeps what needs the seat manifest and re-exports the rest.
 import {
@@ -78,6 +80,9 @@ export function resolveSeatModel(seat: string, config: ModelEnvConfig | undefine
   return modelForTier(config, seatCapability(seat).modelTier as ModelTier);
 }
 
+/** [L1] The app's per-job timeout variable (`apps/web/lib/queue.ts` `jobTimeoutMs`). */
+export const JOB_TIMEOUT_ENV = "TRENT_JOB_TIMEOUT_MS";
+
 export interface ModelEnvReport {
   /** Variables this call wrote. Names only — never values. */
   readonly written: readonly string[];
@@ -111,6 +116,7 @@ export function applyModelEnv(config: ModelEnvConfig | undefined): ModelEnvRepor
   // Prices are not routing, so they are written whatever the provider turns out to be; so are the
   // [P1-C] call policies (fallback_on_pin, reasoning_effort), which the gateway reads per call.
   const pricing = [...applyModelOverridesEnv(config.overrides), ...applyModelCallEnv(config.models)];
+  pricing.push(...applyEscalationEnv((config.models as { escalate?: EscalateConfig } | undefined)?.escalate)); // [L1] models.escalate, read per call
 
   // `ollama`, `lmstudio`, `deepseek` and `groq` are OpenAI-compatible endpoints, not new provider
   // identities: the alias boundary resolves them into `openai` plus a base URL, which is what the
@@ -133,6 +139,9 @@ export function applyModelEnv(config: ModelEnvConfig | undefined): ModelEnvRepor
       process.env.MODEL_ALLOWED_PROVIDERS = alias.provider;
       localChain.push("MODEL_ALLOWED_PROVIDERS");
     }
+    // [L1] The app's per-job timeout (`apps/web/lib/queue.ts`, 10 min, read per job) ended a local seat
+    // mid-answer (L0-2's live run): a local run gets `models.local.job_timeout_seconds` unless the shell set it.
+    if (alias.local) setIfUnset(JOB_TIMEOUT_ENV, String(localJobTimeoutMs((config.models as { local?: LocalModelConfig } | undefined)?.local)), localChain, tierKept);
     return {
       written: [...tierWritten, ...report.written, ...localChain, ...pricing],
       kept: [...tierKept, ...report.kept.filter((name) => !pinned.includes(name))], // [P2-1]

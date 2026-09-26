@@ -12,7 +12,7 @@
 
 import type { ReasoningEffort } from "./call-policy.js";
 import { abortableSleep, classifyProviderError, retryDelayMs, type RetryPolicy } from "./retry.js";
-import type { GatewayMessage, ModelProvider, ProviderStreamFn, ProviderStreamFrame } from "./types.js";
+import type { GatewayMessage, GatewayResponseFormat, ModelProvider, ProviderStreamFn, ProviderStreamFrame } from "./types.js"; // [L1] GatewayResponseFormat
 
 export interface AttemptContext {
   readonly streamFn: ProviderStreamFn;
@@ -23,6 +23,8 @@ export interface AttemptContext {
   readonly maxTokens: number;
   /** [P1-C] Handed to the stream function only when set, so an unconfigured call is unchanged. */
   readonly reasoningEffort?: ReasoningEffort;
+  /** [L1] Handed to the stream function only when set, like the effort. */
+  readonly responseFormat?: GatewayResponseFormat;
   readonly signal?: AbortSignal;
   readonly retryPolicy: RetryPolicy;
   readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -106,6 +108,7 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
       maxTokens: ctx.maxTokens,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
       ...(ctx.reasoningEffort === undefined ? {} : { reasoningEffort: ctx.reasoningEffort }),
+      ...(ctx.responseFormat === undefined ? {} : { responseFormat: ctx.responseFormat }), // [L1]
     });
 
     try {

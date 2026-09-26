@@ -106,7 +106,8 @@ export function openHeartbeat(wiring: HeartbeatWiring): { loop: HeartbeatLoop; c
     consolidate: async () => {
       configManager.loadSecrets();
       const [{ createModelGateway }, { consolidateMemory }] = await Promise.all([import("@trent/core/model-gateway/index.js"), import("@trent/core/fleet-memory/index.js")]);
-      const gateway = await createModelGateway({ preferredProvider: config.provider as ModelProvider, models: { executor: config.model } });
+      const local = config.models?.local; // [L1] the configured budgets, cap and constrained output, not the defaults
+      const gateway = await createModelGateway({ preferredProvider: config.provider as ModelProvider, models: { executor: config.model }, ...(local === undefined ? {} : { local }) });
       // [C4] Every configured block, not only MEMORY.md and USER.md. A read_only block is left
       // alone unless `memory.consolidation_may_edit` names it, and no one pass may take out more
       // than `memory.consolidation_max_removal_ratio` of a block's entries.

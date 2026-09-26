@@ -38,6 +38,33 @@ export const ModelOverrideSchema = z.object({
 
 export type ModelOverride = z.infer<typeof ModelOverrideSchema>;
 
+// [L1] small models
+/**
+ * Three more `models.local` keys, spread into that block below, and `models.escalate`.
+ * `reasoning_effort`: what a seat or the consolidator on a local runtime sends; absent is `none`
+ * (thinking off: 1,267 thinking tokens at 3 tok/s on one qwen3.5:9b seat step, L0-2's live run). The
+ * planner and the critic keep `models.reasoning_effort`. `constrained_output`: seat turns decoded under a
+ * JSON schema; absent is true (local runtimes), `all` adds hosted providers, false turns it off.
+ * `job_timeout_seconds`: the app's per-job timeout for a local run; absent is 1800 (the app's own is 600).
+ * `escalate`: a hosted model that only the named roles may use, each call held for the owner's approval
+ * with a preview of what would leave the machine (`model-gateway/escalation.ts`). Unset by default.
+ * See docs/configuration.md, "Local models" and "Hosted escalation".
+ */
+const SMALL_MODEL_LOCAL_KEYS = {
+  reasoning_effort: z.enum(["none", "minimal", "low", "medium", "high"]).optional(),
+  constrained_output: z.union([z.boolean(), z.literal("all")]).optional(),
+  job_timeout_seconds: z.number().int().positive().optional(),
+};
+
+export const EscalateConfigSchema = z.object({
+  model: z.string().min(1).optional(),
+  provider: ProviderSchema.optional(),
+  on: z.array(z.enum(["planner", "critic", "step_failed"])).min(1),
+}).strict();
+
+export type EscalateConfig = z.infer<typeof EscalateConfigSchema>;
+// [/L1]
+
 // [B2.1] model tiers
 /**
  * `models`: one model id per tier. `orchestrator/model-env.ts` maps these onto the per-provider
@@ -76,6 +103,8 @@ export const ModelTiersConfigSchema = z.object({
     idle_seconds: z.number().int().positive().optional(),
     context_tokens: z.number().int().positive().optional(),
     max_in_flight: z.number().int().positive().optional(),
+    ...SMALL_MODEL_LOCAL_KEYS, // [L1]
   }).strict().optional(),
   // [/L0-2]
+  escalate: EscalateConfigSchema.optional(), // [L1]
 }).strict();

@@ -41,6 +41,11 @@ export class PortTally {
     this.#phase = "executing";
   }
 
+  /** [L1] True after `plan_end`: a port call now is the critic's (`port-escalation.ts`). */
+  get executing(): boolean {
+    return this.#phase === "executing";
+  }
+
   record(call: CompletionPortCall): void {
     this.#calls += 1;
     if (call.ok) return;

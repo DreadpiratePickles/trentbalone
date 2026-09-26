@@ -18,6 +18,7 @@ import { loadWorkspaceContext } from "@trent/core/workspace-context/index.js";
 import { createAlertHook, type AlertBudgetPort, type AlertHook, type AlertHookDeps } from "@trent/core/gateway/index.js";
 import { applyPrivacyEnv, createPromptRedactor, type PromptPrivacyConfig } from "@trent/core/model-gateway/index.js";
 import { OTelExporter, createOTelBusHook, type OTelBusHook } from "@trent/core/traces/index.js";
+import { resolveProviderAlias } from "@trent/core/model-gateway/providers.js"; // [L1]
 
 export interface HeadlessAlertDeps {
   readonly manager: AlertHookDeps["manager"];
@@ -237,3 +238,12 @@ export function wireCheckpoints(config: CheckpointsSlice, input: { workspace: st
   });
 }
 
+/**
+ * [L1] `memory.embedder` alone, for `applyModelEnv` (`applyAppEmbeddingEnv`), which acts only under a
+ * local runtime: the app's embeddings follow it there. A hosted profile's model dep stays exactly what it was.
+ */
+export function appEmbedder(config: unknown): { memory?: { embedder: unknown } } {
+  const { provider, memory } = config as { provider?: string; memory?: { embedder?: unknown } };
+  if (resolveProviderAlias(provider)?.local !== true || memory?.embedder === undefined) return {};
+  return { memory: { embedder: memory.embedder } };
+}

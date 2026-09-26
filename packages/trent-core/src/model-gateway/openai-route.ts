@@ -26,7 +26,8 @@ import { ollamaCapabilities } from "./local-probe.js";
 import { acquireLocalSlot, localFetch, localModelPolicy } from "./local-runtime.js";
 import { streamCompatChat, type FetchLike } from "./openai-compat.js";
 import { activeProviderAlias, aliasBaseUrl, isLocalAlias, type ProviderAlias } from "./providers.js";
-import type { GatewayMessage, ProviderStreamFrame } from "./types.js";
+import { responseFormatFor } from "./response-format.js"; // [L1]
+import type { GatewayMessage, GatewayResponseFormat, ProviderStreamFrame } from "./types.js"; // [L1] GatewayResponseFormat
 
 /** openai-node's default when `OPENAI_BASE_URL` is unset. */
 export const OPENAI_COMPAT_BASE_URL = "https://api.openai.com/v1";
@@ -66,12 +67,15 @@ export interface OpenAiRouteInput {
   readonly maxTokens: number;
   readonly signal?: AbortSignal;
   readonly reasoningEffort?: ReasoningEffort;
+  readonly responseFormat?: GatewayResponseFormat; // [L1]
 }
 
 export interface OpenAiRouteDeps {
   /** The app's `modelChatTuning`: the body fields for this model's size and temperature. */
   readonly tuning: (model: string, maxTokens: number, temperature?: number) => Record<string, unknown>;
   readonly onEffortDropped: (fields: { provider: string; model: string; reason: string }) => void;
+  /** [L1] The gateway's response-format decision for this route's label (`response-format.ts`). */
+  readonly responseFormatFor?: (label: string, format: GatewayResponseFormat | undefined) => GatewayResponseFormat | undefined;
   readonly fetchImpl?: FetchLike;
   readonly env?: NodeJS.ProcessEnv;
 }
@@ -84,6 +88,9 @@ async function sendableEffort(route: OpenAiRoute, model: string, effort: Reasoni
   };
   if (route.alias === undefined) return OPENAI_REASONING_MODEL.test(model) ? effort : drop("OpenAI accepts reasoning_effort on reasoning models only");
   if (route.alias !== "ollama") return drop(`${route.label} documents no reasoning_effort on chat completions`);
+  // [L1] `none` is `think: false`, which Ollama accepts from every model: its ChatHandler refuses only a
+  // truthy think on a model without the capability (server/routes.go), so the local seat default needs no probe.
+  if (effort === "none") return effort;
   const capabilities = await ollamaCapabilities({ baseUrl: route.baseUrl, model, ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) });
   if (capabilities?.includes("thinking")) return effort;
   return drop(capabilities === undefined ? "Ollama's /api/show could not be read" : "the model's /api/show capabilities do not include thinking");
@@ -96,6 +103,7 @@ export async function* streamOpenAiRoute(model: string, input: OpenAiRouteInput,
   if (route.apiKey === undefined) throw new Error("OPENAI_API_KEY is not configured");
   const local = route.alias !== undefined && isLocalAlias(route.alias) ? localModelPolicy(route.alias, env) : undefined;
   const reasoningEffort = await sendableEffort(route, model, input.reasoningEffort, deps);
+  const responseFormat = (deps.responseFormatFor ?? responseFormatFor)(route.label, input.responseFormat); // [L1]
   const release = local === undefined ? undefined : await acquireLocalSlot(route.baseUrl, local.maxInFlight, input.signal);
   try {
     yield* streamCompatChat(
@@ -106,6 +114,7 @@ export async function* streamOpenAiRoute(model: string, input: OpenAiRouteInput,
         maxTokens: input.maxTokens,
         tuning: deps.tuning(model, input.maxTokens, input.temperature),
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        ...(responseFormat === undefined ? {} : { responseFormat }), // [L1]
         ...(input.signal ? { signal: input.signal } : {}),
       },
       {

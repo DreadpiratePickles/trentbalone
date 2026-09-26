@@ -28,12 +28,27 @@
  * asked: a pulled `mistral:7b` or `claude-local:8b` is the alias's model, and the gateway routes it by
  * the alias (`call-policy.ts` `planAttempts`). Under a local alias the app's provider chain is the
  * alias alone (`model-env.ts` writes `MODEL_ALLOWED_PROVIDERS`), so this port only ever sees its models.
+ *
+ * [L1] Under a local provider (or `models.local.constrained_output: all`) the call is constrained: the
+ * port asks for `{thought?, tool?, args?, final?}` under a JSON schema whose `tool` is an enum of the
+ * seat's names, and re-renders the reply into the app's own shape (`./seat-constrained.ts`). A reply
+ * that cannot be used is repaired, then re-asked ONCE with the error and the allowed names, then thrown
+ * as a `SeatTurnError`: never a call with empty arguments (`model-gateway/tool-call-repair.ts`). Every
+ * model call the port made rides back (`trent_usage` and `trent_usage_prior`), on the reply or on the
+ * thrown error, so the meter records the re-ask as the model call it was.
  */
 
 import { extractJsonObject } from "../model-gateway/completion-port.js";
 import { activeProviderAlias } from "../model-gateway/providers.js";
-import type { GatewayCompletion, GatewayMessage, ModelGateway, ModelProvider } from "../model-gateway/types.js";
+import type { GatewayCompletion, GatewayMessage, GatewayStreamRequest, ModelGateway, ModelProvider } from "../model-gateway/types.js";
 import type { SeatChatCompletionFn, SeatChatRequest, SeatChatResponse } from "./types.js";
+// [L1] constrained seat turns
+import { constrainedOutputApplies } from "../model-gateway/local-runtime.js";
+import { reaskMessage, repairSeatTurn } from "../model-gateway/tool-call-repair.js";
+import { readSeatTurnContext, renderSeatTurn, seatTurnFormat, SeatTurnError, withConstrainedInstruction, type SeatTurnContext } from "./seat-constrained.js";
+import { escalate, escalationPolicyFromEnv } from "../model-gateway/escalation.js";
+import { isLocalAlias } from "../model-gateway/providers.js";
+// [/L1]
 
 export const SEAT_JSON_INSTRUCTION =
   "Respond with exactly one JSON object and nothing else: no prose before or after it and no markdown fences.";
@@ -54,10 +69,11 @@ export interface SeatCallUsage {
   readonly unpriced: boolean;
 }
 
-/** The reply the app reads, plus the gateway's record it does not. */
-export type MeteredSeatChatResponse = SeatChatResponse & { readonly trent_usage: SeatCallUsage };
+/** The reply the app reads, plus the gateway's record it does not. [L1] Earlier calls of the same turn (a re-ask) ride in `trent_usage_prior`. */
+export type MeteredSeatChatResponse = SeatChatResponse & { readonly trent_usage: SeatCallUsage; readonly trent_usage_prior?: readonly SeatCallUsage[] };
 
 const USAGE_KEY = "trent_usage";
+const PRIOR_USAGE_KEY = "trent_usage_prior"; // [L1]
 const PORT_MARK = Symbol.for("trent.orchestrator.seat-gateway-port");
 
 /**
@@ -101,6 +117,83 @@ function usageOf(completion: GatewayCompletion): SeatCallUsage {
   };
 }
 
+// [L1] constrained seat turns ─────────────────────────────────────────────────────
+
+/** The usage fields for every call of one turn: the answering call last, the earlier ones before it. */
+function usageFields(completions: readonly GatewayCompletion[]): { trent_usage: SeatCallUsage; trent_usage_prior?: SeatCallUsage[] } {
+  const usages = completions.map(usageOf);
+  const prior = usages.slice(0, -1);
+  return { [USAGE_KEY]: usages.at(-1)!, ...(prior.length === 0 ? {} : { [PRIOR_USAGE_KEY]: prior }) } as { trent_usage: SeatCallUsage; trent_usage_prior?: SeatCallUsage[] };
+}
+
+/** A failure after at least one answered call still carries what those calls spent. */
+function withSpent(error: unknown, completions: readonly GatewayCompletion[]): unknown {
+  if (completions.length > 0 && typeof error === "object" && error !== null) Object.assign(error, usageFields(completions));
+  return error;
+}
+
+function replyOf(content: string | null, completions: readonly GatewayCompletion[], earlier: readonly SeatCallUsage[] = []): MeteredSeatChatResponse {
+  const usages = [...earlier, ...completions.map(usageOf)];
+  const input = usages.reduce((sum, call) => sum + call.inputTokens, 0);
+  const output = usages.reduce((sum, call) => sum + call.outputTokens, 0);
+  const cached = usages.reduce((sum, call) => sum + call.cachedInputTokens, 0);
+  const prior = usages.slice(0, -1);
+  return {
+    choices: [{ message: { content } }],
+    usage: { prompt_tokens: input, completion_tokens: output, total_tokens: input + output, prompt_tokens_details: { cached_tokens: cached } } as SeatChatResponse["usage"],
+    [USAGE_KEY]: usages.at(-1)!,
+    ...(prior.length === 0 ? {} : { [PRIOR_USAGE_KEY]: prior }),
+  } as MeteredSeatChatResponse;
+}
+
+/** The first reply clipped for the re-ask: the model sees what it wrote without doubling a long prompt. */
+const REASK_ECHO_CHARS = 4_000;
+
+async function constrainedSeatCall(gateway: ModelGateway, base: GatewayStreamRequest, context: SeatTurnContext): Promise<MeteredSeatChatResponse> {
+  const messages = withConstrainedInstruction(base.messages, context);
+  const completions: GatewayCompletion[] = [];
+  const first = await gateway.complete({ ...base, messages, responseFormat: seatTurnFormat(context) });
+  completions.push(first);
+  let result = repairSeatTurn(first.text, { allowedTools: context.tools, truncated: first.finishReason === "length" });
+  if (!result.ok) {
+    const echo = first.text.trim() === "" ? "(an empty reply)" : first.text.slice(0, REASK_ECHO_CHARS);
+    const reask: GatewayMessage[] = [...messages, { role: "assistant", content: echo }, { role: "user", content: reaskMessage(result.failure, context.tools) }];
+    const requireTool = result.failure.kind === "no_action" && context.tools.length > 0;
+    const second = await gateway.complete({ ...base, messages: reask, responseFormat: seatTurnFormat(context, { requireTool }) }).catch((error: unknown) => {
+      throw withSpent(error, completions);
+    });
+    completions.push(second);
+    result = repairSeatTurn(second.text, { allowedTools: context.tools, truncated: second.finishReason === "length" });
+    if (!result.ok) throw withSpent(new SeatTurnError(result.failure), completions);
+  }
+  return replyOf(JSON.stringify(renderSeatTurn(result.turn, context)), completions);
+}
+
+/**
+ * `models.escalate` with `step_failed`: a seat call that failed on the LOCAL model (unusable after its
+ * re-ask, or a provider error) is offered to the hosted model through the approval gate, on today's
+ * path (the app's own JSON instruction, no schema). Held: the failure stands and its message names the
+ * row to approve. Anything else rethrows the local failure unchanged. A cancelled call is never offered.
+ */
+async function escalateFailedSeat(gateway: ModelGateway, base: GatewayStreamRequest, request: SeatChatRequest, error: unknown): Promise<MeteredSeatChatResponse> {
+  const policy = escalationPolicyFromEnv();
+  const cancelled = error instanceof Error && error.name === "AbortError";
+  if (cancelled || policy === undefined || !policy.on.includes("step_failed") || !isLocalAlias(activeProviderAlias())) throw error;
+  const seat = /^Seat: (\S+)$/m.exec(request.messages.map((message) => message.content).join("\n"))?.[1];
+  const outcome = await escalate({ role: "step_failed", request: base, gateway, policy, ...(seat === undefined ? {} : { seat }) });
+  const spent = readSeatCallUsages(error);
+  if (outcome.kind === "answered") {
+    const text = outcome.completion.text;
+    return replyOf(text.trim() === "" ? null : extractJsonObject(text), [outcome.completion], spent);
+  }
+  if (outcome.kind !== "held") throw error;
+  const reason = error instanceof Error ? error.message : String(error);
+  const held = new Error(`${reason}; hosted escalation is waiting: ${outcome.summary}`);
+  if (spent.length > 0) Object.assign(held, { [USAGE_KEY]: spent.at(-1), ...(spent.length > 1 ? { [PRIOR_USAGE_KEY]: spent.slice(0, -1) } : {}) });
+  throw held;
+}
+// [/L1]
+
 /** The gateway-backed `createChatCompletion` the orchestrator installs for every seat by default. */
 export function createSeatChatPort(gateway: ModelGateway): SeatChatCompletionFn {
   const port = async (request: SeatChatRequest): Promise<MeteredSeatChatResponse> => {
@@ -108,13 +201,14 @@ export function createSeatChatPort(gateway: ModelGateway): SeatChatCompletionFn 
     if (provider !== undefined && !gateway.configuredProviders().includes(provider)) {
       throw new Error(`${provider} is not configured for this profile (no API key); ${request.model} was not called`);
     }
-    const completion = await gateway.complete({
-      role: "executor",
-      messages: toGatewayMessages(request.messages),
-      model: request.model,
-      temperature: request.temperature,
-      maxTokens: seatMaxTokens(),
-    });
+    const base: GatewayStreamRequest = { role: "executor", messages: toGatewayMessages(request.messages), model: request.model, temperature: request.temperature, maxTokens: seatMaxTokens() }; // [L1] shared by both paths
+    if (constrainedOutputApplies()) return constrainedSeatCall(gateway, base, readSeatTurnContext(request.messages)).catch((error: unknown) => escalateFailedSeat(gateway, base, request, error)); // [L1]
+    let completion: GatewayCompletion;
+    try {
+      completion = await gateway.complete(base);
+    } catch (error) {
+      return escalateFailedSeat(gateway, base, request, error); // [L1] step_failed
+    }
     const cached = completion.cachedInputTokens ?? 0;
     return {
       choices: [{ message: { content: completion.text.trim() === "" ? null : extractJsonObject(completion.text) } }],
@@ -141,4 +235,12 @@ export function readSeatCallUsage(reply: unknown): SeatCallUsage | undefined {
   if (typeof reply !== "object" || reply === null) return undefined;
   const usage = (reply as Record<string, unknown>)[USAGE_KEY];
   return typeof usage === "object" && usage !== null ? (usage as SeatCallUsage) : undefined;
+}
+
+/** [L1] Every call one port call made, earlier ones first, from a reply or a thrown error; [] on anything else. */
+export function readSeatCallUsages(replyOrError: unknown): SeatCallUsage[] {
+  const last = readSeatCallUsage(replyOrError);
+  if (last === undefined) return [];
+  const prior = (replyOrError as Record<string, unknown>)[PRIOR_USAGE_KEY];
+  return [...(Array.isArray(prior) ? (prior as SeatCallUsage[]) : []), last];
 }

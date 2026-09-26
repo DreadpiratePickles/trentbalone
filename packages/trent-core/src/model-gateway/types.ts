@@ -8,6 +8,7 @@
  */
 
 import type { ReasoningEffort } from "./call-policy.js";
+import type { LocalModelConfig } from "./local-runtime.js"; // [L1]
 
 /**
  * The five provider identities `apps/web` understands. This union does NOT grow when Trent gains a
@@ -25,6 +26,16 @@ export type GatewayMessage = {
   content: string;
 };
 
+// [L1] constrained output
+/**
+ * The OpenAI-compatible `response_format`, in the one wire shape Ollama, llama.cpp, LM Studio and vLLM
+ * all read (`response-format.ts` cites each). `solo/types.ts` `SoloResponseFormat` is this type.
+ */
+export type GatewayResponseFormat =
+  | { readonly type: "json_object" }
+  | { readonly type: "json_schema"; readonly json_schema: { readonly name: string; readonly schema: Record<string, unknown>; readonly strict?: boolean } };
+// [/L1]
+
 export type GatewayStreamRequest = {
   messages: GatewayMessage[];
   role?: StreamRole;
@@ -41,6 +52,8 @@ export type GatewayStreamRequest = {
   reasoningEffort?: ReasoningEffort;
   maxTokens?: number;
   temperature?: number;
+  /** [L1] Constrained decoding: sent where the provider documents it, JSON mode or nothing elsewhere (`response-format.ts`). */
+  responseFormat?: GatewayResponseFormat;
   /**
    * Cancellation. There is no AbortSignal support upstream, so the wrapper
    * implements it by breaking the `for await` loop, which calls the upstream
@@ -145,7 +158,7 @@ export type ProviderStreamFrame =
 export type ProviderStreamFn = (
   provider: ModelProvider,
   model: string,
-  input: { messages: GatewayMessage[]; temperature: number; maxTokens: number; signal?: AbortSignal; reasoningEffort?: ReasoningEffort },
+  input: { messages: GatewayMessage[]; temperature: number; maxTokens: number; signal?: AbortSignal; reasoningEffort?: ReasoningEffort; responseFormat?: GatewayResponseFormat /* [L1] */ },
 ) => AsyncGenerator<ProviderStreamFrame>;
 
 export type ModelGatewayConfig = {
@@ -194,6 +207,11 @@ export type ModelGatewayConfig = {
   reasoningEffort?: ReasoningEffort;
   /** [P1-C] Test seam for the Trent-side client ([L0-2] every OpenAI-compatible route); default `fetch`, or `node:http` for a local alias. */
   fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>;
+  /**
+   * [L1] `models.local` for a surface that builds its own gateway (`trent heartbeat`, `trent improve`):
+   * written to the same env bridge the headless runtime writes (`local-runtime.ts` `applyLocalModelEnv`).
+   */
+  local?: LocalModelConfig;
 };
 
 /** One `model_overrides` entry. Rates are CENTS per million tokens; the cost itself is integer cents. */
