@@ -45,7 +45,7 @@ export interface CliOverrides {
   /** Replace the setup wizard (first-run tests must not prompt). */
   runSetup?: (mode: SetupMode, opts: Record<string, unknown>) => Promise<SetupSummary>;
   /** Replace the REPL launch. */
-  startRepl?: (opts: { profile: string; continueSession: boolean }) => Promise<void>;
+  startRepl?: (opts: { profile: string; continueSession: boolean; mode?: "fleet" | "solo" }) => Promise<void>; // [S2] mode: `trent solo` / `--solo`
   /** Replace `now` so a rendered timestamp is stable. */
   now?: () => Date;
   /** Replace the docker CLI `trent sandbox build` runs (a fake needs no daemon). */

@@ -15,9 +15,11 @@ import { GatewayManager, linkRunApprovals, type RunApprovalLink } from "@trent/c
 import { gatewayRunningError, liveGatewayHolder, profileLockPath, type ProfileLockHolder } from "@trent/core/profile/locks.js";
 import { egressBindHosts, TokenManager } from "@trent/core/egress/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
+import { openWebhookRoutes, webhookStatus, webhookStatusLines, type OpenedWebhookRoutes, type WebhookStatusView } from "@trent/core/webhooks/index.js"; // [H3] webhook routes
 import type { CommandContext } from "../context.js";
 import type { CommandSpec } from "../registry.js";
-import { createAgentHandler } from "../../gateway/agent-handler.js";
+import { createAgentHandler, createRunResumer, createRunThreads } from "../../gateway/agent-handler.js"; // [S2] resumer, threads
+import { modeOverride } from "../../runtime/runner-for-mode.js"; // [S2] --solo
 import { startEgressProxy } from "../../repl/tools.js";
 import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime } from "../../runtime/headless.js";
@@ -71,12 +73,14 @@ export const gatewaySpec: CommandSpec = {
         // host run one: one gateway per profile, several per host (`@trent/core/profile/locks`).
         const holder = liveGatewayHolder(manager.getProfileDir());
         const gateway: GatewayLockView = holder === null ? { running: false } : { running: true, ...holder };
+        // [H3] webhook routes: the configured routes and the last deliveries from the profile's store.
+        const webhooks = webhookStatus(manager.getProfileDir(), manager.loadConfig().gateway.webhooks);
         return {
-          data: { count: platforms.length, configured: platforms.filter((p) => p.configured).length, platforms, gateway, gateways: gatewaysOnHost(manager) },
+          data: { count: platforms.length, configured: platforms.filter((p) => p.configured).length, platforms, gateway, gateways: gatewaysOnHost(manager), webhooks },
         };
       },
       render(data, ctx) {
-        const d = data as { platforms: { id: string; configured: boolean; designatedAgent: string }[]; gateway: GatewayLockView; gateways: Array<{ profile: string; pid: number }> };
+        const d = data as { platforms: { id: string; configured: boolean; designatedAgent: string }[]; gateway: GatewayLockView; gateways: Array<{ profile: string; pid: number }>; webhooks?: WebhookStatusView };
         const lines = [ctx.theme.emphasis("MESSAGING GATEWAY")];
         lines.push(
           d.gateway.running
@@ -89,6 +93,10 @@ export const gatewaySpec: CommandSpec = {
         for (const p of d.platforms) {
           const mark = p.configured ? ctx.theme.success("connected") : ctx.theme.meta("not set  ");
           lines.push(`  ${mark} ${ctx.theme.value(p.id.padEnd(14, " "))} ${ctx.theme.meta(p.designatedAgent)}`);
+        }
+        // [H3] webhook routes: shown only when a route is configured or a delivery is on record.
+        if (d.webhooks !== undefined && (d.webhooks.routes.length > 0 || d.webhooks.last.length > 0)) {
+          for (const line of webhookStatusLines(d.webhooks)) lines.push(`  ${ctx.theme.meta(line)}`);
         }
         return lines;
       },
@@ -123,7 +131,7 @@ export const gatewaySpec: CommandSpec = {
     {
       name: "start",
       description: "Start listeners for every configured messaging platform",
-      async run(ctx) {
+      async run(ctx, opts) {
         const configManager = ctx.config();
         const buildManager = ctx.overrides.gatewayManager ?? ((cm, options) => new GatewayManager(cm, options));
         if (ctx.dryRun) {
@@ -160,6 +168,9 @@ export const gatewaySpec: CommandSpec = {
           // [G3.1] Every run this gateway serves is charged to the day's ledger as the gateway's;
           // the cron and heartbeat ports built on this same runtime name themselves per run.
           surface: "gateway",
+          // [S2] Solo holds park only when a human receives the cards (gateway.owner); with none they are refused (B8).
+          holds: config.gateway.owner === undefined ? "deny" : "park",
+          ...(modeOverride(opts) === undefined ? {} : { mode: modeOverride(opts) }), // [S2] --solo
           busHooks: [{ sink: (event) => link?.sink(event), flush: async () => undefined }],
           alerts: {
             manager: {
@@ -171,9 +182,10 @@ export const gatewaySpec: CommandSpec = {
             log: (line) => ctx.err(line),
           },
         });
-        manager = buildManager(configManager, { agentHandler: createAgentHandler(runtime, { configManager }) });
+        const threads = createRunThreads(); // [S2] a solo run's thread, for its reply after a late decision
+        manager = buildManager(configManager, { agentHandler: createAgentHandler(runtime, { configManager, threads }), resumer: createRunResumer(runtime, threads, { configManager }) }); // [S2] resumer
         link = linkRunApprovals({
-          orchestrator: runtime.orchestrator,
+          orchestrator: runtime.runner ?? runtime.orchestrator, // [S2] the runner by mode is the approval target
           bridge: manager.getApprovalBridge(),
           manager,
           owner: config.gateway.owner,
@@ -184,7 +196,9 @@ export const gatewaySpec: CommandSpec = {
         const heartbeat = config.heartbeat.enabled
           ? openHeartbeat({ configManager, config, runtime, buildManager: () => manager as GatewayManager, now: ctx.overrides.now, log: (line) => ctx.err(line) })
           : undefined;
+        let webhooks: OpenedWebhookRoutes | undefined; // [H3] webhook routes
         const shutdown = async (): Promise<void> => {
+          await webhooks?.close(); // [H3] no new run starts once shutdown begins
           heartbeat?.loop.stop();
           link?.close();
           await manager.stopAll();
@@ -193,12 +207,25 @@ export const gatewaySpec: CommandSpec = {
         let started: string[];
         try {
           started = await manager.startAllConfigured();
+          // [H3] webhook routes: served under this profile's gateway lock, each run through this
+          // runtime's runner port; a route whose mode is not this runtime's is answered 503.
+          webhooks = await openWebhookRoutes({
+            block: config.gateway.webhooks,
+            profileDir: configManager.getProfileDir(),
+            manager,
+            // [S2] H3: a route's mode runs whatever the gateway's agent.mode; the seed lands in the ring the tools are judged against.
+            // A runtime without the two seams (a test's partial fake) keeps the rule it had: its own mode only, no seed.
+            runnerFor: (mode) => runtime.runnerFor?.(mode) ?? (mode === runtime.mode ? runtime.runner : undefined),
+            seedInbound: async (runId, source) => runtime.seedInbound?.(runId, source),
+            log: (line) => ctx.err(line),
+          });
         } catch (error) {
           // Refused by the profile's gateway lock: nothing this command built may outlive the refusal.
           await shutdown();
           throw error;
         }
-        if (started.length === 0) {
+        const serving = started.length > 0 || webhooks !== undefined; // [H3] webhook routes keep it up too
+        if (!serving) {
           // Nothing is listening, so the process exits: the proxy and the sandboxes go first.
           await shutdown();
         } else {
@@ -213,12 +240,19 @@ export const gatewaySpec: CommandSpec = {
           releaseOnSignal(shutdown, ctx.overrides.signals);
         }
         return {
-          data: { started, count: started.length, agentHandler: true, approvalLink: link.active, heartbeat: heartbeat !== undefined && started.length > 0 },
-          keepAlive: started.length > 0,
+          data: {
+            started,
+            count: started.length,
+            agentHandler: true,
+            approvalLink: link.active,
+            heartbeat: heartbeat !== undefined && serving,
+            ...(webhooks === undefined ? {} : { webhooks: { listen: `${webhooks.host}:${String(webhooks.port)}`, routes: webhooks.routes } }), // [H3]
+          },
+          keepAlive: serving,
         };
       },
       render(data, ctx) {
-        const d = data as { started?: string[]; wouldStart?: string[]; dryRun?: boolean; approvalLink?: boolean; heartbeat?: boolean };
+        const d = data as { started?: string[]; wouldStart?: string[]; dryRun?: boolean; approvalLink?: boolean; heartbeat?: boolean; webhooks?: { listen: string; routes: string[] } };
         const list = (d.dryRun === true ? d.wouldStart : d.started) ?? [];
         const lines = [
           `  ${ctx.theme.success(d.dryRun === true ? "would start" : "started")} ${ctx.theme.value(
@@ -226,6 +260,7 @@ export const gatewaySpec: CommandSpec = {
           )}`,
         ];
         if (d.heartbeat === true) lines.push(`  ${ctx.theme.meta("heartbeat loop running; history under <profile>/heartbeat/runs.jsonl")}`);
+        if (d.webhooks !== undefined) lines.push(`  ${ctx.theme.meta("webhook routes on")} ${ctx.theme.value(d.webhooks.listen)} ${ctx.theme.meta(d.webhooks.routes.join(", "))}`); // [H3]
         if (d.approvalLink !== undefined) {
           lines.push(
             d.approvalLink

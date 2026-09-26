@@ -15,7 +15,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createAgentRunFold, NO_RUNNER_REASON, type AgentRunOutcome, type AgentRunner } from "../agent-runner/index.js";
+import { createAgentRunFold, NO_RUNNER_REASON, type AgentRunInput, type AgentRunOutcome, type AgentRunner } from "../agent-runner/index.js";
+import type { OrcEvent } from "../orchestrator/types.js"; // [S2]
 import {
   a2aAgentMessage,
   a2aMessageText,
@@ -62,6 +63,36 @@ export interface A2ATaskEngineDeps {
   readonly newId?: (kind: string) => string;
 }
 
+// [S2] solo: the A2A context is the conversation, and a question a run parked on is answered by the next message
+/** A run input naming its conversation: the solo router keeps one runner per A2A context (council A2). */
+interface ConversationRunInput extends AgentRunInput {
+  readonly conversation?: string;
+}
+
+/** A runner that can continue a run parked on a question (`solo/router.ts`). The fleet runner has neither method. */
+interface ResumableRunner extends AgentRunner {
+  answer(runId: string, stepId: string, text: string): Promise<boolean>;
+  resume(runId: string, input?: { readonly signal?: AbortSignal }): AsyncIterable<OrcEvent>;
+}
+
+const resumable = (runner: AgentRunner): runner is ResumableRunner =>
+  typeof (runner as Partial<ResumableRunner>).answer === "function" && typeof (runner as Partial<ResumableRunner>).resume === "function";
+
+/**
+ * The stream for one turn of a task. A task the last turn left `input-required` on a question is
+ * continued: the message is the question's ANSWER and the same run resumes. The router answers
+ * only a question (`ask_human`, `clarify`); a side-effect hold is never released by a peer's text,
+ * so the message then starts a new run in the context instead, which is today's rule.
+ */
+async function turnEvents(runner: AgentRunner, record: TaskRecord, objective: string, signal: AbortSignal): Promise<AsyncIterable<OrcEvent>> {
+  const parked = record.parked;
+  record.parked = undefined;
+  if (parked !== undefined && resumable(runner) && (await runner.answer(parked.runId, parked.stepId, objective))) return runner.resume(parked.runId, { signal });
+  const input: ConversationRunInput = { objective, signal, conversation: record.contextId };
+  return runner.run(input);
+}
+// [S2] end
+
 /** What the engine keeps per task. The public `A2ATask` is derived from it. */
 interface TaskRecord {
   readonly id: string;
@@ -75,6 +106,8 @@ interface TaskRecord {
   controller: AbortController | undefined;
   /** Set by `cancel`, so the settling run cannot overwrite the caller's cancellation. */
   cancelled: boolean;
+  /** [S2] The gate the last turn parked on, so the next message on this task can answer it. */
+  parked?: { readonly runId: string; readonly stepId: string };
 }
 
 /**
@@ -199,8 +232,10 @@ export class A2ATaskEngine {
 
     const fold = createAgentRunFold();
     let outcome: AgentRunOutcome;
+    let gate: TaskRecord["parked"]; // [S2]
     try {
-      for await (const event of runner.run({ objective, signal: controller.signal })) {
+      for await (const event of await turnEvents(runner, record, objective, controller.signal)) { // [S2]
+        if ((event.kind === "step_awaiting_approval" || event.kind === "run_awaiting_approval") && event.step?.id !== undefined) gate = { runId: event.runId, stepId: event.step.id }; // [S2]
         const progress = fold.apply(event);
         if (progress !== undefined) yield this.statusEvent(record, "working", progress, false);
       }
@@ -212,6 +247,7 @@ export class A2ATaskEngine {
     }
 
     const state = record.cancelled ? "canceled" : WIRE_STATE[outcome.status];
+    if (state === "input-required" && gate !== undefined) record.parked = gate; // [S2]
     if (outcome.runId !== undefined) record.metadata = { ...record.metadata, runId: outcome.runId };
 
     if (state === "completed" && outcome.output !== "") {

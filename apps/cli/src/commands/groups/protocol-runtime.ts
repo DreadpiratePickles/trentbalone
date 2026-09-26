@@ -18,6 +18,7 @@ import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import type { CommandContext } from "../context.js";
 import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime } from "../../runtime/headless.js";
+import type { AgentMode, SoloHoldPolicy } from "../../runtime/runner-for-mode.js"; // [S2]
 
 /** Which protocol server opened it. It is the surface its runs are charged to (G3.1). */
 export type ProtocolSurface = "a2a" | "acp";
@@ -32,7 +33,7 @@ export interface ProtocolRuntime {
  * `overrides.gatewayRuntime` is the one headless-runtime seam a test replaces; it is reused here
  * rather than duplicated, so a protocol-server test needs no proxy, sandbox or model either.
  */
-export async function openProtocolRuntime(ctx: CommandContext, surface: ProtocolSurface): Promise<ProtocolRuntime> {
+export async function openProtocolRuntime(ctx: CommandContext, surface: ProtocolSurface, mode?: AgentMode): Promise<ProtocolRuntime> {
   const configManager = ctx.config();
   const config = configManager.loadConfig();
   const runtime = await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({
@@ -41,11 +42,22 @@ export async function openProtocolRuntime(ctx: CommandContext, surface: Protocol
     // [G3.1] The two protocol servers share this function and not a cap: each names itself, so a
     // task delegated over A2A and a prompt from an editor over ACP are told apart on the ledger.
     surface,
+    ...(mode === undefined ? {} : { mode }), // [S2] --solo
   });
+  // [S2] The runner port by mode. An A2A context is the conversation (council A2) and its holds are
+  // `questions`: a question parks and the peer's next message on the task answers it; a side effect is
+  // refused, a peer never approves one (B8). ACP has no channel to ask through, so it refuses them all.
+  // On solo the port also carries `answer` and `resume`, which `A2ATaskEngine` continues a question with.
+  const holds: SoloHoldPolicy = surface === "a2a" ? "questions" : "deny";
+  const port = runtime.runner;
   return {
     runner: {
-      run: ({ objective, signal }) => runtime.run(objective, signal === undefined ? {} : { signal }),
-    },
+      run: (input) => {
+        const conversation = (input as { readonly conversation?: string }).conversation;
+        return runtime.run(input.objective, { ...(input.signal === undefined ? {} : { signal: input.signal }), ...(conversation === undefined ? {} : { conversation }), holds });
+      },
+      ...(port?.resume === undefined ? {} : { answer: port.answer, resume: port.resume }),
+    } as AgentRunner,
     release: () => runtime.cleanup(),
   };
 }

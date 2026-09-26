@@ -52,11 +52,45 @@ import { securitySpec } from "./groups/security.js";
 import { connectSpec } from "./groups/connect.js";
 
 export { CLI_VERSION } from "./registry.js";
+
+// [S2] `trent solo`: an alias that starts the REPL in solo mode for this launch (docs/solo.md)
+/**
+ * Registered so `--help` lists it and every script can find it; `runCli` routes the alias through the
+ * same first-run path bare `trent` takes (the wizard, then the REPL), with the mode forced to solo.
+ * The action below is that path's last step, for a caller that reaches it through Commander.
+ */
+const soloSpec: CommandSpec = {
+  name: "solo",
+  description: "Start the REPL in solo mode: one agent with one tool loop and no seats, overriding agent.mode for this launch",
+  async run(ctx) {
+    if (ctx.dryRun) return { data: { dryRun: true, command: "solo", launch: "repl", mode: "solo" } };
+    if (ctx.overrides.startRepl) await ctx.overrides.startRepl({ profile: ctx.profile, continueSession: ctx.continueSession, mode: "solo" });
+    else launchRequest = { launch: "repl", mode: "solo" };
+    return { data: { launch: "repl", mode: "solo" } };
+  },
+  render: () => [],
+};
+
+/** Set by `soloSpec` when Commander reached it with no harness; read once by `runCli`. */
+let launchRequest: { launch: "repl"; mode: "solo" } | undefined;
+
+/** The tokens that are not flags, and not the value of `--profile`/`-p`, which is the one global that takes one. */
+function operands(argv: readonly string[]): string[] {
+  return argv.filter((token, index) => !token.startsWith("-") && argv[index - 1] !== "--profile" && argv[index - 1] !== "-p");
+}
+
+/** `trent solo`, with any global flags, and no other operand. `--dry-run` reports through the command instead. */
+function isSoloAlias(argv: readonly string[]): boolean {
+  const words = operands(argv);
+  return words.length === 1 && words[0] === "solo" && !argv.includes("--help") && !argv.includes("-h") && !argv.includes("--dry-run");
+}
+// [S2] end
 export type { CommandContext, CliOverrides } from "./context.js";
 
 /** The whole surface, in help order. Adding a command here is the only way to add one. */
 export const COMMAND_SPECS: readonly CommandSpec[] = [
   runSpec,
+  soloSpec, // [S2]
   doctorSpec,
   setupSpec,
   modelSpec,
@@ -138,6 +172,7 @@ export function buildProgram(options: BuildOptions = {}): Command {
     .option("-c, --continue", "Continue the last conversation session")
     .option("--dry-run", "Report what would happen; perform no writes or network calls")
     .option("--tui", "Launch the interactive terminal UI")
+    .option("--solo", "Run on the solo agent (one agent, no seats) for this launch, overriding agent.mode") // [S2]
     .version(CLI_VERSION, "--version", "Print the Trent version and exit")
     .allowExcessArguments(false);
 
@@ -155,6 +190,8 @@ export interface RunResult {
   keepAlive: boolean;
   /** Set when the invocation asked for an interactive surface the binary entry point owns. */
   launch?: "repl" | "tui";
+  /** [S2] Set with `launch` when the launch overrides `agent.mode` (`trent solo`, `--solo`). */
+  mode?: "solo";
 }
 
 export interface RunOptions {
@@ -169,7 +206,7 @@ export interface RunOptions {
  * usage error for Commander to report — never a reason to run the first-run wizard.
  */
 function hasOperand(argv: readonly string[]): boolean {
-  return argv.some((a) => !a.startsWith("-"));
+  return operands(argv).length > 0; // [S2] `--profile <name>`'s value is not an operand: `trent --profile work` opens the REPL
 }
 
 /**
@@ -180,6 +217,8 @@ export async function runCli(argv: readonly string[], options: RunOptions = {}):
   const out: string[] = [];
   const err: string[] = [];
   let launch: "repl" | "tui" | undefined;
+  let mode: "solo" | undefined; // [S2]
+  launchRequest = undefined; // [S2]
 
   const io: CliIo = {
     out: (line) => {
@@ -215,13 +254,14 @@ export async function runCli(argv: readonly string[], options: RunOptions = {}):
     stderr: err.length > 0 ? `${err.join("\n")}\n` : "",
     keepAlive: consumeKeepAlive(),
     ...(launch === undefined ? {} : { launch }),
+    ...(launch !== undefined && mode !== undefined ? { mode } : {}), // [S2]
   });
 
   const globals = extractGlobals(argv);
   const json = globals.json;
 
   try {
-    if (!hasOperand(argv)) {
+    if (!hasOperand(argv) || isSoloAlias(argv)) { // [S2] `trent solo` takes bare `trent`'s path
       // Bare `trent`, or top-level flags only.
       const ctx = createContext(globals.opts, {
         out: io.out,
@@ -232,11 +272,13 @@ export async function runCli(argv: readonly string[], options: RunOptions = {}):
       const handled = await handleTopLevel(ctx, globals);
       if (handled.exitCode !== undefined) {
         if (handled.launch !== undefined) launch = handled.launch;
+        if (globals.solo) mode = "solo"; // [S2]
         return finish(handled.exitCode);
       }
     }
 
     await program.parseAsync([...argv], { from: "user" });
+    if (launchRequest !== undefined) ({ launch, mode } = launchRequest); // [S2]
     return finish(EXIT.OK);
   } catch (error) {
     const code = reportFailure(error, json, io.out, io.err);
@@ -249,6 +291,8 @@ interface Globals {
   version: boolean;
   help: boolean;
   tui: boolean;
+  /** [S2] `--solo` or the `trent solo` alias. */
+  solo: boolean;
   opts: Record<string, unknown>;
 }
 
@@ -269,6 +313,7 @@ function extractGlobals(argv: readonly string[]): Globals {
     version: has("--version") || has("-V"),
     help: has("--help") || has("-h"),
     tui: has("--tui"),
+    solo: has("--solo") || isSoloAlias(argv), // [S2]
     opts,
   };
 }
@@ -308,7 +353,7 @@ async function handleTopLevel(
   }
 
   if (ctx.overrides.startRepl) {
-    await ctx.overrides.startRepl({ profile: ctx.profile, continueSession: ctx.continueSession });
+    await ctx.overrides.startRepl({ profile: ctx.profile, continueSession: ctx.continueSession, ...(globals.solo ? { mode: "solo" as const } : {}) }); // [S2]
     return { exitCode: EXIT.OK };
   }
 

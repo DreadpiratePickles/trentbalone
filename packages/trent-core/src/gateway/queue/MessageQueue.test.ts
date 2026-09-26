@@ -92,6 +92,26 @@ describe("MessageQueue — durable, per-platform, circuit-broken", () => {
     expect(q.breakerState("slack")).toBe("open");
   });
 
+  // [S2] The late-approve reply was lost this way: queued while the approval card's pass awaited Telegram.
+  it("[S2] a drain asked for while a pass is in flight is not dropped: the row queued meanwhile is sent before that pass settles", async () => {
+    const sent: string[] = [];
+    let answer!: () => void;
+    const held = new Promise<void>((resolve) => { answer = resolve; });
+    const q = new MessageQueue(new MemoryGatewayStore(), async (platform, msg) => {
+      if (msg.text === "card") await held; // the platform has not answered the card yet
+      sent.push(msg.text);
+      return { platform, messageId: `m${sent.length}` };
+    });
+    q.enqueue("telegram", { channelId: "555", text: "card" });
+    const first = q.drain();
+    q.enqueue("telegram", { channelId: "555", text: "reply" });
+    const second = q.drain();
+    answer();
+    await Promise.all([first, second]);
+    expect(sent).toEqual(["card", "reply"]);
+    expect(q.pending("telegram")).toEqual([]);
+  });
+
   it("dead-letters a message after maxAttempts", async () => {
     const store = new MemoryGatewayStore();
     const s = sender({ failTimes: 99 });

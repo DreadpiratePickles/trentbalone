@@ -16,6 +16,7 @@ import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { CLI_VERSION, type CommandSpec } from "../registry.js";
 import { releaseOnSignal } from "../../signals.js";
 import { A2A_DEFAULT_PORT, ACP_DEFAULT_PORT, listeningRender, openProtocolRuntime, parsePort } from "./protocol-runtime.js";
+import { modeOverride } from "../../runtime/runner-for-mode.js"; // [S2] --solo
 
 export const a2aSpec: CommandSpec = {
   name: "a2a",
@@ -30,7 +31,7 @@ export const a2aSpec: CommandSpec = {
         if (ctx.dryRun) return { data: { dryRun: true, command: "a2a serve", port } };
         // A delegated task is one real run on this runtime. Without it the endpoint can only
         // refuse (HTTP 503); it never answers on the runtime's behalf.
-        const { runner, release } = await openProtocolRuntime(ctx, "a2a");
+        const { runner, release } = await openProtocolRuntime(ctx, "a2a", modeOverride(opts)); // [S2]
         const token = ctx.config().get("TRENT_A2A_TOKEN");
         const server = new A2AServer({ port, runner, ...(typeof token === "string" && token !== "" ? { token } : {}) });
         try {
@@ -107,7 +108,7 @@ export const acpSpec: CommandSpec = {
 
     // A prompt from the editor is one real run on this runtime; with none attached the method
     // returns a JSON-RPC error rather than a string this process wrote.
-    const { runner, release } = await openProtocolRuntime(ctx, "acp");
+    const { runner, release } = await openProtocolRuntime(ctx, "acp", modeOverride(opts)); // [S2]
     let released = false;
     const releaseOnce = async (): Promise<void> => {
       if (released) return;

@@ -19,6 +19,8 @@ then [configuration.md](configuration.md) and [security.md](security.md).
 
 - [fleet.md](fleet.md): the core seats, the specialist catalog, packs, custom agents, versions, and
   export to and import from other harnesses.
+- [solo.md](solo.md): solo mode, one agent with one tool loop and no seats: `trent solo`, `--solo`,
+  `agent.mode`, which surfaces park a held call and which refuse it, spend and audit rows.
 - [goals.md](goals.md): standing goals with a completion contract and shell quality gates that must
   pass before any model judge.
 - [jobs.md](jobs.md): the concurrent-run cap and the failed-jobs view.
@@ -45,6 +47,8 @@ then [configuration.md](configuration.md) and [security.md](security.md).
 
 - [gateway.md](gateway.md): the messaging gateway, its platform adapters, and answering approvals
   from a phone.
+- [webhooks.md](webhooks.md): signed webhook routes that start a run from Stripe, GitHub or any
+  HMAC sender, with replay dedupe, a per-route rate limit and cost cap.
 - [a2a.md](a2a.md): A2A and ACP, reaching Trent from another agent or an editor.
 - [desktop.md](desktop.md): the Tauri desktop app that wraps the web application.
 

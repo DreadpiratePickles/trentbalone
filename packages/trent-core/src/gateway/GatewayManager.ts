@@ -15,7 +15,7 @@ import { ApprovalBridge, type ApprovalRequest } from "./ApprovalBridge.js";
 import { BUSY_STATUS_LINE, ConversationQueue, INTERRUPT_REASON, type DoubleTextPolicy, type SubmitResult } from "./ConversationQueue.js";
 import { PairingManager } from "./security/PairingManager.js";
 import { MessageQueue, type MessageQueueOptions } from "./queue/MessageQueue.js";
-import { FileGatewayStore, type GatewayStore } from "./store/GatewayStore.js";
+import { FileGatewayStore, type ConversationAddress, type GatewayStore } from "./store/GatewayStore.js";
 import { createAllAdapters, PLATFORM_REGISTRY } from "./registry.js";
 import { prepareVoiceNote, type VoiceNoteOptions } from "./voice-notes.js";
 import type {
@@ -37,6 +37,25 @@ import type { BreakerSnapshot } from "./queue/CircuitBreaker.js";
  */
 export type AgentHandler = (agentId: string, message: InboundMessage, signal?: AbortSignal) => Promise<string | null>;
 
+// [S2] solo: a run whose stream ended at its gate is resumed here after a late decision
+/**
+ * Continues a run a LATE decision released, and says where its reply goes. A solo run's stream ends
+ * at its gate (the handler's turn is over and the owner got a card); the owner decides later, on no
+ * stream, so the runner announces the run id and the manager resumes it on the thread's own lane.
+ * The CLI builds it over the runtime's runner (`apps/cli/src/gateway/agent-handler.ts`).
+ */
+export interface RunResumer {
+  /** The thread a run was started from; undefined for a run that did not come from this gateway. */
+  threadOf(runId: string): (ConversationAddress & { readonly subject?: string }) | undefined;
+  /** Drives the resumed run to its end: its reply, or null for silence. */
+  resume(runId: string, signal?: AbortSignal): Promise<string | null>;
+  /** Tells the manager a run id when a decision lands on a run no reader is streaming. Returns the unsubscribe. */
+  onLateDecision?(listener: (runId: string) => void): () => void;
+  /** Announces the parked runs whose row was decided elsewhere (`trent approvals approve`); called on each drain tick. */
+  sweep?(): unknown;
+}
+// [S2] end
+
 export interface GatewayManagerOptions {
   store?: GatewayStore;
   storePort?: StorePort;
@@ -49,6 +68,8 @@ export interface GatewayManagerOptions {
   doubleTextPolicy?: DoubleTextPolicy;
   /** [P2-3] The voice-note engine and its environment; defaults to the media toolset's local engines. */
   voiceNotes?: VoiceNoteOptions;
+  /** [S2] Resumes a run a late decision released and posts its reply to the thread it came from. */
+  resumer?: RunResumer;
 }
 
 export interface PlatformStatus {
@@ -82,6 +103,8 @@ export class GatewayManager {
   private readonly voiceNotes: VoiceNoteOptions;
   /** Releases this profile's gateway lock and writer registration; set while started. */
   private releaseProfileLocks?: () => void;
+  private resumer?: RunResumer; // [S2]
+  private releaseResumer?: () => void; // [S2]
 
   constructor(configManager?: ConfigManager, options: GatewayManagerOptions = {}) {
     this.configManager = configManager ?? new ConfigManager();
@@ -108,7 +131,49 @@ export class GatewayManager {
       },
     });
     this.routes = { ...DEFAULT_ROUTES, ...(this.configManager.loadConfig().gateway?.routes ?? {}) };
+    if (options.resumer) this.setResumer(options.resumer); // [S2]
   }
+
+  // [S2] solo: resume after a late decision
+  /** Installs (or replaces) the resumer and listens for its late decisions. */
+  public setResumer(resumer: RunResumer): void {
+    this.releaseResumer?.();
+    this.resumer = resumer;
+    this.releaseResumer = resumer.onLateDecision?.((runId) => void this.resumeRun(runId).catch(() => undefined));
+  }
+
+  /**
+   * Resumes a run on the lane of the thread it came from, AFTER whatever turn that thread is running
+   * (never interrupting it, whatever the double-texting policy), and sends the reply there. False when
+   * no resumer knows the run, or the thread's lane was stopped.
+   */
+  public async resumeRun(runId: string): Promise<boolean> {
+    const resumer = this.resumer;
+    const thread = resumer?.threadOf(runId);
+    if (resumer === undefined || thread === undefined) return false;
+    const key = { platform: thread.platform, chatId: thread.channelId, ...(thread.threadId === undefined ? {} : { threadId: thread.threadId }) };
+    let outcome: SubmitResult<string | null>;
+    try {
+      outcome = await this.conversations.submit(key, "", (signal) => resumer.resume(runId, signal), { policy: "enqueue" });
+    } catch (err) {
+      if (err instanceof Error && err.message === INTERRUPT_REASON) return false;
+      throw err;
+    }
+    if (outcome.rejected || outcome.stopped) return false;
+    if (outcome.value !== null && outcome.value !== "") {
+      await this.send(thread.platform, { channelId: thread.channelId, threadId: thread.threadId, text: outcome.value, metadata: { subject: `Re: ${thread.subject ?? "Trent"}` } });
+    }
+    return true;
+  }
+
+  private sweepResumes(): void {
+    try {
+      this.resumer?.sweep?.();
+    } catch {
+      // A sweep that cannot read the rows costs a late resume, never the drain loop.
+    }
+  }
+  // [S2] end
 
   // ------------------------------------------------------------------ accessors
 
@@ -187,16 +252,19 @@ export class GatewayManager {
       }
     }
     if (!this.drainTimer) {
-      this.drainTimer = setInterval(() => { void this.queue.drain(); }, this.drainIntervalMs);
+      this.drainTimer = setInterval(() => { void this.queue.drain(); this.sweepResumes(); }, this.drainIntervalMs); // [S2] sweep
       this.drainTimer.unref?.();
     }
     void this.queue.drain();
+    this.sweepResumes(); // [S2] rows decided while this gateway was down
     return started;
   }
 
   public async stopAll(): Promise<void> {
     clearInterval(this.drainTimer);
     this.drainTimer = undefined;
+    this.releaseResumer?.(); // [S2] a decision after this belongs to no gateway of this process
+    this.releaseResumer = undefined;
     for (const adapter of this.adapters.values()) await adapter.stop().catch(() => undefined);
     // Last: the lock says a gateway is attached until its adapters have let go.
     const release = this.releaseProfileLocks;

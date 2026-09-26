@@ -40,6 +40,7 @@ async function main(): Promise<void> {
       await new ClassicRepl({
         profile: profileFrom(argv),
         continueSession: argv.includes("-c") || argv.includes("--continue"),
+        ...(result.mode === undefined ? {} : { mode: result.mode }), // [S2] `trent solo`, `trent --solo`
       }).start();
     }
     process.exit(EXIT.OK);

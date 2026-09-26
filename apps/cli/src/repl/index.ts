@@ -25,6 +25,7 @@ import { toolsStatusLine, type ToolWiringDeps } from "./tools.js";
 import { fleetMemoryToolListing } from "./fleet-memory.js";
 import { workspaceNotices } from "./workspace.js";
 import { createHeadlessRuntime } from "../runtime/headless.js";
+import { resolveAgentMode, type AgentMode, type SoloSeams } from "../runtime/runner-for-mode.js"; // [S2]
 import type { ReplConfig } from "./types.js";
 
 /**
@@ -34,6 +35,8 @@ import type { ReplConfig } from "./types.js";
  */
 interface TurnHooks {
   sessionId?: () => string | undefined;
+  /** [S2] The session id, created on first use: a solo run needs its conversation before it starts. */
+  resolveSessionId?: () => string;
   afterAssistant?: () => void;
 }
 
@@ -97,11 +100,15 @@ export interface ReplDeps {
   buildAdapters?: ToolWiringDeps["buildAdapters"];
   startEgress?: ToolWiringDeps["startEgress"];
   probeDocker?: ToolWiringDeps["probeDocker"];
+  /** [S2] Solo's test seams: a scripted model and a recording audit writer. */
+  solo?: SoloSeams;
 }
 
 export interface ReplOptions {
   continueSession?: boolean;
   profile?: string;
+  /** [S2] A launch override of `agent.mode` (`trent solo`, `trent --solo`). */
+  mode?: AgentMode;
   io?: ReplIo;
   deps?: ReplDeps;
 }
@@ -121,8 +128,10 @@ export class ClassicRepl {
   readonly #io: ReplIo;
   readonly #deps: ReplDeps;
   readonly #continue: boolean;
+  readonly #mode: AgentMode | undefined; // [S2]
 
   constructor(options: ReplOptions = {}) {
+    this.#mode = options.mode; // [S2]
     this.#configManager = new ConfigManager({ profile: options.profile });
     this.#sessions = new SessionManager(this.#configManager);
     this.#io = options.io ?? processIo();
@@ -135,7 +144,7 @@ export class ClassicRepl {
    * one, a new one on the first turn otherwise. The session file is the durable copy; the
    * `Conversation` is what the next run is told, bounded by `historyLimits`.
    */
-  #openConversation(config: ReplConfig, write: (line: string) => void, width: number, theme: Theme, turns: TurnHooks): {
+  #openConversation(config: ReplConfig, write: (line: string) => void, width: number, theme: Theme, turns: TurnHooks, solo = false): {
     conversation: Conversation;
     openingCents: number;
   } {
@@ -146,6 +155,7 @@ export class ClassicRepl {
     const seed = historySeed(resumed?.messages ?? []);
     const resolveSessionId = (): string => (sessionId ??= this.#sessions.startSession(agent, config.model, config.provider).id);
     turns.sessionId = () => sessionId;
+    turns.resolveSessionId = resolveSessionId; // [S2]
     const sink = sessionSink(this.#sessions, resolveSessionId, agent);
     return {
       conversation: new Conversation({
@@ -153,13 +163,19 @@ export class ClassicRepl {
         seed,
         // Compaction runs after the turn is durable, never before: the transcript on disk is the
         // thing being compacted, and a crash mid-turn must leave the whole turn, not half of one.
-        sink: {
-          user: sink.user,
-          assistant: (content, metadata) => {
-            sink.assistant(content, metadata);
-            turns.afterAssistant?.();
-          },
-        },
+        // [S2] In solo the runner is the session's ONLY writer (council A1), so the REPL keeps no
+        // sink: nothing is written twice, and the fleet's compaction never touches a solo session.
+        ...(solo
+          ? {}
+          : {
+              sink: {
+                user: sink.user,
+                assistant: (content: string, metadata: Parameters<typeof sink.assistant>[1]) => {
+                  sink.assistant(content, metadata);
+                  turns.afterAssistant?.();
+                },
+              },
+            }),
       }),
       openingCents: resumed?.total_cost_cents ?? 0,
     };
@@ -196,7 +212,8 @@ export class ClassicRepl {
     // The compactor is installed once the runtime exists (it needs the shared memory adapter), so
     // the conversation is handed a holder it calls after every persisted answer.
     const turns: TurnHooks = {};
-    const { conversation, openingCents } = this.#openConversation(config, writeLine, width, theme, turns);
+    const mode = resolveAgentMode(config as { agent?: { mode?: AgentMode } }, this.#mode); // [S2] before the conversation: it decides who writes it
+    const { conversation, openingCents } = this.#openConversation(config, writeLine, width, theme, turns, mode === "solo");
 
     // The session's object graph — store, tools, fleet memory, the improve loop, the orchestrator
     // and the company — is the same one the gateway and the schedulers run on; only the terminal
@@ -212,12 +229,17 @@ export class ClassicRepl {
       buildAdapters: this.#deps.buildAdapters,
       startEgress: this.#deps.startEgress,
       probeDocker: this.#deps.probeDocker,
+      // [S2] The mode this launch resolved; a held call parks, because a human is at this terminal.
+      mode,
+      holds: "park",
+      ...(this.#deps.solo === undefined ? {} : { solo: this.#deps.solo }),
     }).catch((error: unknown) => {
       releaseWriter();
       throw error;
     });
-    const { tools, store, durable, fleetMemory, orchestrator, companyId } = runtime;
+    const { tools, store, durable, fleetMemory, companyId } = runtime; // [S2] approvals go to runtime.runner, not the orchestrator
     writeLine(toolsStatusLine(tools, theme));
+    writeLine(theme.meta(runtime.runner.label)); // [S2] the banner names the mode and the model
 
     // A2.1. The workspace's instruction files are already in the stable tier if they were loaded;
     // what belongs on screen is what was NOT: an untrusted root, and every refused file by name.
@@ -262,8 +284,11 @@ export class ClassicRepl {
     };
 
     try {
-      const runner: ReplRunner = ({ objective, signal, history }) =>
-        runtime.run(objective, { trigger: "manual", signal, ...(history === undefined ? {} : { history }) });
+      // [S2] Solo owns the conversation: the run is told the REPL's session and never its history.
+      const runner: ReplRunner =
+        runtime.mode === "solo"
+          ? ({ objective, signal }) => runtime.run(objective, { trigger: "manual", signal, session: (turns.resolveSessionId as () => string)() })
+          : ({ objective, signal, history }) => runtime.run(objective, { trigger: "manual", signal, ...(history === undefined ? {} : { history }) });
 
       // Typed: the `/exit` port below reads `engine.busy` from inside the engine's own options.
       const engine: ReplEngine = new ReplEngine({
@@ -283,7 +308,7 @@ export class ClassicRepl {
         tools: [...tools.adapters.map((adapter) => ({ name: adapter.name, scopes: adapter.scopes })), ...fleetMemoryToolListing(fleetMemory)],
         sandbox: tools.sandbox,
         egress: tools.egress,
-        onApprovalAnswer: bindApprovalAnswers(orchestrator),
+        onApprovalAnswer: bindApprovalAnswers(runtime.runner), // [S2] the runner by mode is the approval target
         // `/context` measures the assembly the hook performed; it estimates nothing of its own.
         contextInspector: fleetMemory,
         compactions: () => compactions,

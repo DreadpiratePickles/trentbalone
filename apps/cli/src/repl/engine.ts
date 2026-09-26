@@ -19,6 +19,7 @@ import { rememberRun } from "./memory.js";
 import { KeyDecoder, NEWLINE_HINT, type KeyEvent } from "./keys.js";
 import { ABORT_REASON, InterruptController } from "./interrupt.js";
 import { ContextTracker } from "./context-report.js";
+import { GateKeys } from "./gate-keys.js"; // [S2]
 import { buildReplContext, unseenNotices, type ReplSessionPorts } from "./session-view.js";
 import type { ContextInspector, ReplConfig, ReplContext, ReplEgressStatus, ReplSandbox, ReplStore, ReplToolListing, ReplTraceStore } from "./types.js";
 
@@ -107,7 +108,7 @@ export class ReplEngine {
   #awaitingStepId: string | undefined;
   #runIds: string[] = [];
   /** Steps already gated this turn: the bus emits step_ AND run_awaiting_approval for one gate. */
-  #gated = new Set<string>();
+  readonly #gated = new GateKeys(); // [S2] A3
   #selected = 0;
   /** Which (run, seat) pairs this session assembled a prompt for, so `/context` can ask about them. */
   readonly #context = new ContextTracker();
@@ -443,12 +444,8 @@ export class ReplEngine {
         }
       }
     }
-    if (event.kind === "step_awaiting_approval" || event.kind === "run_awaiting_approval") {
-      const key = `${event.runId}/${event.step?.id ?? event.at}`;
-      if (this.#gated.has(key)) return;
-      this.#gated.add(key);
-      await this.#blockOnApproval(event, signal);
-    }
+    // [S2] Council A3: one card per HELD CALL, not per step (`gate-keys.ts`).
+    if (this.#gated.admit(event)) await this.#blockOnApproval(event, signal);
   }
 
   /** Opens the card and refuses ordinary input until the human answers it. A question reads one typed line instead of y/n. */

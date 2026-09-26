@@ -321,6 +321,37 @@
         "enabled": false,
         "max_seconds": 120,
         "max_bytes": 5242880
+      },
+      "webhooks": {
+        "host": "127.0.0.1",
+        "port": 9644,
+        "routes": [
+          {
+            "name": "stripe-paid",
+            "path": "/hooks/stripe",
+            "secret_env": "STRIPE_WEBHOOK_SECRET",
+            "signature": "stripe",
+            "tolerance_seconds": 120,
+            "objective_template": "Invoice {{payload.data.object.id}} was paid",
+            "mode": "solo",
+            "seat": "finance-ops",
+            "max_cost_cents": 50,
+            "dedupe_key": "{{payload.id}}",
+            "events": [
+              "invoice.paid"
+            ],
+            "rate_per_minute": 10
+          },
+          {
+            "name": "local-cron",
+            "path": "/hooks/local",
+            "signature": "none-localhost-only",
+            "tolerance_seconds": 300,
+            "objective_template": "Run job {{payload.job}}",
+            "mode": "fleet",
+            "rate_per_minute": 30
+          }
+        ]
       }
     },
     "repl": {

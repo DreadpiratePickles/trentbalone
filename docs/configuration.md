@@ -95,6 +95,10 @@ gateway:
     enabled: true             # a paired sender's voice note is transcribed locally before the run
     max_seconds: 300          # a longer note is refused with a reply naming the cap
     max_bytes: 20971520       # download cap (20 MiB); a larger file is refused the same way
+  # webhooks:                 # signed routes that start a run (docs/webhooks.md); unset = none
+  #   host: 127.0.0.1
+  #   port: 8644
+  #   routes: []              # [{ name, path, signature, secret_env, objective_template, ... }]
 
 repl:
   double_text_policy: enqueue # the same three modes for input typed during a REPL turn

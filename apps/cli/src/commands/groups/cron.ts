@@ -43,6 +43,7 @@ import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import type { ReplConfig } from "../../repl/types.js";
 import { openChildRun, type ChildRun } from "../../runtime/child-run.js";
 import { createHeadlessRuntime, type HeadlessRuntime, type HeadlessRuntimeDeps } from "../../runtime/headless.js";
+import { modeOverride, type AgentMode } from "../../runtime/runner-for-mode.js"; // [S2]
 import { releaseOnSignal, type SignalTarget } from "../../signals.js";
 
 function fail(operation: string, message: string, target?: string): never {
@@ -114,7 +115,7 @@ function parseDeliverTarget(target: string): { platform: string; channelId: stri
  * `trent run --model` in production, or whatever `ctx.overrides.gatewayRuntime` builds in a test.
  */
 async function* runPinned(ctx: CommandContext, deps: HeadlessRuntimeDeps & { readonly model: string }, prompt: string, options: CronRunOptions): AsyncGenerator<OrcEvent> {
-  const open = ctx.overrides.gatewayRuntime ?? ((d: typeof deps): Promise<ChildRun> => Promise.resolve(openChildRun({ profile: ctx.profile, model: d.model, surface: "cron", log: (line) => ctx.err(line) })));
+  const open = ctx.overrides.gatewayRuntime ?? ((d: typeof deps): Promise<ChildRun> => Promise.resolve(openChildRun({ profile: ctx.profile, model: d.model, surface: "cron", log: (line) => ctx.err(line), ...(d.mode === undefined ? {} : { mode: d.mode }) }))); // [S2] mode
   const pinned: ChildRun = await open(deps);
   try {
     yield* pinned.run(prompt, { ...options, surface: "cron" });
@@ -128,11 +129,14 @@ async function* runPinned(ctx: CommandContext, deps: HeadlessRuntimeDeps & { rea
  * process's `runtime`, both charged to `cron`. Exported so every runner (the service daemon's too)
  * honours a pin the same way instead of refusing it.
  */
-export function cronJobRun(ctx: CommandContext, input: { readonly configManager: ConfigManager; readonly config: ReplConfig; readonly runtime: Pick<HeadlessRuntime, "run"> | undefined }): CronRunnerDeps["run"] {
+export function cronJobRun(ctx: CommandContext, input: { readonly configManager: ConfigManager; readonly config: ReplConfig; readonly runtime: (Pick<HeadlessRuntime, "run"> & Partial<Pick<HeadlessRuntime, "mode">>) | undefined; readonly mode?: AgentMode }): CronRunnerDeps["run"] {
+  // [S2] A pinned job's child runs on the runner this launch runs on: `--solo`, or an in-process runtime that is solo.
+  const mode: AgentMode | undefined = input.mode ?? (input.runtime?.mode === "solo" ? "solo" : undefined);
   return (prompt, options) => {
-    if (options.model !== undefined) return runPinned(ctx, { configManager: input.configManager, config: input.config, surface: "cron", model: options.model }, prompt, options);
+    if (options.model !== undefined) return runPinned(ctx, { configManager: input.configManager, config: input.config, surface: "cron", model: options.model, ...(mode === undefined ? {} : { mode }) }, prompt, options);
     if (input.runtime === undefined) throw new TrentError({ code: EXIT.CONFIG, operation: "cron.run", message: "this runner was opened for a pinned job only" });
-    return input.runtime.run(prompt, { ...options, surface: "cron" });
+    // [S2] A job has no human to decide a held call: on solo it is refused, never parked (B8).
+    return input.runtime.run(prompt, { ...options, surface: "cron", holds: "deny" });
   };
 }
 
@@ -142,7 +146,7 @@ export function cronJobRun(ctx: CommandContext, input: { readonly configManager:
  * handler, each job's delivery and the incident alert, both sent through `manager()`, which the
  * caller builds on first use or shares.
  */
-export function buildCronRunner(ctx: CommandContext, input: { readonly configManager: ConfigManager; readonly config: TrentConfig; readonly runtime: Pick<HeadlessRuntime, "run"> | undefined; readonly manager: () => GatewayManager }): CronRunner {
+export function buildCronRunner(ctx: CommandContext, input: { readonly configManager: ConfigManager; readonly config: TrentConfig; readonly runtime: (Pick<HeadlessRuntime, "run"> & Partial<Pick<HeadlessRuntime, "mode">>) | undefined; readonly manager: () => GatewayManager; readonly mode?: AgentMode }): CronRunner {
   const { configManager, config } = input;
   const owner = config.gateway.owner;
   const send = async (platform: string, channelId: string, text: string, subject: string, operation: string): Promise<void> => {
@@ -155,7 +159,7 @@ export function buildCronRunner(ctx: CommandContext, input: { readonly configMan
     profileDir: configManager.getProfileDir(),
     // [G3.1] A scheduled job's cost is cron's, even when it rides the gateway's runtime.
     // [P2-1] A pinned job runs on a runtime built on its pin; an unpinned one on this process's.
-    run: cronJobRun(ctx, { configManager, config: config as unknown as ReplConfig, runtime: input.runtime }),
+    run: cronJobRun(ctx, { configManager, config: config as unknown as ReplConfig, runtime: input.runtime, ...(input.mode === undefined ? {} : { mode: input.mode }) }), // [S2] mode
     // [B1] A queued social post is a handled job: the approval bound at queue time is re-read
     // from this profile's rows and the post leaves once through the idempotent path; no prompt.
     handlers: { [SOCIAL_PUBLISH_HANDLER]: createSocialPublishHandler({ profileDir: configManager.getProfileDir(), social: { manager: configManager } }) },
@@ -181,14 +185,14 @@ export function buildCronRunner(ctx: CommandContext, input: { readonly configMan
  * [P2-1] `inProcess: false` (`run <id>` on a pinned job) builds no in-process runtime; the command
  * still registers as a live writer on the profile for as long as it writes the job's history.
  */
-async function openRunner(ctx: CommandContext, { inProcess = true }: { inProcess?: boolean } = {}): Promise<{ runner: CronRunner; close: () => Promise<void> }> {
+async function openRunner(ctx: CommandContext, { inProcess = true, mode }: { inProcess?: boolean; mode?: AgentMode } = {}): Promise<{ runner: CronRunner; close: () => Promise<void> }> {
   const configManager = ctx.config();
   const config = configManager.loadConfig();
-  const runtime = inProcess ? await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config: config as unknown as ReplConfig }) : undefined;
+  const runtime = inProcess ? await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config: config as unknown as ReplConfig, ...(mode === undefined ? {} : { mode }) }) : undefined; // [S2] --solo
   const releaseWriter = runtime === undefined ? acquireProfileWriter(configManager.getProfileDir(), "cron") : undefined;
   const buildManager = ctx.overrides.gatewayManager ?? ((cm, options) => new GatewayManager(cm, options));
   let manager: GatewayManager | undefined;
-  const runner = buildCronRunner(ctx, { configManager, config, runtime, manager: () => (manager ??= buildManager(configManager, {})) });
+  const runner = buildCronRunner(ctx, { configManager, config, runtime, manager: () => (manager ??= buildManager(configManager, {})), ...(mode === undefined ? {} : { mode }) }); // [S2]
   return {
     runner,
     close: async () => {
@@ -316,12 +320,13 @@ export const cronSpec: CommandSpec = {
     {
       name: "run <id>",
       description: "Run a scheduled job now on the headless runtime; the summary is recorded and delivered",
-      async run(ctx, _opts, args) {
+      async run(ctx, opts, args) {
         const id = String(args[0]);
         if (ctx.dryRun) return { data: { dryRun: true, command: "cron run", id } };
         // [P2-1] A pinned prompt job runs on a runtime of its own, so this process builds none.
         const { job } = findJob(ctx, "cron.run", id);
-        const { runner, close } = await openRunner(ctx, { inProcess: job.model === undefined || job.handler !== undefined });
+        const mode = modeOverride(opts); // [S2] --solo
+        const { runner, close } = await openRunner(ctx, { inProcess: job.model === undefined || job.handler !== undefined, ...(mode === undefined ? {} : { mode }) });
         try {
           const row = await runner.runNow(id);
           if (row.status === "failed") {
@@ -368,7 +373,8 @@ export const cronSpec: CommandSpec = {
       async run(ctx, opts) {
         const jobs = readCronJobs(profileDir(ctx)).filter((j) => j.enabled).length;
         if (ctx.dryRun) return { data: { dryRun: true, command: "cron start", jobs, intervalMs: DEFAULT_TICK_MS } };
-        const { runner, close } = await openRunner(ctx);
+        const mode = modeOverride(opts); // [S2] --solo
+        const { runner, close } = await openRunner(ctx, mode === undefined ? {} : { mode });
         if (opts.once === true) {
           try {
             const { launched, held } = await runner.tick();

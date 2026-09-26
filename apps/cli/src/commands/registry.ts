@@ -89,6 +89,8 @@ const GLOBAL_OPTIONS: readonly OptionSpec[] = [
     flags: "--dry-run",
     description: "Report what would happen; perform no writes, network calls or listeners",
   },
+  // [S2] a launch override of `agent.mode` (runtime/runner-for-mode.ts); it writes nothing
+  { flags: "--solo", description: "Run on the solo agent (one agent, no seats) for this launch, overriding agent.mode" },
 ];
 
 export const GLOBAL_LONG_FLAGS: readonly string[] = GLOBAL_OPTIONS.map(

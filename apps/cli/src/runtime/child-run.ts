@@ -60,6 +60,8 @@ export interface ChildRunDeps {
   readonly env?: NodeJS.ProcessEnv;
   /** Where the child's stderr lines go, one at a time. */
   readonly log?: (line: string) => void;
+  /** [S2] The parent launch's override of `agent.mode`: `solo` is handed on as `--solo`; absent, the child reads the profile's `agent.mode` as the parent did. */
+  readonly mode?: "fleet" | "solo";
 }
 
 /** The two methods a pinned cron job needs of a runtime; `HeadlessRuntime` has both. */
@@ -129,7 +131,7 @@ export function openChildRun(deps: ChildRunDeps): ChildRun {
     }
     const [command, ...lead] = deps.program ?? selfProgram();
     if (command === undefined) throw new TrentError({ code: EXIT.CONFIG, operation: "run.child", message: "no trent executable to start for a pinned run" });
-    const args = [...lead, "--profile", deps.profile, "run", "-", "--model", model, "--format", "stream-json", "--no-color"];
+    const args = [...lead, "--profile", deps.profile, "run", "-", "--model", model, "--format", "stream-json", "--no-color", ...(deps.mode === "solo" ? ["--solo"] : [])]; // [S2]
     const env = { ...(deps.env ?? process.env), ...(deps.surface === undefined ? {} : { [RUN_SURFACE_ENV]: deps.surface }) };
     const child = (deps.spawn ?? defaultSpawn)(command, args, { env });
     live.add(child);

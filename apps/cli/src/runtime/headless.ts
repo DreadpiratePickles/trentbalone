@@ -38,7 +38,6 @@ import {
 } from "@trent/core/orchestrator/index.js";
 import { parseModelPin } from "@trent/core/orchestrator/model-env.js";
 import { applyLocalModelEnv, type LocalModelConfig } from "@trent/core/model-gateway/local-runtime.js"; // [L0-2]
-import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { guardAppDatabase, type AppStoreState, type FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
 import { acquireProfileWriter } from "@trent/core/profile/locks.js";
 import { runSessionHooks } from "@trent/core/hooks/index.js";
@@ -79,6 +78,7 @@ import { wireImproveLoop } from "../repl/improve-loop.js";
 import { wireTools, type ToolWiring, type ToolWiringDeps } from "../repl/tools.js";
 import type { ReplConfig, ReplStore } from "../repl/types.js";
 import { wireGoals, type GoalsSlice } from "./goals.js";
+import { createModeRunners, pinnedElsewhere, resolveAgentMode, runtimePolicy, type ModeRunOptions, type ModeRuntimeDeps, type ModeRuntimeView } from "./runner-for-mode.js"; // [S2]
 
 export {
   sessionHookNotices,
@@ -105,7 +105,7 @@ export interface OpenedStore {
  * REPL's tests, through `ReplDeps`) inject a recording orchestrator factory, an observed proxy
  * and a Docker probe that needs no daemon.
  */
-export interface HeadlessRuntimeDeps {
+export interface HeadlessRuntimeDeps extends ModeRuntimeDeps { // [S2] mode, holds, solo seams
   readonly configManager: ConfigManager;
   /** Already-loaded config, when the caller has it; otherwise `configManager.loadConfig()`. */
   readonly config?: ReplConfig;
@@ -152,7 +152,7 @@ export interface HeadlessRuntimeDeps {
   readonly model?: string;
 }
 
-export interface HeadlessRunOptions {
+export interface HeadlessRunOptions extends ModeRunOptions { // [S2] session, conversation, holds
   /** Defaults to `manual`; schedulers pass `scheduled` or `heartbeat`. */
   readonly trigger?: OrchestrationTrigger;
   readonly signal?: AbortSignal;
@@ -176,7 +176,7 @@ export interface HeadlessRunOptions {
   readonly model?: string;
 }
 
-export interface HeadlessRuntime {
+export interface HeadlessRuntime extends ModeRuntimeView { // [S2] runner and mode beside orchestrator
   readonly orchestrator: Orchestrator;
   readonly companyId: string;
   /** [P2-1] The model this runtime is pinned to, or undefined when it runs the configured models. */
@@ -275,12 +275,15 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
   // The seats' toolsets and the egress proxy, before the first turn. The workspace is where
   // `trent` was launched, never the home directory. Everything from here on is released by
   // `cleanup()` on every exit path: stdin end, a throw, and Ctrl+C.
+  const policy = runtimePolicy(config); // [S2] H3: the dispatcher the tools are wrapped with, so a webhook run's ring can be seeded
   const tools: ToolWiring = await wireTools({
     config: config as unknown as ToolWiringDeps["config"],
     workspace,
     profileDir,
     configManager: deps.configManager,
     buildAdapters: deps.buildAdapters,
+    ...(deps.buildTools === undefined ? {} : { buildTools: deps.buildTools }), // [S2]
+    policy, // [S2]
     startEgress: deps.startEgress,
     probeDocker: deps.probeDocker,
     delegate,
@@ -400,7 +403,28 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     if (hooks !== undefined) notices.push(...sessionHookNotices(await runSessionHooks("session_start", { profileDir, hooks, cwd: workspace })));
     // `cleanup()` is called on every exit path, and more than once; the stop hooks run on the first.
     let stopped = false;
+    const fleetRun = (objective: string, options: HeadlessRunOptions = {}): AsyncIterable<OrcEvent> => {
+      // [E1] One run is one turn: `trent run`, a cron tick and a heartbeat are each a single
+      // checkpoint, and a REPL turn is the run it starts. Opening a turn nothing has written
+      // into yet is a no-op, so a surface that also marks its own boundary cannot skip a number.
+      checkpoints?.beginTurn();
+      // [G3.1] The surface rides the run options because that is where `openRunScope` reads it,
+      // and the run's meter is opened there — before any step of it can be billed.
+      const surface = options.surface ?? deps.surface;
+      return orchestrator.run({
+        companyId,
+        objective,
+        trigger: options.trigger ?? "manual",
+        signal: options.signal,
+        ...(options.history === undefined ? {} : { history: options.history }),
+        ...(surface === undefined ? {} : { surface }),
+      });
+    };
+    // [S2] The runner port by `agent.mode` (a launch override wins): the orchestrator's stream, or one agent's loop on this same graph, its frames on the same hooks.
+    const traced = { sink: (event: OrcEvent): void => { fleetMemory.traceSink(event); deps.traceSink?.(event); } };
+    const runners = await createModeRunners({ ...deps, configManager: deps.configManager, config, profileDir, workspace, companyId, pin, orchestrator, fleetRun, tools, fleetMemory, checkpoints, ledger: spend.ledger, sinks: [busHook, traced], policy, log: (line) => void notices.push(line) }, resolveAgentMode(config as { agent?: { mode?: "fleet" | "solo" } }, deps.mode));
 
+    const runner = runners.runner;
     return {
       orchestrator,
       companyId,
@@ -417,24 +441,14 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
       versionPins,
       checkpoints,
       goals,
+      runner,
+      mode: runner.mode,
+      runnerFor: runners.runnerFor, // [S2] H3
+      seedInbound: runners.seedInbound, // [S2] H3
       run: (objective, options = {}) => {
         // [P2-1] Before the turn opens: a run on a model this process did not load is not this run.
         if (options.model !== undefined && options.model !== pin) throw pinnedElsewhere(options.model, pin);
-        // [E1] One run is one turn: `trent run`, a cron tick and a heartbeat are each a single
-        // checkpoint, and a REPL turn is the run it starts. Opening a turn nothing has written
-        // into yet is a no-op, so a surface that also marks its own boundary cannot skip a number.
-        checkpoints?.beginTurn();
-        // [G3.1] The surface rides the run options because that is where `openRunScope` reads it,
-        // and the run's meter is opened there — before any step of it can be billed.
-        const surface = options.surface ?? deps.surface;
-        return orchestrator.run({
-          companyId,
-          objective,
-          trigger: options.trigger ?? "manual",
-          signal: options.signal,
-          ...(options.history === undefined ? {} : { history: options.history }),
-          ...(surface === undefined ? {} : { surface }),
-        });
+        return runner.run({ objective, ...options }); // [S2] the port by mode
       },
       notices: () => [...notices, ...tools.hookNotices],
       cleanup: async () => {
@@ -469,16 +483,4 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     releaseWriter();
     throw error;
   }
-}
-
-// [P2-1] the per-run model pin
-/** The refusal for a run naming a model its runtime was not built on. Names models, never secrets. */
-function pinnedElsewhere(requested: string, pin: string | undefined): TrentError {
-  const runsOn = pin === undefined ? "the configured models" : `model ${pin}`;
-  return new TrentError({
-    code: EXIT.CONFIG,
-    operation: "run.model",
-    message: `this run asks for model ${requested}, and this runtime runs ${runsOn} for the life of its process; a run on another model needs its own process (trent run --model ${requested}). Nothing was run and no model was called`,
-    target: requested,
-  });
 }

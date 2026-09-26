@@ -1,19 +1,26 @@
 /**
  * One HTTP listener for every webhook-capable adapter: `/webhooks/<platform>` is handed
  * to that adapter's `handleWebhook`. Bodies are read raw so signatures verify byte-exact.
+ * [H3] A configured webhook route (`gateway.webhooks.routes`) is matched first and served by
+ * `webhooks/http.ts`, which starts a run; every other path falls through unchanged.
  */
 
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { GatewayManager } from "./GatewayManager.js";
 import { listPlatformIds } from "./registry.js";
+import type { WebhookRoutesHandler } from "../webhooks/http.js"; // [H3] webhook routes
 
 export const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
 export class WebhookServer {
   private server?: http.Server;
 
-  constructor(private readonly manager: GatewayManager) {}
+  // [H3] webhook routes: optional, so every existing caller is unchanged.
+  constructor(
+    private readonly manager: GatewayManager,
+    private readonly options: { readonly routes?: WebhookRoutesHandler } = {},
+  ) {}
 
   async listen(port: number, host = "127.0.0.1"): Promise<number> {
     this.server = http.createServer((req, res) => this.handle(req, res));
@@ -33,6 +40,12 @@ export class WebhookServer {
 
   private handle(req: http.IncomingMessage, res: http.ServerResponse): void {
     const url = new URL(req.url ?? "/", "http://localhost");
+    // [H3] webhook routes: a route reads its own raw body and answers with its own verdict.
+    const routes = this.options.routes;
+    if (routes !== undefined && routes.matches(url.pathname)) {
+      routes.serve(req, res, (this.server?.address() as AddressInfo | null)?.address ?? "");
+      return;
+    }
     const m = /^\/webhooks\/([a-z]+)$/.exec(url.pathname);
     const platform = m?.[1];
     const adapter = platform && listPlatformIds().includes(platform) ? this.manager.getAdapter(platform) : undefined;

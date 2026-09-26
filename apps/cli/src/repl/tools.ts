@@ -109,6 +109,8 @@ export interface ToolWiringDeps {
   readonly discoverBridgeGateway?: () => Promise<string>;
   /** The orchestrator's delegation path; without it `delegate_task` reports `not_available`. */
   readonly delegate?: DelegatePort;
+  /** [S2] The runtime's policy dispatcher, so a surface can seed a run's ring (H3 webhook runs); absent, the build makes its own. */
+  readonly policy?: ToolBuildDeps["policy"];
 }
 
 export interface ToolWiring {
@@ -228,6 +230,7 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
     pluginsDir: path.join(deps.profileDir, "plugins"),
     backend: sandbox.backend,
     ...(deps.delegate !== undefined ? { delegate: deps.delegate } : {}),
+    ...(deps.policy !== undefined ? { policy: deps.policy } : {}), // [S2]
     ...(sandbox.image !== undefined ? { dockerImage: sandbox.image } : {}),
     ...(handle !== undefined
       ? {

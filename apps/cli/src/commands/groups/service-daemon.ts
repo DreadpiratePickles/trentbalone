@@ -32,7 +32,7 @@ import { acquireProfileWriter, gatewayRunningError, liveGatewayHolder, profileLo
 import { ServiceLog, ServiceSupervisor, serviceLogPaths, type ServiceComponentReport, type ServiceEntry } from "@trent/core/service/index.js";
 import type { CommandOutcome } from "../registry.js";
 import type { CommandContext } from "../context.js";
-import { createAgentHandler } from "../../gateway/agent-handler.js";
+import { createAgentHandler, createRunResumer, createRunThreads } from "../../gateway/agent-handler.js"; // [S2] resumer, threads
 import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime, type HeadlessRuntime } from "../../runtime/headless.js";
 import { releaseOnSignal } from "../../signals.js";
@@ -102,6 +102,8 @@ export async function runServiceDaemon(ctx: CommandContext): Promise<CommandOutc
       configManager,
       config: config as unknown as ReplConfig,
       surface: gatewayOn ? "gateway" : "service",
+      // [S2] Solo holds park only when the gateway sends cards to an owner; cron and the heartbeat are one-off runs and refuse them (B8).
+      holds: gatewayOn && config.gateway.owner !== undefined ? "park" : "deny",
       ...(gatewayOn
         ? {
             busHooks: [{ sink: (event) => link?.sink(event), flush: async () => undefined }],
@@ -126,9 +128,10 @@ export async function runServiceDaemon(ctx: CommandContext): Promise<CommandOutc
     entries.push({
       name: "gateway",
       async start() {
-        const m = buildManager(configManager, { agentHandler: createAgentHandler(built, { configManager }) });
+        const threads = createRunThreads(); // [S2]
+        const m = buildManager(configManager, { agentHandler: createAgentHandler(built, { configManager, threads }), resumer: createRunResumer(built, threads, { configManager }) }); // [S2] resumer
         manager = m;
-        link = linkRunApprovals({ orchestrator: built.orchestrator, bridge: m.getApprovalBridge(), manager: m, owner: config.gateway.owner, log: (line) => ctx.err(line) });
+        link = linkRunApprovals({ orchestrator: built.runner ?? built.orchestrator, bridge: m.getApprovalBridge(), manager: m, owner: config.gateway.owner, log: (line) => ctx.err(line) }); // [S2] the runner by mode
         const release = async (): Promise<void> => {
           link?.close();
           await m.stopAll();

@@ -36,6 +36,8 @@ export class MessageQueue {
   private readonly onSent?: (row: QueueRow, receipt: SendReceipt) => void;
   private readonly breakers = new Map<string, CircuitBreaker>();
   private draining = false;
+  /** [S2] A drain was asked for while a pass was in flight: that pass goes round again before it settles. */
+  private drainAgain = false;
 
   constructor(
     private readonly store: GatewayStore,
@@ -98,47 +100,60 @@ export class MessageQueue {
     });
   }
 
-  /** One pass over every pending row, in insertion order, per-platform breaker respected. */
+  /**
+   * One pass over every pending row, in insertion order, per-platform breaker respected.
+   * [S2] A drain asked for while a pass is in flight is not dropped: that pass read its rows before the
+   * caller's row was queued, so it goes round again for the rows it has not tried, before it settles.
+   * The caller is not made to wait for it (its result says nothing was sent by this call).
+   */
   async drain(): Promise<DrainResult> {
     const result: DrainResult = { sent: 0, failed: 0, skipped: 0, dead: 0 };
-    if (this.draining) return result;
+    if (this.draining) {
+      this.drainAgain = true; // [S2]
+      return result;
+    }
     this.draining = true;
+    const tried = new Set<string>(); // [S2] each row once per drain; a platform that failed stays paused for all of it
+    const pausedThisPass = new Set<string>();
     try {
-      const rows = this.pending().filter((r) => r.nextAttemptAt <= this.now());
-      const pausedThisPass = new Set<string>();
-      for (const row of rows) {
-        const breaker = this.breaker(row.platform);
-        if (pausedThisPass.has(row.platform) || !breaker.canAttempt()) {
-          result.skipped += 1;
-          continue;
+      do { // [S2]
+        this.drainAgain = false; // [S2]
+        const rows = this.pending().filter((r) => r.nextAttemptAt <= this.now() && !tried.has(r.id)); // [S2] tried
+        for (const row of rows) {
+          tried.add(row.id); // [S2]
+          const breaker = this.breaker(row.platform);
+          if (pausedThisPass.has(row.platform) || !breaker.canAttempt()) {
+            result.skipped += 1;
+            continue;
+          }
+          try {
+            const receipt = await this.sender(row.platform, row.message);
+            breaker.recordSuccess();
+            this.update(row.id, (r) => {
+              r.status = "sent";
+              r.attempts += 1;
+              r.sentAt = this.now();
+              r.lastError = undefined;
+            });
+            result.sent += 1;
+            this.onSent?.(row, receipt);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            breaker.recordFailure(message);
+            const dead = row.attempts + 1 >= this.maxAttempts;
+            this.update(row.id, (r) => {
+              r.attempts += 1;
+              r.lastError = message;
+              r.nextAttemptAt = this.now() + this.retryDelayMs;
+              if (dead) r.status = "dead";
+            });
+            if (dead) result.dead += 1;
+            else result.failed += 1;
+            // A failure pauses the rest of this platform for the pass; the breaker decides the next one.
+            pausedThisPass.add(row.platform);
+          }
         }
-        try {
-          const receipt = await this.sender(row.platform, row.message);
-          breaker.recordSuccess();
-          this.update(row.id, (r) => {
-            r.status = "sent";
-            r.attempts += 1;
-            r.sentAt = this.now();
-            r.lastError = undefined;
-          });
-          result.sent += 1;
-          this.onSent?.(row, receipt);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          breaker.recordFailure(message);
-          const dead = row.attempts + 1 >= this.maxAttempts;
-          this.update(row.id, (r) => {
-            r.attempts += 1;
-            r.lastError = message;
-            r.nextAttemptAt = this.now() + this.retryDelayMs;
-            if (dead) r.status = "dead";
-          });
-          if (dead) result.dead += 1;
-          else result.failed += 1;
-          // A failure pauses the rest of this platform for the pass; the breaker decides the next one.
-          pausedThisPass.add(row.platform);
-        }
-      }
+      } while (this.drainAgain); // [S2]
     } finally {
       this.draining = false;
     }

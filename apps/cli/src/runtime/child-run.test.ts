@@ -125,6 +125,22 @@ describe("[P2-1] openChildRun", () => {
     await child.cleanup();
   });
 
+  it("[S2] a launch on the solo runner carries --solo to the child, so a pinned job runs solo too", async () => {
+    const spawned: Spawned[] = [];
+    const child = openChildRun({
+      profile: "work",
+      model: PIN,
+      surface: "cron",
+      mode: "solo",
+      program: ["/opt/trent/bin/trent"],
+      spawn: fakeSpawn(spawned, { stdout: [SYSTEM, line({ type: "result", status: "completed", cost_cents: 0, run_id: "run_child", model: PIN, models: [] })], code: 0 }),
+      env: {},
+    });
+    await collect(child.run(PROMPT, { trigger: "scheduled", model: PIN }));
+    expect(spawned[0]?.args).toEqual(["--profile", "work", "run", "-", "--model", PIN, "--format", "stream-json", "--no-color", "--solo"]);
+    await child.cleanup();
+  });
+
   it("a result that did not complete throws its reason after the events it did carry", async () => {
     const spawned: Spawned[] = [];
     const failed = openChildRun({

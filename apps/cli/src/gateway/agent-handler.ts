@@ -12,6 +12,12 @@
  * the first message on a thread creates the session, every later one resumes it, and each turn
  * (the user's text, then the reply) is appended to that session's transcript exactly as the TUI
  * appends its own turns. `/new` forgets the mapping so the next message starts a fresh session.
+ *
+ * [S2] On the solo runner the thread's session IS the conversation and the runner is its only writer
+ * (council A1): the handler appends nothing and threads no history; it names the session. A run that
+ * parks on a held call ends its stream here (the owner gets a card through the approval link); the
+ * run's thread is remembered, so after the owner's late decision the gateway resumes the run
+ * (`createRunResumer`, `GatewayManager.resumeRun`) and posts its reply to the same thread.
  */
 
 import path from "node:path";
@@ -26,6 +32,7 @@ import {
   type GatewayStore,
   type InboundMessage,
 } from "@trent/core/gateway/index.js";
+import type { RunResumer } from "@trent/core/gateway/GatewayManager.js"; // [S2]
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import {
   DEFAULT_HISTORY_CHARS,
@@ -35,8 +42,8 @@ import {
 } from "../repl/conversation.js";
 import type { HeadlessRuntime } from "../runtime/headless.js";
 
-/** What the handler needs of the runtime: one run per message. */
-export type AgentRuntime = Pick<HeadlessRuntime, "run">;
+/** What the handler needs of the runtime: one run per message. [S2] `mode` and `runner` pick the solo path. */
+export type AgentRuntime = Pick<HeadlessRuntime, "run"> & Partial<Pick<HeadlessRuntime, "mode" | "runner">>;
 
 /** The message text that rotates a thread's session. Nothing else is interpreted here. */
 export const NEW_SESSION_COMMAND = "/new";
@@ -50,7 +57,61 @@ export interface AgentHandlerDeps {
   readonly configManager?: ConfigManager;
   readonly store?: GatewayStore;
   readonly sessions?: SessionManager;
+  /** [S2] Where the solo path records each run's thread, so a late decision's reply finds it. */
+  readonly threads?: RunThreads;
 }
+
+// [S2] solo: the thread a run came from, for the reply after a late decision
+/** The thread a run came from, as the reply after a late decision needs it. */
+export type RunThread = { readonly platform: string; readonly channelId: string; readonly threadId?: string; readonly subject?: string };
+
+export interface RunThreads {
+  remember(runId: string, thread: RunThread): void;
+  threadOf(runId: string): RunThread | undefined;
+}
+
+export function createRunThreads(): RunThreads {
+  const threads = new Map<string, RunThread>();
+  return { remember: (runId, thread) => void threads.set(runId, thread), threadOf: (runId) => threads.get(runId) };
+}
+
+/** The thread a gateway session belongs to, read back from the thread-to-session map (a run parked before a restart). */
+function threadOfSession(store: GatewayStore, sessionId: string): RunThread | undefined {
+  const key = Object.entries(store.snapshot().conversations).find(([, id]) => id === sessionId)?.[0];
+  if (key === undefined) return undefined;
+  const first = key.indexOf(":");
+  const last = key.lastIndexOf(":");
+  if (first <= 0 || last <= first) return undefined;
+  const thread = key.slice(last + 1);
+  return { platform: key.slice(0, first), channelId: key.slice(first + 1, last), ...(thread === "root" ? {} : { threadId: thread }) };
+}
+
+/**
+ * The gateway's `RunResumer` over the runtime's runner: the thread a run came from (this process's
+ * record, else the session's thread in the gateway store, for a run parked before a restart), the
+ * resumed run folded to its reply exactly as a live one is, the runner's late decisions and sweep.
+ */
+export function createRunResumer(runtime: AgentRuntime, threads: RunThreads, deps: { readonly store?: GatewayStore; readonly configManager?: ConfigManager } = {}): RunResumer {
+  const store = deps.store ?? new FileGatewayStore(path.join((deps.configManager ?? new ConfigManager()).getProfileDir(), "gateway.json"));
+  const runner = runtime.runner;
+  return {
+    threadOf(runId) {
+      const known = threads.threadOf(runId);
+      if (known !== undefined) return known;
+      const sessionId = runner?.conversationOf?.(runId)?.sessionId;
+      return sessionId === undefined ? undefined : threadOfSession(store, sessionId);
+    },
+    async resume(runId, signal) {
+      if (runner?.resume === undefined) return null;
+      let reply: string | null = null;
+      for await (const event of runner.resume(runId, signal === undefined ? {} : { signal })) reply = replyFromEvent(reply, event);
+      return reply;
+    },
+    ...(runner?.onLateDecision === undefined ? {} : { onLateDecision: runner.onLateDecision }),
+    ...(runner?.sweep === undefined ? {} : { sweep: runner.sweep }),
+  };
+}
+// [S2] end
 
 /** The reply a finished stream produces, folded one event at a time. */
 export function replyFromEvent(current: string | null, event: OrcEvent): string | null {
@@ -119,6 +180,17 @@ export function createAgentHandler(runtime: AgentRuntime, deps: AgentHandlerDeps
       provider: config.provider,
       model: config.model,
     });
+    // [S2] Solo: the runner writes the thread's session (A1) and keys its conversation by it (A2).
+    if (runtime.mode === "solo") {
+      const subject = typeof message.metadata?.subject === "string" ? { subject: message.metadata.subject } : {};
+      const thread: RunThread = { platform: message.platform, channelId: message.channelId, ...(message.threadId === undefined ? {} : { threadId: message.threadId }), ...subject };
+      let reply: string | null = null;
+      for await (const event of runtime.run(message.content, { trigger: "manual", signal, session: sessionId })) {
+        deps.threads?.remember(event.runId, thread);
+        reply = replyFromEvent(reply, event);
+      }
+      return reply;
+    }
     // The thread's earlier turns, read BEFORE this message joins them, so the run sees the
     // conversation and not its own new line twice. The objective stays the raw message text.
     const history = threadHistory(sessions.getSession(sessionId));
