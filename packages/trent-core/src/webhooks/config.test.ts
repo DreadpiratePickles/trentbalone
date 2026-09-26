@@ -30,6 +30,15 @@ describe("gateway.webhooks.routes", () => {
     expect(WebhookRouteSchema.safeParse({ ...base, dedupe_key: "{{payload.__proto__.x}}" }).success).toBe(false);
   });
 
+  // [C8] The timestamped generic scheme: its own timestamp header, and the digest header it shares.
+  it("parses hmac-sha256-ts with its headers, and keeps timestamp_header off every other scheme", () => {
+    const ts = { ...base, signature: "hmac-sha256-ts", signature_header: "X-Acme-Signature", timestamp_header: "X-Acme-Timestamp", tolerance_seconds: 120 };
+    expect(WebhookRouteSchema.parse(ts)).toMatchObject({ signature: "hmac-sha256-ts", signature_header: "X-Acme-Signature", timestamp_header: "X-Acme-Timestamp", tolerance_seconds: 120 });
+    expect(WebhookRouteSchema.parse({ ...base, signature: "hmac-sha256-ts" }).timestamp_header).toBeUndefined();
+    for (const signature of ["hmac-sha256", "stripe", "github"]) expect(WebhookRouteSchema.safeParse({ ...base, signature, timestamp_header: "X-Acme-Timestamp" }).success).toBe(false);
+    expect(WebhookRouteSchema.safeParse({ ...ts, timestamp_header: "x acme" }).success).toBe(false);
+  });
+
   it("keeps routes off the chat adapters' /webhooks/ prefix", () => {
     expect(WebhookRouteSchema.safeParse({ ...base, path: "/webhooks/telegram" }).success).toBe(false);
     expect(WebhookRouteSchema.safeParse({ ...base, path: "hooks/no-slash" }).success).toBe(false);

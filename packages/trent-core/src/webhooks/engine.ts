@@ -17,6 +17,13 @@
  * `consolidate_end` `costCents`, the ones the spend ledger charges) are summed and the run is
  * aborted when they reach the cap. Every delivery and every run's end is a row in the delivery
  * store (`store.ts`).
+ *
+ * [C8] A `none-localhost-only` route has no secret, and a page in the owner's browser posts from
+ * 127.0.0.1 too. So on those routes a request carrying an `Origin` header (every browser POST has
+ * one, `null` included), or a forwarding header (a tunnel or proxy on this host also connects from
+ * loopback), or a body that is not `application/json` and valid JSON, is answered 403 before any
+ * run starts. A form or a no-cors fetch cannot send `application/json` without a preflight, and
+ * the preflight (`OPTIONS`) is answered 405.
  */
 import crypto from "node:crypto";
 import { createAgentRunFold } from "../agent-runner/index.js";
@@ -31,6 +38,8 @@ import { RUN_VERDICTS, type DeliveryRow, type DeliveryVerdict, type WebhookDeliv
 export const FIRST_FRAME_TIMEOUT_MS = 10_000;
 const MAX_KEY_CHARS = 200;
 const RATE_WINDOW_MS = 60_000;
+/** [C8] Headers a tunnel or reverse proxy adds: the caller it names is not on this host. */
+const FORWARDING_HEADERS = ["forwarded", "x-forwarded-for", "x-real-ip", "cf-connecting-ip", "true-client-ip"] as const;
 
 export interface WebhookEngineDeps {
   readonly routes: readonly WebhookRoute[];
@@ -108,10 +117,31 @@ export function createWebhookEngine(deps: WebhookEngineDeps): WebhookEngine {
     store.append({ at: now().toISOString(), delivery, route: route.name, verdict, mode: route.mode, ...fields });
   };
 
+  // [C8] A loopback peer is not proof of a local script: a browser page and an on-host tunnel are
+  // loopback peers too. Undefined means none of them showed; the body is parsed after this.
+  function refuseNonLocal(route: WebhookRoute, d: WebhookDelivery, deliveryId: string): WebhookResponse | undefined {
+    const origin = d.headers.origin;
+    if (origin !== undefined) {
+      record(route, deliveryId, "browser_origin", { status: 403, detail: `Origin ${clip(origin, 100)}` });
+      return reply(403, { error: "this route refuses a request carrying an Origin header: a browser page may not start a run" });
+    }
+    const forwarded = FORWARDING_HEADERS.find((name) => d.headers[name] !== undefined);
+    if (forwarded !== undefined) {
+      record(route, deliveryId, "not_loopback", { status: 403, detail: `forwarded by a proxy (${forwarded})` });
+      return reply(403, { error: "this route answers a loopback peer on a loopback listener only, and a forwarded request is not one" });
+    }
+    const type = (d.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+    if (type !== "application/json") {
+      record(route, deliveryId, "not_json", { status: 403, detail: `content-type ${clip(type === "" ? "(none)" : type, 100)}` });
+      return reply(403, { error: "this route takes content-type application/json only" });
+    }
+    return undefined;
+  }
+
   /** The signature, or the loopback rule. Undefined means the delivery is authentic. */
   function authenticate(route: WebhookRoute, d: WebhookDelivery, deliveryId: string): WebhookResponse | undefined {
     if (route.signature === "none-localhost-only") {
-      if (isLoopbackAddress(d.boundAddress) && isLoopbackAddress(d.peer)) return undefined;
+      if (isLoopbackAddress(d.boundAddress) && isLoopbackAddress(d.peer)) return refuseNonLocal(route, d, deliveryId); // [C8]
       record(route, deliveryId, "not_loopback", { status: 403, detail: isLoopbackAddress(d.boundAddress) ? "peer is not loopback" : "listener is not bound to loopback" });
       return reply(403, { error: "this route answers a loopback peer on a loopback listener only" });
     }
@@ -268,8 +298,10 @@ export function createWebhookEngine(deps: WebhookEngineDeps): WebhookEngine {
       try {
         payload = JSON.parse(d.body.toString("utf8"));
       } catch {
-        record(route, deliveryId, "bad_body", { status: 400, detail: "the body is not JSON" });
-        return reply(400, { error: "the body is not JSON" });
+        // [C8] On a loopback route a body that does not parse is refused like any non-JSON body: 403.
+        const local = route.signature === "none-localhost-only";
+        record(route, deliveryId, local ? "not_json" : "bad_body", { status: local ? 403 : 400, detail: "the body is not JSON" });
+        return reply(local ? 403 : 400, { error: "the body is not JSON" });
       }
       const event = eventName(route, d, payload);
       if (route.events !== undefined && (event === undefined || !route.events.includes(event))) {

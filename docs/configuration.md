@@ -759,12 +759,16 @@ to install and nothing runs. Set `enabled: false` to refuse voice notes (a capti
 ### Webhook routes
 
 `gateway.webhooks.routes` lists signed HTTP paths that start a run. Each route has a `name`, a
-`path` under `/hooks/`, a `signature` (`github`, `stripe`, `hmac-sha256` or `none-localhost-only`),
-a `secret_env` (the NAME of the variable holding the secret, never the secret itself) and an
-`objective_template` with `{{payload.a.b}}` references. Optional keys: `dedupe_key` (default: the
-body's SHA-256), `events`, `mode` (`fleet` by default), `seat`, `max_cost_cents` (integer cents),
-`rate_per_minute` (default 30), `tolerance_seconds` (Stripe, default 300) and `signature_header`
-(`hmac-sha256`, default `x-webhook-signature`). The listener is `gateway.webhooks.host` and
+`path` under `/hooks/`, a `signature` (`github`, `stripe`, `hmac-sha256`, `hmac-sha256-ts` or
+`none-localhost-only`), a `secret_env` (the NAME of the variable holding the secret, never the secret
+itself) and an `objective_template` with `{{payload.a.b}}` references. Optional keys: `dedupe_key`
+(default: the body's SHA-256), `events`, `mode` (`fleet` by default), `seat`, `max_cost_cents` (integer
+cents), `rate_per_minute` (default 30), `tolerance_seconds` (the timestamped schemes `stripe` and
+`hmac-sha256-ts`, default 300, either direction), `signature_header` (`hmac-sha256` and `hmac-sha256-ts`,
+default `x-webhook-signature`) and `timestamp_header` (`hmac-sha256-ts` only, default
+`x-trent-timestamp`; the Stripe-style `t=<unix>,v1=<hex>` form in the signature header also works).
+A `none-localhost-only` route answers 403 to any request carrying an `Origin` header, a non-JSON body or
+a forwarding header (a tunnel connects from 127.0.0.1). The listener is `gateway.webhooks.host` and
 `port` (default `127.0.0.1:8644`). `trent gateway start` serves the routes and `trent gateway
 status` shows the last deliveries. See [webhooks.md](webhooks.md).
 

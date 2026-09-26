@@ -3,7 +3,7 @@
  */
 import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { githubSigned, hmacHex, route, SECRET, stripeSigned } from "./fakes.test-helpers.js";
+import { githubSigned, hmacHex, route, SECRET, stripeSigned, timestampSigned } from "./fakes.test-helpers.js"; // [C8] timestampSigned
 import { isLoopbackAddress, verifyWebhookSignature } from "./signature.js";
 
 const NOW = new Date("2026-09-26T09:00:00.000Z");
@@ -86,6 +86,48 @@ describe("hmac-sha256: generic HMAC over the raw body with a configurable header
     const generic = route({ signature: "hmac-sha256" });
     const body = Buffer.from("{}");
     expect(verifyWebhookSignature({ route: generic, body, headers: { "x-webhook-signature": hmacHex("", body) }, secret: "", now: NOW }).ok).toBe(false);
+  });
+});
+
+// [C8] The generic scheme bound to a timestamp, so a captured delivery cannot be replayed once the
+// dedupe window has passed. Each `it` builds its route, so the file still collects without the scheme.
+describe("hmac-sha256-ts: HMAC over `<unix-seconds>.<body>`, fresh within tolerance_seconds", () => {
+  const check = (signed: { body: Buffer; headers: Record<string, string> }, now: Date, overrides: Record<string, unknown> = {}) =>
+    verifyWebhookSignature({ route: route({ signature: "hmac-sha256-ts", ...overrides }), body: signed.body, headers: signed.headers, secret: SECRET, now });
+
+  it("passes the timestamp in x-trent-timestamp and the digest in x-webhook-signature by default", () => {
+    expect(check(timestampSigned({ id: "evt_1" }, NOW), new Date(NOW.getTime() + 299_000))).toEqual({ ok: true });
+  });
+
+  it("passes the Stripe-style form, t=<unix>,v1=<hex>, inside the signature header", () => {
+    expect(check(timestampSigned({ id: "evt_1" }, NOW, { inline: true }), NOW)).toEqual({ ok: true });
+  });
+
+  it("refuses a correctly signed delivery 301 s old, or 301 s ahead, in either form", () => {
+    for (const inline of [false, true]) {
+      const signed = timestampSigned({ id: "evt_1" }, NOW, { inline });
+      expect(check(signed, new Date(NOW.getTime() + 301_000)).ok).toBe(false);
+      expect(check(signed, new Date(NOW.getTime() - 301_000)).ok).toBe(false);
+    }
+  });
+
+  it("honours a route's own tolerance_seconds, timestamp_header and signature_header", () => {
+    const signed = timestampSigned({ id: "evt_1" }, NOW, { signatureHeader: "X-Acme-Signature", timestampHeader: "X-Acme-Timestamp" });
+    const headers = { signature_header: "X-Acme-Signature", timestamp_header: "X-Acme-Timestamp" };
+    expect(check(signed, new Date(NOW.getTime() + 50_000), { ...headers, tolerance_seconds: 60 }).ok).toBe(true);
+    expect(check(signed, new Date(NOW.getTime() + 61_000), { ...headers, tolerance_seconds: 60 }).ok).toBe(false);
+    expect(check(signed, NOW).ok).toBe(false);
+  });
+
+  it("refuses a body-only MAC, a missing or non-numeric timestamp, and a timestamp changed after signing", () => {
+    const signed = timestampSigned({ id: "evt_1" }, NOW);
+    const bodyOnly = { ...signed.headers, "x-webhook-signature": hmacHex(SECRET, signed.body) };
+    expect(check({ body: signed.body, headers: bodyOnly }, NOW).ok).toBe(false);
+    const noTimestamp = Object.fromEntries(Object.entries(signed.headers).filter(([name]) => name !== "x-trent-timestamp"));
+    expect(check({ body: signed.body, headers: noTimestamp }, NOW).ok).toBe(false);
+    expect(check({ body: signed.body, headers: { ...signed.headers, "x-trent-timestamp": "yesterday" } }, NOW).ok).toBe(false);
+    const moved = String(Math.floor(NOW.getTime() / 1000) + 10);
+    expect(check({ body: signed.body, headers: { ...signed.headers, "x-trent-timestamp": moved } }, NOW).ok).toBe(false);
   });
 });
 

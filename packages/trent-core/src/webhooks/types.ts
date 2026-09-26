@@ -66,6 +66,8 @@ export const DELIVERY_VERDICTS = [
   "ignored",
   "bad_signature",
   "not_loopback",
+  "browser_origin", // [C8] a loopback route refused a request carrying an Origin header
+  "not_json", // [C8] a loopback route refused a body that is not typed or parsed as JSON
   "no_secret",
   "rate_limited",
   "bad_body",

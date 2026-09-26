@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PolicyDispatcher } from "../governance/policy-dispatch.js";
 import { runWithToolCallContext } from "../governance/tool-call-context.js";
 import { createWebhookEngine, type WebhookEngine, type WebhookEngineDeps } from "./engine.js";
-import { delivery, githubSigned, hmacHex, recordingRunner, route, SECRET, SECRET_ENV, secrets, stripeSigned, tempProfile, type RecordingRunner } from "./fakes.test-helpers.js";
+import { delivery, githubSigned, hmacHex, recordingRunner, route, SECRET, SECRET_ENV, secrets, stripeSigned, tempProfile, timestampSigned, type RecordingRunner } from "./fakes.test-helpers.js"; // [C8] timestampSigned
 import { readDeliveries } from "./store.js";
 import { classifyCall } from "../governance/policy-rules.js";
 import { INBOUND_SEED_CALL, seedInboundTaint } from "./taint.js";
@@ -88,6 +88,20 @@ describe("H3 webhook routes: signature first", () => {
     expect(stale.status).toBe(401);
     expect(runner.inputs).toHaveLength(1);
   });
+
+  // [C8] The generic scheme bound to a timestamp: past tolerance, a valid MAC is still a replay.
+  it("hmac-sha256-ts: a fresh delivery starts a run, the same one correctly signed 301 s ago is 401", async () => {
+    const acme = route({ name: "acme", path: "/hooks/acme", signature: "hmac-sha256-ts", objective_template: "Acme event {{payload.id}}", dedupe_key: "{{payload.id}}" });
+    const { engine, runner, clock, profileDir } = build([acme]);
+    const fresh = await engine.deliver(delivery(timestampSigned({ id: "evt_ts_1", type: "order.paid" }, clock.now), { path: "/hooks/acme" }));
+    expect(fresh.status).toBe(202);
+    const old = new Date(clock.now.getTime() - 301_000);
+    const stale = await engine.deliver(delivery(timestampSigned({ id: "evt_ts_2", type: "order.paid" }, old), { path: "/hooks/acme" }));
+    const staleInline = await engine.deliver(delivery(timestampSigned({ id: "evt_ts_3", type: "order.paid" }, old, { inline: true }), { path: "/hooks/acme" }));
+    expect([stale.status, staleInline.status]).toEqual([401, 401]);
+    expect(runner.inputs).toHaveLength(1);
+    expect(readDeliveries(profileDir, 10).filter((row) => row.verdict === "bad_signature").map((row) => row.status)).toEqual([401, 401]);
+  });
 });
 
 describe("H3 webhook routes: replay and dedupe", () => {
@@ -165,11 +179,51 @@ describe("H3 webhook routes: localhost-only", () => {
     expect(runner.inputs).toHaveLength(0);
   });
 
+  // [C8] A loopback route now takes content-type application/json only (the requirement changed:
+  // council C8), so the script's request names its type.
   it("accepts an unsigned loopback request on a loopback listener", async () => {
     const { engine, runner } = build([open]);
-    const out = await engine.deliver(delivery({ body: Buffer.from('{"job":"nightly"}'), headers: {} }, { path: "/hooks/local", peer: "::ffff:127.0.0.1" }));
+    const out = await engine.deliver(delivery({ body: Buffer.from('{"job":"nightly"}'), headers: { "content-type": "application/json; charset=utf-8" } }, { path: "/hooks/local", peer: "::ffff:127.0.0.1" })); // [C8]
     expect(out.status).toBe(202);
     expect(runner.inputs[0]?.objective).toContain("Local job nightly");
+  });
+
+  // [C8] A page in the owner's browser posts from 127.0.0.1 too; the browser always names its Origin.
+  it("refuses a loopback POST carrying an Origin header with 403, records why, and starts no run", async () => {
+    const { engine, runner, profileDir } = build([open]);
+    for (const origin of ["https://evil.test", "null"]) {
+      const out = await engine.deliver(delivery({ body: Buffer.from('{"job":"x"}'), headers: { "content-type": "application/json", origin } }, { path: "/hooks/local" }));
+      expect(out.status).toBe(403);
+    }
+    expect(runner.inputs).toHaveLength(0);
+    const rows = readDeliveries(profileDir, 10);
+    expect(rows.map((row) => [row.verdict, row.status])).toEqual([["browser_origin", 403], ["browser_origin", 403]]);
+    expect(rows[0]?.detail).toContain("https://evil.test");
+  });
+
+  // [C8] A form (enctype text/plain) or a no-cors fetch can post JSON-looking text with no preflight.
+  it("refuses a text/plain or untyped body, and a body that does not parse, with 403 and no run", async () => {
+    const { engine, runner, profileDir } = build([open]);
+    const post = (body: string, headers: Record<string, string>) => engine.deliver(delivery({ body: Buffer.from(body), headers }, { path: "/hooks/local" }));
+    expect((await post('{"job":"x","a":"="}', { "content-type": "text/plain" })).status).toBe(403);
+    expect((await post('{"job":"x"}', {})).status).toBe(403);
+    expect((await post("{not json", { "content-type": "application/json" })).status).toBe(403);
+    expect(runner.inputs).toHaveLength(0);
+    const rows = readDeliveries(profileDir, 10);
+    expect(rows.map((row) => [row.verdict, row.status])).toEqual([["not_json", 403], ["not_json", 403], ["not_json", 403]]);
+    expect(rows[0]?.detail).toContain("text/plain");
+  });
+
+  // [C8] Beyond the brief: a tunnel or reverse proxy on this host connects from loopback too, and
+  // one that says so (a forwarding header) is not a local caller.
+  it("refuses a loopback POST that a proxy forwarded, with 403 and no run", async () => {
+    const { engine, runner, profileDir } = build([open]);
+    for (const name of ["x-forwarded-for", "forwarded", "cf-connecting-ip", "x-real-ip"]) {
+      const out = await engine.deliver(delivery({ body: Buffer.from('{"job":"x"}'), headers: { "content-type": "application/json", [name]: "203.0.113.9" } }, { path: "/hooks/local" }));
+      expect(out.status).toBe(403);
+    }
+    expect(runner.inputs).toHaveLength(0);
+    expect(readDeliveries(profileDir, 10).map((row) => row.verdict)).toEqual(["not_loopback", "not_loopback", "not_loopback", "not_loopback"]);
   });
 });
 

@@ -48,6 +48,17 @@ export function stripeSigned(payload: unknown, at: Date, secret = SECRET): Signe
   return { body, headers: { "content-type": "application/json", "stripe-signature": `t=${t},v1=${hmacHex(secret, `${t}.${body.toString("utf8")}`)}` } };
 }
 
+// [C8] hmac-sha256-ts: hex HMAC over `<unix-seconds>.<raw body>`. The timestamp rides its own header
+// (default x-trent-timestamp), or with `inline` inside the signature header as `t=<unix>,v1=<hex>`.
+export function timestampSigned(payload: unknown, at: Date, options: { secret?: string; inline?: boolean; signatureHeader?: string; timestampHeader?: string } = {}): Signed {
+  const body = Buffer.from(JSON.stringify(payload));
+  const t = String(Math.floor(at.getTime() / 1000));
+  const hex = hmacHex(options.secret ?? SECRET, `${t}.${body.toString("utf8")}`);
+  const signatureHeader = (options.signatureHeader ?? "x-webhook-signature").toLowerCase();
+  if (options.inline === true) return { body, headers: { "content-type": "application/json", [signatureHeader]: `t=${t},v1=${hex}` } };
+  return { body, headers: { "content-type": "application/json", [signatureHeader]: `sha256=${hex}`, [(options.timestampHeader ?? "x-trent-timestamp").toLowerCase()]: t } };
+}
+
 export function delivery(signed: Signed, overrides: Partial<WebhookDelivery> = {}): WebhookDelivery {
   return { method: "POST", path: "/hooks/gh-issues", headers: signed.headers, body: signed.body, peer: "127.0.0.1", boundAddress: "127.0.0.1", ...overrides };
 }

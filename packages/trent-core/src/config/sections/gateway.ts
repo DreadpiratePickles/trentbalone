@@ -15,7 +15,9 @@ import { z } from "zod";
  * loopback listener. The listener is the same `WebhookServer` the chat adapters use; a route may
  * not sit under their `/webhooks/` prefix.
  */
-export const WEBHOOK_SIGNATURES = ["hmac-sha256", "stripe", "github", "none-localhost-only"] as const;
+export const WEBHOOK_SIGNATURES = ["hmac-sha256", "hmac-sha256-ts", "stripe", "github", "none-localhost-only"] as const; // [C8] hmac-sha256-ts
+/** [C8] The schemes that read `signature_header`: the two generic HMACs. */
+const GENERIC_HMAC_SIGNATURES: readonly string[] = ["hmac-sha256", "hmac-sha256-ts"];
 export const WEBHOOK_MODES = ["fleet", "solo"] as const;
 export const ADAPTER_WEBHOOK_PREFIX = "/webhooks/";
 export const DEFAULT_WEBHOOK_PORT = 8644;
@@ -44,9 +46,11 @@ export const WebhookRouteSchema = z
     /** An environment variable NAME. Its value is the secret; the value never goes in config. */
     secret_env: z.string().regex(/^[A-Z_][A-Z0-9_]{0,127}$/, "secret_env is an environment variable NAME (A-Z, 0-9, _), never the secret").optional(),
     signature: z.enum(WEBHOOK_SIGNATURES),
-    /** `hmac-sha256` only: the header carrying the hex digest. Default `x-webhook-signature`. */
+    /** `hmac-sha256` and `hmac-sha256-ts`: the header carrying the hex digest. Default `x-webhook-signature`. [C8] */
     signature_header: z.string().regex(/^[A-Za-z0-9-]{1,64}$/).optional(),
-    /** `stripe` only: how far `t=` may sit from this host's clock. */
+    /** [C8] `hmac-sha256-ts` only: the header carrying the unix-seconds timestamp. Default `x-trent-timestamp`. */
+    timestamp_header: z.string().regex(/^[A-Za-z0-9-]{1,64}$/).optional(),
+    /** `stripe` and `hmac-sha256-ts`: how far the signed timestamp may sit from this host's clock. [C8] */
     tolerance_seconds: z.number().int().positive().max(3600).default(300),
     objective_template: z.string().trim().min(1).max(8000),
     mode: z.enum(WEBHOOK_MODES).default("fleet"),
@@ -67,7 +71,9 @@ export const WebhookRouteSchema = z
     } else if (route.secret_env === undefined) {
       issue("secret_env", `a ${route.signature} route needs secret_env: the NAME of the variable holding its secret`);
     }
-    if (route.signature_header !== undefined && route.signature !== "hmac-sha256") issue("signature_header", "signature_header applies to hmac-sha256 only");
+    // [C8] signature_header is shared by both generic HMACs; timestamp_header belongs to hmac-sha256-ts.
+    if (route.signature_header !== undefined && !GENERIC_HMAC_SIGNATURES.includes(route.signature)) issue("signature_header", "signature_header applies to hmac-sha256 and hmac-sha256-ts only");
+    if (route.timestamp_header !== undefined && route.signature !== "hmac-sha256-ts") issue("timestamp_header", "timestamp_header applies to hmac-sha256-ts only");
     for (const field of ["objective_template", "dedupe_key"] as const) {
       const bad = badWebhookTemplateRefs(route[field] ?? "");
       if (bad.length > 0) issue(field, `only {{payload.<path>}} references are allowed, not: ${bad.join(", ")}`);
