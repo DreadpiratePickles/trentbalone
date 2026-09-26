@@ -75,6 +75,12 @@ api.openai.com, and any business or search host the owner allowlisted received t
 record with no `hosts` (minted before binding, or by a caller that named none) is bound to
 nothing and injects its secret nowhere: fail closed.
 
+Every request Trent sends through the egress proxy honours `redirect: "error"` and `"manual"`, and a
+followed redirect to another origin drops `Authorization`, cookies, API-key headers, the proxy token and the
+request body (a 301/302/303 POST becomes a GET; a 307/308 that would re-send a body elsewhere is refused), so an
+A2A peer's bearer never reaches the host its 302 names (`a2a/client-redirect.test.ts`,
+`tools/web/proxied-fetch.test.ts`).
+
 ### The local certificate authority
 
 TLS interception needs a certificate the sandbox trusts. Node's `crypto` can verify X.509 but cannot
@@ -309,7 +315,7 @@ negative case in `hardline.test.ts`.
 | `write-to-a-raw-disk-device` | `dd of=/dev/sdX`, a redirect to a raw device, `mkfs` |
 | `fork-bomb` | a function whose body pipes itself into itself in the background |
 | `write-to-trent-secrets` | a write to `~/.trent/.env`, the egress `ca.key`/`ca.crt`/`tokens.json`, or `workspace-trust.json` |
-| `read-trent-env-or-ssh-keys` | a read of `~/.trent/.env` or of anything under `~/.ssh` |
+| `read-trent-env-or-ssh-keys` | a read of `~/.trent/.env`, of anything under `~/.ssh`, or of Trent's own keys: `keys/*.key` (the audit signing key), `egress/ca.key` and `egress/tokens.json` under `~/.trent` or the profile directory (`governance/hardline.test.ts`) |
 | `force-push-to-a-protected-branch` | `git push --force` (or `-f`, or a `+refspec`) naming `main`, `master`, `trunk`, `develop`, `release`, `production` or `prod` |
 
 Commands are matched over the deobfuscated variants the approval floor already generates

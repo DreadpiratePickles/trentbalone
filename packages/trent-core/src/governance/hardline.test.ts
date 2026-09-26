@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { HARDLINE_RULES, hardlineBlock, PROTECTED_BRANCHES, type HardlineContext } from "./hardline.js";
+import { subjectsOfAction } from "./autonomy-dispatch.js"; // [C4]
 
 const HOME = "/home/founder";
 const ctx: HardlineContext = { home: HOME, profileDir: path.posix.join(HOME, ".trent", "default") };
@@ -145,6 +146,32 @@ describe("7. reading ~/.trent/.env or ~/.ssh/* from a tool", () => {
     expect(onCommand("echo 'put your key in ~/.ssh/config'")).toBeNull();
   });
 });
+
+// [C4] The same read rule covers Trent's own keys: the audit signing key and the egress CA key and
+// token store, under the profile dir or ~/.trent. A terminal action goes through `subjectsOfAction`,
+// exactly as the autonomy floor shows it to the hardline.
+describe("7b. reading Trent's audit key, egress CA key or egress token store from a tool", () => {
+  const terminal = (command: string) => hardlineBlock(subjectsOfAction(`terminal ${JSON.stringify({ command })}`), ctx);
+
+  it("fires on a terminal cat of <profile>/keys/audit.key and on a read of the egress key and tokens", () => {
+    expect(terminal(`cat ${path.posix.join(ctx.profileDir, "keys", "audit.key")}`)?.id).toBe("read-trent-env-or-ssh-keys");
+    expect(onCommand("base64 ~/.trent/default/keys/audit.key")?.id).toBe("read-trent-env-or-ssh-keys");
+    expect(onPath(path.posix.join(ctx.profileDir, "keys", "audit.key"), "read")?.id).toBe("read-trent-env-or-ssh-keys");
+    expect(onPath("~/.trent/egress/ca.key", "read")?.id).toBe("read-trent-env-or-ssh-keys");
+    expect(onPath("~/.trent/egress/tokens.json", "read")?.id).toBe("read-trent-env-or-ssh-keys");
+    expect(terminal(`cat ${path.posix.join(ctx.profileDir, "egress", "tokens.json")}`)?.id).toBe("read-trent-env-or-ssh-keys");
+    expect(terminal("cat $HOME/.trent/egress/ca.key")?.id).toBe("read-trent-env-or-ssh-keys");
+  });
+
+  it("does not fire on other profile files, the public halves, or a project's own keys directory", () => {
+    expect(terminal(`cat ${path.posix.join(ctx.profileDir, "notes.md")}`)).toBeNull();
+    expect(onPath(path.posix.join(ctx.profileDir, "keys", "audit.pub"), "read")).toBeNull();
+    expect(onPath("~/.trent/egress/ca.crt", "read")).toBeNull();
+    expect(onPath("/srv/app/keys/dev.key", "read")).toBeNull();
+    expect(terminal("cat /srv/app/egress/tokens.json")).toBeNull();
+  });
+});
+// [/C4]
 
 describe("8. git push --force to a protected branch", () => {
   it("ships a non-empty protected branch list and refuses a force push at one", () => {

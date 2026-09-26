@@ -141,4 +141,16 @@ describe("an OAuth MCP bearer through the egress proxy", () => {
     expect(mcp.requests.length).toBeGreaterThan(0);
     expect(other.requests.map((r) => r.headers.authorization)).toEqual([]);
   });
+
+  // [C4] The egress fetch now honours `redirect: "manual"`, so every hop is decided by the shared rule
+  // (`keepsCredentials`): a same-origin 307 keeps the bearer on the MCP host, and the hop cap still holds.
+  it("follows a same-origin redirect on the shared rule with the bearer, and stops at the hop cap", async () => {
+    await setup({ redirectTo: `http://${MCP_HOST}/mcp` });
+    await expect(viaProxy(entry({ Authorization: "Bearer ${STATIC_MCP_TOKEN}" }), { STATIC_MCP_TOKEN: "static-bearer-fixture" })).rejects.toThrow(/redirected more than 3 times/);
+    const hops = mcp.requests;
+    expect(hops.length).toBeGreaterThanOrEqual(4);
+    for (const hop of hops) expect(hop.headers.authorization).toBe("Bearer static-bearer-fixture");
+    expect(other.requests).toHaveLength(0);
+  });
+  // [/C4]
 });

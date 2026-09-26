@@ -137,12 +137,22 @@ function isTrentWriteTarget(target: string, ctx: HardlineContext): boolean {
   return EGRESS_FILES.has(base) && target.includes("/egress/");
 }
 
+// [C4] Trent's own keys: any `*.key` in a `keys/` or `egress/` directory (the audit signing key,
+// the egress CA key) and the egress token store. The public halves (`audit.pub`, `ca.crt`) stay readable.
+function isTrentKeyMaterial(target: string): boolean {
+  const base = path.posix.basename(target);
+  const parent = path.posix.basename(path.posix.dirname(target));
+  if (parent === "keys") return base.endsWith(".key");
+  return parent === "egress" && (base.endsWith(".key") || base === "tokens.json");
+}
+// [/C4]
+
 function isTrentReadTarget(target: string, ctx: HardlineContext): boolean {
   const home = ctx.home.replace(/\\/g, "/");
   if (under(target, normaliseTarget(path.posix.join(home, ".ssh"), ctx))) return true;
   const trentDir = normaliseTarget(path.posix.join(home, ".trent"), ctx);
   const inTrent = under(target, trentDir) || under(target, normaliseTarget(ctx.profileDir, ctx));
-  return inTrent && path.posix.basename(target) === ".env";
+  return inTrent && (path.posix.basename(target) === ".env" || isTrentKeyMaterial(target)); // [C4]
 }
 
 /** The delete targets that have no recovery path: root, home, `~/.trent`, this profile. */
@@ -248,7 +258,8 @@ export const HARDLINE_RULES: readonly HardlineRule[] = [
   },
   {
     id: "read-trent-env-or-ssh-keys",
-    reason: "a tool may never read Trent's own .env or anything under ~/.ssh; those credentials are not the model's to hold",
+    // [C4] the audit key, the egress CA key and the egress token store are read-protected too.
+    reason: "a tool may never read Trent's own .env, its audit or egress keys, the egress token store, or anything under ~/.ssh; those credentials are not the model's to hold",
     matches(subject, ctx) {
       if (subject.kind === "path") return subject.access === "read" && isTrentReadTarget(normaliseTarget(subject.value, ctx), ctx);
       return pathTokens(viewOf(subject.value)).some((token) => isTrentReadTarget(normaliseTarget(token, ctx), ctx));
