@@ -66,8 +66,12 @@ export interface MemoryLimitSource {
  * - `consolidation`: the scheduled consolidation draft and its human-promoted write
  *   (`fleet-memory/consolidate.ts`, `fleet-memory/memory-draft.ts`). Every action, and — only for
  *   the labels `memory.consolidation_may_edit` lists — a `read_only` block as well.
+ * - [C15] `owner`: the one agent of a solo conversation, which is the only writer its blocks have.
+ *   Every action inside a writable block, so "I moved to York" replaces the Leeds entry and a full
+ *   block is made room in by the same batch; a `read_only` block is refused to it whatever
+ *   `consolidation_may_edit` lists. The provenance hold sits outside this gate and is unchanged.
  */
-export type MemoryWriter = "seat" | "consolidation";
+export type MemoryWriter = "seat" | "consolidation" | "owner"; // [C15] owner
 
 export interface MemoryWriteGate {
   readonly writer: MemoryWriter;
@@ -81,6 +85,8 @@ export interface MemoryWriteGate {
 export const SEAT_WRITE_GATE: MemoryWriteGate = { writer: "seat" };
 /** The consolidation path with no read-only block listed; `consolidationMayEdit` adds those. */
 export const CONSOLIDATION_WRITE_GATE: MemoryWriteGate = { writer: "consolidation" };
+/** [C15] A solo conversation's own agent: add, replace and remove in a writable block. */
+export const OWNER_WRITE_GATE: MemoryWriteGate = { writer: "owner" }; // [C15]
 
 /** The label a ref addresses: the legacy label itself, or the configured block's own. */
 function refLabel(target: MemoryFileRef): string | undefined {
@@ -208,11 +214,22 @@ function locate(entries: string[], needle: string): number {
   return hits.length === 0 ? -1 : -2;
 }
 
+/**
+ * [C15] What an over-cap refusal tells its writer to do next: an owner makes room in the same batch
+ * (Hermes's rule), anyone else shortens the entry and leaves the rewrite to the consolidation.
+ */
+function overCapAdvice(writer: MemoryWriter): string {
+  return writer === "owner"
+    ? "Make room in the same call: replace or remove stale entries and add this one in one `operations` batch, or shorten it."
+    : "Shorten the entry: removing and merging entries is the scheduled consolidation's job, not a seat's.";
+}
+
 /** Apply every operation to a copy of the entries; the cap is checked once, on the result. */
 export function applyOperations(
   entries: readonly string[],
   operations: readonly MemoryOperation[],
-  cap: number
+  cap: number,
+  writer: MemoryWriter = "seat", // [C15] only the over-cap advice reads it
 ): ApplyResult {
   /** Every refusal reports the state it judged, not only the sentence explaining itself. */
   const refuse = (reason: string): ApplyResult => ({
@@ -257,7 +274,7 @@ export function applyOperations(
     return refuse(
       `the result would be ${rendered.length} chars, over the ${cap}-char cap by ${rendered.length - cap}. ` +
         `The file is unchanged: ${current} chars used, ${cap - current} chars remaining. ` +
-        `Shorten the entry: removing and merging entries is the scheduled consolidation's job, not a seat's.`,
+        overCapAdvice(writer), // [C15]
     );
   }
   return { ok: true, entries: next, rendered, remaining: cap - rendered.length };
@@ -353,7 +370,7 @@ export function commitOperations(
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const release = acquireLock(file);
   try {
-    const result = applyOperations(readEntries(profileDir, target), operations, cap);
+    const result = applyOperations(readEntries(profileDir, target), operations, cap, gate.writer); // [C15] the writer's advice
     if (!result.ok) return result;
     atomicWriteFileSync(NODE_IO, file, result.rendered, OWNER_ONLY);
     return result;

@@ -88,13 +88,28 @@ session. Skills loaded with `skill_view` stay loaded (next section).
 ## Memory and skills
 
 Each turn's recall (the brain and earlier runs, for this objective) rides that turn's message, never
-the system prompt. The `memory` tool writes with provenance: after untrusted content anywhere in the
-conversation, a write is held as an approval row, and approving it writes the entry tagged with where
-it came from (`[provenance: untrusted via web_extract]`).
+the system prompt. The `memory` tool can add, replace and remove. In solo the agent is the only writer of its blocks: when a
+fact changes ("I moved to York") it replaces the old entry in one call, it removes an entry you ask it to
+forget, and it makes room in a full block in the same call. A read-only block (`company` by default) stays
+read-only. The fleet is unchanged: a seat only adds, and entries are rewritten by the scheduled
+consolidation. Every write carries provenance: after untrusted content anywhere in the conversation, a write
+is held as an approval row, and approving an add writes the entry tagged with where it came from
+(`[provenance: untrusted via web_extract]`; `packages/trent-core/src/tools/memory/owner.test.ts`).
 
 The system prompt lists every installed skill by name and one line, never its body. `skill_view`
 loads a skill; from then on its text rides every turn of the conversation, read fresh each turn, so it
 survives a compaction and a restart.
+
+
+## The system prompt
+
+In order: the persona (`<profile>/brain/system/solo.md`, else the default), the solo rules, memory and the
+brain as they stood when the session opened, the skills index, the tool protocol and the tools. The rules
+are: use a tool rather than guess, and never claim a call that did not run. Make nothing up. Put independent
+calls in one reply; they run one after another. Save durable facts about you, never a secret. Load a listed
+skill before following it. A `solo.md` persona replaces only the persona; the rules stay. Over the default
+tools the prompt is about 11,400 characters (about 2,850 tokens), and its own text and tool descriptions
+name no seats and no founder (`packages/trent-core/src/solo/prompt-default.test.ts`).
 
 ## Delegation
 
@@ -144,3 +159,9 @@ the app's database in connected mode, its in-process store in standalone mode.
 - A delegated fleet child is not metered against its parent's per-run cap (it is its own run on the
   ledger); its cents are added to the parent's turn as it reports them.
 - Interrupted and failed turns carry no marker in the transcript yet (council A9).
+- The memory section of the prompt still uses the fleet's wording ("shared by every seat", "who the founder is").
+- Approving a held replace or remove does not apply it yet: the approved write is refused and the row stays
+  approved. Say the fact again in a conversation that read nothing untrusted.
+- A gateway thread's platform is passed with each run, but the platform hint ("You are talking over Telegram;
+  keep replies short, no Markdown tables") is not yet in the prompt.
+

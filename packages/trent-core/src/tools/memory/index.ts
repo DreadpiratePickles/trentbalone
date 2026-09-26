@@ -13,13 +13,21 @@
  * `readOnly`, or `callerContext()` reports the current step as delegated. A `read_only` block is
  * refused for every seat, naming the label. Hermes blocks subagent memory entirely; Trent allows
  * the read.
+ *
+ * [C15] The writer is decided per call. A fleet seat appends and nothing else (C4). A solo
+ * conversation's own agent is the `owner` of its blocks and may add, replace and remove in a writable
+ * one, as Hermes's memory tool does; its calls are the ones that run bound to a conversation
+ * (`solo/runner.ts` `bindSessionTaint`), which no fleet step's call ever is. One adapter serves both
+ * modes, so the description is per mode too: `instructions` is the fleet's, `instructionsFor("solo")`
+ * the text the solo prompt shows.
  */
 import fs from "node:fs";
+import { currentSessionTaint } from "../../governance/provenance.js"; // [C15] the solo owner's signal
 import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
 import { parseAction, record as toRecord, type ToolSpec } from "../action.js";
 import { renderToolInstructions, type ToolSchema } from "../web/schemas.js";
 import { DEFAULT_MEMORY_BLOCKS, assertDistinctBlocks, findBlock, type MemoryBlock } from "./blocks.js";
-import { ENTRY_SEPARATOR, checkMemoryWriteGate, commitOperations, memoryLimit, memoryPath, type ApplyResult, type MemoryOperation } from "./store.js";
+import { ENTRY_SEPARATOR, checkMemoryWriteGate, commitOperations, memoryLimit, memoryPath, type ApplyResult, type MemoryOperation, type MemoryWriter } from "./store.js"; // [C15] MemoryWriter
 
 export { DEFAULT_MEMORY_BLOCKS, MEMORY_BLOCK_LABEL_PATTERN, assertDistinctBlocks, findBlock } from "./blocks.js";
 export type { MemoryBlock } from "./blocks.js";
@@ -28,6 +36,7 @@ export {
   ENTRY_SEPARATOR,
   MEMORY_FILES,
   CONSOLIDATION_WRITE_GATE,
+  OWNER_WRITE_GATE, // [C15]
   SEAT_WRITE_GATE,
   applyOperations,
   checkMemoryWriteGate,
@@ -59,8 +68,56 @@ function describeBlocks(blocks: readonly MemoryBlock[]): string {
     .join("; ");
 }
 
+/** [C15] Which runner's prompt a description is written for. */
+export type MemoryToolMode = "fleet" | "solo";
+
+/**
+ * [C15] The solo description: the agent owns its blocks, so it can add, correct and delete, and a full
+ * block is made room in by the same batch. It names no seat, no founder and no consolidation, none of
+ * which a solo conversation has. A read-only block is named, not described: the agent cannot write it.
+ */
+function soloMemoryToolSchema(blocks: readonly MemoryBlock[]): ToolSchema {
+  const writable = blocks.filter((b) => !b.read_only);
+  const readOnly = blocks.filter((b) => b.read_only).map((b) => b.label);
+  const actions = ["add", "replace", "remove"];
+  return {
+    name: "memory",
+    description:
+      "Keep, correct or delete a short note that is loaded into your prompt at the start of every conversation. Blocks: " +
+      `${writable.map((b) => `${b.label} = ${b.description} (${b.limit} chars total)`).join("; ")}.` +
+      (readOnly.length === 0 ? "" : ` Read-only, which you cannot write: ${readOnly.join(", ")}.`) +
+      ` \`block\` (alias \`target\`) names the block and defaults to "${DEFAULT_BLOCK_LABEL}". ` +
+      'Actions: "add" (content) records a new entry; "replace" (old_text, content) puts content, the whole new entry, ' +
+      'in place of the one entry that contains old_text, for a fact that changed; "remove" (old_text) deletes the one ' +
+      "entry that contains old_text. old_text is a short piece of that entry, enough to match no other. Use a single " +
+      "action, or `operations`: a batch applied in order, all or nothing. The cap is checked on the final state, so when " +
+      "a block is full, replace or remove stale entries in the same batch as the add. The current contents are already in your prompt.",
+    parameters: {
+      type: "object",
+      properties: {
+        target: { type: "string", enum: writable.map((b) => b.label), description: `Block label to write; defaults to "${DEFAULT_BLOCK_LABEL}".` },
+        block: { type: "string", enum: writable.map((b) => b.label), description: "Same as target." },
+        action: { type: "string", enum: actions },
+        content: { type: "string", description: "The entry's text: the new entry for add, the whole replacement for replace." },
+        old_text: { type: "string", description: "For replace and remove: a short piece of the one entry to change." },
+        operations: {
+          type: "array",
+          description: "Batch form: [{action, content, old_text}] applied in order, all or nothing.",
+          items: {
+            type: "object",
+            properties: { action: { type: "string", enum: actions }, content: { type: "string" }, old_text: { type: "string" } },
+            required: ["action"],
+          },
+        },
+      },
+      required: ["target"],
+    },
+  };
+}
+
 /** The tool schema for one configured block list; the enum and the description name every label. */
-export function memoryToolSchemas(blocks: readonly MemoryBlock[]): ToolSchema[] {
+export function memoryToolSchemas(blocks: readonly MemoryBlock[], mode: MemoryToolMode = "fleet"): ToolSchema[] { // [C15] mode
+  if (mode === "solo") return [soloMemoryToolSchema(blocks)];
   const writable = blocks.filter((b) => !b.read_only).map((b) => b.label);
   return [
     {
@@ -126,6 +183,17 @@ export interface MemoryAdapter extends TrentToolAdapter {
   thaw(): void;
   /** Installs (or replaces) the caller-context provider; the fleet hook binds its step tracker here. */
   bindCallerContext(provider: () => MemoryCallerContext): void;
+  /** [C15] The instructions as one runner's prompt shows them: `fleet` is `instructions`; `solo` lists replace and remove. */
+  instructionsFor(mode: MemoryToolMode): string; // [C15]
+}
+
+/**
+ * [C15] Who is writing this call. A solo run's calls, and only a solo run's, run bound to their
+ * conversation (`governance/provenance.ts` `currentSessionTaint`): that agent is the conversation's
+ * one writer, the owner. Every other call is a fleet seat's, including a call made outside any run.
+ */
+function writerOfCall(): MemoryWriter {
+  return currentSessionTaint() === undefined ? "seat" : "owner";
 }
 
 /** `block` wins, `target` is the Hermes-era alias, and the default block takes an unnamed write. */
@@ -192,13 +260,14 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
 
   const record = (action: string, status: ToolCallRecord["status"], summary: string) =>
     toRecord(MEMORY_ADAPTER_NAME, action, status, summary);
+  const instructions = renderToolInstructions(memoryToolSchemas(blocks)); // [C15] the fleet's, as before
 
   return {
     name: MEMORY_ADAPTER_NAME,
     blocks,
     scopes: [MEMORY_ADAPTER_NAME, "memory:write", "memory:read"],
     availability: "real",
-    instructions: renderToolInstructions(memoryToolSchemas(blocks)),
+    instructions,
     routingText: ROUTING_TEXT,
     healthCheck: async () => "connected",
     estimateCost: () => 0,
@@ -214,6 +283,7 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
     bindCallerContext(provider) {
       callerContext = provider;
     },
+    instructionsFor: (mode) => (mode === "solo" ? renderToolInstructions(memoryToolSchemas(blocks, "solo")) : instructions), // [C15]
     async execute(action) {
       const { args, error } = parseAction(action, SPECS);
       if (error) return record(action, "failed", error);
@@ -223,7 +293,10 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
       if (options.readOnly || callerContext?.().delegated) {
         return record(action, "blocked", "This seat is delegated and has read-only memory. Report the fact to the parent instead.");
       }
+      const writer = writerOfCall(); // [C15]
       if (block.read_only) {
+        // [C15] The owner is told the same rule in its own words: nobody in its conversation is a seat.
+        if (writer === "owner") return record(action, "blocked", `memory(${label}) is read-only: ${block.file} is edited by hand, not by you. Use a writable block, or ask the person to edit it.`);
         return record(
           action,
           "blocked",
@@ -236,7 +309,8 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
 
       // [C4] The layer gate: a seat appends, and nothing else. A replace or a remove would edit an
       // entry another seat wrote, which is the consolidation draft's job and the founder's call.
-      const gate = { writer: "seat" as const, blocks };
+      // [C15] A solo conversation's own agent is its blocks' only writer: the owner rewrites too.
+      const gate = { writer, blocks };
       const gated = checkMemoryWriteGate(block, ops, gate);
       if (gated !== null) return record(action, "blocked", `memory(${label}) refused: ${gated}`);
 
@@ -254,12 +328,16 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
         // same turn — its prelude snapshot was frozen before this write and may already be stale.
         return record(action, "failed", `memory(${label}) refused: ${result.reason}${renderRefusalState(result)}`);
       }
+      // [C15] Where the write shows up next, told to each writer as it is true for it.
+      const next =
+        writer === "owner"
+          ? "Saved. Your prompt shows memory as it stood when this conversation opened, so the change is in it from the next conversation on."
+          : "Shared with every seat in the company from the next run on; your prompt keeps this run's snapshot.";
       return record(
         action,
         "completed",
         `memory(${label}): applied ${ops.length} operation(s); ${result.entries.length} entries, ` +
-          `${result.rendered.length} chars used, ${result.remaining} remaining of ${cap}. ` +
-          `Shared with every seat in the company from the next run on; your prompt keeps this run's snapshot.`
+          `${result.rendered.length} chars used, ${result.remaining} remaining of ${cap}. ${next}`
       );
     },
     async dryRun(action) {

@@ -94,6 +94,33 @@ describe("createAgentHandler", () => {
   });
 });
 
+// [C15] The solo branch names the thread's platform, for the solo prompt's platform hint (`soloPlatformHint`).
+describe("[C15] createAgentHandler on the solo runner", () => {
+  let tempDir: string;
+  afterEach(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+
+  it("passes the thread's platform name with the run, beside the thread's session", async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-gateway-handler-c15-"));
+    const seen: Array<Record<string, unknown>> = [];
+    const runtime: AgentRuntime = {
+      mode: "solo",
+      run: (_objective, options) => {
+        seen.push({ ...(options ?? {}) });
+        return (async function* () {
+          yield ev("run_done", { run: { status: "completed", summary: "Short answer." } });
+        })();
+      },
+    };
+    const deps = { store: new MemoryGatewayStore(), sessions: new SessionManager(new ConfigManager({ baseDir: tempDir })) };
+
+    expect(await createAgentHandler(runtime, deps)("ceo", message)).toBe("Short answer.");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ trigger: "manual", platform: "telegram" });
+    expect(typeof seen[0]?.session).toBe("string");
+  });
+});
+// [C15] end
+
 describe("createAgentHandler threads are sessions", () => {
   let tempDir: string;
   let sessions: SessionManager;

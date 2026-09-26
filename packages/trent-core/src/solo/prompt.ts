@@ -18,6 +18,15 @@
  * role merge, so a compaction summary and the turn after it arrive as one user message.
  * [S1.1] C2: a result reaches the model capped at `agent.solo.max_tool_result_chars`, the cut named.
  */
+// [C15] The prompt written for solo (council C15; Hermes `agent/prompt_builder.py`): no seats, no
+// founder, no nightly consolidation, none of which a solo conversation has. After the persona come
+// the rules every persona keeps (`SOLO_RULES`: use a tool rather than guess and never claim a call,
+// make nothing up, several independent calls in one reply, run one after another as `turn.ts` runs
+// them, what to save to memory and never a secret, load a listed skill), and the prefix ENDS with the
+// platform hint when the conversation is a gateway thread (`soloPlatformHint`), so everything before
+// it is the same bytes on every platform. The disclosure shows an adapter's solo text when it offers
+// one (`memory`: add, replace and remove) and says "person" where the fleet's text says "founder".
+// The rendered default is measured in `prompt-default.test.ts`.
 import fs from "node:fs";
 import path from "node:path";
 import { toolNameOf } from "../governance/idempotent-dispatch.js";
@@ -30,11 +39,12 @@ import { DEFAULT_SOLO_MAX_TOOL_RESULT_CHARS, SOLO_MAX_TOOL_RESULT_CHARS_KEY, typ
 /** The persona file, under the brain's always-loaded `system/` directory. */
 export const SOLO_PERSONA_FILE = "solo.md";
 
+// [C15] Identity and voice only: the rules below are kept whatever persona `solo.md` replaces this with.
 export const DEFAULT_SOLO_PERSONA =
-  "You are Trent, one capable assistant working for the person in this conversation. Use the tools " +
-  "below when they get you a fact you do not have or do work the person asked for, and say plainly " +
-  "what a tool reported: never claim a tool did something its result does not show. A call that is " +
-  "held for approval waits until the person decides.";
+  "You are Trent, an assistant working for one person: the person in this conversation. You act for them " +
+  "with the tools below and keep what matters to them in memory from one conversation to the next. Be " +
+  "direct: match the length of your reply to the question, skip filler, and when you finish a piece of work " +
+  "say what you did, what it showed and what is left.";
 
 export const SOLO_TOOL_PROTOCOL = [
   "## How to call a tool",
@@ -48,6 +58,66 @@ export const SOLO_TOOL_PROTOCOL = [
 ].join("\n");
 
 const SEPARATOR = "\n\n";
+
+// [C15] The solo rules and the platform hint slot.
+/** [C15] The rules every solo session is told, after the persona, whoever wrote the persona. */
+export const SOLO_RULES = [
+  "## Using tools",
+  "- When a tool can get a fact you do not have, or do what the person asked, call it instead of guessing or describing what you would do. If you say you will do something, make the call in that same reply.",
+  "- Say plainly what each tool reported. Never say a tool ran, or what it returned, unless its result is in this conversation. A call held for approval has not run: say it is waiting for the person.",
+  "",
+  "## No made-up facts",
+  "- Never invent facts, numbers, names, quotes, links, file contents or tool output. When you do not know and cannot find out, say so; when you are unsure, say that too.",
+  '- When a tool fails, say what failed and try another way if there is one. A plain "I could not" is better than a plausible guess.',
+  "",
+  "## Several calls in one reply",
+  "When you need several things that do not depend on each other, such as two files or three searches, ask for all of them in one reply: it saves a round trip. They run one after another, in the order you wrote them, so a call that needs another call's result belongs in your next reply.",
+  "",
+  "## What to save to memory",
+  "The memory tool keeps short notes that are loaded into your prompt at the start of every conversation; what you save now is there from the next conversation on. " +
+    'Save durable facts about the person (where they live, their work, how they like to be helped), decisions they made and standing conventions, written as plain statements ("Lives in York"), not as orders to yourself. ' +
+    "When a fact changes, replace the old entry instead of adding a second one; when the person asks you to forget something, remove it. " +
+    "Do not save task progress or anything you can look up again, and never save a secret: no passwords, API keys, tokens, or card or account numbers. " +
+    "After you read a web page or other outside content in this conversation, a memory write is held for the person's approval, or refused where nobody can approve it: say which, and do not call it saved.",
+  "",
+  "## Following a skill",
+  "When this prompt lists skills and one covers the task, load it with skill_view before you start, and follow it.",
+].join("\n");
+
+/** [C15] The gateway's platform ids (`gateway/registry.ts`), as a person names them. */
+const PLATFORM_NAMES: Readonly<Record<string, string>> = {
+  telegram: "Telegram",
+  whatsapp: "WhatsApp",
+  signal: "Signal",
+  slack: "Slack",
+  discord: "Discord",
+  teams: "Microsoft Teams",
+  matrix: "Matrix",
+  mattermost: "Mattermost",
+  line: "LINE",
+  email: "email",
+  homeassistant: "Home Assistant",
+  ntfy: "ntfy",
+};
+
+/** [C15] How a reply reads there. A chat shows Markdown tables and headings badly or as raw symbols. */
+const CHAT_ADVICE = "keep replies short, no Markdown tables or headings: plain sentences and short lists read best in a chat.";
+const PLATFORM_ADVICE: Readonly<Record<string, string>> = {
+  email: "write a complete reply in plain text, no Markdown; it is sent as an email in this thread.",
+  homeassistant: "reply in one or two plain sentences, no Markdown.",
+  ntfy: "reply in one or two plain sentences, no Markdown: it arrives as a notification.",
+};
+
+/** A platform id that is safe to name in a prompt; anything else is described, never echoed. */
+const PLATFORM_ID = /^[a-z][a-z0-9_-]{0,31}$/i;
+
+/** [C15] The platform hint for a gateway conversation: where the person is, and how a reply should read there. */
+export function soloPlatformHint(platform: string): string {
+  const given = platform.trim();
+  const id = given.toLowerCase();
+  const name = PLATFORM_NAMES[id] ?? (PLATFORM_ID.test(given) ? given : "a messaging platform");
+  return `You are talking over ${name}; ${PLATFORM_ADVICE[id] ?? CHAT_ADVICE}`;
+}
 
 export function soloPersonaPath(profileDir: string): string {
   return path.join(profileDir, "brain", "system", SOLO_PERSONA_FILE);
@@ -116,9 +186,19 @@ function rewriteInlineCalls(text: string, names: readonly string[]): string {
   return out + text.slice(last);
 }
 
+/** [C15] The fleet's word for the human, as solo says it. A quoted value (an argument) is never touched. */
+const FOUNDER = /(?<![\w"'])([Ff])ounder(?![\w"])/g;
+
+/** [C15] An adapter's own solo text when it offers one (`memory`: replace and remove), else its instructions. */
+function soloTextOf(adapter: TrentToolAdapter): string {
+  const perMode = (adapter as { instructionsFor?: (mode: "solo") => string }).instructionsFor;
+  return typeof perMode === "function" ? perMode.call(adapter, "solo") : adapter.instructions;
+}
+
 /** [S1.1] C1: an adapter's instructions in the one call format: no `action =` line, no `toolCall.*`, examples as bodies. */
 export function soloInstructions(adapter: TrentToolAdapter): string {
-  const text = adapter.instructions
+  const text = soloTextOf(adapter) // [C15] the adapter's solo text, and "person" for "founder"
+    .replace(FOUNDER, (_match, initial: string) => (initial === "F" ? "Person" : "person"))
     .replace(ACTION_LINE_WITH_KEYS, "  arguments (keys of the JSON object):")
     .replace(ACTION_LINE, "")
     .replace(TOOLCALL_NAME, "")
@@ -155,11 +235,15 @@ export interface SystemPromptInput {
   /** The stable tier's assembled text (`assembleContext` over the stable blocks). */
   readonly stable: string;
   readonly adapters: readonly TrentToolAdapter[];
+  /** [C15] A gateway thread's platform id (`InboundMessage.platform`); absent on the REPL and a one-off run. */
+  readonly platform?: string;
 }
 
 export function buildSystemPrompt(input: SystemPromptInput): string {
   const tools = renderToolDisclosure(input.adapters);
-  return [input.persona.trim(), input.stable.trim(), SOLO_TOOL_PROTOCOL, tools].filter((part) => part !== "").join(SEPARATOR);
+  // [C15] The rules after the persona; the platform hint last, so the prefix before it is the same on every platform.
+  const platform = input.platform === undefined || input.platform.trim() === "" ? "" : `## Where you are talking\n${soloPlatformHint(input.platform)}`;
+  return [input.persona.trim(), SOLO_RULES, input.stable.trim(), SOLO_TOOL_PROTOCOL, tools, platform].filter((part) => part !== "").join(SEPARATOR);
 }
 
 export interface ContextTierInput {
