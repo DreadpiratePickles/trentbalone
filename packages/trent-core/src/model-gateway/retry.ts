@@ -15,12 +15,16 @@
  *      shared rate limit into a synchronized retry storm across every concurrent run.
  *
  * The numbers live in `DEFAULT_RETRY_POLICY` and nowhere else.
+ *
+ * // [C12] One refusal is told apart from the rest: a context-length 400 is `context_overflow`, still never retried
+ * here (the same request earns the same refusal), but a caller that can shrink the request knows it may: solo
+ * compacts once and asks again (`solo/overflow.ts`). The wording per provider is in `retry.overflow.test.ts`.
  */
 
 import { redactText } from "../errors/index.js";
 
 /** The rulebook's error taxonomy, as it applies to a provider call. */
-export type ErrorClass = "validation" | "auth" | "rate_limit" | "dependency" | "timeout" | "internal";
+export type ErrorClass = "validation" | "context_overflow" | "auth" | "rate_limit" | "dependency" | "timeout" | "internal"; // [C12] context_overflow
 
 export interface RetryPolicy {
   /** Total attempts for one provider, INCLUDING the first. 1 means "no retry". */
@@ -182,6 +186,18 @@ function isSdkTimeout(error: unknown): boolean {
   return error.message === "Request timed out.";
 }
 
+// [C12] Each provider's context-length refusal, as its fixtures word it (sources in `retry.overflow.test.ts`): OpenAI,
+// OpenRouter and vLLM "maximum context length" (and OpenAI's code), Anthropic "prompt is too long", Google "input token
+// count", Ollama "exceeds the context length", llama.cpp "exceeds the available context size". Not a bare "context
+// size": a local server's MEMORY ceiling ends "Reduce context size.", and compaction cannot lower a prefill peak.
+const CONTEXT_OVERFLOW = /maximum context length|context_length_exceeded|prompt is too long|input token count|exceeds the context length|exceeds the available context size/i; // [C12]
+
+/** [C12] The provider refused the request because the prompt does not fit the model's window. */
+function isContextOverflow(error: unknown): boolean { // [C12]
+  if ((error as { code?: unknown } | null | undefined)?.code === "context_length_exceeded") return true;
+  return error instanceof Error && CONTEXT_OVERFLOW.test(error.message);
+}
+
 /** Classify a provider failure into the rulebook's taxonomy and say whether it may be retried. */
 export function classifyProviderError(error: unknown, nowMs: number = Date.now()): ClassifiedFailure {
   const status = statusOf(error);
@@ -192,6 +208,7 @@ export function classifyProviderError(error: unknown, nowMs: number = Date.now()
     if (status === 408) return { errorClass: "timeout", retryable: true, status, maxAttempts: TIMEOUT_MAX_ATTEMPTS, ...withRetryAfter };
     if (status >= 500) return { errorClass: "dependency", retryable: true, status, ...withRetryAfter };
     if (status === 401 || status === 403) return { errorClass: "auth", retryable: false, status };
+    if (isContextOverflow(error)) return { errorClass: "context_overflow", retryable: false, status }; // [C12]
     return { errorClass: "validation", retryable: false, status };
   }
 

@@ -8,8 +8,14 @@
  * (`./store.ts` says why on disk rather than on the run record).
  *
  * No surface work here: {@link TodoAdapter.items} is the getter a REPL pane or the TUI renders from.
+ *
+ * // [C12] A solo conversation's list is ITS list, not one message's: a call bound to a conversation (the binding the
+ * memory tool's owner check reads, `governance/provenance.ts` `currentSessionTaint`) files under the conversation's
+ * key, so a plan written in turn 1 is still there in turn 3 and after a compaction. A call bound to none (every
+ * fleet seat's) keeps the per-run list.
  */
 import { currentToolCallContext } from "../../governance/tool-call-context.js";
+import { currentSessionTaint } from "../../governance/provenance.js"; // [C12] the conversation a solo call is bound to
 import { parseAction, record as toRecord, type ToolSpec } from "../action.js";
 import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
 import { renderToolInstructions, type ToolSchema } from "../web/schemas.js";
@@ -21,6 +27,11 @@ export const TODO_ADAPTER_NAME = "todo";
 export const TODO_SCOPES = ["todo"];
 /** Outside a run — a direct REPL call, a test — the list is keyed here rather than refused. */
 export const TODO_LOCAL_RUN = "local";
+/** [C12] Where a solo conversation's list is filed: its key, apart from every run id. */
+export const todoConversationKey = (conversation: string): string => `conversation:${conversation}`; // [C12]
+
+/** [C12] What a list belongs to, as the model is told it. */
+type TodoScope = "run" | "conversation"; // [C12]
 
 const SPECS: readonly ToolSpec[] = [{ name: TODO_ADAPTER_NAME, primary: "action", signature: ["action"] }];
 const ROUTING_TEXT =
@@ -60,8 +71,8 @@ export interface TodoAdapter extends TrentToolAdapter {
   items(runId?: string): readonly TodoItem[];
 }
 
-function renderList(items: readonly TodoItem[]): string {
-  if (items.length === 0) return "the task list for this run is empty; add the steps you intend to take.";
+function renderList(items: readonly TodoItem[], scope: TodoScope = "run"): string { // [C12] scope
+  if (items.length === 0) return `the task list for this ${scope} is empty; add the steps you intend to take.`; // [C12]
   const counts = new Map<TodoStatus, number>();
   for (const item of items) counts.set(item.status, (counts.get(item.status) ?? 0) + 1);
   const header = TODO_STATUSES.filter((status) => counts.has(status)).map((status) => `${counts.get(status)} ${status}`).join(", ");
@@ -78,6 +89,11 @@ export function createTodoAdapter(options: TodoAdapterOptions): TodoAdapter {
   const store = new TodoStore(options.profileDir);
   const now = options.now ?? ((): string => new Date().toISOString());
   const runOf = (): string => currentToolCallContext()?.runId ?? TODO_LOCAL_RUN;
+  // [C12] The conversation's list when the call is bound to one, else the run's.
+  const listOf = (): { readonly key: string; readonly scope: TodoScope } => { // [C12]
+    const conversation = currentSessionTaint()?.key;
+    return conversation === undefined ? { key: runOf(), scope: "run" } : { key: todoConversationKey(conversation), scope: "conversation" };
+  };
   const record = (action: string, status: ToolCallRecord["status"], summary: string): ToolCallRecord =>
     toRecord(TODO_ADAPTER_NAME, action, status, summary);
 
@@ -94,17 +110,17 @@ export function createTodoAdapter(options: TodoAdapterOptions): TodoAdapter {
     async execute(action) {
       const { args, error } = parseAction(action, SPECS);
       if (error) return record(action, "failed", error);
-      const runId = runOf();
+      const { key: runId, scope } = listOf(); // [C12]
       const verb = typeof args.action === "string" ? args.action.trim().toLowerCase() : "";
 
-      if (verb === "list") return record(action, "completed", renderList(store.list(runId)));
+      if (verb === "list") return record(action, "completed", renderList(store.list(runId), scope)); // [C12] scope
 
       if (verb === "add") {
         const texts = textsOf(args);
         if (texts.length === 0) return record(action, "failed", 'todo add needs "items": one non-empty string per task.');
         const added = store.add(runId, texts, now());
-        if (added.length === 0) return record(action, "failed", "todo add wrote nothing: this run is already at its task limit.");
-        return record(action, "completed", renderList(store.list(runId)));
+        if (added.length === 0) return record(action, "failed", `todo add wrote nothing: this ${scope} is already at its task limit.`); // [C12]
+        return record(action, "completed", renderList(store.list(runId), scope)); // [C12]
       }
 
       if (verb === "update") {
@@ -118,14 +134,14 @@ export function createTodoAdapter(options: TodoAdapterOptions): TodoAdapter {
         if (typeof args.text === "string") patch.text = args.text;
         if (typeof args.note === "string") patch.note = args.note;
         const updated = store.update(runId, id, patch, now());
-        if (updated === undefined) return record(action, "failed", `todo update: this run has no task "${id}". Call todo with action list to see the ids.`);
-        return record(action, "completed", renderList(store.list(runId)));
+        if (updated === undefined) return record(action, "failed", `todo update: this ${scope} has no task "${id}". Call todo with action list to see the ids.`); // [C12]
+        return record(action, "completed", renderList(store.list(runId), scope)); // [C12]
       }
 
       return record(action, "failed", `todo: "${verb}" is not an action. Use add, update or list.`);
     },
     items(runId) {
-      return store.list(runId ?? runOf());
+      return store.list(runId ?? listOf().key); // [C12] the conversation's list when bound
     },
     async cleanup() {},
   };

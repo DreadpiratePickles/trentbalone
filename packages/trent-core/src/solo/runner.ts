@@ -114,7 +114,7 @@ export function createSoloRunner(deps: SoloRunnerOptions): SoloRunner { // [CF] 
   function sessionTaint(): SessionTaint {
     if (taint === undefined) {
       const saved = loadSoloState(deps.state);
-      taint = createSessionTaint(saved.taint);
+      taint = createSessionTaint(saved.taint, deps.sessionId ?? defaultId("conversation")); // [C12] the conversation's key: its todo list (`tools/todo`)
       for (const park of saved.parked) parks.set(park.runId, park);
       invoked = [...(saved.invokedSkills ?? [])]; // [S3]
     }
@@ -155,10 +155,11 @@ export function createSoloRunner(deps: SoloRunnerOptions): SoloRunner { // [CF] 
       parks.set(state.runId, parkRecordOf(state, { objective, parkedAt: clock().toISOString(), ...(deps.sessionId === undefined ? {} : { sessionId: deps.sessionId }) }));
       persist();
     },
+    compactOnOverflow: (runId) => compactor.compactForRun(runId), // [C12] `overflow.ts`; the compactor is built below
   };
 
   // [S3] Compaction: the automatic path before a run, and `compact()`; its model calls on the meter as their own run.
-  const compactor = createSoloCompactor({ deps, ...(window === undefined ? {} : { windowTokens: window }), now: clock, newId, taint: () => sessionTaint(), parked: () => new Set(parks.keys()), busy: () => streaming.size > 0 });
+  const compactor = createSoloCompactor({ deps, ...(window === undefined ? {} : { windowTokens: window }), now: clock, newId, taint: () => sessionTaint(), parked: () => new Set(parks.keys()), busy: (except) => [...streaming].some((runId) => runId !== except) }); // [C12] the run asking is not busy to itself
 
   async function prefixFor(objective: string, runId: string, history: readonly SoloMessage[]): Promise<{ session: SessionPrefix; context: readonly ContextBlock[] }> {
     const tiers = await deps.memory({ runId, objective, history });

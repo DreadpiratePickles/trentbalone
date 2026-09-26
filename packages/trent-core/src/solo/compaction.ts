@@ -19,6 +19,8 @@
  * A run parked on a held call keeps its opening message whatever the budget says: `resume` after a
  * restart rebuilds the run from it. The model calls are metered as their own run, seat `trent`, on the
  * one ledger, and the meter's stop is asked before each of them.
+ * // [C12] And once mid-run, when the provider refuses a turn's request as over its window (`overflow.ts`):
+ * forced, with that run's own opening kept verbatim like a parked run's (`compactForRun`).
  *
  * What a compaction does NOT touch is the frozen system prefix (persona, stable tier, tool protocol):
  * the runner keeps it byte-identical, so a provider's prefix cache survives. What the model needs and a
@@ -295,14 +297,16 @@ export interface SoloCompactorDeps {
   readonly taint: () => SessionTaint;
   /** The run ids parked on a held call: their openings are kept. */
   readonly parked: () => ReadonlySet<string>;
-  /** True while a run of this conversation is being streamed: a compaction then would race its appends. */
-  readonly busy: () => boolean;
+  /** True while a run of this conversation is being streamed: a compaction then would race its appends. [C12] `except`: the run asking. */
+  readonly busy: (except?: string) => boolean; // [C12]
 }
 
 export interface SoloCompactor {
   /** False when `agent.solo.auto_compact` is off: only `/compact` compacts. */
   readonly auto: boolean;
   compact(force: boolean): Promise<SoloCompactionOutcome>;
+  /** [C12] The one compaction a run's context-length refusal earns (`overflow.ts`): forced, mid-run, that run's opening kept verbatim. */
+  compactForRun(runId: string): Promise<SoloCompactionOutcome>; // [C12]
   /** The step note the automatic path leaves, or undefined when it changed nothing. */
   noteFor(outcome: SoloCompactionOutcome | undefined): string | undefined;
 }
@@ -313,31 +317,41 @@ export function createSoloCompactor(input: SoloCompactorDeps): SoloCompactor {
   const model = deps.config?.model;
   // The flush writes through the conversation's own `memory` adapter: the gated one the model's calls use.
   const memory = deps.tools.adapters.find((adapter) => adapter.name === MEMORY_ADAPTER_NAME);
-  const keepFrom = (messages: readonly SessionMessage[]): number | undefined => {
+  // [C12] `running`: the run compacting mid-run keeps its opening, like a parked run's.
+  const keepFrom = (messages: readonly SessionMessage[], running?: string): number | undefined => { // [C12]
     const parked = input.parked();
-    const index = messages.findIndex((message) => message.role === "user" && parked.has(String(message.metadata?.run_id ?? "")));
+    const index = messages.findIndex((message) => message.role === "user" && (parked.has(String(message.metadata?.run_id ?? "")) || (running !== undefined && message.metadata?.run_id === running))); // [C12]
     return index === -1 ? undefined : index;
   };
-  return {
+  const compactNow = async (force: boolean, running?: string, bounds: SoloCompactionLimits = limits): Promise<SoloCompactionOutcome> => { // [C12] one body for both callers
+    const taint = input.taint();
+    if (input.busy(running)) return { status: "skipped", reason: "a run is in flight on this conversation; compact it after that run ends", pruned: 0 }; // [C12] the run asking is not "in flight" to itself
+    return compactConversation({
+      session: deps.session,
+      gateway: deps.gateway,
+      request: { role: "executor", ...(model === undefined || model === "" ? {} : { model }) },
+      meter: deps.meter,
+      ...(memory === undefined ? {} : { memory }),
+      ...(deps.companyId === undefined ? {} : { companyId: deps.companyId }),
+      ...(deps.compaction === undefined ? {} : { settings: deps.compaction }),
+      taint,
+      newRunId: () => input.newId("solo_compact"),
+      keepFrom: (messages) => keepFrom(messages, running), // [C12]
+      limits: bounds, // [C12]
+      force,
+      now: input.now,
+    });
+  };
+  return { // [C12]
     auto: deps.compaction?.auto !== false,
-    async compact(force) {
-      const taint = input.taint();
-      if (input.busy()) return { status: "skipped", reason: "a run is in flight on this conversation; compact it after that run ends", pruned: 0 };
-      return compactConversation({
-        session: deps.session,
-        gateway: deps.gateway,
-        request: { role: "executor", ...(model === undefined || model === "" ? {} : { model }) },
-        meter: deps.meter,
-        ...(memory === undefined ? {} : { memory }),
-        ...(deps.companyId === undefined ? {} : { companyId: deps.companyId }),
-        ...(deps.compaction === undefined ? {} : { settings: deps.compaction }),
-        taint,
-        newRunId: () => input.newId("solo_compact"),
-        keepFrom,
-        limits,
-        force,
-        now: input.now,
-      });
+    compact: (force) => compactNow(force), // [C12]
+    // [C12] The provider said the request does not fit, which beats this process's estimate (a window from a table can
+    // be wrong, and 4 characters a token is a guess): whatever the window allows, keep at most half of what the
+    // conversation holds, so a refusal always shrinks what came before the run.
+    compactForRun: async (runId) => {
+      const stored = await deps.session.transcript?.();
+      const half = stored === undefined ? limits.historyChars : Math.max(1, Math.floor(transcriptChars(stored) / 2));
+      return compactNow(true, runId, { ...limits, historyChars: Math.min(limits.historyChars, half) });
     },
     noteFor: (outcome) => (outcome?.status === "pruned" || outcome?.status === "compacted" ? describeCompaction(outcome, "before this turn") : undefined),
   };

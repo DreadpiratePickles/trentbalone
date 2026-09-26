@@ -32,6 +32,8 @@ import { createModelGateway } from "@trent/core/model-gateway/index.js";
 import type { ModelGateway } from "@trent/core/model-gateway/types.js"; // [CF] G
 import { readContextWindow } from "@trent/core/model-gateway/local-probe.js";
 import { localModelPolicy } from "@trent/core/model-gateway/local-runtime.js";
+import { contextWindowFor } from "@trent/core/model-gateway/pricing.js"; // [C12] a hosted model's window
+import type { ModelOverrides } from "@trent/core/model-gateway/types.js"; // [C12]
 import { activeProviderAlias, aliasBaseUrl, isLocalAlias } from "@trent/core/model-gateway/providers.js";
 import { SEAT_ROLES, type ConversationMessage, type OrcEvent, type OrchestrationTrigger, type Orchestrator } from "@trent/core/orchestrator/index.js";
 import { createSoloAuditSink, type SoloAuditWriter } from "@trent/core/solo/audit.js";
@@ -246,16 +248,23 @@ const positive = (value: number | undefined): number | undefined => (typeof valu
 /**
  * The model's context window for solo's in-run budget (S1.1 C2): on a LOCAL provider, the runtime's own
  * figure (L0-2's probe, `models.local.context_tokens` when the server cannot be asked), because a local
- * server cuts an over-long prompt silently. Nothing on a hosted provider: it rejects one out loud.
+ * server cuts an over-long prompt silently.
+ * [C12] On a hosted provider, `model_overrides.<model>.context_window`, else the gateway's own table (`pricing.ts`
+ * `contextWindowFor`), so S3's compaction threshold follows the model; undefined when neither knows it (compaction
+ * keeps its fixed 64,000 characters). A hosted provider still refuses an over-long prompt out loud, and that
+ * refusal is now recovered once (`solo/overflow.ts`).
  */
-export async function soloWindowTokens(model: string, env: NodeJS.ProcessEnv = process.env, fetchImpl?: Parameters<typeof readContextWindow>[0]["fetchImpl"]): Promise<number | undefined> {
+export async function soloWindowTokens(model: string, env: NodeJS.ProcessEnv = process.env, fetchImpl?: Parameters<typeof readContextWindow>[0]["fetchImpl"], overrides?: ModelOverrides): Promise<number | undefined> { // [C12] overrides
   const alias = activeProviderAlias(env);
-  if (alias === undefined || !isLocalAlias(alias)) return undefined;
+  if (alias === undefined || !isLocalAlias(alias)) return contextWindowFor(model, alias, overrides); // [C12]
   const fallbackTokens = localModelPolicy(alias, env).contextTokens;
   const baseUrl = env.OPENAI_BASE_URL?.trim() || aliasBaseUrl(alias, env);
   const window = await readContextWindow({ alias, baseUrl, model, fallbackTokens, ...(fetchImpl === undefined ? {} : { fetchImpl }) }).catch(() => ({ tokens: fallbackTokens }));
   return window.tokens;
 }
+
+/** [C12] `model_overrides` of the parsed config (`config/sections/models.ts`), where a per-model window lives. */
+const overridesOf = (config: ReplConfig): ModelOverrides | undefined => (config as { model_overrides?: ModelOverrides }).model_overrides; // [C12]
 
 /** `agent.solo.max_tool_result_chars` (S1.1 C2); the `agent` block is a passthrough, so it is read here, loosely. */
 function soloResultCap(config: ReplConfig): number | undefined {
@@ -379,13 +388,13 @@ function soloRunner(parts: RunnerParts, windowTokens: number | undefined, seeds?
 
 export async function createRunnerForMode(parts: RunnerParts, mode: AgentMode, seeds?: InboundSeeds): Promise<ModeRunner> {
   if (mode !== "solo") return fleetRunner(parts);
-  return soloRunner(parts, parts.solo?.windowTokens ?? (await soloWindowTokens(parts.pin ?? parts.config.model)), seeds);
+  return soloRunner(parts, parts.solo?.windowTokens ?? (await soloWindowTokens(parts.pin ?? parts.config.model, process.env, undefined, overridesOf(parts.config))), seeds); // [C12] the hosted window
 }
 
-/** The window without asking the server: the configured local figure, for a solo runner built on demand. */
-function soloWindowFallback(env: NodeJS.ProcessEnv = process.env): number | undefined {
+/** The window without asking the server: the configured local figure, for a solo runner built on demand. [C12] Hosted: the override or the table. */
+function soloWindowFallback(model: string, overrides: ModelOverrides | undefined, env: NodeJS.ProcessEnv = process.env): number | undefined { // [C12]
   const alias = activeProviderAlias(env);
-  return alias === undefined || !isLocalAlias(alias) ? undefined : localModelPolicy(alias, env).contextTokens;
+  return alias === undefined || !isLocalAlias(alias) ? contextWindowFor(model, alias, overrides) : localModelPolicy(alias, env).contextTokens; // [C12]
 }
 
 /** The launch's runner, (H3) the other mode's, built on first use from the same graph, and the inbound seed both honour. */
@@ -395,7 +404,7 @@ export async function createModeRunners(parts: RunnerParts, mode: AgentMode): Pr
   let other: ModeRunner | undefined;
   return {
     runner,
-    runnerFor: (wanted) => (wanted === mode ? runner : (other ??= wanted === "solo" ? soloRunner(parts, parts.solo?.windowTokens ?? soloWindowFallback(), seeds) : fleetRunner(parts))),
+    runnerFor: (wanted) => (wanted === mode ? runner : (other ??= wanted === "solo" ? soloRunner(parts, parts.solo?.windowTokens ?? soloWindowFallback(parts.pin ?? parts.config.model, overridesOf(parts.config)), seeds) : fleetRunner(parts))), // [C12] the hosted window
     async seedInbound(runId, source) {
       if (parts.policy === undefined) return;
       seeds.add(runId);

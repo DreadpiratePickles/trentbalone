@@ -1,5 +1,6 @@
 /**
- * Where a run's task list lives.
+ * Where a run's task list lives. // [C12] Or a solo conversation's: the key is a run id, or `conversation:<key>`
+ * (`index.ts` `todoConversationKey`); the file, its bounds and its pruning are the same for both.
  *
  * Two candidates were on the table: the orchestration run record, and a file beside the session
  * transcripts. The run record loses. Under Node every durable layer the wrapper builds is an

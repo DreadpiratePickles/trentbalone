@@ -142,6 +142,11 @@ export interface SessionTaint {
   readonly calls: SessionTaintCall[];
   /** Untrusted tools any turn of the conversation called, in call order, without repeats. */
   readonly sources: string[];
+  /**
+   * [C12] The conversation's key (its session id, or one minted per in-memory conversation): what a store kept per
+   * conversation files under (`tools/todo`). Not part of the snapshot: the runner that owns the conversation knows it.
+   */
+  readonly key?: string; // [C12]
 }
 
 /** What is saved with the session: plain JSON. */
@@ -150,10 +155,11 @@ export interface SessionTaintSnapshot {
   readonly sources: readonly string[];
 }
 
-export function createSessionTaint(seed?: SessionTaintSnapshot): SessionTaint {
+export function createSessionTaint(seed?: SessionTaintSnapshot, key?: string): SessionTaint { // [C12] key
   return {
     calls: (seed?.calls ?? []).map((call) => ({ tool: call.tool, classes: [...call.classes], at: call.at })),
     sources: [...new Set(seed?.sources ?? [])],
+    ...(key === undefined ? {} : { key }), // [C12]
   };
 }
 

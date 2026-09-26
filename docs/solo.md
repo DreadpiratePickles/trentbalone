@@ -127,8 +127,26 @@ session. Skills loaded with `skill_view` stay loaded (next section).
 
 | Key | Default | Effect |
 |---|---|---|
-| `agent.solo.compact_after_chars` | half the model's window when it is known (local models), else 64,000 | the threshold, in characters of stored conversation |
+| `agent.solo.compact_after_chars` | half the model's window when it is known (next section), else 64,000 <!-- [C12] --> | the threshold, in characters of stored conversation |
 | `agent.solo.auto_compact` | `true` | `false` leaves compaction to `/compact` |
+
+## Long sessions <!-- [C12] -->
+
+A provider that refuses a turn because the prompt is longer than its window (OpenAI's "maximum context length",
+Anthropic's "prompt is too long", Google's "input token count", Ollama's and llama.cpp's context errors, classed
+`context_overflow` in `packages/trent-core/src/model-gateway/retry.ts`) no longer ends the run. The run compacts the
+conversation once, mid-turn, as above: its own messages stay whole and at most half of what came before them is kept
+verbatim, because the provider's refusal beats Trent's own estimate. It then sends the request again once, with the
+system prompt byte-identical. A second refusal in the same run, or a compaction that could not shrink anything, ends
+the run with a verdict naming the window. The window is known on hosted models too: `model_overrides.<model>.context_window`
+when the profile sets it, else the gateway's own table (`packages/trent-core/src/model-gateway/pricing.ts`: 1,000,000
+tokens for `gemini-3.5-flash-lite`, 200,000 for the Claude rows), and the compaction threshold above is half of it, at 4 characters a token; a local model
+keeps the runtime's probe, and a model neither names keeps 64,000 characters. The `todo` list belongs to the conversation,
+not to one message: a plan written in the first turn is still listed in the third, after a compaction, and after a
+restart of a stored session (a fleet run keeps its own list). Once a run has made 80 percent of `agent.solo.max_tool_calls`
+(20 of the default 25), the next request tells the model once, at the end of its tool results, "N tool calls left;
+wrap up", so a run is warned before the cap stops it (a cap of 1 leaves no room for a warning). A scripted 60-turn session with a refusal every 20 turns
+checks all of it (`packages/trent-core/src/solo/long-session.test.ts`).
 
 ## Memory and skills
 
@@ -220,3 +238,11 @@ is what makes its charged figure larger than its list price; on the 9B only solo
 - Interrupted and failed turns carry no marker in the transcript yet (council A9).
 - A parked run continued after a restart (`trent solo -c` then `/resume`) opens its conversation without
   the gateway platform, so that turn carries no platform hint.
+- A run gets one compaction for a context-length refusal, whatever call was refused. The summary call itself is
+  not split: when the turns it must summarise are longer than the window, only the pruning of old tool results
+  shrinks the conversation. A hosted window is only as right as `model_overrides` or the gateway's table (the
+  Claude rows carry the 200,000-token floor although newer models list more). <!-- [C12] -->
+- A request that Trent's own estimate (4 characters a token) already puts over a known window is stopped before it
+  is sent, as before, and is not compacted mid-run: the one mid-run compaction answers a provider's refusal only.
+  Now that hosted models have a window, that check applies to them too. The `todo` tool's own description still
+  says "this run". <!-- [C12] -->

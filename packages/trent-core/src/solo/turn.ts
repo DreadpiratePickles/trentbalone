@@ -27,6 +27,9 @@
  *   C2  each result reaches the model capped; a request over the window is refused before it is
  *       sent, with a verdict naming the sizes.
  *
+ * [C12] A context-length refusal earns one mid-run compaction and one retry (`overflow.ts`); a run at 80 percent of its
+ * tool-call cap is told once to wrap up (`wrap-up.ts`).
+ *
  * `driveTurn` emits every frame of the turn, terminal ones included, and returns `parked` when it
  * stopped on a held call; what happens to a parked run is the runner's business (`runner.ts`).
  */
@@ -50,6 +53,9 @@ import { SOLO_MISUSE_REPEATS, SOLO_SEAT, type SoloGateway, type SoloGatewayReque
 import { withEnvelopeInstruction } from "./turn-settings.js"; // [C11] a constrained request tells the model its reply format
 import { createAnswerStream } from "./stream-parse.js"; // [C13]
 import { repeatedSuccessOf } from "./repeat-stop.js"; // [CF] a repeated success stops the run
+import { recoverFromOverflow } from "./overflow.js"; // [C12] a context-length 400: one compaction, one retry
+import type { SoloCompactionOutcome } from "./compaction.js"; // [C12]
+import { addWrapUpNote } from "./wrap-up.js"; // [C12] 80 percent of the cap: one note
 
 /** Everything one run carries between model calls, and across a park. */
 export interface TurnState {
@@ -103,6 +109,8 @@ export interface TurnDeps {
   readonly afterCall?: (state: TurnState) => void;
   /** [S1.1] A run is about to park: called BEFORE the gate frames, so a crash while a human decides loses nothing. */
   readonly onPark?: (state: TurnState) => void;
+  /** [C12] The one mid-run compaction a context-length refusal earns (`overflow.ts`); absent, the refusal ends the run. */
+  readonly compactOnOverflow?: (runId: string) => Promise<SoloCompactionOutcome>; // [C12]
 }
 
 export type TurnEnd = "ended" | "parked";
@@ -322,6 +330,7 @@ async function* loop(state: TurnState, deps: TurnDeps, signal: AbortSignal | und
     if (signal?.aborted) return yield* cancel(state, signal);
     const stop = deps.meter.stopReason?.(state.runId);
     if (stop !== undefined) return yield* fail(state, stopVerdict(stop, state.costCents));
+    addWrapUpNote(state, deps.maxToolCalls); // [C12] once per run, on the tail of the request about to go
     const over = overBudget(state.messages, deps.budget);
     if (over !== undefined) return yield* fail(state, stopVerdict(over, state.costCents));
     let completion: GatewayCompletion;
@@ -329,6 +338,9 @@ async function* loop(state: TurnState, deps: TurnDeps, signal: AbortSignal | und
       completion = yield* callModel(state, deps, { ...deps.request, messages: withEnvelopeInstruction(state.messages, deps.request.responseFormat), ...(signal === undefined ? {} : { signal }) }); // [C11] [C13] streamed
     } catch (error) {
       if (signal?.aborted) return yield* cancel(state, signal);
+      const overflow = yield* recoverFromOverflow(state, deps, error); // [C12] compacted once: ask again, once
+      if (overflow === "retry") continue; // [C12]
+      if (overflow !== undefined) return yield* fail(state, stopVerdict(overflow, state.costCents)); // [C12] the verdict names the window
       return yield* fail(state, modelFailureVerdict(state.step, error, state.costCents));
     }
     charge(state, deps, completion);
