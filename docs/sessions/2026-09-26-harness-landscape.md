@@ -112,3 +112,7 @@ Fact at start: the gateway already accepts ollama/lmstudio/deepseek/groq aliases
   runner behind the existing AgentRunner port yielding the same OrcEvents, so every surface, the
   ledger, approvals and checkpoints work unchanged; `agent.mode: fleet|solo`, `trent --solo`.
   Waves S1-S4 after L0 frees slots; an Opus adversarial review runs beside S1.
+- R6 landed (01_discovery/output/harness-matrix-2026-09-26.md, 56 rows: parity 14, ahead 6,
+  partial 24, missing 9, deliberately-not 3). Synthesis written: 01_discovery/output/harness-
+  landscape-2026-09-26.md with the ten gaps mapped to waves L0-L2, S1-S4, H1-H5 and Bobby's steps.
+- S1 (solo core loop) launched.
