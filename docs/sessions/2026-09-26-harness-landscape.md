@@ -199,3 +199,197 @@ Fact at start: the gateway already accepts ollama/lmstudio/deepseek/groq aliases
   webhook routes that start a run (HMAC / Stripe / GitHub signatures, dedupe 24 h, untrusted
   provenance, cost cap, delivery store) and L2 `trent setup --mode local` + docs/local-models.md.
   In flight: S2 surfaces, S1.1 runner hardening, H1 approvals reviewer, H2 MCP OAuth, H3, L2.
+- H1 reported (unlanded): governance.auto_review {enabled false, model?, max_class read|write|
+  external_send|money, max_amount_cents, currency, recipients[]}; only bound held calls (never
+  step approvals, ask_human or held memory writes); policy check in code first, then the model's
+  strict JSON verdict; approve/deny through ApprovalBridge.decide with actor auto-review:<model>;
+  escalate, malformed or a failed call leaves the row (retried next pass); every decision on a
+  hash-chained <profile>/approvals-audit.ndjson verifiable by walkAuditChain; a reviewer approval
+  is reversible with `trent approvals reject` until the call has run (stamped in
+  bound-approvals.require). Open: an automatic trigger (today only `trent approvals list
+  --review`; the service daemon or heartbeat should run a pass); a held row does not record
+  whether its step read untrusted text.
+- H2 reported (unlanded): OAuth 2.1 for remote MCP servers per the MCP authorization revision
+  2026-07-28 (RFC 6750 challenge, 9728 protected-resource metadata, 8414/OIDC discovery with exact
+  issuer match, 7636 S256-only PKCE refused when not advertised, 7591 dynamic registration, 8707
+  resource parameter, 9207 iss check, 8252 loopback reuse); tokens in the profile secrets under
+  MCP_<NAME>_* names, config holds only the ${...} reference; refresh within 5 min of expiry and
+  on 401; bearer only to the MCP origin, token requests with the own-credential header; `trent mcp
+  add --oauth`, `mcp test --oauth`, `mcp list` shows connected/expired/needs-login; doctor warns.
+  LEAK FIXED: the egress fetch followed redirects re-sending every header, so a 307 from an MCP
+  server handed its bearer to any host (probe printed the static bearer at the other host); now
+  same-origin only. Open: CLI add/test run no egress proxy so cannot connect to http servers
+  after login; doctor reachability reads mcp.json not mcp_servers; no Client ID Metadata
+  Documents; no 403 insufficient_scope re-auth.
+- H4 (messaging adapters: Matrix, Mattermost, LINE, ntfy) launched.
+- S1.1 reported (unlanded; needs L0-2's prompt-budget.ts landed first): taint and policy history
+  belong to the conversation, saved after every tool result, restored on reopen (B1; also found
+  that S1 asked requiresApproval outside the run context so network-after-secret never fired
+  within a run); answer() releases only ask_human/clarify and gate frames name the held call (B2);
+  only a dryRun hold parks, an approved call runs once and its repeat is answered from the
+  idempotency store, a differing call gets one new row naming each changed argument (B6); one
+  format, the Hermes/Qwen <tool_call>{"name","arguments"} body normalised to `name {json}` so keys
+  and rows do not move, <think> stripped, newlines in JSON strings repaired, prompt examples
+  rewritten, responseFormat passed through with the {"tool_calls"}/{"answer"} envelope (C1);
+  tool results capped at 8,000 chars (agent.solo.max_tool_result_chars) and over-window prompts
+  refused with a verdict naming the sizes (C2); parked runs persisted before the gate frames go
+  out, listed by parked() and continued by resume(runId) after a restart, else the row is marked
+  abandoned and the conversation gets one "not run" line (restart). 84 solo tests. The new
+  format's live smoke on the 9B is NOT measured (load stayed above 20).
+- Landed L0-2 75a26cb. Landing in sequence (background): L0-1 (config-doc variant with the bare
+  /v1 wrapped, model-env minus [L0-5]/[L1] marks), L0-5, H1, H2, S1.1 (runner and SessionStore
+  minus [S2] marks). Launched H5 (browser attach over CDP behind the gate). In flight: S2, H3,
+  L2, L1 (also wires L0-5's headless line), H4, H5.
+- H3 reported (unlanded): gateway.webhooks {host 127.0.0.1, port, routes[{name, path, signature
+  hmac-sha256|stripe|github|none-localhost-only, secret_env (an env NAME; a pasted value is
+  rejected), objective_template with {{payload.x}} only, mode, seat?, max_cost_cents?,
+  dedupe_key? (default body SHA-256), events?, rate_per_minute 30, tolerance_seconds 300,
+  signature_header?}}; the signature is checked on the raw body in constant time before parsing
+  (Stripe t/v1 with tolerance both ways; GitHub X-Hub-Signature-256; localhost-only needs a
+  loopback caller on a loopback listener); 405/413/401/503-naming-the-variable/400/200-ignored/
+  200-with-the-original-run-id on a 24 h repeat (survives restart; two copies start one run; a run
+  that never started frees its key)/429 with Retry-After/202 with the run id; the first message
+  opens with "[provenance: untrusted via webhook:<route>]" and the run input carries provenance
+  untrusted and the cost cap; deliveries in <profile>/webhooks/deliveries.jsonl; `gateway start`
+  serves routes under the profile lock; `gateway status` shows the last deliveries. Needs S2's
+  runtime seams (runnerFor(mode) for a route whose mode differs, 503 today; the policy dispatcher
+  to seed the inbound ring entry so send-after-untrusted fires) and H1 should record the inbound
+  seed on the approval row so auto-review refuses such sends.
+- Landed: H1 5bab958, H2 2095c7d, S1.1 35fd43b. L0-1 still red on docs-truth (diagnosing the
+  exact claim); L0-5 depends on L0-1's model-env-early.ts; L2 depends on L0-5's memory.ts. Order:
+  L0-1 -> L0-5 -> L2 -> H3.
+- L2 reported (unlanded): `trent setup --mode local` detects Ollama / LM Studio / a llama.cpp
+  server at --base-url, lists models with size and role (chat / embedding / cloud; the abliterated
+  27Bs are "chat, no tools"), picks the tier model or a smaller pulled one, the embedder
+  qwen3-embedding:0.6b else nomic-embed-text else lexical, --pull with one confirmation per model,
+  writes provider, model, memory.embedder, agent.mode solo (unless --fleet), reasoning_effort none
+  when the model supports thinking control, leaves terminal.backend alone when Docker answers;
+  exits 3 runtime-unreachable naming every URL tried, or model-not-pulled; --dry-run reads only.
+  On this 32 GB machine it would write qwen3.5:9b (fallback; the tier's qwen3.6:27b is not pulled).
+  docs/local-models.md (209 lines) with the measured numbers; live run skipped (load 294).
+- L0-1's docs-truth failures diagnosed: the config-doc variant predated H1's landing (missing the
+  documented `governance` key) and a bare URL ending in /v1 outside backticks; variants are now
+  rebuilt from current HEAD with URLs backticked (a `slashfix` step in the landing script).
+  Landing in the background: L0-1 -> L0-5 -> L2 -> H3. In flight: S2, L1, H4, H5.
+- H4 reported (unlanded): Matrix (spec v1.11: whoami, sync long-poll with a since cursor, join on
+  invite, two-member rooms are DMs, m.room.message with m.thread relations, m.reaction, media
+  download for voice notes), Mattermost (API v4: users/me, posts with root_id threads, reactions,
+  channels, files, websocket with authentication_challenge/hello/posted/reaction_added; no buttons
+  because Mattermost posts button presses unsigned, a reaction decides the card), LINE (Messaging
+  API v2: reply token while fresh then push with X-Line-Retry-Key, quick-reply postbacks, media
+  content for voice notes, X-Line-Signature over the raw body before parsing, duplicates dropped by
+  webhookEventId), ntfy (publish JSON with up to three http action buttons, /<topic>/json?since=
+  reply stream, /v1/health, bearer token; the reply topic is what gets paired; buttons never carry
+  the token). Each adapter's tests drive the real GatewayManager (pairing code, routed once paired,
+  an approval card decided on each platform; LINE forged request 401 over real HTTP). README "12
+  adapters"; docs/gateway.md rows and section. Follow-ups (P3): `gateway start` opens the
+  WebhookServer only when an H3 route exists, so LINE (and WhatsApp) webhooks listen only then;
+  `gateway setup <platform>` writes <PLATFORM>_BOT_TOKEN, matching only Mattermost; tools/index.ts
+  is at 506 lines in the tree (someone's unlanded edit; wrapped-modules will refuse it).
+- Landed: L0-1 77373a0, L0-5 4b6f20c, L2 5989ac8. H3 red in isolation only because servers.ts now
+  carries S2's wiring of the runnerFor/seedInbound seams; H3 lands with S2. Landing H4.
+- S2 reported (unlanded): precedence launch override (--solo, `trent solo`, `run --solo`) >
+  agent.mode > fleet; the REPL, run, cron run|start, gateway start, a2a serve and acp read the
+  flag, the daemon/heartbeat/jobs/goal/mcp serve follow agent.mode, the TUI stays fleet-only.
+  Council: A1 the runner is the only writer (one turn with one tool call leaves exactly
+  [user, assistant, tool, assistant] on disk); A2 a router keeps a runner per REPL session, gateway
+  thread and A2A context, a late decision resumes the right run by id; A3 a card per held call;
+  B4 solo writes the fleet's orchestration.* audit rows through the app store and every frame
+  reaches the bus hooks and trace sink; B8 the REPL parks, the gateway parks only with
+  gateway.owner, trent run parks only on a terminal, A2A parks questions only, ACP/cron/heartbeat
+  refuse and file no row. S1.1 wiring done (sessionId, state, bindings; tool-result cap and the
+  local window; saved parks reopened after a restart; a row decided via trent approvals resumes on
+  the gateway's next drain). H3 seams done: runtime.runnerFor(mode) and seedInbound(runId, source)
+  (a seeded webhook run's first send parks on send-after-untrusted). Also fixed: `trent --profile
+  work` printed usage instead of opening the REPL. Not done: ACP refuses every held call; a park
+  left by a killed REPL is kept but not offered; solo session messages carry no cost_cents (usage
+  is right); fleet compaction is off for solo until S3.
+- Landed H4 ee84083. S2 + H3 landing in the background. H5 reported (unlanded): attach mode as
+  an argument (`browser_navigate {"attach": true}`, tool count unchanged) under tools.browser.attach
+  {enabled false, cdp_url 127.0.0.1:9222, profile_hint}; before any approval: attach enabled,
+  cdp_url loopback only, SSRF + intercept_domains allowlist on every navigation and re-checked on
+  the tab's current host per call, typing into password/one-time-code fields refused, key presses
+  refused while one has focus, console expressions refused; navigate/back/click/type/press/scroll
+  each wait for a customer_facing approval bound to site + element + occurrence count so one yes
+  runs one call; reads ungated; an empty tab is reused else a new one opens, never the owner's
+  content tab, front before each action, detach closes nothing; no proxy in the path and no proxy
+  token ever sent; hash-chained <profile>/browser/attach-audit.ndjson without typed text. BUG FOUND
+  AND FIXED: the password-field refusal never worked against a real browser (Playwright treated the
+  field check as an expression), so "hunter2" was typed into a real type=password field; a
+  real-Chromium test covers it now. noDefaults: true so the owner's downloads and settings are not
+  touched. tools/index.ts is at the 500-line limit.
+
+## HANDOFF (Bobby resets context here; 2026-09-26 ~05:30Z)
+Read this section, then AGENTS.md, CLAUDE.md and the rulebook, then resume. Do not re-audit what is
+evidenced above.
+
+### What is on the branch (feature/trent-fleet-v2, pushed)
+Research (all 2026-09-26, 01_discovery/output/): harness-openai, harness-anthropic, harness-others
+(Perplexity Computer + field), local-models, trent-local-path-audit, harness-matrix (56 areas:
+parity 14 / ahead 6 / partial 24 / missing 9), harness-landscape (the synthesis: ten gaps mapped to
+waves). Plans (02_plan/output/): local-models-plan (L0/L1/L2), solo-harness-design, solo-harness-
+review (council: approve with changes, nine blockers, all addressed by S1.1/S2/S3).
+Code landed today, in order: e0e13ab S1 solo runner; 7c96232 L0-4 doctor Local Model check (23rd);
+f90cf41 L0-3 local setup/DEGRADED/local judge; 75a26cb L0-2 wrapper client for every OpenAI-
+compatible provider, prefill timeouts, prompt budget, slot cap; 5bab958 H1 approvals reviewer
+model; 2095c7d H2 MCP OAuth 2.1 (+ redirect bearer leak fixed); 35fd43b S1.1 runner hardening;
+77373a0 L0-1 local routing truth (+ the mistral leak closed); 4b6f20c L0-5 local embeddings;
+5989ac8 L2 `trent setup --mode local` + docs/local-models.md; ee84083 H4 Matrix/Mattermost/LINE/
+ntfy. IN PROGRESS at handoff: the S2 + H3 landing (solo on every surface; signed webhook routes)
+was running in the background via scripts/dev/isolate.sh; check `git log --oneline -3` for a commit
+"feat(solo,webhooks): solo mode on every surface; signed webhook routes start a run". If absent,
+the working tree still holds S2's and H3's files (their lists are in docs/sessions/2026-09-26-
+s2-solo-surfaces.md and h3-webhooks.md); land them with the procedure below.
+
+### Agents that may have left uncommitted work in the tree (each writes its own session log)
+- L1 small-model reliability: constrained JSON on local providers (the seat port re-renders JSON
+  into the app's action string), tool-call repair, thinking off for local seats, TRENT_JOB_TIMEOUT_MS
+  from models.local, heartbeat/improve gateways honour models.local, hosted escalation behind
+  approval, plus L0-5's headless.ts memory.embedder line. Log: docs/sessions/2026-09-26-l1-small-
+  models.md. Files: marked `// [L1]` hunks in model-gateway/**, orchestrator/{seat-gateway-port,
+  model-env}.ts, config/sections/models.ts, new model-gateway/tool-call-repair.ts, headless.ts.
+- H5 browser attach: FINISHED, unlanded. Files listed in docs/sessions/2026-09-26-h5-browser-
+  attach.md (tools/browser/attach*.ts, session.ts, page-types.ts, launch.ts, schemas.ts, index.ts,
+  config/sections/tools.ts [H5] block, tools/index.ts one marked line, docs/browser.md).
+- S3 solo continuity (compaction through the wrapped memory adapter, skills on demand, delegation
+  in solo, checkpoints, cost_cents on solo messages, resume offer): log docs/sessions/2026-09-26-
+  s3-solo-continuity.md; files: solo/** additive + marked [S3], sessions/compaction.ts, tools/delegate.
+- P3 follow-ups (webhook listener opens for webhook-only adapters, gateway setup env names per
+  platform, auto-review pass on the daemon/heartbeat tick, untrusted_inbound stamp on held rows,
+  platform comments/docs): log docs/sessions/2026-09-26-p3-followups.md; marked [P3] hunks.
+If an agent's log is missing, its work did not finish: relaunch from the brief recorded in this
+file (search "P3 follow-ups", "S3 solo continuity", "L1 reliable").
+
+### Landing procedure (unchanged, proven all day)
+`export TRENT_DEV_SCRATCH=<session scratchpad>; scripts/dev/isolate.sh <test paths> -- <files>
+[published=variant ...]`; gate on `ISOLATED rc=0`; commit by explicit paths; push. Shared files get
+VARIANTS: `scripts/dev/hunks.py <file> <out> '<regex>'` keeps only matching diff hunks against
+HEAD; a marked-line drop (see the `dropmarks` python in the transcript: drop lines containing
+`[TAG]` and comment blocks starting `// [TAG]`) removes another agent's hunks; the fixture
+`schema-split.input.json` variant is HEAD's JSON with only this task's top-level keys merged from
+the working tree; regenerate the snapshot INSIDE the worktree with `npx tsx scripts/dev/regen-
+snapshot.mjs`; docs/configuration.md variants must backtick any bare URL ending in /v1 or the
+docs-truth slash-command scan fails; docs-truth also checks README command counts (36/152 after
+S2), doctor count (23), toolset count (17), documented config keys.
+
+### Known CI flake, unsolved
+apps/cli/src/repl/__tests__/approvals.restart.test.ts: the Bun child (`approval-restart-runner.ts
+resume`) dies with "Cannot find module './internal/class' from packages/trent-core/src/store/
+generated/client.ts" on some runs (7eb7502, a23efa5, 5989ac8), always green on rerun, and it
+happened inside the serial (exclusive) vitest project, so the concurrent-Bun theory (68894ea) is
+wrong. Next: find what rewrites store/generated during the run (the parallel project runs beside
+the exclusive one), or give the child its own generated client copy.
+
+### Bobby's decisions and steps (unchanged)
+Default branch / tag v1.0.0 / repo rename / topics / private vulnerability reporting / platform
+applications. NEW: the app's own embedding calls (apps/web/lib/wiki-embeddings.ts,
+semantic-router.ts) need a one-line gate each to stop 404s on a local runtime and to stop sending
+the objective to api.openai.com under a hosted key; an apps/web edit outside the two granted
+exceptions. Free-tier Gemini key: 20/day on gemini-3.6-flash, per-minute 429s.
+
+### What comes next, in order
+Land S2+H3 (if not yet), H5, L1, S3, P3 (each after its agent's log exists). Then S4: docs/solo.md
+final, README rows for solo and local, the live proof on this machine's qwen3.5:9b in solo mode
+with constrained output (one run at a time; the machine swapped under concurrent Ollama calls),
+the fleet-vs-solo cost table. Then the nightly local smoke (L2 owner's item), then a full clean-HEAD
+suite and a CI check, then the daily sweep continues from here.
