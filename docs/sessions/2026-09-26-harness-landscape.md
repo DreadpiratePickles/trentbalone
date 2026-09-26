@@ -116,3 +116,86 @@ Fact at start: the gateway already accepts ollama/lmstudio/deepseek/groq aliases
   partial 24, missing 9, deliberately-not 3). Synthesis written: 01_discovery/output/harness-
   landscape-2026-09-26.md with the ten gaps mapped to waves L0-L2, S1-S4, H1-H5 and Bobby's steps.
 - S1 (solo core loop) launched.
+- L0-4 reported (unlanded): Local Model check (23rd; runtime + version, model present with the pull
+  line, effective context from the loaded model with the OLLAMA_CONTEXT_LENGTH hint, slots, a
+  five-case tool-call smoke through the wrapper's gateway, first-token time at ~4K), connectivity
+  resolves the provider's real host (local: one request to its URL, no cloud lookup), Docker down
+  is a warn naming the local fallback (the REPL and trent run already fall back), credentials line
+  for local. LIVE on qwen3.5:9b (6.6 GB, pulled by L0-3): doctor exit 0, 23 checks, context 32768;
+  tool-call smoke 1/5: the model wrote `"action": "read_file", {...}` instead of the `<tool>
+  <json>` string; timings unusable (load ~1000, swap 14.8/15.4 GB, other agents' Ollama calls
+  overlapping). Closed port: exit 3 naming the URL. Consequences: constrained JSON `{tool, args}`
+  on local providers (L1) is the prerequisite for small models, and live local proofs run one at
+  a time from now on.
+- L0-3 reported (unlanded): `trent setup --mode quick --provider ollama|lmstudio` needs no key,
+  checks the runtime, proposes a model by memory (qwen3.5:9b < 32 GB; qwen3.6:27b at 32 GB+;
+  qwen3.6:35b-a3b at 64 GB+), exits 3 with runtime-unreachable / model-not-pulled and the exact
+  pull line, `--pull` after a confirmation; DEGRADED means no usable provider (one line naming the
+  URL and `ollama serve` when the runtime is down); the judge refuses a hosted, priced or :cloud
+  fallback under a local provider; getting-started "Local models" section with a drift test.
+  Pulled qwen3.5:9b (6.6 GB, 96 s). LIVE: setup JSON success; REPL boots with no banner; `trent
+  run "Say the word ready"` reached the model (planner 6m4s, seat 9m57s under load ~467) and the
+  seat was cut by the app's 600 s job timeout; the model thinks by default (201 tokens at 2.7
+  tok/s; 2 tokens with think:false). Adds to L1: thinking off for local seats, and the app's job
+  timeout sized for local. Open: providers.ts:58 still defaults to llama3.2 when a config's model
+  is empty (L0-2's file).
+- S1 landing: first attempt failed at regen-snapshot because the input variant carried L0-2's
+  unlanded models.local line; rebuilt from HEAD + the agent key only; rerunning.
+- L0-1 reported (unlanded): env-defaults.ts applies the profile's model names before any app
+  code loads (new orchestrator/model-env-early.ts, app-free; model-env.ts re-exports it and, under
+  a local provider, forces MODEL_ALLOWED_PROVIDERS to the local endpoint); call-policy routes a
+  pinned model to its alias's own endpoint, never a provider guessed from the name, with no
+  fallback under a local alias; seats are no longer refused by name; a `:cloud` model on a local
+  runtime is "hosted via ollama", tier-priced, unpriced: true. Red first (seats sent gpt-5.2 /
+  gpt-4.1-mini; mistral:7b routed to mistral; a failed local call fell back to gemini-2.5-pro).
+  PROOF: local-routing.test.ts runs the real gateway and the app's real client against a local
+  fake plus a trap that every hosted base URL points to, with fetch restricted to 127.0.0.1: a
+  pinned mistral:7b and seats named mistral/gemini/claude reach only the local server; the trap
+  receives nothing. Fake-server run: 12 calls all on mistral:7b, 4 ledger rows, 0 cents. Follow-up:
+  hosted aliases (deepseek, groq) route pins to their own endpoint but their seat fallback chain
+  is not narrowed.
+- Council review landed (02_plan/output/solo-harness-review-2026-09-26.md): APPROVE WITH CHANGES,
+  35 findings, 9 blockers. Runner-level (S1.1, launched): taint and policy history scoped to the
+  session (B1); answer() only for ask_human/clarify and gate frames name the held call (B2); no
+  hold bounce loop (B6); one tool-call format, the model's own <tool_call>{"name","arguments"}
+  with <think> stripped and constrained JSON on local (C1); in-run context budget and tool-result
+  cap (C2); parked runs persisted, never lost silently on restart. Surface-level (sent to S2):
+  the runner is the only writer of a conversation (A1); one runner per conversation with a router
+  and a resume driver (A2); a card per held call (A3); solo on the audit chain (B4); unattended
+  surfaces refuse holds (B8). S3 inherits: compaction flushes through the wrapped memory adapter
+  carrying the session taint, prunes old tool results, rebuilds the frozen prefix (B3, change 5).
+  Also: delegate_task returns not_available in solo; zero-cent groups hidden in usage --by seat.
+- L0-2 reported (unlanded): ollama, lmstudio, deepseek, groq and openai stream through the
+  wrapper's client (include_usage; cached tokens incl. llama.cpp timings.cache_n); reasoning_effort
+  IS accepted by Ollama (when /api/show lists thinking) and llama.cpp ("none" disables thinking),
+  sent to OpenAI reasoning models only, not to LM Studio/DeepSeek/Groq; models.local.ttft_seconds
+  300 / idle_seconds 120 for local, hosted keep 60 s; every timeout retried once; local calls use
+  node:http (Node fetch caps headers at 300 s); prompt budget from the LOADED model's window
+  (/api/ps, Modelfile num_ctx, LM Studio instance, llama.cpp /props, else 32768) refuses
+  over-budget prompts naming the tier to trim; max_in_flight 1 on Ollama, 4 on LM Studio, per
+  endpoint; a stream abandoned early no longer holds the local slot (leak fixed). LIVE qwen3.5:9b
+  under load 170-970: planner 3,773 tokens, TTFT ~91 s, 893 tokens at 3 tok/s; step 5,935 tokens,
+  TTFT ~157 s, 1,267 THINKING tokens; killed by the app's 10-minute job timeout
+  (apps/web/lib/queue.ts, TRENT_JOB_TIMEOUT_MS). L1 adds: TRENT_JOB_TIMEOUT_MS sized for local
+  through models.local; reasoning_effort none by default for local seats; heartbeat/improve build
+  their own gateways and miss models.local.
+- L0-5 reported (unlanded): memory.embedder.provider ollama|lmstudio|llamacpp|none|google with
+  embedder-local.ts (Ollama /api/embed truncate:false, batches, cache by provider/model/task
+  type), calibrated floors (qwen3-embedding:0.6b, 639 MB: 0.46 no prefix, 0.32 with the query
+  instruction, the default), one WARN then lexical when the runtime is down; doctor embedder
+  check live: dimensions, floor, sanity 3/3, pull line, "lexical only" for none. RECALL on the
+  docs corpus, local hybrid 0.600 / recall@3 0.486 / MRR 0.480 / paraphrased 0.417 vs Gemini
+  0.629 / 0.571 / 0.529 / 0.417 at 0 cents; the query instruction is what finds paraphrases
+  (5/12 vs 1/12); weak spot: abstains on 0/5 unanswerable (floor set on short sentences).
+  Needs at landing: one line in apps/cli/src/runtime/headless.ts (~360) passing memory.embedder
+  into the model env (G10 wiring). BOBBY'S DECISION: the app's own embedding calls
+  (apps/web/lib/wiki-embeddings.ts, semantic-router.ts) are silenced only by OPENAI_API_KEY; under
+  embedder none they still 404 on a local runtime, and with a hosted key they send the objective
+  to api.openai.com; the fix is a one-line gate in each file, an apps/web edit outside the two
+  granted exceptions.
+- Landed: L0-4 7c96232 (doctor Local Model check), L0-3 f90cf41 (local setup, DEGRADED truth,
+  local judge). L0-1 and L0-2 landing in the background (L0-1's first attempt carried L0-5's
+  unlanded embedder import in model-env.ts; cut and rerun). Launched with the free slots: H3 signed
+  webhook routes that start a run (HMAC / Stripe / GitHub signatures, dedupe 24 h, untrusted
+  provenance, cost cap, delivery store) and L2 `trent setup --mode local` + docs/local-models.md.
+  In flight: S2 surfaces, S1.1 runner hardening, H1 approvals reviewer, H2 MCP OAuth, H3, L2.
