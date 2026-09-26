@@ -58,6 +58,7 @@ describe("DoctorRunner", () => {
       "Dependencies",
       "Workbench",
       "Self-Improvement",
+      "Local Model",
     ]) {
       expect(categories, expected).toContain(expected);
     }
@@ -154,6 +155,34 @@ describe("DoctorRunner", () => {
     expect(report.results).toHaveLength(3);
     expect(report.results.every((r) => r.status === "fail")).toBe(true);
     expect(doctorExitCode(report)).toBe(EXIT.CONFIG);
+  });
+
+  it("gives a check that declares its own budget that budget, and grows the run deadline so later checks still run", async () => {
+    // A local model's cold prefill is slow by design; the check brings its own time instead of
+    // borrowing it from the checks after it.
+    const slow: DoctorCheck = {
+      id: "slow",
+      name: "Slow",
+      category: "Slow",
+      timeoutMs: 1_000,
+      run: () => new Promise<CheckResult>((resolve) => setTimeout(() => resolve({ category: "Slow", name: "Slow", status: "ok", message: "slow fine" }), 300)),
+    };
+    const runner = new DoctorRunner(configManager, {
+      checks: [slow, stubCheck("After", {})],
+      checkTimeoutMs: 100,
+      totalTimeoutMs: 150,
+    });
+    const report = await runner.runAll();
+    expect(report.results.map((r) => [r.category, r.status])).toEqual([["Slow", "ok"], ["After", "ok"]]);
+  });
+
+  it("still bounds a check that declares its own budget", async () => {
+    const wedged: DoctorCheck = { id: "w", name: "W", category: "W", timeoutMs: 120, run: () => new Promise<CheckResult>(() => {}) };
+    const started = Date.now();
+    const report = await new DoctorRunner(configManager, { checks: [wedged], checkTimeoutMs: 10_000 }).runAll();
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(report.results[0]?.status).toBe("fail");
+    expect(report.results[0]?.details).toMatchObject({ timeoutMs: 120 });
   });
 
   it("turns a throwing check into a failure rather than crashing the run", async () => {

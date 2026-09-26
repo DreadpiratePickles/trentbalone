@@ -53,7 +53,7 @@ export const checkCredentials: DoctorCheck = {
     if (KEYLESS_PROVIDERS.has(provider)) {
       return result({
         status: "skip",
-        message: `Provider "${provider}" runs locally and needs no API key.`,
+        message: `Provider "${provider}" runs locally, no key needed; the Local Model check probes the runtime itself.`,
         details: { provider },
       });
     }

@@ -43,6 +43,8 @@ import { checkMedia } from "./checks/media.js";
 import { checkBusiness } from "./checks/business.js";
 // [B1] social
 import { checkSocial } from "./checks/social.js";
+// [L0-4] local model runtime
+import { checkLocalModel } from "./checks/local-model.js";
 
 export interface DoctorRunnerOptions {
   checks?: DoctorCheck[];
@@ -90,6 +92,8 @@ export const DEFAULT_CHECKS: readonly DoctorCheck[] = [
   checkBusiness,
   // [B1] social
   checkSocial,
+  // [L0-4] local model runtime: last, because under a local provider it is the slow one
+  checkLocalModel,
 ];
 
 /** 3 (config) when any check failed; 0 when everything passed or only warned. */
@@ -137,7 +141,14 @@ export class DoctorRunner {
   public async runAll(): Promise<DoctorReport> {
     const context = this.context();
     const checkTimeoutMs = this.options.checkTimeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
-    const totalTimeoutMs = this.options.totalTimeoutMs ?? DEFAULT_TOTAL_TIMEOUT_MS;
+    // A check that declares a longer budget brings that time with it rather than taking it from the
+    // checks after it: the run's deadline grows by the difference (the Local Model check waits up to
+    // 60 s for a first token by design).
+    const declaredExtraMs = this.checks.reduce(
+      (sum, check) => sum + Math.max(0, (check.timeoutMs ?? checkTimeoutMs) - checkTimeoutMs),
+      0,
+    );
+    const totalTimeoutMs = (this.options.totalTimeoutMs ?? DEFAULT_TOTAL_TIMEOUT_MS) + declaredExtraMs;
     const startedAt = Date.now();
     const results: CheckResult[] = [];
 
@@ -145,7 +156,7 @@ export class DoctorRunner {
       // The per-call AbortSignal is not a deadline: a library is free to ignore it. The run is
       // therefore bounded twice, once per check and once overall, by timers we own.
       const remaining = totalTimeoutMs - (Date.now() - startedAt);
-      const budget = Math.min(checkTimeoutMs, Math.max(remaining, 0));
+      const budget = Math.min(check.timeoutMs ?? checkTimeoutMs, Math.max(remaining, 0));
 
       if (budget <= 0) {
         results.push(this.timeoutResult(check, totalTimeoutMs, true));

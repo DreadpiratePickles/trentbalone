@@ -5,9 +5,17 @@ import { isTrentSandboxImage, SANDBOX_IMAGE } from "../../terminal/sandbox-image
 
 /**
  * This check used to report the configured backend as if configuring it made it work. A backend
- * named in a YAML file is a claim; `docker info` exiting 0 is evidence. On this machine the Docker
- * daemon is not running, so the honest answer today is a failure that names Docker.
+ * named in a YAML file is a claim; `docker info` exiting 0 is evidence.
+ *
+ * [G12] When Docker does not answer, the runtime does not stop: the REPL and `trent run` fall back
+ * to the local backend (`apps/cli/src/repl/tools.ts` `resolveSandbox`, used by both), and no config
+ * key turns that fallback off (`config/sections/terminal.ts`). So the doctor agrees with the
+ * runtime: a warning that names the fallback and its lack of isolation, not a failure.
  */
+
+/** What the REPL and `trent run` print when they fall back (`resolveSandbox`). */
+const FALLBACK =
+  "the REPL and `trent run` fall back to the local backend, so commands run on this machine, confined to the workspace, with no container isolation";
 
 const CATEGORY = "Workbench";
 const NAME = "Sandbox & Workbench";
@@ -45,30 +53,31 @@ export const checkWorkbench: DoctorCheck = {
 
     const info = await dockerInfo(ctx, timeoutMs);
 
+    const explicit = "or set `terminal.backend` to local to make the fallback explicit";
     if (info instanceof Error) {
       return result({
-        status: "fail",
-        message: "Docker is the configured sandbox backend but the docker binary could not be run on this machine.",
-        fixHint: "Install Docker Desktop, or set `terminal.backend` to local (which gives no isolation).",
-        details: { backend, reason: "binary-missing" },
+        status: "warn",
+        message: `Docker is the configured sandbox backend but the docker binary could not be run on this machine; ${FALLBACK}.`,
+        fixHint: `Install Docker Desktop for an isolated sandbox, ${explicit}.`,
+        details: { backend, reason: "binary-missing", fallback: "local" },
       });
     }
 
     if (info.code === 124) {
       return result({
-        status: "fail",
-        message: `Docker did not answer within ${timeoutMs}ms; the daemon is unresponsive.`,
-        fixHint: "Restart Docker Desktop, then re-run `trent doctor`.",
-        details: { backend, reason: "timeout" },
+        status: "warn",
+        message: `Docker did not answer within ${timeoutMs}ms (the daemon is unresponsive); ${FALLBACK}.`,
+        fixHint: `Restart Docker Desktop, then re-run \`trent doctor\`; ${explicit}.`,
+        details: { backend, reason: "timeout", fallback: "local" },
       });
     }
 
     if (info.code !== 0) {
       return result({
-        status: "fail",
-        message: "Docker is installed but the Docker daemon is not running, so the sandbox cannot start.",
-        fixHint: "Start Docker Desktop, then re-run `trent doctor`.",
-        details: { backend, exitCode: info.code, reason: "daemon-down" },
+        status: "warn",
+        message: `Docker is installed but the Docker daemon is not running; ${FALLBACK}.`,
+        fixHint: `Start Docker Desktop for an isolated sandbox, then re-run \`trent doctor\`; ${explicit}.`,
+        details: { backend, exitCode: info.code, reason: "daemon-down", fallback: "local" },
       });
     }
 

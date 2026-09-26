@@ -125,6 +125,17 @@ describe("credentials check", () => {
     expect(JSON.stringify([fromFile, fromEnv])).not.toContain(REAL_SHAPED_ANTHROPIC);
   });
 
+  it("under a local provider says it runs locally with no key needed, and nothing else about keys", async () => {
+    for (const provider of ["ollama", "lmstudio"] as const) {
+      configManager.saveConfig({ ...configManager.loadConfig(), provider });
+      const result = await checkCredentials.run(context({ fetchImpl: async () => { throw new Error("must not be called"); } }));
+      expect(result.status).toBe("skip");
+      expect(result.message).toContain(`Provider "${provider}" runs locally, no key needed`);
+      expect(result.message).not.toMatch(/API key|_API_KEY|secrets/i);
+      expect(result.fixHint).toBeUndefined();
+    }
+  });
+
   it("fails when the active provider has no key at all", async () => {
     const result = await checkCredentials.run(context());
     expect(result.status).toBe("fail");

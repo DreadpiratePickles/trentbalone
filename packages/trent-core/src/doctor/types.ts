@@ -34,6 +34,12 @@ export interface DoctorCheck {
   id: string;
   name: string;
   category: string;
+  /**
+   * A check that must wait on something slow by design (a local model's cold prefill) declares its
+   * own deadline. The runner gives it this budget instead of the per-check default and extends the
+   * run's deadline by the difference, so the checks after it are not starved.
+   */
+  timeoutMs?: number;
   run(context: DoctorContext): Promise<CheckResult>;
 }
 
@@ -59,8 +65,13 @@ export interface DoctorContext {
   fetchImpl?: FetchLike;
   /** Injected in tests; defaults to spawning the real binary. */
   execImpl?: ExecLike;
-  /** The environment a PATH lookup reads; injected in tests, defaults to `process.env`. */
+  /**
+   * The environment a PATH lookup and a provider's base-URL variable (`OLLAMA_BASE_URL`,
+   * `OPENAI_BASE_URL`, ...) are read from; injected in tests, defaults to `process.env`.
+   */
   env?: NodeJS.ProcessEnv;
+  /** DNS resolution for the connectivity check; injected in tests, defaults to `dns.lookup`. */
+  lookupHost?: (host: string) => Promise<unknown>;
   mode?: DoctorMode;
   /** Connected mode only: the health endpoint of the deployed app. */
   healthUrl?: string;

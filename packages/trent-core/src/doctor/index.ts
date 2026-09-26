@@ -29,3 +29,5 @@ export * from "./checks/media.js";
 export * from "./checks/business.js";
 // [B1] social
 export * from "./checks/social.js";
+// [L0-4] local model runtime
+export * from "./checks/local-model.js";

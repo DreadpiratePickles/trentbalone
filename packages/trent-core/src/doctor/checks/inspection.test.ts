@@ -148,18 +148,24 @@ describe("cron check", () => {
 });
 
 describe("workbench check", () => {
-  it("fails naming Docker when the daemon is not running", async () => {
+  // [G12] The REPL and `trent run` fall back to the local backend whenever `docker info` does not
+  // answer (apps/cli/src/repl/tools.ts resolveSandbox), so the doctor warns and names the fallback
+  // instead of failing a machine the runtime runs on.
+  it("warns naming Docker and the local fallback when the daemon is not running", async () => {
     const result = await checkWorkbench.run(
       context({
         execImpl: async () => ({ code: 1, stdout: "", stderr: "Cannot connect to the Docker daemon" }),
       }),
     );
-    expect(result.status).toBe("fail");
+    expect(result.status).toBe("warn");
     expect(result.message).toMatch(/Docker/);
+    expect(result.message).toMatch(/local backend/);
+    expect(result.message.toLowerCase()).toContain("isolation");
     expect(result.fixHint).toBeTruthy();
+    expect(result.details).toMatchObject({ reason: "daemon-down", fallback: "local" });
   });
 
-  it("fails naming Docker when the docker binary is absent", async () => {
+  it("warns naming Docker and the local fallback when the docker binary is absent", async () => {
     const result = await checkWorkbench.run(
       context({
         execImpl: async () => {
@@ -167,11 +173,22 @@ describe("workbench check", () => {
         },
       }),
     );
-    expect(result.status).toBe("fail");
+    expect(result.status).toBe("warn");
     expect(result.message).toMatch(/Docker/);
+    expect(result.message).toMatch(/local backend/);
+    expect(result.details).toMatchObject({ reason: "binary-missing", fallback: "local" });
   });
 
-  it("a real probe reports what this machine's daemon reports: not ok when it is down, ok only with the image present", async () => {
+  it("warns naming the local fallback when the daemon does not answer in time", async () => {
+    const result = await checkWorkbench.run(
+      context({ execImpl: async () => ({ code: 124, stdout: "", stderr: "timed out" }) }),
+    );
+    expect(result.status).toBe("warn");
+    expect(result.message).toMatch(/local backend/);
+    expect(result.details).toMatchObject({ reason: "timeout", fallback: "local" });
+  });
+
+  it("a real probe reports what this machine's daemon reports: warn when it is down, ok only with the image present", async () => {
     // An independent probe with the same commands, so the expected status is measured, not assumed.
     // Both sides get the same generous budget: under a saturated fork pool `docker info` has taken
     // >6 s, and a 5 s check against a 5 s probe turned that into a "fail != ok" flake.
@@ -182,7 +199,7 @@ describe("workbench check", () => {
     const present = up && (await runCommand("docker", ["inspect", "--type", "image", "--format", "{{.Id}}", image], budgetMs).catch(() => undefined))?.code === 0;
     const result = await checkWorkbench.run(context({ probeTimeoutMs: budgetMs }));
     expect(result.message).toMatch(/Docker/i);
-    expect(result.status).toBe(!up ? "fail" : present ? "ok" : "warn");
+    expect(result.status).toBe(up && present ? "ok" : "warn");
   }, 60_000);
 
   it("warns that the local backend has no isolation", async () => {
