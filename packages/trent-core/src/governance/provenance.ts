@@ -39,7 +39,11 @@ export type { Provenance } from "../tools/types.js";
  * read it is tainted. `delegation` is deliberately absent: a child is untrusted only when it
  * actually touched one of these, which it reports by tagging its own record.
  */
-export const UNTRUSTED_ADAPTERS: readonly string[] = ["web", "browser", "mcp", "plugins", "inbound"];
+// [SEC-1 T-03] `vision`, `media` and `a2a` return content from off this machine as surely as `web`
+// does: a described remote image, a transcribed remote clip, and an A2A peer's answer are all text
+// somebody else authored. They belong in the same quarantine as a fetched page — a memory or skill
+// write derived from them in the same step is held, not written straight through.
+export const UNTRUSTED_ADAPTERS: readonly string[] = ["web", "browser", "mcp", "plugins", "inbound", "vision", "media", "a2a"];
 
 /** [U1] The scope an adapter declares when its results are text somebody outside this machine wrote. */
 export const INBOUND_SCOPE = "inbound";

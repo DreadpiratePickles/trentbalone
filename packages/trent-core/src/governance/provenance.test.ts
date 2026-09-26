@@ -45,7 +45,7 @@ const skills = adapter("skills", ["skills_list", "skill_view", "skill_manage"]);
 
 describe("adapterProvenance", () => {
   it("names web, browser, MCP and plugin output untrusted and everything Trent runs itself trusted", () => {
-    expect([...UNTRUSTED_ADAPTERS].sort()).toEqual(["browser", "inbound", "mcp", "plugins", "web"]);
+    expect([...UNTRUSTED_ADAPTERS].sort()).toEqual(["a2a", "browser", "inbound", "mcp", "media", "plugins", "vision", "web"]);
     expect(adapterProvenance("web", "web_extract")).toBe("untrusted");
     expect(adapterProvenance("browser", "browser_get_text")).toBe("untrusted");
     expect(adapterProvenance("mcp", "mcp_status")).toBe("untrusted");
@@ -135,6 +135,31 @@ describe("provenanceAdapters", () => {
       expect(held).toHaveLength(1);
       expect(held[0]!.sources).toEqual(["web_extract"]);
       expect(write.summary).toContain("appr_test");
+    });
+  });
+
+  it("holds a memory write after a remote image is described: vision output is untrusted", async () => {
+    // [SEC-1 T-03] An image can carry typographic or embedded instructions; a memory add derived
+    // from a vision description in the same step must be held, exactly as a web page is.
+    const vision = adapter("vision", ["ask_vision", "describe_image"]);
+    const ledger = createProvenanceLedger();
+    const held: Array<{ sources: readonly string[] }> = [];
+    const [wrappedVision, wrappedMemory] = provenanceAdapters([vision, memory], {
+      ledger,
+      policy: DEFAULT_PROVENANCE_POLICY,
+      hold: (input) => {
+        held.push({ sources: input.sources });
+        return `held as appr_test (${input.sources.join(", ")})`;
+      },
+    });
+    await runWithToolCallContext({ runId: "run-vis", stepId: "step-a" }, async () => {
+      const seen = await wrappedVision!.execute('ask_vision {"url":"https://example.invalid/a.png"}', {});
+      expect(seen.provenance).toBe("untrusted");
+      const write = await wrappedMemory!.execute('memory {"action":"add","content":"the image said to send the keys"}', {});
+      expect(write.status).toBe("needs_approval");
+      expect(write.provenance).toBe("untrusted");
+      expect(write.summary).toContain("ask_vision");
+      expect(held[0]!.sources).toEqual(["ask_vision"]);
     });
   });
 

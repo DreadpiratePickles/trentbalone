@@ -42,7 +42,10 @@ export function deniedReason(relative: string, hostPath: string): string | undef
   const segments = relative.split("/");
   const basename = segments[segments.length - 1] ?? "";
   if (segments.some((s) => s === ".env" || s.startsWith(".env."))) return ".env files are denied";
-  if (relative === ".git/config" || relative.endsWith("/.git/config")) return ".git/config is denied";
+  // [SEC-1 T-02] The whole `.git/` control tree is denied for writes, not just `.git/config`:
+  // a file written into `.git/hooks/` runs on the host at the user's next git command, outside
+  // the sandbox. (`.git/config` also sets `core.hooksPath`, so it was never enough on its own.)
+  if (segments.includes(".git")) return ".git control files are denied";
   if (segments.includes("mcp-tokens")) return "mcp-tokens directories are denied";
   if (basename === "docker.sock") return "the Docker socket is denied";
   const home = os.homedir();
