@@ -10,6 +10,10 @@
  *    CONNECT and the seat sees the navigation error.
  * Screenshots are files under `<profileDir>/browser/<runId>/`; the tool output carries the path,
  * never the bytes. Text output is capped by the spillover rule.
+ *
+ * [H5] `browser_navigate {"attach": true}` switches the run to the owner's own running Chrome
+ * (`attach.ts`, off unless `tools.browser.attach.enabled`); every tool then acts on that tab, with
+ * the proxy's allowlist applied by the adapter and every action bound to an approval.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -18,15 +22,22 @@ import { fitSummary } from "../spillover.js";
 import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
 import { renderToolInstructions } from "../web/schemas.js";
 import { checkUrlSafety, type LookupFn } from "../web/url-safety.js";
+import type { BoundApprovalStore } from "../../governance/bound-approvals.js";
+import { ATTACH_GATED_TOOLS, AttachedMode } from "./attach.js";
+import type { BrowserAttachConfig } from "./attach-config.js";
 import { CHROMIUM_INSTALL_HINT, findChromium } from "./chromium.js";
-import { createChromiumLauncher } from "./launch.js";
-import type { BrowserLauncher } from "./page-types.js";
+import { createCdpConnector, createChromiumLauncher } from "./launch.js";
+import type { BrowserConnector, BrowserLauncher } from "./page-types.js";
 import { BROWSER_TOOL_SCHEMAS, SNAPSHOT_LIMIT } from "./schemas.js";
-import { BrowserSession, NoPageError, PasswordFieldError } from "./session.js";
+import { BrowserSession, launchedSource, NoPageError, PasswordFieldError } from "./session.js";
 
 export { BROWSER_TOOL_SCHEMAS, SNAPSHOT_LIMIT } from "./schemas.js";
 export { findChromium, CHROMIUM_INSTALL_HINT } from "./chromium.js";
-export type { BrowserLauncher, BrowserLike, ContextLike, PageLike } from "./page-types.js";
+export type { BrowserConnector, BrowserLauncher, BrowserLike, ContextLike, PageLike } from "./page-types.js";
+// [H5] browser attach
+export { ATTACH_GATED_TOOLS, attachedSiteRefusal, siteOf } from "./attach.js";
+export { browserAttachOptions, BrowserAttachConfigSchema, BrowserToolsConfigSchema, checkCdpUrl, DEFAULT_CDP_URL, type BrowserAttachConfig, type BrowserAttachConfigSource } from "./attach-config.js";
+export { appendAttachAudit, attachAuditPath, readAttachAudit, verifyAttachAudit, ATTACH_AUDIT_FILE } from "./attach-audit.js";
 
 export const BROWSER_ADAPTER_NAME = "browser";
 
@@ -45,7 +56,20 @@ export interface BrowserAdapterOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly lookup?: LookupFn;
   readonly vision?: VisionAsk;
+  // [H5] browser attach
+  /** `tools.browser.attach`. Absent or `enabled: false`: `attach: true` is refused and nothing connects. */
+  readonly attach?: BrowserAttachConfig;
+  /** `egress.intercept_domains`: the allowlist an attached browser is held to. Absent allows nothing. */
+  readonly allowedHosts?: readonly string[];
+  /** Test seam: a fake CDP connection. When absent, `playwright-core`'s `connectOverCDP`. */
+  readonly connector?: BrowserConnector;
+  /** Where attached actions bind their approvals; defaults to the process's installed store. */
+  readonly bindings?: BoundApprovalStore;
+  /** The seat acting, named on the approval row and the attach audit. */
+  readonly seat?: string;
 }
+
+type BrowserMode = "launched" | "attached";
 
 const SPECS: readonly ToolSpec[] = [
   { name: "browser_navigate", primary: "url", signature: ["url"] },
@@ -72,7 +96,23 @@ export function createBrowserAdapter(options: BrowserAdapterOptions): TrentToolA
     options.launcher ?? (executable ? createChromiumLauncher({ executablePath: executable, proxyUrl: options.egress.proxyUrl, caPem: options.egress.caPem }) : null);
   const runId = options.runId ?? `run-${Date.now()}`;
   const screenshotDir = path.join(options.profileDir, "browser", runId);
-  const session = launcher ? new BrowserSession({ launcher, token: options.egress.token, screenshotDir }) : null;
+  const session = launcher ? new BrowserSession({ source: launchedSource(launcher, options.egress.token), screenshotDir }) : null;
+  const attached = new AttachedMode({
+    adapterName: BROWSER_ADAPTER_NAME,
+    allowedHosts: options.allowedHosts ?? [],
+    connector: options.connector ?? createCdpConnector(),
+    profileDir: options.profileDir,
+    screenshotDir,
+    ...(options.attach ? { config: options.attach } : {}),
+    ...(options.lookup ? { lookup: options.lookup } : {}),
+    ...(options.bindings ? { bindings: options.bindings } : {}),
+    ...(options.seat === undefined ? {} : { seat: options.seat }),
+  });
+  let mode: BrowserMode = "launched";
+  /** `attach` on a navigation picks the browser; any other call uses the one the run is on. */
+  const modeFor = (tool: string, args: Record<string, unknown>): BrowserMode =>
+    tool === "browser_navigate" && args.attach === true ? "attached" : tool === "browser_navigate" && args.attach === false ? "launched" : mode;
+  const available = session !== null || attached.enabled;
 
   const done = (action: string, status: ToolCallRecord["status"], summary: string): ToolCallRecord =>
     record(BROWSER_ADAPTER_NAME, action, status, fitSummary(summary, options.profileDir, "browser", SNAPSHOT_LIMIT));
@@ -93,6 +133,12 @@ export function createBrowserAdapter(options: BrowserAdapterOptions): TrentToolA
     const file = await live.screenshot(false, args.annotate === true);
     const answer = await options.vision({ image: readFileSync(file), mimeType: "image/png", question });
     return done(action, "completed", `${answer}\n\nscreenshot_path: ${file}`);
+  }
+
+  async function launchedCall(action: string, tool: string, args: Record<string, unknown>): Promise<ToolCallRecord> {
+    if (!session) return fail(action, `${tool} not_available: ${CHROMIUM_INSTALL_HINT}`);
+    if (tool !== "browser_navigate" && !session.isOpen) return fail(action, `${tool} needs an open page: call browser_navigate first.`);
+    return run(action, tool, args, session);
   }
 
   async function run(action: string, tool: string, args: Record<string, unknown>, live: BrowserSession): Promise<ToolCallRecord> {
@@ -142,19 +188,26 @@ export function createBrowserAdapter(options: BrowserAdapterOptions): TrentToolA
   return {
     name: BROWSER_ADAPTER_NAME,
     scopes: [BROWSER_ADAPTER_NAME, ...BROWSER_TOOL_SCHEMAS.map((s) => s.name)],
-    availability: session ? "real" : "unavailable",
+    availability: available ? "real" : "unavailable",
     instructions: renderToolInstructions(BROWSER_TOOL_SCHEMAS),
     routingText: ROUTING_TEXT,
-    healthCheck: async () => (session ? "connected" : "needs_credentials"),
+    healthCheck: async () => (available ? "connected" : "needs_credentials"),
     estimateCost: () => 0,
-    requiresApproval: () => false,
+    requiresApproval(action) {
+      const { tool, args, error } = parseAction(action, SPECS);
+      return !error && attached.enabled && modeFor(tool, args) === "attached" && ATTACH_GATED_TOOLS.has(tool);
+    },
     async execute(action) {
       const { tool, args, error } = parseAction(action, SPECS);
       if (error) return fail(action, error);
-      if (!session) return fail(action, `${tool} not_available: ${CHROMIUM_INSTALL_HINT}`);
-      if (tool !== "browser_navigate" && !session.isOpen) return fail(action, `${tool} needs an open page: call browser_navigate first.`);
+      const want = modeFor(tool, args);
       try {
-        return await run(action, tool, args, session);
+        const result =
+          want === "attached"
+            ? await attached.execute(action, tool, args, (name, input, live) => run(action, name, input, live))
+            : await launchedCall(action, tool, args);
+        if (tool === "browser_navigate" && result.status === "completed") mode = want;
+        return result;
       } catch (err) {
         if (err instanceof PasswordFieldError) return record(BROWSER_ADAPTER_NAME, action, "blocked", err.message);
         if (err instanceof NoPageError) return fail(action, err.message);
@@ -163,10 +216,20 @@ export function createBrowserAdapter(options: BrowserAdapterOptions): TrentToolA
       }
     },
     async dryRun(action) {
+      const { tool, args, error } = parseAction(action, SPECS);
+      if (!error && modeFor(tool, args) === "attached") {
+        try {
+          return await attached.dryRun(action, tool, args);
+        } catch (err) {
+          return fail(action, `${tool} failed: ${err instanceof Error ? err.message.split("\n")[0] ?? "" : String(err)}`);
+        }
+      }
       return record(BROWSER_ADAPTER_NAME, action, "mocked", `browser dry-run: would perform "${action}" in the headless browser.`);
     },
     async cleanup() {
       await session?.close();
+      // Detaching disconnects from the owner's Chrome; it closes none of the owner's tabs.
+      await attached.detach();
     },
   };
 }

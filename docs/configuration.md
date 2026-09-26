@@ -159,6 +159,11 @@ policy:
 tools:
   disclosure_threshold: 24    # above this many registered tools, everything outside the core
                               # toolsets is reached through tool_search/tool_describe/tool_call
+  browser:                    # absent is the same as enabled: false
+    attach:
+      enabled: false          # true: browser_navigate {"attach": true} may act in your own Chrome
+      cdp_url: http://127.0.0.1:9222  # loopback only; Chrome started with --remote-debugging-port
+      # profile_hint: Trent   # a label on the approval card and in the audit, not a selector
 
 brain:
   enabled: true               # false: no <profile>/brain/ is created and no brain block is injected
@@ -546,6 +551,17 @@ direct schemas at the cost of prompt context on every turn; lowering it buys con
 one extra round trip the first time a tool is needed. A call made through `tool_call` re-enters the
 same wrapper chain a direct call enters, so the approval floors, the policy rules and the hooks all
 still apply. See [tools.md](tools.md).
+
+### Browser attach
+
+`tools.browser.attach.enabled` (default false, and absent is false) lets `browser_navigate
+{"attach": true}` act in your own running Chrome, signed in as you, instead of the isolated
+launched browser. `cdp_url` (default `http://127.0.0.1:9222`) is that Chrome's DevTools endpoint
+and must be 127.0.0.1, `localhost` or `[::1]`; `profile_hint` is a label for the approval card and
+the audit. Every navigation, click, keystroke and scroll there waits for an approval bound to
+exactly that call, navigation is held to `egress.intercept_domains` because this traffic does not
+pass the egress proxy, and password fields are refused. How to start Chrome for it, and what an
+open debugging port exposes, are in [browser.md](browser.md), "Attach to your own Chrome".
 
 ### The brain
 

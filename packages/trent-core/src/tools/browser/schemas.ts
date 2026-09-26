@@ -1,7 +1,8 @@
 /**
  * Hermes's `browser_*` schemas (`~/.hermes/hermes-agent/tools/browser_tool.py:437-577`), as data
  * so the seat prompt can render them, plus two Trent additions: `browser_screenshot` (the PNG
- * path with no model call) and `browser_get_text` (plain page text under the spillover rule).
+ * path with no model call) and `browser_get_text` (plain page text under the spillover rule), and
+ * [H5] one argument: `attach` on `browser_navigate` (`attach.ts`).
  * The Hermes descriptions are condensed; the names, keys and required lists are theirs.
  */
 import type { ToolSchema } from "../web/schemas.js";
@@ -25,10 +26,21 @@ export const BROWSER_TOOL_SCHEMAS: ToolSchema[] = [
       "other browser tools. For plain information retrieval prefer web_search or web_extract (faster, cheaper); " +
       "use the browser when you need to interact with a page (click, fill forms, dynamic content). Returns a " +
       "compact snapshot with interactive elements and ref IDs. Private, loopback and cloud-metadata addresses " +
-      "and non-http(s) schemes are always refused.",
+      "and non-http(s) schemes are always refused. attach=true acts in the owner's own signed-in Chrome instead " +
+      "of the isolated browser (only when the owner enabled it); there every navigate, click, type, press, scroll " +
+      "and back waits for the owner's approval of exactly that call, and password fields are refused.",
     parameters: {
       type: "object",
-      properties: { url: { type: "string", description: "The URL to navigate to (e.g. 'https://example.com')." } },
+      properties: {
+        url: { type: "string", description: "The URL to navigate to (e.g. 'https://example.com')." },
+        // [H5] browser attach: an argument, not a tool, so the toolset keeps its twelve tools.
+        attach: {
+          type: "boolean",
+          description:
+            "true: use the owner's own running Chrome, signed in as them (tools.browser.attach). false: the isolated " +
+            "browser. Omitted: whichever this run is already using, the isolated one at first.",
+        },
+      },
       required: ["url"],
     },
   },

@@ -552,7 +552,14 @@
       }
     },
     "tools": {
-      "disclosure_threshold": 40
+      "disclosure_threshold": 40,
+      "browser": {
+        "attach": {
+          "enabled": true,
+          "cdp_url": "http://127.0.0.1:9333",
+          "profile_hint": "fixture"
+        }
+      }
     },
     "brain": {
       "enabled": false,

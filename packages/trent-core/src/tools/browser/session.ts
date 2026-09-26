@@ -1,14 +1,19 @@
 /**
- * One browser session per adapter: a browser launched on the first `browser_navigate`, one fresh
- * isolated context carrying the broker token header, one page. Closed by the adapter's `cleanup`
- * (the seat's run end). Every method returns text for the model; nothing here logs page content.
+ * One browser session per page source: the page is obtained on the first `browser_navigate` and
+ * released by the adapter's `cleanup` (the seat's run end). Two sources exist: the launched one
+ * here (a browser launched for this run, one fresh isolated context carrying the broker token
+ * header, one page) and [H5] the attached one in `attach.ts` (the owner's own Chrome over CDP,
+ * whose release disconnects and closes nothing). Every method returns text for the model; nothing
+ * here logs page content.
  */
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import {
   ANNOTATE_SCRIPT,
-  FIELD_KIND_SCRIPT,
+  FIELD_KIND_FN,
+  FOCUSED_FIELD_SCRIPT,
   IMAGES_SCRIPT,
+  isSecretField,
   refSelector,
   SNAPSHOT_SCRIPT,
   TEXT_SCRIPT,
@@ -16,6 +21,7 @@ import {
   type BrowserLauncher,
   type BrowserLike,
   type ContextLike,
+  type FieldKind,
   type PageImage,
   type PageLike,
   type SnapshotElement,
@@ -31,17 +37,57 @@ function isTransientNetworkError(error: unknown): boolean {
   return TRANSIENT_NET_ERRORS.some((code) => message.includes(code));
 }
 
+/** Where a session's page comes from, and how it is let go. */
+export interface PageSource {
+  /** The page the session drives, obtained for the first navigation, whose target is `url`. */
+  open(url: string): Promise<PageLike>;
+  /** Releases what `open` obtained. Safe to call twice, and before `open`. */
+  close(): Promise<void>;
+}
+
+/** The launched source: a browser started for this run, reachable to the network only through the proxy. */
+export function launchedSource(launcher: BrowserLauncher, token: string): PageSource {
+  let browser: BrowserLike | null = null;
+  let context: ContextLike | null = null;
+  return {
+    async open() {
+      browser = await launcher();
+      context = await browser.newContext({
+        ignoreHTTPSErrors: true,
+        viewport: { width: 1280, height: 900 },
+        acceptDownloads: false,
+        serviceWorkers: "block",
+      });
+      await context.setExtraHTTPHeaders({ "x-trent-proxy-token": token });
+      return context.newPage();
+    },
+    async close() {
+      const [ownContext, ownBrowser] = [context, browser];
+      context = null;
+      browser = null;
+      try {
+        await ownContext?.close();
+      } catch {
+        // Already gone.
+      }
+      try {
+        await ownBrowser?.close();
+      } catch {
+        // Already gone.
+      }
+    },
+  };
+}
+
 export interface SessionOptions {
-  readonly launcher: BrowserLauncher;
-  /** The opaque broker token, sent as `x-trent-proxy-token` on every request. */
-  readonly token: string;
+  readonly source: PageSource;
   /** `<profileDir>/browser/<runId>`; created on the first screenshot. */
   readonly screenshotDir: string;
 }
 
 export class PasswordFieldError extends Error {
-  constructor(ref: string) {
-    super(`browser_type refused: ${ref} is a password field. Trent never types secrets; ask the human to enter it.`);
+  constructor(subject: string, tool = "browser_type") {
+    super(`${tool} refused: ${subject} is a password field. Trent never types secrets; ask the human to enter it.`);
     this.name = "PasswordFieldError";
   }
 }
@@ -62,8 +108,6 @@ function formatElement(el: SnapshotElement): string {
 }
 
 export class BrowserSession {
-  private browser: BrowserLike | null = null;
-  private context: ContextLike | null = null;
   private page: PageLike | null = null;
   private launching: Promise<PageLike> | null = null;
   private readonly consoleLog: string[] = [];
@@ -76,24 +120,26 @@ export class BrowserSession {
     return this.page !== null && !(this.page.isClosed?.() ?? false);
   }
 
+  /** The URL the page shows now; empty before the first navigation. */
+  get currentUrl(): string {
+    return this.isOpen && this.page ? this.page.url() : "";
+  }
+
+  /** [H5] Brings the page to the front of its window, where the owner can watch what happens to it. */
+  async bringToFront(): Promise<void> {
+    if (this.isOpen && this.page) await this.page.bringToFront?.();
+  }
+
   private current(): PageLike {
     if (!this.isOpen || !this.page) throw new NoPageError();
     return this.page;
   }
 
-  private async ensurePage(): Promise<PageLike> {
+  private async ensurePage(url: string): Promise<PageLike> {
     if (this.isOpen && this.page) return this.page;
     if (this.launching) return this.launching;
     this.launching = (async () => {
-      this.browser = await this.options.launcher();
-      this.context = await this.browser.newContext({
-        ignoreHTTPSErrors: true,
-        viewport: { width: 1280, height: 900 },
-        acceptDownloads: false,
-        serviceWorkers: "block",
-      });
-      await this.context.setExtraHTTPHeaders({ "x-trent-proxy-token": this.options.token });
-      const page = await this.context.newPage();
+      const page = await this.options.source.open(url);
       page.on("console", (message) => this.pushConsole(`[${message.type()}] ${message.text()}`));
       page.on("pageerror", (error) => this.pushConsole(`[pageerror] ${error.message}`));
       this.page = page;
@@ -118,7 +164,7 @@ export class BrowserSession {
    * any other error, is the caller's. CI saw `net::ERR_NETWORK_CHANGED` on a shared runner twice.
    */
   async navigate(url: string): Promise<string> {
-    const page = await this.ensurePage();
+    const page = await this.ensurePage(url);
     this.consoleLog.length = 0;
     try {
       await page.goto(url, { timeout: NAVIGATION_TIMEOUT_MS, waitUntil: "domcontentloaded" });
@@ -154,13 +200,26 @@ export class BrowserSession {
     return `Clicked ${ref}.\n\n${await this.snapshot(false)}`;
   }
 
+  /** What the floors and a preview know about `ref`, or null when it is not in the current snapshot. */
+  async element(ref: string): Promise<FieldKind | null> {
+    const locator = this.current().locator(refSelector(ref));
+    if ((await locator.count()) === 0) return null;
+    return ((await locator.evaluate(FIELD_KIND_FN)) as FieldKind | null) ?? {};
+  }
+
+  /** [H5] Throws `PasswordFieldError` when focus is in a secret field, where a key press would type. */
+  async assertFocusNotSecret(tool: string): Promise<void> {
+    const focused = (await this.current().evaluate(FOCUSED_FIELD_SCRIPT)) as FieldKind | null;
+    if (isSecretField(focused)) throw new PasswordFieldError("the focused element", tool);
+  }
+
   /** Throws `PasswordFieldError` before any text reaches the page. */
   async type(ref: string, text: string): Promise<string> {
     const page = this.current();
     const locator = page.locator(refSelector(ref));
     if ((await locator.count()) === 0) return `${ref} is not in the current snapshot; call browser_snapshot to refresh refs.`;
-    const kind = (await locator.evaluate(FIELD_KIND_SCRIPT)) as { tag?: string; type?: string } | null;
-    if (kind?.type === "password") throw new PasswordFieldError(ref);
+    const kind = (await locator.evaluate(FIELD_KIND_FN)) as FieldKind | null;
+    if (isSecretField(kind)) throw new PasswordFieldError(ref);
     await locator.fill(text, { timeout: ACTION_TIMEOUT_MS });
     return `Typed ${text.length} character(s) into ${ref}.`;
   }
@@ -179,6 +238,7 @@ export class BrowserSession {
 
   async press(key: string): Promise<string> {
     const page = this.current();
+    await this.assertFocusNotSecret("browser_press");
     await page.keyboard.press(key);
     return `Pressed ${key}.\n\n${await this.snapshot(false)}`;
   }
@@ -218,20 +278,7 @@ export class BrowserSession {
   }
 
   async close(): Promise<void> {
-    const browser = this.browser;
-    const context = this.context;
     this.page = null;
-    this.context = null;
-    this.browser = null;
-    try {
-      await context?.close();
-    } catch {
-      // Already gone.
-    }
-    try {
-      await browser?.close();
-    } catch {
-      // Already gone.
-    }
+    await this.options.source.close();
   }
 }

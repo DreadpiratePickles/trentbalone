@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod";
+import { BrowserToolsConfigSchema } from "../../tools/browser/attach-config.js"; // [H5] browser attach
 
 export const ToolsetSchema = z.enum([
   "file_ops",
@@ -39,4 +40,12 @@ export type Toolset = z.infer<typeof ToolsetSchema>;
  */
 export const ToolDisclosureConfigSchema = z.object({
   disclosure_threshold: z.number().int().positive().default(24),
+  // [H5] browser attach
+  /**
+   * `tools.browser.attach`: the `browser` toolset may attach to the owner's own running Chrome over
+   * the DevTools protocol instead of launching its isolated one (`tools/browser/attach-config.ts`,
+   * docs/browser.md "Attach to your own Chrome"). Optional: absent is off, and so is `enabled: false`.
+   */
+  browser: BrowserToolsConfigSchema.optional(),
+  // [/H5]
 });

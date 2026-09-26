@@ -46,7 +46,7 @@ describe.skipIf(!chromiumPath)("browser toolset (real Chromium through a real Eg
       const rawToken = req.headers["x-trent-proxy-token"];
       seen.push({ host: req.headers.host, token: Array.isArray(rawToken) ? rawToken[0] : rawToken, url: req.url });
       res.writeHead(200, { "content-type": "text/html" });
-      res.end('<html><head><title>Proxied Page</title></head><body><h1>Through the tunnel</h1><a href="/next" id="go">Next</a><input name="q" placeholder="Search"></body></html>');
+      res.end('<html><head><title>Proxied Page</title></head><body><h1>Through the tunnel</h1><a href="/next" id="go">Next</a><input name="q" placeholder="Search"><input type="password" name="pw" placeholder="Password"></body></html>');
     });
     await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
     const address = upstream.address();
@@ -103,6 +103,21 @@ describe.skipIf(!chromiumPath)("browser toolset (real Chromium through a real Eg
     const head = fs.readFileSync(file!).subarray(0, 4);
     expect([...head]).toEqual([0x89, 0x50, 0x4e, 0x47]);
   }, { timeout: 120_000, retry: 1 });
+
+  // [H5] Found by the attach suite: the field check was a string handed to `locator.evaluate`, which
+  // Playwright evaluates as an expression and never calls, so against a real page the floor saw no
+  // field kind and let the text through. The fake browser could not show it.
+  it("refuses to type into a real password field, and the text never reaches the page", async () => {
+    const snapshot = await adapter.execute("browser_snapshot {}", {});
+    const line = snapshot.summary.split("\n").find((l) => l.includes("password input"));
+    const ref = line ? /\[(@e\d+)\]/.exec(line)?.[1] : undefined;
+    expect(ref, snapshot.summary).toBeDefined();
+    const typed = await adapter.execute(`browser_type {"ref":"${ref}","text":"hunter2"}`, {});
+    expect(typed.status, typed.summary).toBe("blocked");
+    expect(typed.summary).toMatch(/password/);
+    const value = await adapter.execute(`browser_console {"expression":"document.querySelector('input[name=pw]').value"}`, {});
+    expect(value.summary).toContain('Result: ""');
+  }, 60_000);
 
   it("refuses a host the proxy does not allowlist, so the browser cannot leave the tunnel", async () => {
     const result = await adapter.execute('browser_navigate {"url":"https://not-allowlisted.example/"}', {});

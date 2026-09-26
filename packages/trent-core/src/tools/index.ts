@@ -36,7 +36,7 @@ import { createTodoAdapter, type TodoAdapter } from "./todo/index.js";
 import { discloseAdapters, DEFAULT_DISCLOSURE_THRESHOLD, isToolBridge } from "./tool_search/index.js";
 import { createTerminalAdapter } from "./terminal/index.js";
 import { createWebToolsAdapter } from "./web/index.js";
-import { createBrowserAdapter } from "./browser/index.js";
+import { browserAttachOptions, createBrowserAdapter } from "./browser/index.js";
 import { askVision, createVisionAdapter, type VisionGateway } from "./vision/index.js";
 import { createMediaAdapter } from "./media/index.js";
 import { buildBusinessToolset, type BusinessBuildSeams } from "./business/build.js";
@@ -352,11 +352,11 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
         const gateway = deps.gateway;
         adapters.push(
           createBrowserAdapter({
-            profileDir: deps.profileDir,
-            egress,
+            profileDir: deps.profileDir, egress,
             env: deps.env ?? process.env,
             ...(deps.runId ? { runId: deps.runId } : {}),
             ...(gateway ? { vision: (input) => askVision(gateway, input) } : {}),
+            ...browserAttachOptions(config, deps.seat), // [H5] browser attach: `tools.browser.attach` + `egress.intercept_domains` (tools/browser/attach-config.ts)
           }),
         );
       }
