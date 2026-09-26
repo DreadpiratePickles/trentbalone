@@ -15,6 +15,7 @@ import {
   type ProxyTokenRecord,
   type TokenStorePort,
 } from "./TokenStorePort.js";
+import { normalizeCredentialHosts } from "./host-binding.js";
 
 export type { ProxyTokenRecord, TokenStorePort } from "./TokenStorePort.js";
 
@@ -25,6 +26,16 @@ export interface TokenManagerOptions {
   filePath?: string;
   /** Opt out of durability explicitly; nothing production should. */
   ephemeral?: boolean;
+}
+
+/** The options form of `issueToken`'s last argument. */
+export interface IssueTokenOptions {
+  ttlSeconds?: number;
+  /**
+   * The host(s) the credentials belong to, `host` or `host:port`. The broker injects the secret
+   * only into requests to these (see `host-binding.ts`); omitted, it injects it nowhere.
+   */
+  hosts?: readonly string[];
 }
 
 export const TOKEN_PREFIX = "trnt_egress_";
@@ -52,14 +63,19 @@ export class TokenManager {
 
   /**
    * Mint an opaque token standing in for `realCredentials`. The returned string is the only value
-   * that may enter a sandbox.
+   * that may enter a sandbox. The last argument is a TTL in seconds or `{ ttlSeconds, hosts }`; a
+   * token minted without `hosts` is bound to no host, so its secret is injected nowhere.
    */
   public issueToken(
     agentId: string,
     realCredentials: Record<string, string>,
     toolsetName?: string,
-    ttlSeconds?: number
+    ttlOrOptions?: number | IssueTokenOptions
   ): string {
+    const options: IssueTokenOptions = typeof ttlOrOptions === "number" ? { ttlSeconds: ttlOrOptions } : ttlOrOptions ?? {};
+    const ttlSeconds = options.ttlSeconds;
+    // Validated before anything is stored: a refused binding mints nothing.
+    const hosts = options.hosts === undefined ? undefined : normalizeCredentialHosts(options.hosts);
     const token = `${TOKEN_PREFIX}${crypto.randomBytes(16).toString("hex")}`;
     const now = new Date();
     this.store.put({
@@ -67,6 +83,7 @@ export class TokenManager {
       agentId,
       toolsetName,
       realCredentials,
+      ...(hosts === undefined ? {} : { hosts }),
       createdAt: now.toISOString(),
       expiresAt:
         ttlSeconds === undefined

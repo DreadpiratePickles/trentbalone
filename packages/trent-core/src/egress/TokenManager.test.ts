@@ -109,3 +109,54 @@ describe("FileTokenStore", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+// [egress host binding]
+describe("TokenManager binds a token's credentials to hosts at mint time", () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-tokens-hosts-"));
+    file = path.join(dir, "tokens.json");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("stores the normalised hosts on the record, and they survive a restart", () => {
+    const manager = new TokenManager({ filePath: file });
+    const token = manager.issueToken("trent-repl", { apiKey: REAL_SECRET }, "repl", { hosts: [" API.OpenAI.com. ", "127.0.0.1:11434"] });
+    expect(manager.resolveToken(token)?.hosts).toEqual(["api.openai.com", "127.0.0.1:11434"]);
+    expect(new TokenManager({ filePath: file }).resolveToken(token)?.hosts).toEqual(["api.openai.com", "127.0.0.1:11434"]);
+  });
+
+  it("takes the TTL from the options form as well as the positional one", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const manager = new TokenManager({ filePath: file });
+    const token = manager.issueToken("ceo", { apiKey: "sk-expiring" }, "terminal", { ttlSeconds: 60, hosts: ["api.openai.com"] });
+    expect(manager.resolveToken(token)?.expiresAt).toBe("2026-01-01T00:01:00.000Z");
+    vi.setSystemTime(new Date("2026-01-01T00:01:01.000Z"));
+    expect(manager.resolveToken(token)).toBeNull();
+  });
+
+  it("refuses a binding that is not a plain host[:port]: a wildcard, a URL, an empty or spaced name, userinfo", () => {
+    const manager = new TokenManager({ filePath: file });
+    for (const bad of ["*.openai.com", "https://api.openai.com/v1", "api.openai.com/v1", "", "  ", "api openai.com", "user@api.openai.com", "api.openai.com:0", "api.openai.com:99999"]) {
+      expect(() => manager.issueToken("ceo", { apiKey: REAL_SECRET }, "repl", { hosts: [bad] }), JSON.stringify(bad)).toThrow(/host/i);
+    }
+    // Nothing was minted by a refused call.
+    expect(manager.listActiveTokens()).toHaveLength(0);
+  });
+
+  it("lists the bound hosts as metadata, never the credentials", () => {
+    const manager = new TokenManager({ filePath: file });
+    manager.issueToken("trent-repl", { apiKey: REAL_SECRET }, "repl", { hosts: ["generativelanguage.googleapis.com"] });
+    const listed = manager.listActiveTokens();
+    expect(listed[0]?.hosts).toEqual(["generativelanguage.googleapis.com"]);
+    expect(JSON.stringify(listed)).not.toContain(REAL_SECRET);
+  });
+});
+// [/egress host binding]

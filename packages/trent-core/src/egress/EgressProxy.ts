@@ -17,7 +17,10 @@ import { URL } from "node:url";
 import { TokenManager } from "./TokenManager.js";
 import { CertificateAuthority } from "./CertificateAuthority.js";
 import { applyCredentials, extractToken, isHostAllowed, normalizeHost } from "./CredentialBroker.js";
+import type { SecretWithheld } from "./host-binding.js";
+import type { ProxyTokenRecord } from "./TokenStorePort.js";
 import type { ConfigManager } from "../config/ConfigManager.js";
+import { StructuredLogger } from "../telemetry/logger.js";
 
 export interface UpstreamOverride {
   host: string;
@@ -42,7 +45,12 @@ export interface EgressProxyOptions {
   upstreamCa?: string[];
   /** Redirect an allowlisted host to a different address. For tests and staging only. */
   upstreamOverrides?: Record<string, UpstreamOverride>;
+  /** Where the proxy's structured log lines go (`egress.secret_withheld`). Defaults to stderr. */
+  log?: (line: string) => void;
 }
+
+/** Bound on the remembered (token, host) pairs a withheld line was written for; cleared when full. */
+const WITHHELD_MEMORY = 1024;
 
 interface Target {
   host: string;
@@ -106,6 +114,9 @@ export class EgressProxy {
   private readonly upstreamOverrides: Record<string, UpstreamOverride>;
   private readonly targets = new WeakMap<net.Socket, Target>();
   private readonly sockets = new Set<net.Socket>();
+  private readonly logger: StructuredLogger;
+  /** (token, host:port) pairs already reported as withheld: one line per host per token, not per request. */
+  private readonly withheldSeen = new Set<string>();
 
   private port: number;
   private readonly bindHosts: readonly string[];
@@ -124,6 +135,7 @@ export class EgressProxy {
       options?.interceptDomains ?? config?.egress?.intercept_domains ?? [];
     this.upstreamCa = options?.upstreamCa;
     this.upstreamOverrides = options?.upstreamOverrides ?? {};
+    this.logger = new StructuredLogger({ runId: "egress", stage: "egress.proxy", ...(options?.log ? { sink: options.log } : {}) });
   }
 
   public getTokenManager(): TokenManager {
@@ -282,6 +294,26 @@ export class EgressProxy {
   }
 
   /**
+   * One `egress.secret_withheld` line the first time a token's secret is withheld from a host: the
+   * request still goes, without the secret. Names the host, the reason and the bound hosts; never
+   * the secret, never the token.
+   */
+  private noteWithheld(record: ProxyTokenRecord, event: SecretWithheld): void {
+    const key = `${record.token}\n${event.host}:${event.port ?? ""}`;
+    if (this.withheldSeen.has(key)) return;
+    if (this.withheldSeen.size >= WITHHELD_MEMORY) this.withheldSeen.clear();
+    this.withheldSeen.add(key);
+    this.logger.warn("egress.secret_withheld", {
+      host: event.host,
+      ...(event.port === undefined ? {} : { port: event.port }),
+      reason: event.reason,
+      boundHosts: [...event.boundHosts],
+      agentId: record.agentId,
+      ...(record.toolsetName === undefined ? {} : { toolset: record.toolsetName }),
+    });
+  }
+
+  /**
    * The single forwarding path. Both gates are checked here before anything is dialled, so there is
    * no branch that can reach an upstream with an unauthenticated request.
    */
@@ -305,7 +337,10 @@ export class EgressProxy {
       return;
     }
 
-    const headers = applyCredentials(req.headers, target.host, record);
+    const headers = applyCredentials(req.headers, target.host, record, {
+      port: target.port,
+      onWithheld: (event) => this.noteWithheld(record, event),
+    });
     const override = this.upstreamOverrides[target.host];
     const dial = override ?? target;
 

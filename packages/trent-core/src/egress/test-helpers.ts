@@ -5,6 +5,7 @@
  * exact path a sandboxed process takes. Nothing here is imported by production code.
  */
 import http from "node:http";
+import https from "node:https";
 import tls from "node:tls";
 import type { Socket } from "node:net";
 
@@ -126,4 +127,34 @@ export interface RecordingUpstream {
   port: number;
   requests: RecordedRequest[];
   close(): Promise<void>;
+}
+
+/** A throwaway HTTPS server that records every request it receives. */
+export async function startRecordingUpstream(
+  certPem: string,
+  keyPem: string
+): Promise<RecordingUpstream> {
+  const requests: RecordedRequest[] = [];
+  const server = https.createServer({ cert: certPem, key: keyPem }, (req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      requests.push({
+        method: req.method ?? "",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: Buffer.concat(chunks).toString("utf8"),
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, seen: requests.length }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  return {
+    port,
+    requests,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
 }

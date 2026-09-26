@@ -5,3 +5,5 @@ export * from "./CredentialBroker.js";
 export * from "./SandboxEnvironment.js";
 export * from "./EgressProxy.js";
 export * from "./bind-hosts.js";
+export * from "./host-binding.js";
+export * from "./provider-hosts.js";

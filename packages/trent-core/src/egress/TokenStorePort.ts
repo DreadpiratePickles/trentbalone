@@ -15,6 +15,13 @@ export interface ProxyTokenRecord {
   toolsetName?: string;
   /** The real secrets. Never logged, never serialized into any surface a sandbox can read. */
   realCredentials: Record<string, string>;
+  /**
+   * The host(s) `realCredentials` belong to, as `host` or `host:port` (see `host-binding.ts`). The
+   * broker writes the secret only onto a request to one of them or a subdomain of a named domain;
+   * every other allowlisted host gets the request without it. Absent (a record minted before this
+   * field, or by a caller that named no host) binds the secret to NOTHING: fail closed.
+   */
+  hosts?: string[];
   createdAt: string;
   expiresAt?: string;
   revoked: boolean;

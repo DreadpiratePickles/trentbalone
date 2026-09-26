@@ -21,7 +21,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
-import { EgressProxy, TokenManager, egressBindHosts } from "@trent/core/egress/index.js";
+import { EgressProxy, TokenManager, credentialHostsForProvider, egressBindHosts } from "@trent/core/egress/index.js";
 import type { ConfigManager } from "@trent/core/config/index.js";
 import { SANDBOX_IMAGE } from "@trent/core/terminal/index.js";
 import {
@@ -77,6 +77,11 @@ export interface StartEgressInput {
   readonly interceptDomains?: readonly string[];
   /** The real credential the broker swaps in at the boundary. Never logged; never enters a sandbox. */
   readonly credentials?: Record<string, string>;
+  /**
+   * [egress host binding] The host(s) `credentials` belong to (`host` or `host:port`). The broker
+   * injects the credential only into requests to these; absent, it injects it nowhere.
+   */
+  readonly credentialHosts?: readonly string[];
   /** 0 (the default) takes a free loopback port. */
   readonly port?: number;
   /**
@@ -160,7 +165,15 @@ export async function startEgressProxy(input: StartEgressInput): Promise<EgressH
     ...(input.bindHosts ? { bindHosts: [...input.bindHosts] } : {}),
   });
   await proxy.start();
-  const token = tokenManager.issueToken("trent-repl", input.credentials ?? {}, "repl");
+  let token: string;
+  try {
+    token = tokenManager.issueToken("trent-repl", input.credentials ?? {}, "repl", {
+      ...(input.credentialHosts === undefined ? {} : { hosts: input.credentialHosts }),
+    });
+  } catch (error) {
+    await proxy.stop(); // a refused binding must not leave a listener behind
+    throw error;
+  }
   const port = proxy.getPort();
   return {
     port,
@@ -216,6 +229,8 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
         configManager: deps.configManager,
         interceptDomains: deps.config.egress?.intercept_domains,
         credentials: providerCredentials(deps.config),
+        // [egress host binding] the key goes only to the host the provider's model calls go to
+        credentialHosts: credentialHostsForProvider(deps.config.provider, process.env),
         bindHosts,
       });
       egress = { state: "on", port: handle.port };

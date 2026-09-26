@@ -62,6 +62,19 @@ nothing. Storage is now durable, so revocation crosses a restart.
 The proxy reads a token from `x-trent-proxy-token`, `authorization`, `x-api-key` or
 `x-goog-api-key`, so an unmodified SDK works without knowing the proxy exists.
 
+A token's secret is bound to the host(s) it belongs to (`hosts` on the record, `host` or
+`host:port`; `egress/host-binding.ts`). The REPL mints its token bound to the host the configured
+provider's model calls go to, as `doctor/endpoint.ts` resolves it (so a moved `OPENAI_BASE_URL`
+and a local runtime's `127.0.0.1:<port>` are honoured). A request to any other allowlisted host
+is still forwarded, but without the secret: the proxy removes only what carries the broker token
+and its own headers, so a caller's own key (a search API's) passes intact, and it writes one
+`egress.secret_withheld` warning per token and host naming the host, never the secret or the
+token. This matters because the sandbox holds the one token in every provider key variable and
+the default allowlist names three providers: before binding, a Gemini profile's key reached
+api.openai.com, and any business or search host the owner allowlisted received the model key. A
+record with no `hosts` (minted before binding, or by a caller that named none) is bound to
+nothing and injects its secret nowhere: fail closed.
+
 ### The local certificate authority
 
 TLS interception needs a certificate the sandbox trusts. Node's `crypto` can verify X.509 but cannot
