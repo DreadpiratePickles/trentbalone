@@ -183,3 +183,78 @@ Landing order after reports: A (security) first, then B, C, D; E and F feed wave
   per day and today's proofs used them; per-minute 429s on other models. Live proofs for the rest
   of today are limited; the nightly live tests will read the quota, not a defect.
 - P2-10 (follow-ups bundle), P2-11 (run without a verdict), P2-12 (media on social posts) launched.
+- P2-5a landed 423f202; deliverable docs committed da0c385; P2-6 landed (recall measured: hybrid
+  0.400 -> 0.629 after the gate fix; paraphrased 0.417; reranker now decided with numbers).
+  Launching P2-13 rerank (task-type embeddings first, then opt-in LLM rerank over the union pool,
+  metered), P2-9 A2A client toolset, P2-10 follow-ups bundle, P2-11 run without a verdict,
+  P2-12 media on social posts.
+- Secret scan note: the one `AIza` match in the docs-corpus fixture is the four-letter prefix
+  named in docs/doctor.md:102 (how the doctor recognises a Google key), public since 761f652.
+- True-cost transcript captured after P2-8 (2 cents, 26,867 tokens, 5 rows) and saved over
+  05_release/output/first-run-transcript-2026-09-25.txt for the README (P2-B).
+- Wave P2 second half launched (six): P2-13 rerank (task-type embeddings, then opt-in LLM rerank
+  over the union pool, metered), P2-9 A2A client toolset (a2a_list/discover/send/history through
+  the egress client, behind the gate, untrusted-tagged replies), P2-10 follow-ups bundle (usage
+  flags in text, daemon honours the pin via cronJobRun and shares cron.ts wiring, one program
+  resolver, TUI /exit cleanup), P2-12 media on social posts (Bluesky blobs/embeds, Buffer per its
+  docs, queue with media), P2-B README from the audited draft with the true-cost keyed transcript
+  plus text-mode `[Worker]` lines routed to logs/run.log, P2-11 a run that loses model calls
+  mid-way ends with failedSteps/summary/retryAfter instead of "without a verdict".
+- CI: a23efa5 red on the same Bun child-process error as 7eb7502 ("Cannot find module
+  './internal/class'", approvals.restart.test.ts), both green on rerun; cause: four suites spawn
+  Bun children that transpile the generated client concurrently; they now run in the exclusive
+  (serial) vitest project (this commit). Every other landed commit is green.
+- P2-B landed (README rewritten with proofs; text-mode run log). P2-12 landed (media on Bluesky;
+  Buffer by hosted URL). Follow-ups for P2-14: queue editing drops a post's files and `cron queue
+  list` does not show them; FleetPacks.ts:177 "text only", FleetPacks.ts:188 / pack-personas.ts:54
+  "owner posts every clip", pack-skills.test.ts:204 stale message; Buffer alt text/thumbnail/multi
+  asset; EXIF strip. README after P2-9: seventeen toolsets with a2a, an a2a Tools row, the Hermes
+  A2A row "server and client", the not-done A2A line.
+- P2-10 landed. P2-B is held: run.ts in the tree also carries P2-11's unlanded verdict import
+  (tsc fails in isolation), so README + text-mode log + verdict land together after P2-11.
+
+## Landing record, wave P2 second half
+- P2-B + P2-11 landed ac9a0e3 (README rewritten with proofs; text-mode run log; a run that loses
+  model calls ends with a verdict: reason, failed_steps with provider/status/retry_after_seconds,
+  consolidation state, exit 5 for model_calls_failed; a mid-run 429 had been reported as
+  `completed` because the app keeps only the last provider's error).
+- P2-13 landed 0f740e6 (task-type embeddings and LLM rerank built, measured, off by default: rerank
+  0.571 vs hybrid 0.629 on 300-char snippets, 0.21 cents/query; task-type re-measure blocked by
+  the free tier's 1,000 embeddings/day; next: whole-chunk snippets, ~15 cents).
+- P2-9 landed dec2a54 (a2a toolset: list/discover/send/history, live against trent a2a serve with
+  zero spend; SECURITY: the egress proxy replaced any tool's Authorization with the model key for
+  non-Anthropic/Google hosts; a2a keeps its own bearer via x-trent-own-credential; business and
+  MCP http paths fixed in P2-14). README: seventeen toolsets.
+- P2-10 landed 4f164ca; P2-12 landed 3dd461c; stray `.1` removed (next commit).
+- P2-14 launched: business/MCP through the own-credential header (red-first through the real
+  proxy), service-log test hygiene, queue editing keeps files, pack wording, seat-wiring a2a gate.
+
+## Bobby's steps (unchanged, all one command each)
+1. Put the product on the default branch: `git push origin feature/trent-fleet-v2:main` (fast
+   forward; main is behind) or `gh repo edit --default-branch feature/trent-fleet-v2`.
+2. Tag v1.0.0 on that branch (05_release/output/release-checklist-v1.md steps 5-7, 10-12).
+3. Rename the repo from trentbalone (seven hardcoded places listed in the audit), set the About
+   text and topics.
+4. Enable private vulnerability reporting (SECURITY.md points there).
+5. Platform applications (Meta, YouTube, TikTok, Google Business Profile) when ready.
+- Day close on f0d0ce4 (clean worktree, whole core + CLI suite via scripts/dev/isolate.sh):
+tsc exit=0
+core build exit=0
+repo-scan exit=0
+      Tests  4089 passed | 2 skipped (4091)
+ Test Files  415 passed (415)
+vitest exit=0
+  CI green on 68894ea, fb90bcb, 3dd461c, 4f164ca, 0f740e6, ac9a0e3 (dec2a54 superseded,
+  f0d0ce4 in progress). Since this morning: 3608 -> 4089 tests, 370 -> 415 files.
+- P2-14 landed ccd9430 (business/MCP tokens keep their own credential through the proxy, proven
+  red-first behind the real proxy; service-log tests confined to temp dirs; queue edits keep files;
+  pack wording; a2a gate map). Every P1 and P2 task is on the branch. Open, small: `tailServiceLog("")`
+  still reads `.1` from the working directory; the docs-corpus fixture snapshot carries the old
+  "text only" wording (regenerated with the next re-record).
+
+## State at close (2026-09-26 ~01:30Z)
+HEAD ccd9430, tree clean except this log, CI green on every commit since 68894ea at the last
+check. 32 commits today. Everything left is Bobby's (default branch, tag, rename, topics, private
+vulnerability reporting, platform applications) or waits on quota (task-type embeddings re-record,
+whole-chunk rerank measurement) or a real reboot (service). Tomorrow's 02:00 sweep resumes from
+here.
