@@ -11,8 +11,9 @@
  * [CI] It is spawned by hand, not through Playwright's launcher, so that no second automation client
  * sits in the browser Trent attaches to. It gets the switches Playwright itself would pass (see
  * PLAYWRIGHT_SWITCHES), its output is kept, and its exit is watched: a Chromium that dies before
- * writing DevToolsActivePort skips the suite with its exit status and last output; one that is alive
- * but never writes it fails the suite with that output.
+ * writing DevToolsActivePort, or is still alive without it after 60 s (a runner too loaded to start
+ * Chrome, run 36228798388), skips the suite with its status and last output. One that dies AFTER
+ * writing it fails the suite with that output. The file runs in vitest's "exclusive" project, alone.
  *
  * Skipped, not passed, when no Chromium is installed or the one found cannot start. A skip is NOT a pass.
  */
@@ -72,7 +73,7 @@ const PLAYWRIGHT_SWITCHES = [
   "--disable-sync",
   "--no-sandbox",
 ];
-const PORT_FILE_TIMEOUT_MS = 30_000;
+const PORT_FILE_TIMEOUT_MS = 60_000;
 const OUTPUT_TAIL_LINES = 25;
 // [CI] Shutdown budget, inside afterAll's 45 s: SIGTERM grace, settle after a SIGKILL, and how long to
 // wait for Chromium's children to let go of its stdio before removing the profile anyway.
@@ -190,15 +191,21 @@ function removeTempDir(dir: string): void {
   }
 }
 
-/** The DevTools port once Chromium has written it, or undefined if Chromium ended first. Throws on timeout. */
-async function devToolsPort(chrome: ThrowawayChromium, userDataDir: string): Promise<string | undefined> {
+/**
+ * The DevTools port once Chromium has written it; otherwise why not: it ended first, or it is still
+ * running at the deadline. [CI] Both are facts about the machine, not about Trent, so both skip.
+ */
+async function devToolsPort(chrome: ThrowawayChromium, userDataDir: string): Promise<{ port: string } | { skip: string }> {
   const portFile = path.join(userDataDir, "DevToolsActivePort");
   const deadline = Date.now() + PORT_FILE_TIMEOUT_MS;
   for (;;) {
     const port = fs.existsSync(portFile) ? fs.readFileSync(portFile, "utf8").split("\n")[0]?.trim() : undefined;
-    if (port && /^\d+$/.test(port)) return port;
-    if (chrome.ended()) return undefined;
-    if (Date.now() > deadline) throw new Error(`timed out after ${PORT_FILE_TIMEOUT_MS} ms waiting for DevToolsActivePort\n${chrome.report()}`);
+    if (port && /^\d+$/.test(port)) return { port };
+    const ended = chrome.ended();
+    if (ended) return { skip: `Chromium could not start (${ended}), so nothing was attached to; a skip is NOT a pass` };
+    if (Date.now() > deadline) {
+      return { skip: `Chrome did not open its DevTools port within ${PORT_FILE_TIMEOUT_MS / 1000} s (runner load); a skip is NOT a pass` };
+    }
     await sleep(100);
   }
 }
@@ -247,13 +254,13 @@ describe.skipIf(!chromiumPath)("browser attach (real throwaway Chromium over CDP
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-attach-chrome-"));
     const started = startThrowawayChromium(chromiumPath!, userDataDir);
     chrome = started;
-    const cdpPort = await devToolsPort(started, userDataDir);
-    if (!cdpPort) {
-      unavailable = `Chromium could not start (${started.ended()}), so nothing was attached to. A skip is NOT a pass.`;
+    const devTools = await devToolsPort(started, userDataDir);
+    if ("skip" in devTools) {
+      unavailable = devTools.skip;
       console.error(`[browser.attach.chromium] SKIPPED: ${unavailable}\n${started.report()}`);
       return;
     }
-    cdpUrl = `http://127.0.0.1:${cdpPort}`;
+    cdpUrl = `http://127.0.0.1:${devTools.port}`;
     await until(async () => ((await pageUrls()).length === 1 ? true : undefined), "the empty starting tab", 10_000, started.report);
     const opened = await fetch(`${cdpUrl}/json/new?${encodeURIComponent(`${origin}/owner`)}`, { method: "PUT" });
     expect(opened.ok).toBe(true);
@@ -279,7 +286,7 @@ describe.skipIf(!chromiumPath)("browser attach (real throwaway Chromium over CDP
       allowedHosts: [HOST],
       bindings: store,
     });
-  }, 60_000);
+  }, 90_000); // [CI] the 60 s port wait plus two 10 s tab waits
 
   beforeEach((context) => {
     if (unavailable) context.skip(unavailable);

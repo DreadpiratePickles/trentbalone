@@ -151,3 +151,50 @@ escalates SIGTERM -> SIGKILL. Hook timeout 60 s; the port wait is 30 s so the na
   no `trent-attach-chrome-*` dir left. `cd packages/trent-core && npm run build`: exit 0.
   Files: `browser.attach.chromium.test.ts` (325 -> 355 lines; the first fix is already in HEAD, this
   diff is the cleanup only) and this log.
+
+## Round 3: slow start under the parallel suite (coordinator, after run 36228798388 at 99b123e)
+- CI: 514/515 files; the attach file `5 tests | 5 skipped 35722ms`, `timed out after 30000 ms waiting
+  for DevToolsActivePort. Chromium (/usr/bin/chromium) is still running`, last output two
+  `ERROR:dbus/bus.cc:405 Failed to connect to the bus` lines at 08:08:44.7 and 08:08:50.0, i.e. ~18 s
+  and ~23 s after the spawn (the file started ~08:08:26), then silence. The job's `collect 227.18s`
+  shows the runner saturated by the parallel files. Neighbouring runs 6202bc4, 2d95444, 5434b9d passed
+  the same suite: a slow start under load, not a broken launch.
+- Asked: (1) move the file into the EXCLUSIVE project (serial, singleFork, after the parallel files),
+  red first in `vitest-config-truth.test.ts`; (2) port wait 60 s; (3) deadline passed with Chrome
+  alive -> SKIP (environment fact), keep the fail path for a Chrome that dies AFTER the port file.
+- Question checked: does the copied switch list contain `--remote-debugging-pipe` or anything that
+  suppresses DevToolsActivePort? No. In playwright-core 1.63 `--remote-debugging-pipe` is pushed by
+  `defaultArgs()` AFTER `_innerDefaultArgs()` (`chromeArguments.push("--remote-debugging-pipe")`), not
+  by `chromiumSwitches`, and was never copied; `grep -n "remote-debugging\|pipe"` on the test finds only
+  `--remote-debugging-port=0` and the stdio `"pipe"`s. Nothing in the list touches the DevTools HTTP
+  handler that writes the file (Playwright itself reads `<userDataDir>/DevToolsActivePort` for its
+  channel-connect path). Empirically the same argv wrote the file in every local run and in three CI runs.
+- (1) RED: `vitest-config-truth.test.ts` now expects exclusive `include` = `[desktop, attach]` and
+  both in the parallel `exclude` -> `npx vitest run apps/cli/src/commands/__tests__/vitest-config-truth.test.ts`
+  exit 1, 2 failed / 2 passed (`expected [ Array(1) ] to deeply equal [ …(2) ]`; parallel exclude
+  lacks the attach path). GREEN: `vitest.config.ts` `EXCLUSIVE` gains the attach file, the comment now
+  names two files and why (run 36228798388), "owns exactly its two files" -> exit 0, 4 passed.
+  `npx vitest list --project exclusive --filesOnly` exit 0: `[exclusive] desktop.test.ts` and
+  `[exclusive] browser.attach.chromium.test.ts`; `--project parallel` lists the attach file 0 times.
+- (2)+(3) Harness: `PORT_FILE_TIMEOUT_MS` 60 s; `devToolsPort` returns `{ port }` or `{ skip }`; a
+  Chrome still alive at the deadline SKIPS with `SKIPPED: Chrome did not open its DevTools port within
+  60 s (runner load); a skip is NOT a pass` + its status and last lines; beforeAll timeout 90 s (60 s
+  port + two 10 s tab waits). A Chrome that dies AFTER writing the port file still FAILS.
+- Checked with scratch fakes (`TRENT_BROWSER_PATH`):
+  argv printer (exits 2): skip, exit 0; the printed argv holds `--remote-debugging-port=0` and no
+  `--remote-debugging-pipe`. Dies after writing a port file: exit 1, `timed out waiting for the empty
+  starting tab` + `is gone: exit code 1` + its line (fail path kept). Hang: exit 0, `5 skipped`,
+  60134 ms, the new SKIPPED line + `is still running` + its line; no leftover process or temp dir.
+- Real Chrome, now reported as `|exclusive|`: run 1 exit 0 `5 passed` 18.07 s; run 2 exit 0 `5 passed`
+  19.98 s; run 3 exit 0 `5 passed` 18.55 s. Truth test exit 0 (4 passed). `apps/cli` typecheck
+  (`tsc -p tsconfig.json --noEmit`, compiles the truth test and, through its import, vitest.config.ts)
+  exit 0.
+- `cd packages/trent-core && npm run build` -> exit 2, NOT from this work: exactly two errors, in
+  `src/setup/solo-default.test.ts` (untracked, created 04:24 by another agent, imports a not-yet-
+  exported `NEW_PROFILE_AGENT_MODE`: someone's RED) and `src/bench/tools.ts` (untracked `src/bench/`).
+  Zero errors in `browser.attach.chromium.test.ts`. Neither file touched.
+- Build retried: exit 2, the same two foreign errors. The same `tsc --noEmit` over
+  `packages/trent-core/src/**/*` minus only those two untracked paths (scratch tsconfig extending the
+  package's): exit 0, 0 errors. Files changed this round: `vitest.config.ts`,
+  `apps/cli/src/commands/__tests__/vitest-config-truth.test.ts`,
+  `packages/trent-core/src/tools/browser/browser.attach.chromium.test.ts` (355 -> 362 lines), this log.

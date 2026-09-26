@@ -33,13 +33,18 @@ const includeLiveTests = process.env.TRENT_TEST_LIVE === "1";
  * failures and nothing else.
  */
 /**
- * desktop.test.ts drives `hdiutil`, which mounts disk images serially on macOS; a concurrent mount
- * contends and a failed run leaves a stale volume that blocks later ones, so it runs alone. Vitest
- * 3.2.7 drops a per-project `fileParallelism` (a NonProjectOptions key); the per-project knob the
- * shared forks pool reads is `poolOptions.forks.singleFork`: these files run in one fork, one at a
+ * Two files run alone. desktop.test.ts drives `hdiutil`, which mounts disk images serially on macOS;
+ * a concurrent mount contends and a failed run leaves a stale volume that blocks later ones.
+ * browser.attach.chromium.test.ts holds a real Chrome: started beside the whole parallel suite on a
+ * 4-vCPU runner it once took longer than 30 s to open its DevTools port (run 36228798388).
+ * Vitest 3.2.7 drops a per-project `fileParallelism` (a NonProjectOptions key); the per-project knob
+ * the shared forks pool reads is `poolOptions.forks.singleFork`: these files run in one fork, one at a
  * time, after the parallel files finish (vitest/dist/chunks/coverage.DfSpMS-b.js:2674-2708).
  */
-const EXCLUSIVE = ["apps/cli/src/commands/__tests__/desktop.test.ts"];
+const EXCLUSIVE = [
+  "apps/cli/src/commands/__tests__/desktop.test.ts",
+  "packages/trent-core/src/tools/browser/browser.attach.chromium.test.ts",
+];
 
 const ROOT_EXCLUDE = [
   "**/node_modules/**",
@@ -106,7 +111,7 @@ export default defineConfig({
       {
         // Deliberately NOT `extends: true`. Inheriting the root config merges its include glob
         // into this project, so a CLI path filter collects every matched file here too and each
-        // test runs twice. This project is self-contained and owns exactly its one file.
+        // test runs twice. This project is self-contained and owns exactly its two files.
         test: {
           name: "exclusive",
           environment: "node",
