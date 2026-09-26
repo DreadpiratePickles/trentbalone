@@ -378,3 +378,27 @@ describe("model gateway — a pinned model never falls back silently (P1-C)", ()
     }
   });
 });
+
+// [L0-2] G16: the SDK timeout that killed the planner on a 27B model is retried, once.
+describe("model gateway retry — a timeout is retried once", () => {
+  it("retries an SDK \"Request timed out.\" one time, then fails with it", async () => {
+    const { APIConnectionTimeoutError } = await import("openai");
+    const attempts: string[] = [];
+    const slept: number[] = [];
+    const gateway = await createModelGateway({
+      apiKeys: { google: KEYS.google },
+      preferredProvider: "google",
+      allowedProviders: ["google"],
+      models: { executor: "gemini-3.5-flash-lite" },
+      streamProvider: async function* (provider) {
+        attempts.push(provider);
+        throw new APIConnectionTimeoutError();
+      },
+      retry: { attempts: 3, random: () => 1, sleep: async (ms: number) => void slept.push(ms) },
+      retryLog: () => undefined,
+    });
+    await expect(drain(gateway.stream({ messages: ASK }))).rejects.toThrow(/Request timed out/);
+    expect(attempts).toEqual(["google", "google"]); // today: ["google"], classed internal
+    expect(slept).toEqual([500]);
+  });
+});

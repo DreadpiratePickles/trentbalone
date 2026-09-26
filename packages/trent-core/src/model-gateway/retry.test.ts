@@ -178,3 +178,22 @@ describe("resolveRetryPolicy", () => {
     expect(resolveRetryPolicy({ attempts: Number.NaN, baseMs: -1, capMs: 0 })).toEqual(DEFAULT_RETRY_POLICY);
   });
 });
+
+// [L0-2] G16: openai-node's timeout is a timeout, and a timeout is retried ONCE.
+describe("classifyProviderError — timeouts (G16)", () => {
+  it("classes openai-node's APIConnectionTimeoutError as a retryable timeout, not internal", async () => {
+    // The live audit's planner failure: "planner call failed: internal (Request timed out.)".
+    const { APIConnectionTimeoutError } = await import("openai");
+    const classified = classifyProviderError(new APIConnectionTimeoutError(), NOW);
+    expect(classified).toMatchObject({ errorClass: "timeout", retryable: true });
+  });
+
+  it("allows a timeout ONE retry: a second identical wait is not transient, it is the budget", () => {
+    const named = Object.assign(new Error("ollama sent no token within 300 s"), { name: "TimeoutError" });
+    expect(classifyProviderError(named, NOW)).toMatchObject({ errorClass: "timeout", retryable: true, maxAttempts: 2 });
+    const coded = Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" });
+    expect(classifyProviderError(coded, NOW).maxAttempts).toBe(2);
+    // A rate limit keeps the full policy: it has no cap of its own.
+    expect(classifyProviderError(new ProviderHttpError({ provider: "openai", status: 429 }), NOW).maxAttempts).toBeUndefined();
+  });
+});

@@ -38,7 +38,15 @@ export interface ClassifiedFailure {
   readonly status?: number;
   /** Milliseconds the server asked us to wait, when it said so. */
   readonly retryAfterMs?: number;
+  /**
+   * [L0-2] A cap below the policy's attempts, INCLUDING the first. A timeout gets 2: one retry. The
+   * same wait twice is the budget talking, not a blip, and on a local model each wait is minutes.
+   */
+  readonly maxAttempts?: number;
 }
+
+/** [L0-2] A timeout is retried once (G16). */
+const TIMEOUT_MAX_ATTEMPTS = 2;
 
 /** Transport failures that mean "try again", not "you asked for the wrong thing". */
 const RETRYABLE_NETWORK_CODES: ReadonlySet<string> = new Set([
@@ -161,6 +169,19 @@ export function parseRetryAfter(raw: string | undefined | null, nowMs: number): 
   return Math.max(0, at - nowMs);
 }
 
+/**
+ * [L0-2] openai-node's `APIConnectionTimeoutError` (4.104.0): no status, no code, and no `name` of its
+ * own, so it read as `internal` and was never retried (audit G16: "planner call failed: internal
+ * (Request timed out.)"). Matched by its class name or its fixed message, without importing the SDK.
+ */
+function isSdkTimeout(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  for (let proto: object | null = Object.getPrototypeOf(error); proto !== null && proto !== Error.prototype; proto = Object.getPrototypeOf(proto)) {
+    if ((proto as { constructor?: { name?: string } }).constructor?.name === "APIConnectionTimeoutError") return true;
+  }
+  return error.message === "Request timed out.";
+}
+
 /** Classify a provider failure into the rulebook's taxonomy and say whether it may be retried. */
 export function classifyProviderError(error: unknown, nowMs: number = Date.now()): ClassifiedFailure {
   const status = statusOf(error);
@@ -168,7 +189,7 @@ export function classifyProviderError(error: unknown, nowMs: number = Date.now()
     const retryAfterMs = parseRetryAfter(headerValue(headersOf(error), "retry-after"), nowMs);
     const withRetryAfter = retryAfterMs === undefined ? {} : { retryAfterMs };
     if (status === 429) return { errorClass: "rate_limit", retryable: true, status, ...withRetryAfter };
-    if (status === 408) return { errorClass: "timeout", retryable: true, status, ...withRetryAfter };
+    if (status === 408) return { errorClass: "timeout", retryable: true, status, maxAttempts: TIMEOUT_MAX_ATTEMPTS, ...withRetryAfter };
     if (status >= 500) return { errorClass: "dependency", retryable: true, status, ...withRetryAfter };
     if (status === 401 || status === 403) return { errorClass: "auth", retryable: false, status };
     return { errorClass: "validation", retryable: false, status };
@@ -176,12 +197,12 @@ export function classifyProviderError(error: unknown, nowMs: number = Date.now()
 
   const code = networkCodeOf(error);
   if (code !== undefined) {
-    if (TIMEOUT_CODES.has(code)) return { errorClass: "timeout", retryable: true };
+    if (TIMEOUT_CODES.has(code)) return { errorClass: "timeout", retryable: true, maxAttempts: TIMEOUT_MAX_ATTEMPTS };
     if (RETRYABLE_NETWORK_CODES.has(code)) return { errorClass: "dependency", retryable: true };
   }
 
   const name = error instanceof Error ? error.name : "";
-  if (name === "TimeoutError") return { errorClass: "timeout", retryable: true };
+  if (name === "TimeoutError" || isSdkTimeout(error)) return { errorClass: "timeout", retryable: true, maxAttempts: TIMEOUT_MAX_ATTEMPTS };
 
   const message = error instanceof Error ? error.message : "";
   // undici reports every transport failure as this one TypeError.

@@ -66,4 +66,16 @@ export const ModelTiersConfigSchema = z.object({
   fallback_on_pin: z.boolean().optional(),
   reasoning_effort: z.enum(["none", "minimal", "low", "medium", "high"]).optional(),
   // [/P1-C]
+  // [L0-2] local
+  // `local`: budgets for a model on this machine (provider `ollama` or `lmstudio`); each absent key
+  // keeps the gateway's default (`model-gateway/local-runtime.ts`): 300 s to the first token, 120 s
+  // of silence after it, a 32768-token window when the server cannot be asked, and 1 call in flight
+  // on Ollama (its OLLAMA_NUM_PARALLEL default) or 4 on LM Studio. See docs/configuration.md, "Local models".
+  local: z.object({
+    ttft_seconds: z.number().int().positive().optional(),
+    idle_seconds: z.number().int().positive().optional(),
+    context_tokens: z.number().int().positive().optional(),
+    max_in_flight: z.number().int().positive().optional(),
+  }).strict().optional(),
+  // [/L0-2]
 }).strict();

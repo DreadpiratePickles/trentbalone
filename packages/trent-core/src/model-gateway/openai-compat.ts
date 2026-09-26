@@ -1,5 +1,5 @@
 /**
- * [P1-C] The Trent-side streamer for Google's OpenAI-compatible endpoint.
+ * [P1-C] The Trent-side streamer for OpenAI-compatible endpoints; [L0-2] now for every one of them.
  *
  * Why it exists. Every Google call used to go through `apps/web/lib/ai-client.ts`
  * `streamOpenAiCompatibleChat`, which is read-only and wrong for Google in three measured ways
@@ -13,14 +13,20 @@
  * `total_tokens` only (16 prompt + 3 completion, total 254 at `reasoning_effort: high`), and Google
  * bills them as output, so `parseCompatUsage` folds the difference into the billed output count.
  *
- * The request mirrors what the app sent for a Gemini model (`modelChatTuning`: `max_tokens` and
- * `temperature`), the key and base URL are resolved from the same variables the app reads
- * (`GOOGLE_API_KEY` then `GEMINI_API_KEY`, `GOOGLE_BASE_URL`), and a non-2xx is the same
- * `ProviderHttpError` the retry policy already classifies. The other providers keep the app's path.
+ * [L0-2] `openai` itself and the four aliases resolved to it (`ollama`, `lmstudio`, `deepseek`,
+ * `groq`) stream here too (`openai-route.ts`). The app's client gave them a 60 s timeout that killed
+ * a 27B model's planner during prefill (audit G2), the SDK's own two retries on top of the gateway's
+ * three, and no cached-token count. A LOCAL route (`route.local`) has two budgets instead of the
+ * headers one: time to the first token, then the longest silence between tokens (`local-runtime.ts`).
+ * A hosted route keeps the 60 s the app's client allowed for response headers.
+ *
+ * A non-2xx is the same `ProviderHttpError` the retry policy already classifies; a budget that runs
+ * out is a `TimeoutError` (retried once, `retry.ts`) whose message names the budget and its setting.
  */
 
 import { ProviderHttpError } from "./retry.js";
 import type { ReasoningEffort } from "./call-policy.js";
+import { LOCAL_MODEL_SETTINGS } from "./local-runtime.js";
 import type { GatewayMessage, ProviderStreamFrame } from "./types.js";
 
 export const GOOGLE_COMPAT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
@@ -37,6 +43,14 @@ export interface CompatChatInput {
   readonly maxTokens: number;
   readonly reasoningEffort?: ReasoningEffort;
   readonly signal?: AbortSignal;
+  /** [L0-2] Replaces `max_tokens` and `temperature`: the app's `modelChatTuning` for this model. */
+  readonly tuning?: Readonly<Record<string, unknown>>;
+}
+
+/** [L0-2] The two budgets of a model on the operator's own machine. */
+export interface LocalBudgets {
+  readonly ttftMs: number;
+  readonly idleMs: number;
 }
 
 export interface CompatRoute {
@@ -44,6 +58,12 @@ export interface CompatRoute {
   readonly baseUrl: string;
   readonly fetchImpl?: FetchLike;
   readonly headersTimeoutMs?: number;
+  /** [L0-2] The provider named in errors: `google`, `openai`, or the alias (`ollama`, ...). */
+  readonly label?: string;
+  /** [L0-2] Extra request headers (OpenAI's organization and project). Never logged. */
+  readonly headers?: Readonly<Record<string, string>>;
+  /** [L0-2] Present for a local runtime: its budgets replace the headers budget. */
+  readonly local?: LocalBudgets;
 }
 
 /** The request body. `reasoning_effort` is present only when configured. */
@@ -53,8 +73,7 @@ export function buildCompatChatBody(input: Omit<CompatChatInput, "signal">): Rec
     stream: true,
     stream_options: { include_usage: true },
     messages: input.messages,
-    max_tokens: input.maxTokens,
-    temperature: input.temperature,
+    ...(input.tuning ?? { max_tokens: input.maxTokens, temperature: input.temperature }),
     ...(input.reasoningEffort === undefined ? {} : { reasoning_effort: input.reasoningEffort }),
   };
 }
@@ -96,73 +115,116 @@ function chatUrl(baseUrl: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
 }
 
-/** Fetch with a deadline on the HEADERS only; the run's signal aborts the whole exchange. */
-async function openStream(url: string, init: RequestInit, route: CompatRoute, signal: AbortSignal | undefined): Promise<{ response: Response; controller: AbortController; detach: () => void }> {
-  const controller = new AbortController();
-  const onAbort = (): void => controller.abort(signal?.reason);
-  if (signal?.aborted) controller.abort(signal.reason);
-  signal?.addEventListener("abort", onAbort, { once: true });
-  const detach = (): void => signal?.removeEventListener("abort", onAbort);
-  const timeoutMs = route.headersTimeoutMs ?? COMPAT_HEADERS_TIMEOUT_MS;
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-  try {
-    const response = await (route.fetchImpl ?? ((u: string, i?: RequestInit) => fetch(u, i)))(url, { ...init, signal: controller.signal });
-    return { response, controller, detach };
-  } catch (error) {
-    detach();
-    if (!timedOut) throw error;
-    const timeout = new Error(`google request sent no response headers within ${timeoutMs}ms`);
-    timeout.name = "TimeoutError"; // classifies as a retryable timeout (retry.ts)
-    throw timeout;
-  } finally {
-    clearTimeout(timer);
+function timeoutError(message: string): Error {
+  const error = new Error(message);
+  error.name = "TimeoutError"; // classifies as a timeout, retried once (retry.ts)
+  return error;
+}
+
+function seconds(ms: number): string {
+  return `${Math.round(ms / 100) / 10} s`;
+}
+
+/** [L0-2] One timer, re-armed as the exchange moves from waiting to streaming. */
+class Deadline {
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  expired: string | undefined;
+
+  constructor(private readonly controller: AbortController) {}
+
+  arm(ms: number, message: string): void {
+    this.clear();
+    this.timer = setTimeout(() => {
+      this.expired = message;
+      this.controller.abort();
+    }, ms);
+  }
+
+  clear(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  /** The error to throw for a failure that happened because this deadline fired. */
+  explain(error: unknown): unknown {
+    return this.expired === undefined ? error : timeoutError(this.expired);
   }
 }
 
-type ChunkChoice = { delta?: { content?: unknown }; finish_reason?: unknown };
-type Chunk = { choices?: ChunkChoice[]; usage?: unknown; error?: { code?: unknown; message?: unknown } };
-
-function streamError(error: NonNullable<Chunk["error"]>): ProviderHttpError {
-  const code = typeof error.code === "number" && error.code >= 400 && error.code <= 599 ? error.code : 502;
-  const message = typeof error.message === "string" ? error.message : "error inside the response stream";
-  return new ProviderHttpError({ provider: "google", status: code, statusText: "stream error", body: message });
+function budgetMessages(label: string, local: LocalBudgets): { ttft: string; idle: string } {
+  return {
+    ttft:
+      `${label} sent no token within the ${seconds(local.ttftMs)} time-to-first-token budget (${LOCAL_MODEL_SETTINGS.ttftSeconds}); ` +
+      "prefill of a long prompt on a large local model can take longer: raise it, shorten the prompt, or use a smaller model",
+    idle: `${label} went silent for ${seconds(local.idleMs)} after its first token, past the idle budget (${LOCAL_MODEL_SETTINGS.idleSeconds})`,
+  };
 }
 
-function* framesOf(chunk: Chunk): Generator<ProviderStreamFrame> {
-  if (chunk.error) throw streamError(chunk.error);
+type Delta = { content?: unknown; reasoning?: unknown; reasoning_content?: unknown; tool_calls?: unknown };
+type ChunkChoice = { delta?: Delta; finish_reason?: unknown };
+type Chunk = { choices?: ChunkChoice[]; usage?: unknown; timings?: { cache_n?: unknown }; error?: { code?: unknown; message?: unknown } };
+
+function streamError(label: string, error: NonNullable<Chunk["error"]>): ProviderHttpError {
+  const code = typeof error.code === "number" && error.code >= 400 && error.code <= 599 ? error.code : 502;
+  const message = typeof error.message === "string" ? error.message : "error inside the response stream";
+  return new ProviderHttpError({ provider: label, status: code, statusText: "stream error", body: message });
+}
+
+function* framesOf(label: string, chunk: Chunk): Generator<ProviderStreamFrame> {
+  if (chunk.error) throw streamError(label, chunk.error);
   const choice = chunk.choices?.[0];
   const token = choice?.delta?.content;
   if (typeof token === "string" && token !== "") yield { type: "token", content: token };
   if (typeof choice?.finish_reason === "string" && choice.finish_reason !== "") yield { type: "finish", reason: choice.finish_reason };
 }
 
+/** [L0-2] The model is generating: text, thinking (Ollama `reasoning`, llama.cpp `reasoning_content`) or a tool call. */
+function carriesToken(chunk: Chunk): boolean {
+  const delta = chunk.choices?.[0]?.delta;
+  const said = (value: unknown): boolean => typeof value === "string" && value !== "";
+  return delta !== undefined && (said(delta.content) || said(delta.reasoning) || said(delta.reasoning_content) || delta.tool_calls !== undefined);
+}
+
 /**
  * Streams one chat completion. Tokens and the finish reason are yielded as they arrive; the usage
- * frame is yielded ONCE, after the stream ends, from the last usage object Google sent (it sends
- * the same one twice).
+ * frame is yielded ONCE, after the stream ends, from the last usage object the server sent (Google
+ * sends the same one twice). llama.cpp's `timings.cache_n` stands in for a missing cached count.
  */
-export async function* streamGoogleCompatChat(input: CompatChatInput, route: CompatRoute): AsyncGenerator<ProviderStreamFrame> {
-  const body = buildCompatChatBody(input);
-  const { response, controller, detach } = await openStream(
-    chatUrl(route.baseUrl),
-    { method: "POST", headers: { authorization: `Bearer ${route.apiKey}`, "content-type": "application/json" }, body: JSON.stringify(body) },
-    route,
-    input.signal,
-  );
+export async function* streamCompatChat(input: CompatChatInput, route: CompatRoute): AsyncGenerator<ProviderStreamFrame> {
+  const label = route.label ?? "google";
+  const controller = new AbortController();
+  const signal = input.signal;
+  const onAbort = (): void => controller.abort(signal?.reason);
+  if (signal?.aborted) controller.abort(signal.reason);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  const deadline = new Deadline(controller);
+  const budgets = route.local === undefined ? undefined : budgetMessages(label, route.local);
+  if (route.local !== undefined && budgets !== undefined) deadline.arm(route.local.ttftMs, budgets.ttft);
+  else {
+    const headersMs = route.headersTimeoutMs ?? COMPAT_HEADERS_TIMEOUT_MS;
+    deadline.arm(headersMs, `${label} request sent no response headers within ${headersMs}ms`);
+  }
   let finished = false;
   try {
-    if (!response.ok) {
-      throw new ProviderHttpError({ provider: "google", status: response.status, statusText: response.statusText, headers: response.headers, body: await response.text().catch(() => "") });
+    const fetchImpl = route.fetchImpl ?? ((u: string, i?: RequestInit) => fetch(u, i));
+    const headers = { ...route.headers, authorization: `Bearer ${route.apiKey}`, "content-type": "application/json" };
+    let response: Response;
+    try {
+      response = await fetchImpl(chatUrl(route.baseUrl), { method: "POST", headers, body: JSON.stringify(buildCompatChatBody(input)), signal: controller.signal });
+    } catch (error) {
+      throw deadline.explain(error);
     }
-    if (response.body === null) throw new Error("google returned no response body");
+    if (route.local === undefined) deadline.clear(); // a hosted route's budget covers the headers only
+    if (!response.ok) {
+      throw new ProviderHttpError({ provider: label, status: response.status, statusText: response.statusText, headers: response.headers, body: await response.text().catch(() => "") });
+    }
+    if (response.body === null) throw new Error(`${label} returned no response body`);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let usage: CompatUsage | undefined;
+    let cacheN: number | undefined;
+    let generating = false;
     const handle = function* (line: string): Generator<ProviderStreamFrame> {
       if (!line.startsWith("data:")) return;
       const payload = line.slice(5).trim();
@@ -171,13 +233,21 @@ export async function* streamGoogleCompatChat(input: CompatChatInput, route: Com
       try {
         chunk = JSON.parse(payload) as Chunk;
       } catch {
-        throw new Error(`google sent an unreadable stream chunk (${payload.length} chars)`);
+        throw new Error(`${label} sent an unreadable stream chunk (${payload.length} chars)`);
       }
       usage = parseCompatUsage(chunk.usage) ?? usage;
-      yield* framesOf(chunk);
+      cacheN = count(chunk.timings?.cache_n) ?? cacheN;
+      if (carriesToken(chunk)) generating = true;
+      yield* framesOf(label, chunk);
     };
     for (;;) {
-      const { done, value } = await reader.read();
+      let read: ReadableStreamReadResult<Uint8Array>;
+      try {
+        read = await reader.read();
+      } catch (error) {
+        throw deadline.explain(error);
+      }
+      const { done, value } = read;
       buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
       let newline = buffer.indexOf("\n");
       while (newline >= 0) {
@@ -187,13 +257,24 @@ export async function* streamGoogleCompatChat(input: CompatChatInput, route: Com
         newline = buffer.indexOf("\n");
       }
       if (done) break;
+      // [L0-2] After the first token, every byte the server sends resets the idle budget.
+      if (route.local !== undefined && budgets !== undefined && generating) deadline.arm(route.local.idleMs, budgets.idle);
     }
     yield* handle(buffer.replace(/\r$/, ""));
     finished = true;
-    if (usage !== undefined) yield { type: "usage", ...usage };
+    if (usage !== undefined) {
+      const cached = usage.cachedInputTokens === 0 && cacheN !== undefined ? Math.min(cacheN, usage.inputTokens) : usage.cachedInputTokens;
+      yield { type: "usage", ...usage, cachedInputTokens: cached };
+    }
   } finally {
-    detach();
+    deadline.clear();
+    signal?.removeEventListener("abort", onAbort);
     // A consumer that stopped early (cancellation, a failed attempt) closes the socket.
     if (!finished) controller.abort();
   }
+}
+
+/** [P1-C] The Google route, unchanged in behaviour: its errors say `google`. */
+export function streamGoogleCompatChat(input: CompatChatInput, route: CompatRoute): AsyncGenerator<ProviderStreamFrame> {
+  return streamCompatChat(input, { label: "google", ...route });
 }

@@ -70,9 +70,9 @@ import {
   estimateTokens,
   placeTiers,
   stableVersionBlock,
-  type AssembledContext,
-  type ContextBlock,
+  type AssembledContext, type ContextBlock,
 } from "./tiers.js";
+import { fitSeatPrompt } from "./prompt-budget.js"; // [L0-2] G17 (the type line above was joined to keep this file under 500)
 
 /** [G2] The end of one step's seat call, as the hook watched it (`source.ts` defines it). */
 export type { StepSettled };
@@ -444,7 +444,7 @@ export function createFleetMemoryHook(options: FleetMemoryHookOptions): FleetMem
         const stepId = input.subtask.id;
         interrupted.begin(run.runId, stepId, seat);
         try {
-          const result = await fn({ ...input, ...placed });
+          const result = await fn({ ...input, ...(await fitSeatPrompt(input, placed, (await pending).assembled)) }); // [L0-2] G17: refuse, never truncate
           interrupted.settle(run.runId, stepId, true);
           return result;
         } catch (error) {

@@ -257,7 +257,13 @@
     "planner": "fixture-planner",
     "judge": "fixture-judge",
     "fallback_on_pin": true,
-    "reasoning_effort": "low"
+    "reasoning_effort": "low",
+    "local": {
+      "ttft_seconds": 600,
+      "idle_seconds": 90,
+      "context_tokens": 65536,
+      "max_in_flight": 2
+    }
   },
   "tools": {
     "disclosure_threshold": 40

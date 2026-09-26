@@ -37,6 +37,7 @@ import {
   type Orchestrator,
 } from "@trent/core/orchestrator/index.js";
 import { parseModelPin } from "@trent/core/orchestrator/model-env.js";
+import { applyLocalModelEnv, type LocalModelConfig } from "@trent/core/model-gateway/local-runtime.js"; // [L0-2]
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { guardAppDatabase, type AppStoreState, type FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
 import { acquireProfileWriter } from "@trent/core/profile/locks.js";
@@ -342,6 +343,7 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
     // its model resolver reads before the first apps/web import (live proof, F2). The privacy
     // block takes the same road, before the gateway is built.
     wirePromptRedaction(config as PrivacySlice);
+    applyLocalModelEnv((config as { models?: { local?: LocalModelConfig } }).models?.local); // [L0-2] models.local, same road
     const createOrchestrator = deps.createOrchestrator ?? createRealOrchestrator;
     // `runtime.max_concurrent_runs` (T3.5): runs past the cap wait FIFO for a slot; absent, the
     // orchestrator's own default applies.

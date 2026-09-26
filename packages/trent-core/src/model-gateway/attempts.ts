@@ -98,6 +98,7 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
     let reasoningTokens = 0;
     let finishReason: string | undefined;
     let text = "";
+    let upstreamDone = false; // [L0-2]
 
     const iterator = ctx.streamFn(ctx.provider, ctx.model, {
       messages: ctx.messages,
@@ -114,7 +115,10 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
           aborted = true;
           break;
         }
-        if (step.kind === "done") break;
+        if (step.kind === "done") {
+          upstreamDone = true;
+          break;
+        }
         const frame = step.frame;
         if (frame.type === "token") {
           emittedToken = true;
@@ -143,8 +147,10 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
         failure = error;
       }
     } finally {
-      // Closes the upstream reader / aborts the SDK stream controller.
-      if (aborted || failed) void iterator.return(undefined).catch(() => undefined);
+      // Closes the upstream reader / aborts the SDK stream controller. [L0-2] Also when OUR reader
+      // stopped early (a `break` reaches this finally through return()): the upstream was left
+      // suspended mid-stream, holding its socket and, on a local route, its in-flight slot.
+      if (!upstreamDone) void iterator.return(undefined).catch(() => undefined);
     }
 
     if (!failed) {
@@ -163,7 +169,9 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
     }
 
     const classified = classifyProviderError(failure);
-    if (emittedToken || !classified.retryable || attempt >= ctx.retryPolicy.attempts) break;
+    // [L0-2] A class may cap its own retries below the policy (a timeout is retried once).
+    const allowed = Math.min(ctx.retryPolicy.attempts, classified.maxAttempts ?? ctx.retryPolicy.attempts);
+    if (emittedToken || !classified.retryable || attempt >= allowed) break;
 
     const delayMs = retryDelayMs({
       attempt,

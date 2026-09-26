@@ -37,7 +37,7 @@ export type GatewayStreamRequest = {
    * `models.fallback_on_pin` is true (`call-policy.ts`).
    */
   model?: string;
-  /** [P1-C] Beats `models.reasoning_effort` for this call. Sent to Google only (`openai-compat.ts`). */
+  /** [P1-C] Beats `models.reasoning_effort` for this call. [L0-2] Sent where the provider documents it (`openai-route.ts`). */
   reasoningEffort?: ReasoningEffort;
   maxTokens?: number;
   temperature?: number;
@@ -71,8 +71,8 @@ export type GatewayStreamEvent =
       costCents: number;
       /**
        * True when the provider emitted no usage frame and these numbers were
-       * estimated locally (google / mistral / openrouter commonly emit none —
-       * `stream_options.include_usage` is set only for openai upstream).
+       * estimated locally. [L0-2] The Trent-side client asks every OpenAI-compatible route for one
+       * (`include_usage`); mistral and openrouter, on the app's streamer, commonly emit none.
        */
       estimated: boolean;
       /**
@@ -192,7 +192,7 @@ export type ModelGatewayConfig = {
    */
   fallbackOnPin?: boolean;
   reasoningEffort?: ReasoningEffort;
-  /** [P1-C] Test seam for the Trent-side Google streamer; the default is the global `fetch`. */
+  /** [P1-C] Test seam for the Trent-side client ([L0-2] every OpenAI-compatible route); default `fetch`, or `node:http` for a local alias. */
   fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>;
 };
 

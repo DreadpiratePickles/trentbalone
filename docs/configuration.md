@@ -922,6 +922,35 @@ streamer, which cannot carry the field; the gateway logs `model_gateway.reasonin
 once when that happens. Measured on `gemini-3.5-flash-lite` with one golden prompt: `low` 169
 output tokens (168 of them thinking), `high` 321 (320 thinking).
 
+### Local models
+
+`provider: ollama` or `lmstudio` runs on this machine, and four budgets in the `models` block fit
+the call to it. Each is optional; the value shown is the default.
+
+```yaml
+models:
+  local:
+    ttft_seconds: 300      # request to first token: prefill of a long prompt on a large model
+    idle_seconds: 120      # the longest silence between tokens once they flow
+    context_tokens: 32768  # the window assumed when the server cannot be asked
+    max_in_flight: 1       # concurrent calls per endpoint; 1 on Ollama, 4 on LM Studio when unset
+```
+
+A local server sends nothing, headers included, until prefill ends, so a local call is not held to
+the 60 s headers budget hosted providers keep: it gets `ttft_seconds` to its first token, then
+`idle_seconds` per silence. A budget that runs out fails with a message naming it and its setting,
+and is retried once. Calls past `max_in_flight` wait in the gateway, not in the server's queue, so
+the wait does not count against `ttft_seconds`; the defaults are Ollama's `OLLAMA_NUM_PARALLEL` (1,
+https://docs.ollama.com/faq) and LM Studio's Max Concurrent Predictions (4).
+
+Before a seat call leaves, its prompt plus the seat's `max_tokens` is checked against the model's
+effective window, read from the server (Ollama `/api/ps` for a loaded model or a Modelfile
+`num_ctx`; LM Studio's loaded instance; llama.cpp `GET /props`), else `context_tokens`, never the
+model's trained maximum. A prompt that does not fit is refused with the sizes and the tier to trim,
+rather than cut silently by the server. Ollama's default window is 4k below 24 GiB of VRAM
+(https://docs.ollama.com/context-length); raise it with `OLLAMA_CONTEXT_LENGTH`. The block reaches a
+run through the session runtime (`TRENT_LOCAL_*` variables).
+
 ## Retry and fallback
 
 Every provider attempt is bounded: **3 attempts**, exponential backoff with full jitter, 500 ms

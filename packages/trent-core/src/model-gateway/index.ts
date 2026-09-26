@@ -44,6 +44,11 @@
  * thinking tokens, `reasoning_effort`); cached tokens are priced at the row's cached ratio
  * (`pricing.ts`); and a request that names its model is never answered by another one unless
  * `models.fallback_on_pin` says so (`call-policy.ts`).
+ *
+ * [L0-2] `openai` and the four aliases resolved to it stream through the same Trent-side client
+ * (`openai-route.ts`), not the app's, whose 60 s timeout killed a local 27B planner in prefill (audit
+ * G2). A local alias gets prefill-sized budgets and a per-endpoint in-flight cap (`local-runtime.ts`).
+ * `anthropic`, `mistral` and `openrouter` keep the app's streamers.
  */
 
 import type {
@@ -65,6 +70,7 @@ import { runProviderAttempts } from "./attempts.js";
 import { modelCallPolicyFromEnv, planAttempts, type ReasoningEffort } from "./call-policy.js";
 import { collectCompletion } from "./complete.js";
 import { googleCompatRoute, streamGoogleCompatChat } from "./openai-compat.js";
+import { streamOpenAiRoute } from "./openai-route.js"; // [L0-2]
 import { modelOverridesFromEnv, priceCall } from "./pricing.js";
 import {
   PROVIDER_ALIAS_ROUTES,
@@ -215,6 +221,12 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
   const fallbackOnPin = config.fallbackOnPin ?? bridged.fallbackOnPin;
   const configuredEffort: ReasoningEffort | undefined = config.reasoningEffort ?? bridged.reasoningEffort;
   let effortIgnoredLogged = false;
+  // Said once per gateway, not per call.
+  const effortNotSent = (fields: Record<string, unknown>): void => {
+    if (effortIgnoredLogged) return;
+    effortIgnoredLogged = true;
+    retryLog("model_gateway.reasoning_effort_not_sent", fields);
+  };
 
   const defaultStreamProvider: ProviderStreamFn = async function* (provider, model, input) {
     if (provider === "google") {
@@ -227,11 +239,13 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
       );
       return;
     }
-    if (input.reasoningEffort !== undefined && !effortIgnoredLogged) {
-      // Said once, not per call: the app's streamer for this provider has no field to carry it in.
-      effortIgnoredLogged = true;
-      retryLog("model_gateway.reasoning_effort_not_sent", { provider, model, reason: "only the google path carries reasoning_effort" });
+    if (provider === "openai") {
+      // [L0-2] OpenAI and its aliases: the wrapper's client, with the app's per-model body tuning.
+      yield* streamOpenAiRoute(model, input, { tuning: clientModule.modelChatTuning, onEffortDropped: effortNotSent, ...(config.fetchImpl ? { fetchImpl: config.fetchImpl } : {}) });
+      return;
     }
+    // The app's streamer for these providers has no field to carry reasoning_effort in.
+    if (input.reasoningEffort !== undefined) effortNotSent({ provider, model, reason: "the app's streamer for this provider cannot carry reasoning_effort" });
     if (provider === "anthropic") {
       yield* clientModule.streamAnthropicMessages({
         model,
