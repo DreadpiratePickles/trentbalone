@@ -11,7 +11,7 @@ import type { AgentRunInput, AgentRunner } from "../agent-runner/index.js";
 import type { ContextBlock } from "../fleet-memory/tiers.js";
 import type { BoundApprovalStore } from "../governance/bound-approvals.js";
 import type { SessionTaintSnapshot } from "../governance/provenance.js";
-import type { GatewayCompletion, GatewayMessage, GatewayStreamRequest } from "../model-gateway/types.js";
+import type { GatewayCompletion, GatewayMessage, GatewayStreamEvent, GatewayStreamRequest } from "../model-gateway/types.js"; // [C13] GatewayStreamEvent
 import type { RunModelCall } from "../orchestrator/run-hooks.js";
 import type { OrcEvent } from "../orchestrator/types.js";
 import type { SessionMessage } from "../sessions/schema.js"; // [S3] compaction plans over the stored transcript
@@ -52,6 +52,8 @@ export type SoloGatewayRequest = GatewayStreamRequest & { readonly responseForma
 /** The gateway slice the loop calls. `ModelGateway` satisfies it. */
 export interface SoloGateway {
   complete(request: SoloGatewayRequest): Promise<GatewayCompletion>;
+  /** [C13] The same call as token frames. When present the turn uses it, so the answer is shown while the model writes. */
+  stream?(request: SoloGatewayRequest): AsyncIterable<GatewayStreamEvent>; // [C13]
 }
 
 /** The tool build slice the loop reads: the adapters, already wrapped in the gate chain. `TrentToolBuild` satisfies it. */

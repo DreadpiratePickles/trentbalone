@@ -1,9 +1,12 @@
 /**
  * [S1] The solo loop as orchestrator events. Only the 20 kinds of `orchestrator/types.ts` exist and
  * no surface may be taught a new one, so each part of a turn takes the kind its consumers already
- * read:
+ * read ([C13] with one additive exception, `step_delta`, which a surface that does not know ignores):
  *   run_start                     the objective (REPL "Objective:", `rememberRun`)
  *   step_start                    one step per run, seat `trent`
+ *   step_delta                    [C13] answer text while the model writes it, in `detail`: only what the
+ *                                 reply will show (`stream-parse.ts`), never the envelope. The one kind
+ *                                 the wrapper added; the frames after it are exactly the ones below
  *   step_note                     the model's own words beside a tool call; a repair notice
  *   step_output + toolCalls       a tool result: the step's CUMULATIVE record list, which is what
  *                                 the REPL draws its tool lines from (`repl/render.ts`), and what
@@ -99,6 +102,11 @@ export class SoloEvents {
 
   note(step: SoloStep, detail: string): SoloEvent {
     return this.#frame("step_note", { step: this.#step(step, { status: "running" }), detail });
+  }
+
+  /** [C13] Answer text as it arrives; the text that confirms it (the answer, or a note) follows in its own frame. */
+  delta(step: SoloStep, text: string): SoloEvent {
+    return this.#frame("step_delta", { step: this.#step(step, { status: "running" }), detail: text });
   }
 
   toolResults(step: SoloStep, toolCalls: readonly ToolCallRecord[]): SoloEvent {

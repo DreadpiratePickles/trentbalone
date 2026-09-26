@@ -3,11 +3,22 @@ import { Box, Text, useInput } from "ink";
 import { P } from "./palette.js";
 import type { SessionData, SessionMessageMetadata } from "@trent/core";
 import { formatCents } from "../repl/budget.js";
+import type { OrcEvent } from "@trent/core/orchestrator/index.js"; // [C13]
 
 export interface ChatProps {
   session: SessionData;
   onSendMessage: (text: string) => void;
   isActive?: boolean;
+  /** [C13] The answer the model is writing now (`streamedAnswer`), drawn after the messages until it lands as one. */
+  streaming?: string; // [C13]
+}
+
+/**
+ * [C13] The live text a pane keeps over a run's frames: a `step_delta` appends its text, and any other frame ends
+ * it, because the model call it belonged to is over; the answer itself lands as a message (`events.ts`, `run_done`).
+ */
+export function streamedAnswer(current: string, event: OrcEvent): string {
+  return event.kind === "step_delta" ? current + (event.detail ?? "") : "";
 }
 
 /**
@@ -22,7 +33,7 @@ function describeMetadata(metadata: SessionMessageMetadata): string {
   return parts.join(" | ");
 }
 
-export const Chat: React.FC<ChatProps> = ({ session, onSendMessage, isActive = true }) => {
+export const Chat: React.FC<ChatProps> = ({ session, onSendMessage, isActive = true, streaming = "" }) => { // [C13] streaming
   const [input, setInput] = useState("");
 
   useInput(
@@ -61,7 +72,7 @@ export const Chat: React.FC<ChatProps> = ({ session, onSendMessage, isActive = t
       </Box>
 
       <Box flexDirection="column" flexGrow={1} marginBottom={1}>
-        {displayMessages.length === 0 ? (
+        {displayMessages.length === 0 && streaming === "" ? ( // [C13] not while an answer streams
           <Box marginY={2} justifyContent="center">
             <Text dimColor color={P.dim}>
               Fleet session initialized. Type below and press [Enter] to dispatch.
@@ -87,6 +98,12 @@ export const Chat: React.FC<ChatProps> = ({ session, onSendMessage, isActive = t
               </Box>
             );
           })
+        )}
+        {streaming !== "" && ( // [C13] the answer as it is written
+          <Box>
+            <Text bold color={P.accent}>{`[${session.agent}]: `}</Text>
+            <Text color={P.text}>{streaming}</Text>
+          </Box>
         )}
       </Box>
 

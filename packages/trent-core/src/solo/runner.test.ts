@@ -5,6 +5,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { createAgentRunFold } from "../agent-runner/index.js";
+import { collectCompletion } from "../model-gateway/complete.js"; // [C13]
+import type { GatewayStreamEvent, GatewayStreamRequest } from "../model-gateway/types.js"; // [C13]
 import type { OrcEvent } from "../orchestrator/types.js";
 import {
   FIXED_NOW,
@@ -154,5 +156,104 @@ describe("[S1.1] C1: the runner speaks the model's own format", () => {
     const plain = setup(["Hi."]);
     await collect(plain.runner.run({ objective: "Hello" }));
     expect("responseFormat" in (plain.gateway.requests[0] ?? {})).toBe(false);
+  });
+});
+
+// [C13] the answer streams while the model writes
+/**
+ * A gateway that streams, as `ModelGateway.stream()` does: each reply's tokens `gapMs` apart, then usage and finish.
+ * Its `complete()` drains the same stream, so a turn that only calls `complete()` sees the same reply, at the end.
+ */
+function streamingGateway(replies: readonly (readonly string[])[], gapMs = 100) {
+  const requests: GatewayStreamRequest[] = [];
+  const tokenAt: number[] = [];
+  let closed = 0;
+  async function* stream(request: GatewayStreamRequest): AsyncGenerator<GatewayStreamEvent> {
+    requests.push(request);
+    const tokens = replies[requests.length - 1];
+    if (tokens === undefined) throw new Error(`the test script has no reply for call ${String(requests.length)}`);
+    try {
+      for (const content of tokens) {
+        await new Promise((resolve) => setTimeout(resolve, gapMs));
+        if (request.signal?.aborted) {
+          yield { type: "finish", reason: "aborted", provider: "google", model: "gemini-test" };
+          return;
+        }
+        tokenAt.push(Date.now());
+        yield { type: "token", content, provider: "google", model: "gemini-test" };
+      }
+      yield { type: "usage", provider: "google", model: "gemini-test", modelTier: "sonnet", inputTokens: 100, outputTokens: 20, cachedInputTokens: 0, costCents: 1, estimated: false, priced_as_default: false, unpriced: false };
+      yield { type: "finish", reason: "stop", provider: "google", model: "gemini-test" };
+    } finally {
+      closed += 1;
+    }
+  }
+  const gateway = { stream, complete: (request: GatewayStreamRequest) => collectCompletion(stream(request)) };
+  return { gateway, requests, tokenAt, closed: () => closed };
+}
+
+async function timed(events: AsyncIterable<OrcEvent>): Promise<Array<{ readonly event: OrcEvent; readonly at: number }>> {
+  const out: Array<{ event: OrcEvent; at: number }> = [];
+  for await (const event of events) out.push({ event, at: Date.now() });
+  return out;
+}
+
+/** 50 tokens: the envelope's opening, 48 words, its close. */
+const WORDS = Array.from({ length: 48 }, (_, i) => `w${String(i + 1)}`);
+const STREAMED_ANSWER = WORDS.join(" ");
+const ENVELOPE_TOKENS = ['{"answer": "', ...WORDS.map((word, i) => (i === 0 ? word : ` ${word}`)), '"}'];
+
+describe("[C13] the answer streams: step_delta frames while the model writes", () => {
+  it("50 tokens 100 ms apart: the first answer text is a frame within 300 ms of the first token, long before step_end, never the envelope", async () => {
+    const fake = streamingGateway([ENVELOPE_TOKENS]);
+    const responseFormat = { type: "json_object" as const };
+    const runner = createSoloRunner({ gateway: fake.gateway, tools: { adapters: [] }, session: memorySession(), memory: fakeMemory().memory, meter: fakeMeter({ centsPerCall: 2 }), now: FIXED_NOW, newId: sequentialIds(), config: { responseFormat } });
+    const frames = await timed(runner.run({ objective: "Say the words." }));
+    const deltas = frames.filter((f) => f.event.kind === "step_delta");
+    const stepEnd = frames.find((f) => f.event.kind === "step_end");
+
+    expect(deltas.length).toBeGreaterThan(40);
+    expect(deltas[0]!.at - fake.tokenAt[0]!).toBeLessThan(300);
+    expect(stepEnd!.at - deltas[0]!.at).toBeGreaterThan(4_000);
+    expect(deltas.map((f) => f.event.detail).join("")).toBe(STREAMED_ANSWER);
+    for (const f of deltas) {
+      expect(f.event.detail).not.toContain('"answer"');
+      expect(f.event.detail).not.toContain("{");
+      expect(f.event.step).toMatchObject({ id: "solo_1-trent", agentRole: "trent", status: "running" });
+    }
+    // Everything after the deltas is the frame sequence a non-streamed turn emits, answer included.
+    expect(kinds(frames.map((f) => f.event)).filter((kind) => kind !== "step_delta")).toEqual(["run_start", "step_start", "step_output", "step_end", "run_done"]);
+    expect(frames.find((f) => f.event.kind === "step_output")?.event.step?.output).toBe(STREAMED_ANSWER);
+    expect(frames.at(-1)?.event.run).toMatchObject({ status: "completed", summary: STREAMED_ANSWER });
+    expect(stepEnd?.event.step).toMatchObject({ status: "completed", costCents: 2, tokens: 120, model: "gemini-test" });
+  }, 20_000);
+
+  it("text protocol: the words beside a call stream and are the step_note after it; the call itself never streams", async () => {
+    const files = fakeAdapter({ name: "file_ops", tools: ["read_file"] });
+    const call = ["Let me ", "look.\n<tool", '_call>\n{"name": "read_file", ', '"arguments": {"path": "a.md"}}\n</tool_call>'];
+    const fake = streamingGateway([call, ["Five ", "working ", "days."]], 5);
+    const runner = createSoloRunner({ gateway: fake.gateway, tools: { adapters: [files] }, session: memorySession(), memory: fakeMemory().memory, meter: fakeMeter(), now: FIXED_NOW, newId: sequentialIds() });
+    const events = (await timed(runner.run({ objective: "Read a.md" }))).map((f) => f.event);
+
+    expect(kinds(events)).toEqual(["run_start", "step_start", "step_delta", "step_delta", "step_note", "step_output", "step_delta", "step_delta", "step_delta", "step_output", "step_end", "run_done"]);
+    expect(events.slice(2, 4).map((e) => e.detail).join("")).toBe("Let me look.");
+    expect(events[4]?.detail).toBe("Let me look.");
+    expect(events.slice(6, 9).map((e) => e.detail).join("")).toBe("Five working days.");
+    expect(events[9]?.step?.output).toBe("Five working days.");
+    expect(files.calls.map((c) => c.action)).toEqual(['read_file {"path":"a.md"}']);
+  });
+
+  it("an abort mid-stream closes the model's stream and cancels the run", async () => {
+    const fake = streamingGateway([ENVELOPE_TOKENS], 20);
+    const runner = createSoloRunner({ gateway: fake.gateway, tools: { adapters: [] }, session: memorySession(), memory: fakeMemory().memory, meter: fakeMeter(), now: FIXED_NOW, newId: sequentialIds(), config: { responseFormat: { type: "json_object" } } });
+    const controller = new AbortController();
+    const events: OrcEvent[] = [];
+    for await (const event of runner.run({ objective: "Say the words.", signal: controller.signal })) {
+      events.push(event);
+      if (event.kind === "step_delta" && events.filter((e) => e.kind === "step_delta").length === 3) controller.abort(new Error("stopped by the test"));
+    }
+    expect(kinds(events).filter((kind) => kind !== "step_delta")).toEqual(["run_start", "step_start", "step_end", "run_cancelled"]);
+    expect(fake.tokenAt.length).toBeLessThan(ENVELOPE_TOKENS.length);
+    expect(fake.closed()).toBe(1);
   });
 });

@@ -34,7 +34,9 @@ import { evaluatePromptBudget } from "../fleet-memory/prompt-budget.js";
 import { estimateTokens } from "../fleet-memory/tiers.js";
 import type { BoundApprovalStore } from "../governance/bound-approvals.js";
 import { runWithToolCallContext } from "../governance/tool-call-context.js";
-import type { GatewayCompletion, GatewayMessage } from "../model-gateway/types.js";
+import type { GatewayCompletion, GatewayMessage, GatewayStreamEvent } from "../model-gateway/types.js"; // [C13] GatewayStreamEvent
+import { collectWithNativeFields } from "../model-gateway/anthropic-client.js"; // [C13] complete()'s own fold
+import { collectCompletion } from "../model-gateway/complete.js"; // [C13]
 import { record as toRecord } from "../tools/action.js";
 import { CARD_ADAPTER_NAMES } from "../tools/human/index.js";
 import type { ToolCallRecord, TrentToolAdapter } from "../tools/types.js";
@@ -45,6 +47,7 @@ import { parseReply, TOOL_CALL_BODY_SHAPE, TOOL_CALL_CLOSE, TOOL_CALL_OPEN, type
 import { renderToolResult } from "./prompt.js";
 import { SOLO_MISUSE_REPEATS, SOLO_SEAT, type SoloGateway, type SoloGatewayRequest, type SoloMeter, type SoloSession } from "./types.js";
 import { withEnvelopeInstruction } from "./turn-settings.js"; // [C11] a constrained request tells the model its reply format
+import { createAnswerStream } from "./stream-parse.js"; // [C13]
 
 /** Everything one run carries between model calls, and across a park. */
 export interface TurnState {
@@ -247,6 +250,32 @@ export function overBudget(messages: readonly GatewayMessage[], budget: TurnDeps
   );
 }
 
+// [C13] the model call, streamed
+async function* replay(frames: readonly GatewayStreamEvent[]): AsyncGenerator<GatewayStreamEvent> {
+  yield* frames;
+}
+
+/**
+ * [C13] One model call. With `stream()`, each token frame goes through the answer parser (`stream-parse.ts`) and
+ * the answer text it releases is yielded as a `step_delta` while the model is still writing. The completion is
+ * then `complete()`'s own fold of the same frames (`model-gateway/index.ts`), so the reply parsed below is exactly
+ * the one `complete()` would have returned. Without `stream()`, `complete()` as before.
+ */
+async function* callModel(state: TurnState, deps: TurnDeps, request: SoloGatewayRequest): AsyncGenerator<SoloEvent, GatewayCompletion> {
+  if (deps.gateway.stream === undefined) return await deps.gateway.complete(request);
+  const answer = createAnswerStream({ envelope: request.responseFormat !== undefined });
+  const frames: GatewayStreamEvent[] = [];
+  for await (const frame of deps.gateway.stream(request)) {
+    frames.push(frame);
+    const text = frame.type === "token" ? answer.push(frame.content) : "";
+    if (text !== "") yield state.events.delta(state.step, text);
+  }
+  const rest = answer.end();
+  if (rest !== "") yield state.events.delta(state.step, rest);
+  return collectWithNativeFields(replay(frames), collectCompletion);
+}
+// [/C13]
+
 /** Runs the pending calls of the last reply. Returns how the turn ended, or undefined to ask the model again. */
 async function* runPending(state: TurnState, deps: TurnDeps, signal: AbortSignal | undefined): AsyncGenerator<SoloEvent, TurnEnd | undefined> {
   while (state.pending.length > 0) {
@@ -294,7 +323,7 @@ async function* loop(state: TurnState, deps: TurnDeps, signal: AbortSignal | und
     if (over !== undefined) return yield* fail(state, stopVerdict(over, state.costCents));
     let completion: GatewayCompletion;
     try {
-      completion = await deps.gateway.complete({ ...deps.request, messages: withEnvelopeInstruction(state.messages, deps.request.responseFormat), ...(signal === undefined ? {} : { signal }) }); // [C11]
+      completion = yield* callModel(state, deps, { ...deps.request, messages: withEnvelopeInstruction(state.messages, deps.request.responseFormat), ...(signal === undefined ? {} : { signal }) }); // [C11] [C13] streamed
     } catch (error) {
       if (signal?.aborted) return yield* cancel(state, signal);
       return yield* fail(state, modelFailureVerdict(state.step, error, state.costCents));

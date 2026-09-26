@@ -10,6 +10,7 @@
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { GLYPHS, truncate, type AgentCategory, type AgentState, type Theme } from "../ui/index.js";
 import { DEGRADED_MARK } from "./degraded.js";
+import { StreamedText } from "./stream-render.js"; // [C13]
 
 export interface AgentIdentity {
   role: string;
@@ -108,6 +109,8 @@ export class TranscriptRenderer {
   /** Tool calls already drawn per step: `step_output` carries the whole list on every emission. */
   readonly #toolCallsDrawn = new Map<string, number>();
   readonly #lines: string[] = [];
+  /** [C13] Answer text streamed per step and not yet confirmed by the frame that carries it whole. */
+  readonly #streams = new Map<string, StreamedText>(); // [C13]
 
   constructor(options: RenderOptions) {
     this.#theme = options.theme;
@@ -151,7 +154,7 @@ export class TranscriptRenderer {
 
   /** Handles one event and returns the lines it newly emitted (often none). */
   handle(event: OrcEvent): string[] {
-    const emitted = this.#linesFor(event);
+    const emitted = [...this.#endStreams(event), ...this.#linesFor(event)]; // [C13] unconfirmed streamed text first
     this.#lines.push(...emitted);
     return emitted;
   }
@@ -179,8 +182,45 @@ export class TranscriptRenderer {
     });
   }
 
+  // [C13] streamed answers
+  /** The frame that carries a step's streamed text whole: its answer, or the note of the words beside a call. */
+  #confirms(event: OrcEvent): string | undefined {
+    if (event.kind !== "step_output" && event.kind !== "step_note" && event.kind !== "step_critic") return undefined;
+    const text = event.kind === "step_output" ? (event.detail ?? event.step?.output) : event.detail;
+    return text === undefined || text === "" ? undefined : event.step?.id ?? "unknown";
+  }
+
+  /** Every stream this frame does not confirm ends where it stands: its unfinished line is printed, never dropped. */
+  #endStreams(event: OrcEvent): string[] {
+    if (event.kind === "step_delta") return [];
+    const confirmed = this.#confirms(event);
+    const lines: string[] = [];
+    for (const [id, stream] of this.#streams) {
+      if (id === confirmed) continue;
+      lines.push(...stream.flush());
+      this.#streams.delete(id);
+    }
+    return lines;
+  }
+
+  /** A step's output or note text: the rest of what streamed, or the whole line when nothing did. */
+  #output(event: OrcEvent, text: string): string[] {
+    const id = event.step?.id ?? "unknown";
+    const stream = this.#streams.get(id);
+    if (stream === undefined) return [`    ${this.#theme.body(text)}`];
+    this.#streams.delete(id);
+    return stream.settle(text);
+  }
+  // [/C13]
+
   #linesFor(event: OrcEvent): string[] {
     switch (event.kind) {
+      case "step_delta": { // [C13] a line is printed when the delta that ends it arrives
+        const id = event.step?.id ?? "unknown";
+        const stream = this.#streams.get(id) ?? new StreamedText(this.#theme);
+        this.#streams.set(id, stream);
+        return stream.push(event.detail ?? "");
+      }
       case "run_start":
         return [this.#note(IDLE_DOT, `Objective: ${event.run?.objective ?? "(none)"}`)];
       case "run_preflight":
@@ -203,13 +243,13 @@ export class TranscriptRenderer {
         // `step.output`, so reading it there printed every output twice (live proof, F6).
         const lines = this.#toolActivity(event);
         const detail = event.detail ?? event.step?.output;
-        if (detail !== undefined && detail !== "") lines.push(`    ${this.#theme.body(detail)}`);
+        if (detail !== undefined && detail !== "") lines.push(...this.#output(event, detail)); // [C13] only what did not stream
         return lines;
       }
       case "step_note":
       case "step_critic": {
         const detail = event.detail;
-        return detail === undefined || detail === "" ? [] : [`    ${this.#theme.body(detail)}`];
+        return detail === undefined || detail === "" ? [] : this.#output(event, detail); // [C13]
       }
       case "step_awaiting_approval":
       case "run_awaiting_approval": {

@@ -55,6 +55,19 @@ session with its tool results. A long conversation is compacted by the solo runn
 Each conversation has its own runner: a message in one chat thread never cancels or resumes a held
 call in another. `trent run`, a cron job and a heartbeat are one-off conversations.
 
+## Streaming <!-- [C13] -->
+
+When the solo runner's gateway can stream, a turn reads the reply as the model writes it and emits the
+answer's text as `step_delta` frames: only what the turn will show (the answer, or the words beside a tool
+call), never the JSON envelope, a tool call or a `<think>` block
+(`packages/trent-core/src/solo/stream-parse.ts`); `step_output` and `run_done` still carry the whole answer.
+The REPL and `trent run --format text` print each line of the answer as soon as the model finishes it, and
+the transcript is byte for byte the one an unstreamed turn leaves; `--format stream-json` carries the frames.
+On the gateway, a solo turn keeps the chat's typing indicator on (every 4 s on Telegram, Discord, Signal and
+WhatsApp) until the reply goes out, for a handler given its adapters' typing action. Not wired yet: the
+runtime hands the runner a gateway with `complete` only (`apps/cli/src/runtime/runner-for-mode.ts`), and
+`trent gateway start` does not yet pass the typing action, so both stay off until those two call sites do.
+
 ## Held calls, by surface
 
 A call the gate holds (a send, a payment, a customer action, a call under `autonomy`) waits for a

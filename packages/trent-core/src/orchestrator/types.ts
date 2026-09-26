@@ -15,8 +15,14 @@
 
 import type { ModelGateway } from "../model-gateway/types.js";
 
-/** The 20 event kinds carried on the in-process bus (`__trentOrcBus`). */
+/**
+ * The 20 event kinds carried on the in-process bus (`__trentOrcBus`), and one of the wrapper's own.
+ * [C13] `step_delta`: the solo turn's answer text while the model writes it, in `detail` (`solo/events.ts`).
+ * The app's bus never emits it; a consumer that does not know it ignores it, and the frames after it are
+ * unchanged (`step_output` and `run_done` still carry the whole answer).
+ */
 export type OrcEventKind =
+  | "step_delta" // [C13]
   | "run_preflight"
   | "run_start"
   | "plan_start"

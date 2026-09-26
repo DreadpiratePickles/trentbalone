@@ -62,7 +62,79 @@ export interface AgentHandlerDeps {
   readonly sessions?: SessionManager;
   /** [S2] Where the solo path records each run's thread, so a late decision's reply finds it. */
   readonly threads?: RunThreads;
+  /** [C13] The platform's typing action, sent every `typingIntervalMs` while a solo turn runs (`typingFromAdapters`). */
+  readonly typing?: TypingAction; // [C13]
+  /** [C13] Default {@link TYPING_INTERVAL_MS}. */
+  readonly typingIntervalMs?: number; // [C13]
+  /** [C13] Where a failed typing action is reported, once per turn; default stderr. The turn never fails on it. */
+  readonly onTypingError?: (reason: string) => void; // [C13]
 }
+
+// [C13] typing while a solo turn runs
+/** Telegram shows a chat action for 5 s (Bot API `sendChatAction`); one every 4 s keeps it on for the whole turn. */
+export const TYPING_INTERVAL_MS = 4_000;
+/** The longest a reply waits for a typing action already on the wire, so no action can land after the reply. */
+const TYPING_SETTLE_MS = 2_000;
+
+/** The platform's typing action for the chat a message came from. */
+export type TypingAction = (message: InboundMessage) => Promise<void>;
+
+type TypingAdapter = { capabilities?: () => { typing?: boolean }; sendTyping?: (id: string) => Promise<void> };
+
+/**
+ * The typing action of whichever adapter has one (`sendTyping`, and `capabilities().typing`): Telegram, Discord and
+ * Signal by chat, WhatsApp by the message it marks read. Any other platform is sent nothing. `adapterOf` is the
+ * gateway's own lookup (`GatewayManager.getAdapter`), read at send time so the handler can be built first.
+ */
+export function typingFromAdapters(adapterOf: (platform: string) => unknown): TypingAction {
+  return async (message) => {
+    const adapter = adapterOf(message.platform) as TypingAdapter | undefined;
+    if (typeof adapter?.sendTyping !== "function" || adapter.capabilities?.().typing !== true) return;
+    await adapter.sendTyping(message.platform === "whatsapp" ? message.id : message.channelId);
+  };
+}
+
+/**
+ * `work` with the typing action sent now and every interval until it settles, however it settles. No action
+ * starts after that, and one already sent is awaited (bounded), so none reaches the chat after the reply. A
+ * failed action stops the typing for this turn and is reported once.
+ */
+async function whileTyping<T>(message: InboundMessage, deps: AgentHandlerDeps, work: () => Promise<T>): Promise<T> {
+  const typing = deps.typing;
+  if (typing === undefined) return work();
+  let stopped = false;
+  let failed = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const sent = new Set<Promise<void>>();
+  const stop = (): void => {
+    stopped = true;
+    clearInterval(timer);
+  };
+  const report = deps.onTypingError ?? ((reason: string) => void process.stderr.write(`trent gateway: ${reason}\n`));
+  const tick = (): void => {
+    if (stopped) return;
+    const action: Promise<void> = typing(message)
+      .catch((error: unknown) => {
+        stop();
+        if (failed) return;
+        failed = true;
+        report(`the typing action on ${message.platform} failed, so this turn shows no more of it: ${error instanceof Error ? error.message : String(error)}`);
+      })
+      .finally(() => sent.delete(action));
+    sent.add(action);
+  };
+  tick();
+  timer = setInterval(tick, deps.typingIntervalMs ?? TYPING_INTERVAL_MS);
+  try {
+    return await work();
+  } finally {
+    stop();
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([Promise.all(sent), new Promise<void>((resolve) => (settle = setTimeout(resolve, TYPING_SETTLE_MS)))]);
+    clearTimeout(settle);
+  }
+}
+// [/C13]
 
 // [S2] solo: the thread a run came from, for the reply after a late decision
 /** The thread a run came from, as the reply after a late decision needs it. */
@@ -191,12 +263,14 @@ export function createAgentHandler(runtime: AgentRuntime, deps: AgentHandlerDeps
       // `solo/prompt.ts`). The runner port does not carry it to the prompt yet: `runner-for-mode.ts` copies
       // named fields only (docs/sessions/2026-09-26-c15-memory-and-prompt.md, "Open items").
       const options: SoloThreadRunOptions = { trigger: "manual", signal, session: sessionId, platform: message.platform };
-      let reply: string | null = null;
-      for await (const event of runtime.run(message.content, options)) {
-        deps.threads?.remember(event.runId, thread);
-        reply = replyFromEvent(reply, event);
-      }
-      return reply;
+      return whileTyping(message, deps, async () => { // [C13] the chat sees the agent typing until the turn ends
+        let reply: string | null = null;
+        for await (const event of runtime.run(message.content, options)) {
+          deps.threads?.remember(event.runId, thread);
+          reply = replyFromEvent(reply, event);
+        }
+        return reply;
+      });
     }
     // The thread's earlier turns, read BEFORE this message joins them, so the run sees the
     // conversation and not its own new line twice. The objective stays the raw message text.
