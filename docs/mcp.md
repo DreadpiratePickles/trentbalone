@@ -116,6 +116,79 @@ Implemented in `packages/trent-core/src/tools/mcp/`.
 - **Results follow the spillover rule.** Output over `SUMMARY_LIMIT` is written to
   `<profile>/cache/spillover/` and the summary keeps a head/tail window plus the path.
 
+## OAuth 2.1 for remote servers
+
+Implements the MCP authorization specification, revision **2026-07-28**
+([authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization),
+[server discovery](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/authorization-server-discovery),
+[client registration](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration),
+[security considerations](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/security-considerations)),
+in `packages/trent-core/src/tools/mcp/http-oauth-wire.ts`, `http-oauth.ts`, `http-oauth-store.ts` and
+`http-transport.ts`, on the `trent connect` loopback listener, PKCE helpers and refresh lock.
+
+```
+trent mcp add remote --url https://mcp.example.com/mcp --oauth  # browser login first, then the entry
+trent mcp list                                                  # oauth: connected | expired | needs-login
+trent mcp test remote --oauth                                   # log in again, then connect
+trent mcp remove remote                                         # the entry and its OAuth state
+```
+
+**The flow.** A person starts it (`add --oauth`, `test --oauth`); a seat or a cron job never opens a
+browser.
+
+1. An `initialize` POST with no credential; the 401's `WWW-Authenticate: Bearer` challenge gives
+   `resource_metadata` and `scope` (RFC 6750 section 3).
+2. Protected-resource metadata (RFC 9728): the challenge's URL, else
+   `/.well-known/oauth-protected-resource/<path>`, then the root. Its `resource` must be this server's
+   URL (or its origin), or the document is not used (section 3.3).
+3. Authorization-server metadata: RFC 8414 path insertion, then OpenID Connect path insertion, then
+   path appending. The document's `issuer` must be identical to the one the URL was built from, and
+   `code_challenge_methods_supported` must list `S256`; absent, the login refuses to proceed.
+4. The client: the one this profile registered with that same issuer, else RFC 7591 registration of a
+   native public client (`application_type: native`, `token_endpoint_auth_method: none`) for the
+   exact loopback redirect URI `http://127.0.0.1:<port>/callback`.
+5. The browser: authorization code with S256 PKCE, `state`, and `resource` (RFC 8707, the canonical
+   server URI); the scope is the challenge's, else `scopes_supported`, plus `offline_access` when the
+   authorization server lists it. The loopback listener refuses a callback whose `state` differs, and
+   one whose `iss` is not the recorded issuer (RFC 9207; an absent `iss` too when the metadata promised
+   it), before the code is used.
+6. The token request carries the verifier, the same redirect URI and the same `resource`.
+
+**Where the tokens live.** The profile secrets file (`<profile>/.env`, mode 0600, written atomically by
+`ConfigManager.saveSecrets`), under names derived from the server name (upper case, `-` becomes `_`):
+`MCP_<NAME>_ACCESS_TOKEN`, `_REFRESH_TOKEN`, `_TOKEN_EXPIRES_AT`, `_TOKEN_SCOPES`, and the client:
+`_OAUTH_CLIENT_ID`, `_OAUTH_CLIENT_SECRET` (only when the server issued one), `_OAUTH_CLIENT_AUTH`,
+`_OAUTH_ISSUER`, `_OAUTH_TOKEN_URL`, `_OAUTH_RESOURCE`, `_OAUTH_REDIRECT_URI`. `config.yaml` holds only
+`headers.Authorization: "Bearer ${MCP_<NAME>_ACCESS_TOKEN}"`, the reference that marks an entry as
+OAuth-managed. Nothing prints a value: results and `list` carry names, the issuer and the expiry.
+
+**At connect time.** The bearer goes on every request, never in a query. It is renewed when it is
+within five minutes of expiry, and once more when the server answers 401 (then the request is retried
+once), under the same refresh lock `trent connect` uses, so racing seats produce one refresh; a rotated
+refresh token replaces the old one. With nothing to renew the server is unavailable and the reason
+says `log in with trent mcp test <name> --oauth`; `trent doctor` says the same on its MCP line for an
+expired token or a server nobody logged in to. The refresh goes through the egress proxy with the
+own-credential marker, so the broker adds nothing to it: put the authorization server's token host in
+`egress.intercept_domains` beside the MCP host.
+
+**Where a bearer may go.** Only to the MCP server's origin. A redirect is followed only to the same
+origin (or the same host upgraded to https) and a cross-origin one is refused by name, for an OAuth
+bearer and a static `Authorization` header alike (before this, the egress fetch re-sent the configured
+header to whatever host a 307 named; `tools/mcp/http-egress.test.ts`). Metadata, registration and token
+requests are never redirected, every URL passes the SSRF floor first, and an authorization-server
+endpoint must be https unless the MCP server itself was configured over plain http.
+
+**What a server must support.** A 401 with a `Bearer` challenge (ideally carrying `resource_metadata`)
+or protected-resource metadata at a well-known URI; an authorization server with RFC 8414 or OpenID
+Connect metadata whose `issuer` matches, `S256` in `code_challenge_methods_supported`, https endpoints,
+and RFC 7591 registration that accepts a loopback redirect URI (Trent reuses the registered port when it
+is free, and registers again when it is not). `resource` is always sent; `iss` is checked when present.
+
+Not implemented: Client ID Metadata Documents (Trent hosts no HTTPS client document), entering a
+pre-registered client, and step-up re-authorization on a 403 `insufficient_scope`. From the CLI the
+login runs on the process network like `trent connect`, but `add` and `test` still cannot connect to an
+http server afterwards, because the CLI runs no egress proxy (unchanged; a seat can).
+
 ## Wiring
 
 `createMcpAdapters(config, deps)` (async) returns `{ adapters: [mcp], unavailable }`;
@@ -237,7 +310,7 @@ and builds nothing.
 Server-side: resources and prompts (tools only), OAuth (a bearer or nothing), seats as tools
 (decision C: after a seat-targeted runner exists), and the legacy HTTP+SSE transport.
 
-Client-side: SSE transport, OAuth flows, resources and prompts, Hermes's tool-definition drift checks (the
+Client-side: SSE transport, resources and prompts (OAuth: see [above](#oauth-21-for-remote-servers)), Hermes's tool-definition drift checks (the
 scan runs at `add` and on `test`; a server that changes a description after install is not
 re-scanned at connect time) and its OSV malware preflight for `npx` servers. The read-only app's `mcp-tool-adapter.ts` keeps its
 own per-company registry; this toolset is the CLI/desktop profile equivalent.

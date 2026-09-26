@@ -162,3 +162,59 @@ function expiryOf(record: Record<string, unknown>, now: Date): string | undefine
   if (typeof expiresAt === "string" && Number.isFinite(Date.parse(expiresAt))) return new Date(expiresAt).toISOString();
   return undefined;
 }
+
+// [H2] A token request at an endpoint no registry entry describes: the authorization server an MCP
+// server named in its protected-resource metadata (`tools/mcp/http-oauth.ts`). The same rule as
+// `requestToken` above: the answer is reported by status and error code, its body never repeated.
+// The body is always a form (OAuth 2.1 section 3.2.2); `headers` carries client authentication when
+// the registration asked for `client_secret_basic`. Redirects are not followed: a token endpoint that
+// redirects would receive the code, the verifier or the refresh token at a host nobody vetted.
+export interface TokenEndpointRequest {
+  readonly endpoint: string;
+  readonly params: Readonly<Record<string, string>>;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly fetchImpl: FetchLike;
+  readonly now: () => Date;
+  /** Who answered, for the message: "the authorization server at https://auth.example.com". */
+  readonly label: string;
+  readonly operation: string;
+}
+
+export async function requestTokenAt(input: TokenEndpointRequest): Promise<TokenResponse> {
+  let response: Response;
+  try {
+    response = await input.fetchImpl(input.endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json", ...input.headers },
+      body: new URLSearchParams({ ...input.params }).toString(),
+      redirect: "manual",
+    });
+  } catch (err) {
+    throw new TrentError({ code: EXIT.PROVIDER, operation: input.operation, message: `${input.label} could not be reached`, target: input.endpoint, cause: err });
+  }
+  let json: unknown;
+  try {
+    json = await response.json();
+  } catch {
+    json = undefined;
+  }
+  const record = typeof json === "object" && json !== null ? (json as Record<string, unknown>) : {};
+  if (!response.ok) {
+    const code = typeof record.error === "string" && ERROR_CODE.test(record.error) ? record.error : "no error code";
+    throw new TrentError({ code: EXIT.PROVIDER, operation: input.operation, message: `${input.label} answered ${response.status} (${code})`, target: input.endpoint, context: { status: response.status } });
+  }
+  const accessToken = record.access_token;
+  if (typeof accessToken !== "string" || accessToken === "") {
+    throw new TrentError({ code: EXIT.PROVIDER, operation: input.operation, message: `${input.label} answered ${response.status} without an access token`, target: input.endpoint });
+  }
+  const refreshToken = typeof record.refresh_token === "string" && record.refresh_token !== "" ? record.refresh_token : undefined;
+  const expiresAt = expiryOf(record, input.now());
+  const scopes = typeof record.scope === "string" ? record.scope.split(/[\s,]+/).filter((s) => s !== "") : undefined;
+  return {
+    accessToken,
+    ...(refreshToken === undefined ? {} : { refreshToken }),
+    ...(expiresAt === undefined ? {} : { expiresAt }),
+    ...(scopes === undefined || scopes.length === 0 ? {} : { scopes }),
+  };
+}
+// [/H2]

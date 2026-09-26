@@ -28,6 +28,12 @@ export interface LoopbackOptions {
   /** 0 picks a free port. */
   readonly port: number;
   readonly expectedState: string;
+  /**
+   * [H2] RFC 9207 section 2.4: the issuer this flow recorded from validated metadata, and whether that
+   * metadata set `authorization_response_iss_parameter_supported` (an absent `iss` is then refused). A
+   * present `iss` must equal it by simple string comparison, checked before `error` or `code` is used.
+   */
+  readonly expectedIssuer?: { readonly issuer: string; readonly required: boolean };
 }
 
 const ERROR_CODE = /^[a-z_]{1,40}$/;
@@ -68,6 +74,17 @@ export async function startLoopback(options: LoopbackOptions): Promise<LoopbackL
       res.writeHead(400, headers("text/html; charset=utf-8")).end(page("Trent: refused", "This callback did not carry the state Trent sent, so it was refused. Run trent connect again."));
       finish({ error: new TrentError({ code: EXIT.AUTH, operation: "connect.callback", message: "the callback did not carry the state this flow sent; refused", target: options.providerName }) });
       return;
+    }
+    // [H2] RFC 9207: on a mismatch nothing else in the response is acted on or shown, `error` included.
+    if (options.expectedIssuer !== undefined) {
+      const iss = url.searchParams.get("iss");
+      const refused = iss === null ? options.expectedIssuer.required : iss !== options.expectedIssuer.issuer;
+      if (refused) {
+        res.writeHead(400, headers("text/html; charset=utf-8")).end(page("Trent: refused", "This callback did not come from the authorization server Trent sent you to, so it was refused."));
+        const why = iss === null ? "carried no iss although the authorization server promised one" : "carried an iss that is not the issuer this flow recorded";
+        finish({ error: new TrentError({ code: EXIT.AUTH, operation: "connect.callback", message: `the callback ${why}; refused (RFC 9207)`, target: options.providerName }) });
+        return;
+      }
     }
     if (providerError !== null) {
       const known = ERROR_CODE.test(providerError) ? providerError : "unknown_error";

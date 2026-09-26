@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CheckResult, DoctorCheck, DoctorContext } from "../types.js";
 import { DEFAULT_PROBE_TIMEOUT_MS, probeHttp, runCommand } from "../probe.js";
+import type { McpServersConfig } from "../../config/schema.js";
+import { isMcpOAuthEntry, McpOAuthStore } from "../../tools/mcp/http-oauth-store.js";
 
 /**
  * This check used to return a hard-coded green sentence about a "marketplace" from inside a try
@@ -42,6 +44,47 @@ export function loadMcpServers(ctx: DoctorContext): {
   return { servers: config.mcp?.servers ?? {}, source: ctx.configManager.getConfigPath() };
 }
 
+// [H2] OAuth-managed `mcp_servers` entries whose token needs a person: expired with nothing to renew
+// it, or never logged in. Names, expiries and commands only; a token never reaches a message.
+interface OAuthFindings {
+  readonly lines: string[];
+  readonly commands: string[];
+}
+
+function oauthFindings(ctx: DoctorContext): OAuthFindings {
+  const found: OAuthFindings = { lines: [], commands: [] };
+  let servers: McpServersConfig;
+  try {
+    servers = ctx.configManager.loadConfig().mcp_servers ?? {};
+  } catch {
+    return found;
+  }
+  const store = new McpOAuthStore(ctx.configManager);
+  for (const [name, entry] of Object.entries(servers)) {
+    if (entry.transport !== "http" || !entry.enabled || !isMcpOAuthEntry(name, entry.headers)) continue;
+    const status = store.status(name, new Date());
+    if (status.state === "needs-login") found.lines.push(`${name} (OAuth: never logged in)`);
+    else if (status.state === "expired" && !status.refreshable) found.lines.push(`${name} (OAuth token expired at ${status.expiresAt ?? "an unknown time"}, no refresh token)`);
+    else continue;
+    found.commands.push(status.login);
+  }
+  return found;
+}
+
+function withOAuth(base: CheckResult, found: OAuthFindings): CheckResult {
+  if (found.lines.length === 0) return base;
+  const note = `MCP OAuth login needed: ${found.lines.join(", ")}.`;
+  const fix = `Run ${found.commands.join(" and ")}.`;
+  return {
+    ...base,
+    status: base.status === "fail" ? "fail" : "warn",
+    message: base.status === "skip" ? note : `${base.message} ${note}`,
+    fixHint: base.fixHint === undefined ? fix : `${base.fixHint} ${fix}`,
+    details: { ...(base.details ?? {}), oauthLoginNeeded: found.lines.map((line) => line.split(" ")[0]) },
+  };
+}
+// [/H2]
+
 async function commandExists(ctx: DoctorContext, command: string, timeoutMs: number): Promise<boolean> {
   const exec = ctx.execImpl ?? runCommand;
   try {
@@ -52,7 +95,7 @@ async function commandExists(ctx: DoctorContext, command: string, timeoutMs: num
   }
 }
 
-export const checkMcp: DoctorCheck = {
+const checkMcpReachability: DoctorCheck = {
   id: "check_mcp",
   name: NAME,
   category: CATEGORY,
@@ -113,5 +156,13 @@ export const checkMcp: DoctorCheck = {
       message: `${reachable.length} MCP server(s) answered: ${reachable.join(", ")}.`,
       details: { source, reachable },
     });
+  },
+};
+
+// [H2] The same check, with the OAuth findings folded into its line.
+export const checkMcp: DoctorCheck = {
+  ...checkMcpReachability,
+  async run(ctx: DoctorContext): Promise<CheckResult> {
+    return withOAuth(await checkMcpReachability.run(ctx), oauthFindings(ctx));
   },
 };

@@ -10,6 +10,9 @@ import path from "node:path";
 import process from "node:process";
 import { parse as parseYaml } from "yaml";
 import { EXIT } from "@trent/core/errors/index.js";
+import { ConfigManager } from "@trent/core/config/ConfigManager.js";
+import { AS_HOST, FakeAuthServer, FakeOAuthMcp, LOOKUP, MCP_HOST, fakeBrowser, routingFetch } from "@trent/core/tools/mcp/__fixtures__/fake-oauth-mcp.js";
+import { setMcpDeps } from "../groups/mcp.js";
 import { runCli } from "../index.js";
 
 const FIXTURE = path.resolve(process.cwd(), "packages/trent-core/src/tools/mcp/__fixtures__/fake-mcp-server.mjs");
@@ -157,5 +160,102 @@ describe("trent mcp", () => {
     const result = await runCli(["mcp", "add", "fake", "--command", "srv", "--dry-run", "--json"]);
     expect(result.exitCode).toBe(EXIT.OK);
     expect(fs.existsSync(path.join(home, "config.yaml"))).toBe(false);
+  });
+});
+
+/**
+ * [H2] `--oauth` on `add` and `test`, the auth state on `list`, and `remove` taking the OAuth state with
+ * it, against the fake authorization server and fake MCP server of the core fixture. The browser is
+ * `fakeBrowser`; nothing reaches a real provider.
+ */
+describe("trent mcp with OAuth", () => {
+  let as: FakeAuthServer;
+  let fake: FakeOAuthMcp;
+  let routes: Record<string, number>;
+  type Configured = { configured: { name: string; auth?: string; refreshable?: boolean }[] };
+
+  beforeEach(async () => {
+    as = new FakeAuthServer();
+    await as.start();
+    fake = new FakeOAuthMcp(as);
+    await fake.start();
+    routes = { [AS_HOST]: as.port, [MCP_HOST]: fake.port };
+    setMcpDeps({ fetchImpl: routingFetch(routes), lookup: LOOKUP, openBrowser: (url) => void fakeBrowser(url, routes), timeoutMs: 5000 });
+  });
+
+  afterEach(async () => {
+    setMcpDeps(null);
+    await fake.stop();
+    await as.stop();
+    for (const name of Object.keys(process.env)) if (name.startsWith("MCP_REMOTE_")) delete process.env[name];
+  });
+
+  const issuedValues = (): string[] => [...as.issued.accessTokens, ...as.issued.refreshTokens, ...as.issued.codes];
+
+  it("add --oauth logs in, writes only the reference to config and the tokens to the secrets file, and list shows connected", async () => {
+    const added = await runCli(["mcp", "add", "remote", "--url", fake.url, "--oauth", "--json"]);
+    expect(added.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(added.stdout) as { added: { auth?: string }; login: { issuer: string; registration: string; written: string[] } };
+    expect(data.added.auth).toBe("oauth");
+    expect(data.login).toMatchObject({ issuer: as.issuer, registration: "dynamic" });
+    expect(data.login.written).toContain("MCP_REMOTE_ACCESS_TOKEN");
+    expect(added.stderr).toContain("opening the browser to authorize MCP server remote");
+    const yaml = fs.readFileSync(path.join(home, "config.yaml"), "utf8");
+    expect(yaml).toContain("Bearer ${MCP_REMOTE_ACCESS_TOKEN}");
+    for (const value of issuedValues()) {
+      expect(yaml).not.toContain(value);
+      expect(added.stdout).not.toContain(value);
+      expect(added.stderr).not.toContain(value);
+    }
+    expect(fs.readFileSync(path.join(home, ".env"), "utf8")).toContain(`MCP_REMOTE_ACCESS_TOKEN=${as.issued.accessTokens[0]}`);
+    const listed = JSON.parse((await runCli(["mcp", "list", "--json"])).stdout) as Configured;
+    expect(listed.configured[0]).toMatchObject({ name: "remote", auth: "connected", refreshable: true });
+  });
+
+  it("a login that fails writes nothing", async () => {
+    setMcpDeps({ fetchImpl: routingFetch({ [MCP_HOST]: fake.port }), lookup: LOOKUP, openBrowser: () => undefined, timeoutMs: 5000 });
+    const result = await runCli(["mcp", "add", "remote", "--url", fake.url, "--oauth", "--json"]);
+    expect(result.exitCode).not.toBe(EXIT.OK);
+    expect(fs.existsSync(path.join(home, "config.yaml"))).toBe(false);
+    expect(fs.existsSync(path.join(home, ".env")) ? fs.readFileSync(path.join(home, ".env"), "utf8") : "").not.toContain("MCP_REMOTE_");
+  });
+
+  it("add --oauth refuses a static Authorization header and a stdio server, writing nothing", async () => {
+    const header = await runCli(["mcp", "add", "remote", "--url", fake.url, "--oauth", "--header", "Authorization=Bearer ${X_TOKEN}", "--json"]);
+    expect(header.exitCode).toBe(EXIT.CONFIG);
+    const stdio = await runCli(["mcp", "add", "local", "--command", "srv", "--oauth", "--json"]);
+    expect(stdio.exitCode).toBe(EXIT.CONFIG);
+    expect(fs.existsSync(path.join(home, "config.yaml"))).toBe(false);
+    expect(as.requests).toHaveLength(0);
+  });
+
+  it("list shows an expired token; test names the login command; test --oauth logs in again with the registered client", async () => {
+    expect((await runCli(["mcp", "add", "remote", "--url", fake.url, "--oauth", "--json"])).exitCode).toBe(EXIT.OK);
+    new ConfigManager({ baseDir: home }).saveSecrets({ MCP_REMOTE_TOKEN_EXPIRES_AT: "2020-01-01T00:00:00.000Z", MCP_REMOTE_REFRESH_TOKEN: "" });
+    const expired = JSON.parse((await runCli(["mcp", "list", "--json"])).stdout) as Configured;
+    expect(expired.configured[0]).toMatchObject({ auth: "expired", refreshable: false });
+
+    const hinted = await runCli(["mcp", "test", "remote", "--json"]);
+    expect(hinted.exitCode).toBe(EXIT.CONFIG);
+    expect((JSON.parse(hinted.stdout) as { reason: string }).reason).toContain("trent mcp test remote --oauth");
+
+    const again = await runCli(["mcp", "test", "remote", "--oauth", "--json"]);
+    const data = JSON.parse(again.stdout) as { login?: { registration: string }; reason?: string };
+    expect(data.login?.registration).toBe("stored");
+    expect(as.registrations).toHaveLength(1);
+    // The CLI runs no egress proxy, so the connection itself stays unavailable, and says why.
+    expect(data.reason).toContain("egress proxy");
+    const after = JSON.parse((await runCli(["mcp", "list", "--json"])).stdout) as Configured;
+    expect(after.configured[0]).toMatchObject({ auth: "connected" });
+  });
+
+  it("test --oauth converts an http entry with no Authorization header; remove takes the OAuth state with it", async () => {
+    expect((await runCli(["mcp", "add", "remote", "--url", fake.url, "--json"])).exitCode).toBe(EXIT.OK);
+    const tested = await runCli(["mcp", "test", "remote", "--oauth", "--json"]);
+    expect((JSON.parse(tested.stdout) as { login?: unknown }).login).toBeDefined();
+    expect(fs.readFileSync(path.join(home, "config.yaml"), "utf8")).toContain("Bearer ${MCP_REMOTE_ACCESS_TOKEN}");
+    const removed = JSON.parse((await runCli(["mcp", "remove", "remote", "--json"])).stdout) as { oauthRemoved?: string[] };
+    expect(removed.oauthRemoved).toContain("MCP_REMOTE_ACCESS_TOKEN");
+    expect(fs.readFileSync(path.join(home, ".env"), "utf8")).not.toContain("MCP_REMOTE_");
   });
 });
