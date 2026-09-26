@@ -10,7 +10,8 @@
  *   - every result goes back to the model as ONE user message, after its reply.
  * Bounded four ways (coding rule 9): the tool-call cap, the same failing call three times
  * (the app's `repeatedToolMisuse` idea, `apps/web/lib/seat-agent-loop.ts`, keyed on the call
- * itself), one repair per malformed reply, and the meter's budget before every model call.
+ * itself), one repair per malformed reply, and the meter's budget before every model call. [CF] Fifth: the same
+ * SUCCESSFUL call returning the same result five times (`repeat-stop.ts`, C11 open item 3).
  *
  * [S1.1] Council review, the runner-level blockers:
  *   B6  only a `dryRun` hold parks the run. A `needs_approval` that `execute` returns (after a yes,
@@ -48,6 +49,7 @@ import { renderToolResult } from "./prompt.js";
 import { SOLO_MISUSE_REPEATS, SOLO_SEAT, type SoloGateway, type SoloGatewayRequest, type SoloMeter, type SoloSession } from "./types.js";
 import { withEnvelopeInstruction } from "./turn-settings.js"; // [C11] a constrained request tells the model its reply format
 import { createAnswerStream } from "./stream-parse.js"; // [C13]
+import { repeatedSuccessOf } from "./repeat-stop.js"; // [CF] a repeated success stops the run
 
 /** Everything one run carries between model calls, and across a park. */
 export interface TurnState {
@@ -225,6 +227,7 @@ function charge(state: TurnState, deps: TurnDeps, completion: GatewayCompletion)
     inputTokens: completion.inputTokens,
     outputTokens: completion.outputTokens,
     cachedInputTokens: completion.cachedInputTokens ?? 0,
+    ...(completion.cacheWriteInputTokens === undefined ? {} : { cacheWriteInputTokens: completion.cacheWriteInputTokens }), // [CF] C14.1 priced at the write rate
     estimated: completion.estimated,
     costCents: completion.costCents,
   });
@@ -301,7 +304,7 @@ async function* runPending(state: TurnState, deps: TurnDeps, signal: AbortSignal
     state.pending.shift();
     state.callsMade += 1;
     state.results.push(renderToolResult(result, deps.maxToolResultChars));
-    const misuse = misuseOf(state, call, result);
+    const misuse = misuseOf(state, call, result) ?? repeatedSuccessOf(state, call, result); // [CF] C11 open item 3
     if (misuse !== undefined) return yield* fail(state, stopVerdict(misuse, state.costCents));
   }
   return undefined;
@@ -331,7 +334,7 @@ async function* loop(state: TurnState, deps: TurnDeps, signal: AbortSignal | und
     charge(state, deps, completion);
     if (signal?.aborted) return yield* cancel(state, signal);
 
-    const reply = parseReply(completion.text, deps.adapters, { envelope: deps.request.responseFormat !== undefined });
+    const reply = parseReply(completion.text, deps.adapters, { envelope: deps.request.responseFormat !== undefined, ...(completion.toolCalls === undefined ? {} : { toolCalls: completion.toolCalls }) }); // [CF] C14.1 native calls
     if (reply.kind === "malformed") {
       if (state.malformedStreak >= 1) {
         return yield* fail(state, stopVerdict(`the model's reply could not be parsed twice in a row: ${clip(reply.error, 300)}`, state.costCents));

@@ -156,7 +156,7 @@ describe("[S1.1] C1: the constrained-output envelope the runner can pass through
     expect(format.type).toBe("json_schema");
     const schema = format.type === "json_schema" ? format.json_schema.schema : {};
     expect(JSON.stringify(schema)).toContain('"enum":["file_ops","read_file"]');
-    expect(schema).toMatchObject({ oneOf: [{ required: ["tool_calls"] }, { required: ["answer"] }] });
+    expect(schema).toMatchObject({ anyOf: [{ required: ["tool_calls"] }, { required: ["answer"] }] }); // [CF] the enforced form (C11 live run 1); was `oneOf`
     const parsed = parseReply('{"tool_calls": [{"name": "read_file", "arguments": {"path": "a.md"}}]}', [files], { envelope: true });
     expect(parsed.kind === "actions" ? parsed.actions.map((a) => a.action) : []).toEqual(['read_file {"path":"a.md"}']);
   });

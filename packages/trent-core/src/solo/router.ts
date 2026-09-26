@@ -39,6 +39,8 @@ export interface SoloConversation {
   readonly holds: SoloHoldPolicy;
   /** The surface the conversation's spend and audit rows are charged to. */
   readonly surface?: string;
+  /** [CF] C15.1: a gateway thread's platform id, from the run that opened the conversation; the prompt's last section. */
+  readonly platform?: string; // [CF]
 }
 
 export interface SoloRouteInput extends AgentRunInput {
@@ -49,6 +51,8 @@ export interface SoloRouteInput extends AgentRunInput {
   /** Overrides the router's policy when this run opens its conversation. */
   readonly holds?: SoloHoldPolicy;
   readonly surface?: string;
+  /** [CF] C15.1: the platform a gateway thread is on (`InboundMessage.platform`). Read when the run opens its conversation. */
+  readonly platform?: string; // [CF]
 }
 
 /** A consumer of every frame: `BusHook` satisfies it, and so does a bare trace sink. */
@@ -106,7 +110,7 @@ export function createSoloRouter(options: SoloRouterOptions): SoloRouter {
   let adopted = false;
 
   function open(input: SoloRouteInput): SoloConversation {
-    const surface = input.surface === undefined ? {} : { surface: input.surface };
+    const surface = { ...(input.surface === undefined ? {} : { surface: input.surface }), ...(input.platform === undefined ? {} : { platform: input.platform }) }; // [CF] and the platform
     if (input.session !== undefined && input.session !== "") {
       return { key: `session:${input.session}`, sessionId: input.session, holds: input.holds ?? options.holds ?? "deny", ...surface };
     }

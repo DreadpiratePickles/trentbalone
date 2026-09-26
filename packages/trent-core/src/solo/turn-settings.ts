@@ -36,19 +36,11 @@ export function soloMaxToolCalls(config: unknown): number | undefined {
 
 /**
  * The solo envelope as an `anyOf` of two complete objects (a call list, or an answer), each with its one
- * property required and nothing else allowed. The call item and the tool enum are `soloResponseFormat`'s own;
- * only the envelope's form changes. Throws if that format no longer has the two properties, so a change there
- * fails a test instead of silently sending an unenforced schema.
+ * property required and nothing else allowed. [CF] `soloResponseFormat` now states exactly this, so this name
+ * returns it: one source (docs/sessions/2026-09-26-council-followups.md, item D).
  */
 export function soloEnvelopeFormat(adapters: readonly TrentToolAdapter[]): SoloResponseFormat {
-  const source = soloResponseFormat(adapters);
-  if (source.type !== "json_schema") return source;
-  const properties = (source.json_schema.schema as { properties?: Record<string, unknown> }).properties ?? {};
-  const alternative = (key: "tool_calls" | "answer"): Record<string, unknown> => {
-    if (properties[key] === undefined) throw new TypeError(`soloResponseFormat has no "${key}" property; the solo envelope cannot be built from it`);
-    return { type: "object", properties: { [key]: properties[key] }, required: [key], additionalProperties: false };
-  };
-  return { type: "json_schema", json_schema: { name: source.json_schema.name, schema: { anyOf: [alternative("tool_calls"), alternative("answer")] } } };
+  return soloResponseFormat(adapters); // [CF]
 }
 
 /**

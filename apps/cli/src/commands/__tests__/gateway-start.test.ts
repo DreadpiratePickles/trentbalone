@@ -250,6 +250,18 @@ describe("trent gateway start", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ dryRun: true, command: "gateway start", wouldStart: [] });
   });
 
+  // [CF] H: the gateway types while a solo turn runs (C13 built `typingFromAdapters`; nothing passed it).
+  it("[CF] a solo gateway's handler sends the platform's typing action while the turn runs", async () => {
+    const f = fakes();
+    const overrides: CliOverrides = { ...f.overrides, gatewayRuntime: async (deps) => ({ ...(await f.overrides.gatewayRuntime!(deps)), mode: "solo" }) as HeadlessRuntime };
+    await runCli(["gateway", "start", "--json"], { overrides });
+    const telegram = f.managers[0]!.getAdapter("telegram") as unknown as { sendTyping(id: string): Promise<void> };
+    const typed = vi.spyOn(telegram, "sendTyping").mockResolvedValue(undefined);
+
+    expect(await f.managerOptions[0]?.agentHandler?.("trent", message)).toBe("brief for: summarise yesterday");
+    expect(typed).toHaveBeenCalledWith("555");
+  });
+
   // [P3] the heartbeat this command carries runs the auto reviewer's pass on each of its ticks.
   it("with the heartbeat and governance.auto_review on, a held call inside the policy is decided on the heartbeat's next tick", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });

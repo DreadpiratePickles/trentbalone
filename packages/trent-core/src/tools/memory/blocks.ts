@@ -47,6 +47,19 @@ export const DEFAULT_MEMORY_BLOCKS: readonly MemoryBlock[] = [
   },
 ];
 
+/** [CF] C15.1: the shipped blocks' descriptions as a solo prompt says them: one person, no seats, no founder. */
+const SOLO_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  memory: "durable facts, decisions and conventions worth keeping from one conversation to the next",
+  user: "who you work for and how they want to be worked with",
+  company: "facts about the person's company; edited by hand",
+};
+
+/** [CF] A block's description in solo: the solo words for a shipped block the profile did not re-describe, else its own. */
+export function soloBlockDescription(block: MemoryBlock): string {
+  const shipped = DEFAULT_MEMORY_BLOCKS.find((candidate) => candidate.label === block.label);
+  return shipped?.description === block.description ? (SOLO_DESCRIPTIONS[block.label] ?? block.description) : block.description;
+}
+
 /** The block for a label, or undefined; labels are unique within one configured list. */
 export function findBlock(blocks: readonly MemoryBlock[], label: string): MemoryBlock | undefined {
   return blocks.find((b) => b.label === label);

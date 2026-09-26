@@ -26,7 +26,7 @@ import { currentSessionTaint } from "../../governance/provenance.js"; // [C15] t
 import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
 import { parseAction, record as toRecord, type ToolSpec } from "../action.js";
 import { renderToolInstructions, type ToolSchema } from "../web/schemas.js";
-import { DEFAULT_MEMORY_BLOCKS, assertDistinctBlocks, findBlock, type MemoryBlock } from "./blocks.js";
+import { DEFAULT_MEMORY_BLOCKS, assertDistinctBlocks, findBlock, soloBlockDescription, type MemoryBlock } from "./blocks.js"; // [CF] soloBlockDescription
 import { ENTRY_SEPARATOR, checkMemoryWriteGate, commitOperations, memoryLimit, memoryPath, type ApplyResult, type MemoryOperation, type MemoryWriter } from "./store.js"; // [C15] MemoryWriter
 
 export { DEFAULT_MEMORY_BLOCKS, MEMORY_BLOCK_LABEL_PATTERN, assertDistinctBlocks, findBlock } from "./blocks.js";
@@ -185,6 +185,8 @@ export interface MemoryAdapter extends TrentToolAdapter {
   bindCallerContext(provider: () => MemoryCallerContext): void;
   /** [C15] The instructions as one runner's prompt shows them: `fleet` is `instructions`; `solo` lists replace and remove. */
   instructionsFor(mode: MemoryToolMode): string; // [C15]
+  /** [CF] C15.1 The prelude as one runner's prompt shows it, frozen like `frozenSnapshot` (which `fleet` is); `solo` names no seat and no founder. */
+  snapshotFor(mode: MemoryToolMode): string; // [CF]
 }
 
 /**
@@ -240,13 +242,14 @@ function renderRefusalState(result: Extract<ApplyResult, { ok: false }>): string
     : `${header}\n${result.entries.map((entry, i) => `${i + 1}. ${entry}`).join("\n")}`;
 }
 
-/** One prelude section per block: file, label, description, limit, bytes used and the write rule. */
-function renderBlock(profileDir: string, block: MemoryBlock): string {
+/** One prelude section per block: file, label, description, limit, bytes used and the write rule. [CF] Worded per mode. */
+function renderBlock(profileDir: string, block: MemoryBlock, mode: MemoryToolMode = "fleet"): string {
   const file = memoryPath(profileDir, block);
   const text = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "";
-  const rule = block.read_only ? "; read-only for seats" : "";
+  const rule = block.read_only ? (mode === "solo" ? "; read-only" : "; read-only for seats") : ""; // [CF]
+  const description = mode === "solo" ? soloBlockDescription(block) : block.description; // [CF]
   return (
-    `## ${block.file} (${block.label}: ${block.description}; ${block.limit}-char cap, ${text.length} chars used${rule})\n` +
+    `## ${block.file} (${block.label}: ${description}; ${block.limit}-char cap, ${text.length} chars used${rule})\n` + // [CF] description
     (text || "(empty)")
   );
 }
@@ -256,6 +259,7 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
   assertDistinctBlocks(blocks);
   const labels = blocks.map((b) => b.label).join(", ");
   let snapshot: string | null = null;
+  let soloSnapshot: string | null = null; // [CF] C15.1 the solo wording, frozen and thawed with `snapshot`
   let callerContext = options.callerContext;
 
   const record = (action: string, status: ToolCallRecord["status"], summary: string) =>
@@ -279,11 +283,13 @@ export function createMemoryAdapter(options: MemoryAdapterOptions): MemoryAdapte
     },
     thaw() {
       snapshot = null;
+      soloSnapshot = null; // [CF]
     },
     bindCallerContext(provider) {
       callerContext = provider;
     },
     instructionsFor: (mode) => (mode === "solo" ? renderToolInstructions(memoryToolSchemas(blocks, "solo")) : instructions), // [C15]
+    snapshotFor: (mode) => (mode === "solo" ? (soloSnapshot ??= blocks.map((block) => renderBlock(options.profileDir, block, "solo")).join("\n\n")) : (snapshot ??= blocks.map((block) => renderBlock(options.profileDir, block)).join("\n\n"))), // [CF]
     async execute(action) {
       const { args, error } = parseAction(action, SPECS);
       if (error) return record(action, "failed", error);

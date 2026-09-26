@@ -64,6 +64,7 @@ export interface SeatCallUsage {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cachedInputTokens: number;
+  readonly cacheWriteInputTokens?: number; // [CF] C14.1 Anthropic cache writes, for the run meter
   readonly costCents: number;
   readonly estimated: boolean;
   readonly unpriced: boolean;
@@ -111,6 +112,7 @@ function usageOf(completion: GatewayCompletion): SeatCallUsage {
     inputTokens: completion.inputTokens,
     outputTokens: completion.outputTokens,
     cachedInputTokens: completion.cachedInputTokens ?? 0,
+    ...(completion.cacheWriteInputTokens === undefined ? {} : { cacheWriteInputTokens: completion.cacheWriteInputTokens }), // [CF] C14.1
     costCents: completion.costCents,
     estimated: completion.estimated,
     unpriced: completion.unpriced ?? false,

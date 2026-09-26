@@ -60,6 +60,7 @@ function modelCall(usage: SeatCallUsage | GatewayCompletion, seat: string, stepI
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     cachedInputTokens: usage.cachedInputTokens ?? 0,
+    cacheWriteInputTokens: usage.cacheWriteInputTokens ?? 0, // [CF] C14.1 priced at the write rate
     estimated: usage.estimated,
     costCents: usage.costCents,
   };

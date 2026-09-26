@@ -47,7 +47,7 @@ import { ServiceLog, ServiceSupervisor, ephemeralStoreLine, serviceLogPaths, typ
 import { diagnoseStoreFailure } from "@trent/core/store/durability.js"; // [C10]
 import type { CommandOutcome } from "../registry.js";
 import type { CommandContext } from "../context.js";
-import { createAgentHandler, createRunResumer, createRunThreads } from "../../gateway/agent-handler.js"; // [S2] resumer, threads
+import { createAgentHandler, createRunResumer, createRunThreads, typingFromAdapters } from "../../gateway/agent-handler.js"; // [S2] resumer, threads; [CF] typingFromAdapters
 import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime, type HeadlessRuntime } from "../../runtime/headless.js";
 import { releaseOnSignal } from "../../signals.js";
@@ -217,7 +217,8 @@ export async function runServiceDaemon(ctx: CommandContext): Promise<CommandOutc
       name: "gateway",
       async start() {
         const threads = createRunThreads(); // [S2]
-        const m = buildManager(configManager, { agentHandler: createAgentHandler(built, { configManager, threads }), resumer: createRunResumer(built, threads, { configManager }) }); // [S2] resumer
+        const typing = typingFromAdapters((platform) => manager?.getAdapter(platform)); // [CF] H the typing action while a solo turn runs (C13)
+        const m = buildManager(configManager, { agentHandler: createAgentHandler(built, { configManager, threads, typing }), resumer: createRunResumer(built, threads, { configManager }) }); // [S2] resumer; [CF] typing
         manager = m;
         link = linkRunApprovals({ orchestrator: built.runner ?? built.orchestrator, bridge: m.getApprovalBridge(), manager: m, owner: config.gateway.owner, log: (line) => ctx.err(line) }); // [S2] the runner by mode
         const release = async (): Promise<void> => {

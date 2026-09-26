@@ -79,6 +79,8 @@ export interface RunModelCall {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cachedInputTokens?: number;
+  /** [CF] C14.1: the part of `inputTokens` WRITTEN to the prompt cache (Anthropic), priced at the model's write rate. */
+  readonly cacheWriteInputTokens?: number; // [CF]
   /** The provider reported no usage: the tokens are the gateway's chars/4 estimate. */
   readonly estimated: boolean;
   readonly costCents: number;
@@ -95,6 +97,7 @@ interface MeteredGroup {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
+  cacheWriteInputTokens: number; // [CF] C14.1
   microCents: number;
   estimated: boolean;
   unpriced: boolean;
@@ -179,15 +182,17 @@ export function recordRunModelCall(runId: string | undefined, call: RunModelCall
   const inputTokens = whole(call.inputTokens);
   const outputTokens = whole(call.outputTokens);
   const cachedInputTokens = Math.min(inputTokens, whole(call.cachedInputTokens));
+  const cacheWriteInputTokens = Math.min(inputTokens - cachedInputTokens, whole(call.cacheWriteInputTokens)); // [CF] C14.1 writes
   const alias = call.providerAlias !== undefined && isProviderAlias(call.providerAlias) ? call.providerAlias : undefined;
-  const priced = priceCallMicroCents({ model: call.model, inputTokens, outputTokens, cachedInputTokens, overrides: modelOverridesFromEnv(), ...(alias ? { alias } : {}) });
+  const priced = priceCallMicroCents({ model: call.model, inputTokens, outputTokens, cachedInputTokens, cacheWriteInputTokens, overrides: modelOverridesFromEnv(), ...(alias ? { alias } : {}) }); // [CF] and the writes
   const microCents = priced?.microCents ?? whole(Math.ceil(call.costCents)) * MICRO_PER_CENT;
   const provider = call.providerAlias ?? call.provider;
   const key = `${pool}|${call.seat}|${call.model}|${provider}`;
-  const group = scope.metered.get(key) ?? { pool, seat: call.seat, model: call.model, provider, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, microCents: 0, estimated: false, unpriced: false };
+  const group = scope.metered.get(key) ?? { pool, seat: call.seat, model: call.model, provider, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, microCents: 0, estimated: false, unpriced: false }; // [CF] cacheWriteInputTokens
   group.inputTokens += inputTokens;
   group.outputTokens += outputTokens;
   group.cachedInputTokens += cachedInputTokens;
+  group.cacheWriteInputTokens += cacheWriteInputTokens; // [CF]
   group.microCents += microCents;
   group.estimated ||= call.estimated;
   group.unpriced ||= priced === undefined;
@@ -255,6 +260,7 @@ function writeMeteredRows(ledger: SpendLedger, runId: string, scope: RunSpendSco
       inputTokens: group.inputTokens,
       outputTokens: group.outputTokens,
       ...(group.cachedInputTokens > 0 ? { cachedInputTokens: group.cachedInputTokens } : {}),
+      ...(group.cacheWriteInputTokens > 0 ? { cacheWriteInputTokens: group.cacheWriteInputTokens } : {}), // [CF] C14.1 the row carries the writes
       ...(group.estimated ? { estimated: true } : {}),
       ...(group.unpriced ? { unpriced: true } : {}),
     });

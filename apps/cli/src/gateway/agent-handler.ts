@@ -45,8 +45,7 @@ import type { HeadlessRuntime } from "../runtime/headless.js";
 /** What the handler needs of the runtime: one run per message. [S2] `mode` and `runner` pick the solo path. */
 export type AgentRuntime = Pick<HeadlessRuntime, "run"> & Partial<Pick<HeadlessRuntime, "mode" | "runner">>;
 
-/** [C15] A solo run's options from a thread: the runtime's own, and the platform the thread is on. */
-type SoloThreadRunOptions = NonNullable<Parameters<AgentRuntime["run"]>[1]> & { readonly platform: string }; // [C15]
+// [CF] The runtime's run options carry `platform` (`runtime/runner-for-mode.ts` `ModeRunOptions`), so a solo thread's need no type of their own.
 
 /** The message text that rotates a thread's session. Nothing else is interpreted here. */
 export const NEW_SESSION_COMMAND = "/new";
@@ -259,10 +258,8 @@ export function createAgentHandler(runtime: AgentRuntime, deps: AgentHandlerDeps
     if (runtime.mode === "solo") {
       const subject = typeof message.metadata?.subject === "string" ? { subject: message.metadata.subject } : {};
       const thread: RunThread = { platform: message.platform, channelId: message.channelId, ...(message.threadId === undefined ? {} : { threadId: message.threadId }), ...subject };
-      // [C15] The thread's platform rides the run, for the solo prompt's platform hint (`soloPlatformHint`,
-      // `solo/prompt.ts`). The runner port does not carry it to the prompt yet: `runner-for-mode.ts` copies
-      // named fields only (docs/sessions/2026-09-26-c15-memory-and-prompt.md, "Open items").
-      const options: SoloThreadRunOptions = { trigger: "manual", signal, session: sessionId, platform: message.platform };
+      // [C15] The thread's platform rides the run; [CF] it ends the solo prompt as the platform hint (`soloPlatformHint`).
+      const options = { trigger: "manual" as const, signal, session: sessionId, platform: message.platform }; // [CF]
       return whileTyping(message, deps, async () => { // [C13] the chat sees the agent typing until the turn ends
         let reply: string | null = null;
         for await (const event of runtime.run(message.content, options)) {

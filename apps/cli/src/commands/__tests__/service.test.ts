@@ -20,7 +20,7 @@ import process from "node:process";
 import { ConfigManager } from "@trent/core/config/index.js";
 import { DEFAULT_TICK_MS, cronRunnerLockPath, readCronRuns } from "@trent/core/cron/index.js";
 import { EXIT } from "@trent/core/errors/index.js";
-import { GatewayManager } from "@trent/core/gateway/index.js";
+import { GatewayManager, type GatewayManagerOptions } from "@trent/core/gateway/index.js"; // [CF] GatewayManagerOptions
 import { HeartbeatLoop, heartbeatLockPath } from "@trent/core/heartbeat/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { liveGatewayHolder, liveWriters, profileLockPath } from "@trent/core/profile/locks.js";
@@ -195,6 +195,20 @@ describe("trent service daemon", () => {
     await vi.advanceTimersByTimeAsync(15 * 60_000);
     expect(f.runs.some((run) => run.surface === "heartbeat")).toBe(true);
 
+    await f.signals.raise("SIGTERM");
+  });
+
+  // [CF] H: the daemon's gateway types while a solo turn runs, as `gateway start` does.
+  it("[CF] a solo daemon's gateway handler sends the platform's typing action while the turn runs", async () => {
+    configure({ gateway: true, heartbeat: false });
+    const f = fakes();
+    let handler: GatewayManagerOptions["agentHandler"];
+    const overrides: CliOverrides = { ...f.overrides, gatewayRuntime: async (deps) => ({ ...(await f.overrides.gatewayRuntime!(deps)), mode: "solo" }) as HeadlessRuntime, gatewayManager: (cm, options) => ((handler = options.agentHandler), f.overrides.gatewayManager!(cm, options)) };
+    await runCli(["service", "daemon", "--json"], { overrides });
+    const typed = vi.spyOn(f.managers[0]!.getAdapter("telegram") as unknown as { sendTyping(id: string): Promise<void> }, "sendTyping").mockResolvedValue(undefined);
+    expect(typeof handler).toBe("function");
+    await handler?.("trent", { id: "m1", platform: "telegram", channelId: "777", senderId: "777", content: "hi", timestamp: "2026-09-25T09:00:00.000Z", scope: "dm" });
+    expect(typed).toHaveBeenCalledWith("777");
     await f.signals.raise("SIGTERM");
   });
 

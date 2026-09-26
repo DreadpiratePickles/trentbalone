@@ -18,7 +18,7 @@ import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { openWebhookRoutes, webhookStatus, webhookStatusLines, WebhooksConfigSchema, type OpenedWebhookRoutes, type WebhooksConfig, type WebhookStatusView } from "@trent/core/webhooks/index.js"; // [H3] webhook routes; [P3] WebhooksConfigSchema, WebhooksConfig
 import type { CommandContext } from "../context.js";
 import type { CommandSpec } from "../registry.js";
-import { createAgentHandler, createRunResumer, createRunThreads } from "../../gateway/agent-handler.js"; // [S2] resumer, threads
+import { createAgentHandler, createRunResumer, createRunThreads, typingFromAdapters } from "../../gateway/agent-handler.js"; // [S2] resumer, threads; [CF] typingFromAdapters
 import { modeOverride } from "../../runtime/runner-for-mode.js"; // [S2] --solo
 import { startEgressProxy } from "../../repl/tools.js";
 import type { ReplConfig } from "../../repl/types.js";
@@ -177,7 +177,9 @@ export const gatewaySpec: CommandSpec = {
           },
         });
         const threads = createRunThreads(); // [S2] a solo run's thread, for its reply after a late decision
-        manager = buildManager(configManager, { agentHandler: createAgentHandler(runtime, { configManager, threads }), resumer: createRunResumer(runtime, threads, { configManager }) }); // [S2] resumer
+        // [CF] H: the platform's typing action while a solo turn runs (C13), looked up on this manager at send time.
+        const typing = typingFromAdapters((platform) => manager?.getAdapter(platform)); // [CF]
+        manager = buildManager(configManager, { agentHandler: createAgentHandler(runtime, { configManager, threads, typing }), resumer: createRunResumer(runtime, threads, { configManager }) }); // [S2] resumer; [CF] typing
         link = linkRunApprovals({
           orchestrator: runtime.runner ?? runtime.orchestrator, // [S2] the runner by mode is the approval target
           bridge: manager.getApprovalBridge(),

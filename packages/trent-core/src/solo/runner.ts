@@ -46,6 +46,7 @@ import { driveTurn, gateFrames, type TurnDeps, type TurnState } from "./turn.js"
 import { createSoloCompactor } from "./compaction.js"; // [S3]
 import { bindRunDelegation } from "./delegate-route.js"; // [S3]
 import { invokedSkillOf, invokedSkillsBlock, skillsIndexBlock } from "./skills.js"; // [S3]
+import { offersNativeTools, soloNativeTools } from "./native-tools.js"; // [CF] C14.1
 import {
   DEFAULT_SOLO_MAX_TOOL_CALLS,
   DEFAULT_SOLO_MAX_TOOL_RESULT_CHARS,
@@ -78,13 +79,25 @@ interface LiveRun {
 
 const SUPERSEDED = "a new message started another run on this conversation";
 
-export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
+/**
+ * [CF] The runner's options: `SoloRunnerDeps` (`types.ts`) and what the council follow-ups add. Declared here so
+ * `types.ts` is not edited by this lane; the fields can move into `SoloRunnerDeps` with no caller change.
+ */
+export type SoloRunnerOptions = SoloRunnerDeps & {
+  /** [CF] C15.1: a gateway thread's platform id; the system prompt ends with its hint (`soloPlatformHint`). */
+  readonly platform?: string;
+  /** [CF] C14.1: the configured provider (`config.provider`, a provider or an alias); `anthropic` is offered the tools natively. */
+  readonly provider?: string;
+};
+
+export function createSoloRunner(deps: SoloRunnerOptions): SoloRunner { // [CF] SoloRunnerOptions
   const clock = deps.now ?? (() => new Date());
   const newId = deps.newId ?? defaultId;
   const config = deps.config ?? {};
   const humanAnswers = deps.humanAnswers ?? sharedHumanAnswers;
   const resultCap = positiveInt(config.maxToolResultChars) ?? DEFAULT_SOLO_MAX_TOOL_RESULT_CHARS;
   const window = positiveInt(config.contextWindowTokens);
+  const nativeTools = offersNativeTools(deps.provider) ? soloNativeTools(deps.tools.adapters) : []; // [CF] C14.1
 
   let prefix: SessionPrefix | undefined;
   /** Runs in flight or parked in this process, by run id. A run leaves when it reaches a terminal frame. */
@@ -125,6 +138,7 @@ export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
       ...(config.temperature === undefined ? {} : { temperature: config.temperature }),
       ...(config.maxTokens === undefined ? {} : { maxTokens: config.maxTokens }),
       ...(config.responseFormat === undefined ? {} : { responseFormat: config.responseFormat }),
+      ...(nativeTools.length === 0 ? {} : { tools: nativeTools }), // [CF] C14.1 native tools, anthropic only
     },
     payload: deps.companyId === undefined ? {} : { companyId: deps.companyId },
     maxToolResultChars: resultCap,
@@ -152,7 +166,7 @@ export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
       const index = skillsIndexBlock(deps.skills); // [S3] names and one line each, frozen with the prefix
       const blocks = [...tiers.stable, ...(index === undefined ? [] : [index])].map((block) => ({ ...block, tier: "stable" as const }));
       const text = assembleContext(blocks, { ceilingChars: config.ceilingChars ?? Number.NaN }).text;
-      prefix = { system: buildSystemPrompt({ persona: readSoloPersona(deps.profileDir), stable: text, adapters: deps.tools.adapters }), stable: blocks };
+      prefix = { system: buildSystemPrompt({ persona: readSoloPersona(deps.profileDir), stable: text, adapters: deps.tools.adapters, ...(deps.platform === undefined ? {} : { platform: deps.platform }) }), stable: blocks }; // [CF] C15.1 the platform hint
     }
     return { session: prefix, context: tiers.context };
   }

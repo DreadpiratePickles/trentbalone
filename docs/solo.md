@@ -76,9 +76,9 @@ call), never the JSON envelope, a tool call or a `<think>` block
 The REPL and `trent run --format text` print each line of the answer as soon as the model finishes it, and
 the transcript is byte for byte the one an unstreamed turn leaves; `--format stream-json` carries the frames.
 On the gateway, a solo turn keeps the chat's typing indicator on (every 4 s on Telegram, Discord, Signal and
-WhatsApp) until the reply goes out, for a handler given its adapters' typing action. Not wired yet: the
-runtime hands the runner a gateway with `complete` only (`apps/cli/src/runtime/runner-for-mode.ts`), and
-`trent gateway start` does not yet pass the typing action, so both stay off until those two call sites do.
+WhatsApp) until the reply goes out, for a handler given its adapters' typing action. The runtime hands the runner a streaming gateway, and `trent gateway start` and the service
+daemon pass the typing action (`apps/cli/src/runtime/runner-for-mode.cf.test.ts`,
+`apps/cli/src/commands/__tests__/gateway-start.test.ts`); the REPL shows the text a completed line at a time.
 
 ## Held calls, by surface
 
@@ -196,6 +196,19 @@ A solo run writes the audit rows a fleet run writes, through the same call (the 
 `run_failed` or `run_cancelled`. Where they land is the app store's choice, exactly as for the fleet:
 the app's database in connected mode, its in-process store in standalone mode.
 
+## Cost: the fleet against solo, measured
+
+Every figure is from a logged live run on this machine; the ledger charges whole cents per run, rounded up, so
+"charged" and "list" differ on small runs (the bench reports list micro-cents for that reason, [bench.md](bench.md)).
+
+| Model | Fleet (nine seats) | Solo |
+|---|---|---|
+| `gemini-3.5-flash-lite`, one small objective | 0.90 / 0.89 / 1.29 cents at list per run over three runs, charged 2 cents each (`docs/sessions/2026-09-25-p2-8-spend-truth.md`); the seats proof before the price fix used 36 provider calls in 27.9 s (`docs/sessions/2026-09-19-shippable.md`) | 0.28 cents at list for a three-turn session with a real tool call every turn, charged 3 cents (one per turn); 6,939 tokens in, 293 out; first token in 0.5 to 1.0 s (`docs/sessions/2026-09-26-c11-solo-live.md`) |
+| `qwen3.5:9b` on this Mac (Ollama) | 0 of 2 steps in 600 s, the job timed out; 0 cents (`docs/sessions/2026-09-26-l0-3-setup.md`) | 3 of 3 turns, a completed tool call each; 33 to 40 s to a turn's first token under load, 3.6 to 6 s after a tool result; 0 cents; solo-format smoke 4 of 5 (`docs/sessions/2026-09-26-c11-solo-live.md`) |
+
+Read it as: on a hosted model the fleet and solo cost the same order (about a cent), and solo's per-turn rounding
+is what makes its charged figure larger than its list price; on the 9B only solo finishes.
+
 ## Limits
 
 - The live proof is one three-turn session on `qwen3.5:9b` and one on `gemini-3.5-flash-lite`
@@ -205,9 +218,5 @@ the app's database in connected mode, its in-process store in standalone mode.
 - A delegated fleet child is not metered against its parent's per-run cap (it is its own run on the
   ledger); its cents are added to the parent's turn as it reports them.
 - Interrupted and failed turns carry no marker in the transcript yet (council A9).
-- The memory section of the prompt still uses the fleet's wording ("shared by every seat", "who the founder is").
-- Approving a held replace or remove does not apply it yet: the approved write is refused and the row stays
-  approved. Say the fact again in a conversation that read nothing untrusted.
-- A gateway thread's platform is passed with each run, but the platform hint ("You are talking over Telegram;
-  keep replies short, no Markdown tables") is not yet in the prompt.
-
+- A parked run continued after a restart (`trent solo -c` then `/resume`) opens its conversation without
+  the gateway platform, so that turn carries no platform hint.

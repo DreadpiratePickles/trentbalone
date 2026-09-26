@@ -190,15 +190,19 @@ function rewriteInlineCalls(text: string, names: readonly string[]): string {
 const FOUNDER = /(?<![\w"'])([Ff])ounder(?![\w"])/g;
 
 /** [C15] An adapter's own solo text when it offers one (`memory`: replace and remove), else its instructions. */
-function soloTextOf(adapter: TrentToolAdapter): string {
+export function soloTextOf(adapter: TrentToolAdapter): string { // [CF] exported: the native tools read the same text (`native-tools.ts`)
   const perMode = (adapter as { instructionsFor?: (mode: "solo") => string }).instructionsFor;
   return typeof perMode === "function" ? perMode.call(adapter, "solo") : adapter.instructions;
 }
 
+/** [CF] The fleet's word for the human, as solo says it: "person" for "founder" outside quotes (the disclosure, the native tools). */
+export function soloWording(text: string): string {
+  return text.replace(FOUNDER, (_match, initial: string) => (initial === "F" ? "Person" : "person"));
+}
+
 /** [S1.1] C1: an adapter's instructions in the one call format: no `action =` line, no `toolCall.*`, examples as bodies. */
 export function soloInstructions(adapter: TrentToolAdapter): string {
-  const text = soloTextOf(adapter) // [C15] the adapter's solo text, and "person" for "founder"
-    .replace(FOUNDER, (_match, initial: string) => (initial === "F" ? "Person" : "person"))
+  const text = soloWording(soloTextOf(adapter)) // [C15] the adapter's solo text, and "person" for "founder"; [CF] one helper
     .replace(ACTION_LINE_WITH_KEYS, "  arguments (keys of the JSON object):")
     .replace(ACTION_LINE, "")
     .replace(TOOLCALL_NAME, "")
@@ -213,21 +217,17 @@ export function renderToolDisclosure(adapters: readonly TrentToolAdapter[]): str
   return `## Tools\n\n${sections.join(SEPARATOR)}`;
 }
 
-/** [S1.1] C1: the constrained-output envelope for the solo turn, tool names as an enum (local-models G2, G3). */
+/**
+ * [S1.1] C1: the constrained-output envelope for the solo turn, tool names as an enum (local-models G2, G3).
+ * [CF] The one source of the envelope (`turn-settings.ts` `soloEnvelopeFormat` returns it): an `anyOf` of two
+ * complete objects, a call list or an answer, each with its one property required and nothing else. A top-level
+ * `oneOf` of `required`-only branches is not enforced by llama.cpp's grammar (Ollama), C11 live run 1.
+ */
 export function soloResponseFormat(adapters: readonly TrentToolAdapter[]): SoloResponseFormat {
   const names = [...new Set(adapters.flatMap(toolNamesOf))];
   const call = { type: "object", properties: { name: { type: "string", enum: names }, arguments: { type: "object" } }, required: ["name", "arguments"] };
-  return {
-    type: "json_schema",
-    json_schema: {
-      name: "solo_turn",
-      schema: {
-        type: "object",
-        properties: { tool_calls: { type: "array", items: call, minItems: 1 }, answer: { type: "string" } },
-        oneOf: [{ required: ["tool_calls"] }, { required: ["answer"] }],
-      },
-    },
-  };
+  const only = (key: string, schema: Record<string, unknown>) => ({ type: "object", properties: { [key]: schema }, required: [key], additionalProperties: false }); // [CF]
+  return { type: "json_schema", json_schema: { name: "solo_turn", schema: { anyOf: [only("tool_calls", { type: "array", items: call, minItems: 1 }), only("answer", { type: "string" })] } } }; // [CF]
 }
 
 export interface SystemPromptInput {

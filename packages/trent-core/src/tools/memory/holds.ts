@@ -16,6 +16,9 @@
 import path from "node:path";
 import crypto from "node:crypto";
 import { FileGatewayStore, type ApprovalRow } from "../../gateway/store/GatewayStore.js";
+import { bindSessionTaint, createSessionTaint, unbindSessionTaint } from "../../governance/provenance.js"; // [CF] a solo row replays as the owner
+import { runWithToolCallContext } from "../../governance/tool-call-context.js"; // [CF]
+import { SOLO_SEAT } from "../../solo/types.js"; // [CF] the seat a solo hold names (`solo/memory-gate.ts`)
 import type { Provenance, ToolCallRecord } from "../types.js";
 import type { MemoryAdapter } from "./index.js";
 
@@ -158,12 +161,29 @@ function decide(profileDir: string, id: string, decision: "approved" | "denied",
   });
 }
 
+/**
+ * [CF] C15.1: a solo row replays as its conversation's owner, the one writer that may replace and remove (the
+ * memory adapter's `writerOfCall` reads a bound conversation). It runs inside a tool-call context of its OWN,
+ * `approval_<row id>`, bound to a fresh taint for the replay and unbound after it: never the row's `runId`,
+ * whose binding may belong to a conversation still live in this process.
+ */
+async function replayAsSoloOwner<T>(rowId: string, replay: () => Promise<T>): Promise<T> {
+  const runId = `approval_${rowId}`;
+  bindSessionTaint(runId, createSessionTaint());
+  try {
+    return await runWithToolCallContext({ runId, stepId: `${runId}-${SOLO_SEAT}` }, replay);
+  } finally {
+    unbindSessionTaint(runId);
+  }
+}
+
 /** Applies a held write: the row is decided first, so a crash mid-write cannot replay the entry. */
 export async function approveHeldMemoryWrite(input: ApproveHeldWriteInput): Promise<ApproveHeldWriteResult> {
   const decided = decide(input.profileDir, input.id, "approved", input.decidedBy ?? "human");
   if ("ok" in decided) return decided;
   const action = heldWriteAction(decided.details.action, decided.details.sources);
-  const result = await input.memory.execute(action, {});
+  const replay = () => input.memory.execute(action, {}); // [CF]
+  const result = decided.agentId === SOLO_SEAT ? await replayAsSoloOwner(decided.id, replay) : await replay(); // [CF] a solo row as the owner
   return { ok: true, record: { ...result, provenance: "untrusted" }, provenance: "untrusted", row: decided };
 }
 

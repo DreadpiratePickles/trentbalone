@@ -29,6 +29,7 @@ import { currentBoundApprovals } from "@trent/core/governance/bound-approvals.js
 import { PolicyDispatcher } from "@trent/core/governance/policy-dispatch.js";
 import type { PolicyRule } from "@trent/core/governance/policy-rules.js";
 import { createModelGateway } from "@trent/core/model-gateway/index.js";
+import type { ModelGateway } from "@trent/core/model-gateway/types.js"; // [CF] G
 import { readContextWindow } from "@trent/core/model-gateway/local-probe.js";
 import { localModelPolicy } from "@trent/core/model-gateway/local-runtime.js";
 import { activeProviderAlias, aliasBaseUrl, isLocalAlias } from "@trent/core/model-gateway/providers.js";
@@ -82,6 +83,8 @@ export interface ModeRunInput {
   readonly conversation?: string;
   /** Solo: what a held call does in this conversation, when it opens (`hold-policy.ts`). */
   readonly holds?: SoloHoldPolicy;
+  /** [CF] C15.1 Solo: a gateway thread's platform (`InboundMessage.platform`), for the prompt's platform hint. */
+  readonly platform?: string; // [CF]
 }
 
 /** The runner port. `approve`/`reject`/`answer` make it the REPL's and the gateway's approval target. */
@@ -114,6 +117,8 @@ export interface SoloSeams {
   readonly audit?: SoloAuditWriter;
   /** The model's window, instead of asking the local runtime (`soloWindowTokens`). */
   readonly windowTokens?: number;
+  /** [CF] G: the model gateway the lazy solo gateway builds on first use, instead of `createModelGateway()` (tests: a fake). */
+  readonly modelGateway?: () => Promise<ModelGateway>; // [CF]
 }
 
 /** What `createHeadlessRuntime` adds to its deps for the port. */
@@ -132,6 +137,7 @@ export interface ModeRunOptions {
   readonly session?: string;
   readonly conversation?: string;
   readonly holds?: SoloHoldPolicy;
+  readonly platform?: string; // [CF] C15.1 the gateway thread's platform
 }
 
 /** What the headless runtime exposes beside `orchestrator`. */
@@ -224,9 +230,15 @@ export interface RunnerParts {
 }
 
 /** The gateway built on the first solo call: after the orchestrator has written the model env it reads. */
-function lazyGateway(): SoloGateway {
-  let gateway: ReturnType<typeof createModelGateway> | undefined;
-  return { complete: async (request) => (await (gateway ??= createModelGateway())).complete(request) };
+function lazyGateway(create: () => Promise<ModelGateway> = () => createModelGateway()): SoloGateway { // [CF] G the factory is a seam
+  let gateway: Promise<ModelGateway> | undefined; // [CF]
+  return {
+    complete: async (request) => (await (gateway ??= create())).complete(request), // [CF]
+    // [CF] G: the token frames, so the solo turn shows the answer while the model writes it (C13, `turn.ts` `callModel`).
+    async *stream(request) {
+      yield* (await (gateway ??= create())).stream(request);
+    },
+  };
 }
 
 const positive = (value: number | undefined): number | undefined => (typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined);
@@ -270,7 +282,7 @@ function soloRunner(parts: RunnerParts, windowTokens: number | undefined, seeds?
   const { config, companyId, profileDir } = parts;
   const maxToolResultChars = soloResultCap(config);
   const sessions = new SessionManager(parts.configManager);
-  const gateway = parts.solo?.gateway ?? lazyGateway();
+  const gateway = parts.solo?.gateway ?? lazyGateway(parts.solo?.modelGateway); // [CF] G
   const memory = soloMemoryFromFleetHook({ hook: parts.fleetMemory, companyId, profileDir });
   const audit = createSoloAuditSink({ companyId, ...(parts.solo?.audit === undefined ? {} : { write: parts.solo.audit }), ...(parts.log === undefined ? {} : { onError: parts.log }) });
   const seeding = (adapters: TrentToolAdapter[]): TrentToolAdapter[] => (parts.policy === undefined || seeds === undefined ? adapters : seededOnFirstCall(adapters, parts.policy, seeds));
@@ -322,6 +334,8 @@ function soloRunner(parts: RunnerParts, windowTokens: number | undefined, seeds?
       skills, // [S3] item 3
       delegation, // [S3] item 4
       compaction: settings.compaction, // [S3] item 1
+      ...(conversation.platform === undefined ? {} : { platform: conversation.platform }), // [CF] C15.1 the prompt's platform hint
+      provider: config.provider, // [CF] C14.1 anthropic is offered the tools natively
     });
   }, parts.holds ?? "deny");
   const router = createSoloRouter({
@@ -347,6 +361,7 @@ function soloRunner(parts: RunnerParts, windowTokens: number | undefined, seeds?
         ...(input.conversation === undefined ? {} : { conversation: input.conversation }),
         ...(input.holds === undefined ? {} : { holds: input.holds }),
         ...(input.surface === undefined ? {} : { surface: input.surface }),
+        ...(input.platform === undefined ? {} : { platform: input.platform }), // [CF] C15.1
       }),
     approve: (runId, stepId) => router.approve(runId, stepId),
     reject: (runId, stepId) => router.reject(runId, stepId),

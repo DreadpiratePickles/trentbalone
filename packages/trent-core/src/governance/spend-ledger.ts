@@ -51,6 +51,8 @@ export interface SpendRow {
    * before the field existed and a row with no cache hits read the same.
    */
   readonly cachedInputTokens?: number;
+  /** [CF] C14.1 The part of the prompt WRITTEN to the provider's cache (inside `tokens`, priced at the write rate in `cents`). Written only when there were some. */
+  readonly cacheWriteInputTokens?: number; // [CF]
   /**
    * [P2-8] The token split of a model row, when the charge was metered per call. `tokens` is their
    * sum, and `cents` is those tokens at the answering model's list price (`model-gateway/pricing.ts`),
@@ -136,18 +138,20 @@ export class SpendLedger implements SpendLedgerReader {
     if (!Number.isInteger(charge.cents)) {
       throw new TypeError(`spend must be integer cents, received ${charge.cents}`);
     }
-    const { cachedInputTokens: rawCached, inputTokens: rawInput, outputTokens: rawOutput, estimated, unpriced, ...rest } = charge;
-    for (const [name, count] of [["cached input", rawCached], ["input", rawInput], ["output", rawOutput]] as const) {
+    const { cachedInputTokens: rawCached, cacheWriteInputTokens: rawWritten, inputTokens: rawInput, outputTokens: rawOutput, estimated, unpriced, ...rest } = charge; // [CF] rawWritten
+    for (const [name, count] of [["cached input", rawCached], ["cache write", rawWritten], ["input", rawInput], ["output", rawOutput]] as const) { // [CF] cache write
       if (count !== undefined && !(Number.isFinite(count) && count >= 0)) {
         throw new TypeError(`${name} tokens must be a non-negative count, received ${count}`);
       }
     }
     const cached = Math.trunc(rawCached ?? 0);
+    const written = Math.trunc(rawWritten ?? 0); // [CF]
     const row: SpendRow = {
       ...rest,
       at: charge.at ?? this.#now().toISOString(),
       tokens: Math.trunc(charge.tokens),
       ...(cached > 0 ? { cachedInputTokens: cached } : {}),
+      ...(written > 0 ? { cacheWriteInputTokens: written } : {}), // [CF] C14.1
       // [P2-8] The split is written whenever it is known, zero included: 0 output tokens is a fact.
       ...(rawInput === undefined ? {} : { inputTokens: Math.trunc(rawInput) }),
       ...(rawOutput === undefined ? {} : { outputTokens: Math.trunc(rawOutput) }),
