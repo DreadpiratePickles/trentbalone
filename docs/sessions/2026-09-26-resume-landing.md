@@ -264,3 +264,178 @@ duplicate gate key dropped). After C3: C1-C10 all landed; C11 (live proof), C14,
 ### 13:40Z LANDED 5b2ff11 fix(governance): auto-review never approves a send or a payment (C3); isolate 93 files / 1589
 passed / 1 skipped, rc=0; pushed. C1..C10 are ALL landed. Landing next: the C5 remainder (GEMINI_API_KEY in the live
 job, pinned) and the council record (02_plan/output/hermes-council-2026-09-26/, the verdict) with this log.
+### 13:55Z LANDED 7f58c25 docs(council,sessions) and e0834e6 ci(live): GEMINI_API_KEY declared (C5 remainder; isolate 2 files
+/ 8 tests, rc=0); pushed. Launched C6 (docs-truth over every page + the proven-wrong rows). Running: C6, C11, C14,
+C15. Bobby's C5 step: add the GEMINI_API_KEY repository secret, then `gh workflow run` the CI with the live input.
+### 14:15Z C15 FINISHED (agent): solo `owner` writer may add/replace/remove in writable blocks (fleet stays add-only),
+decided per call by the solo conversation binding; tool description per mode; solo prompt rewritten (rules: tool
+over guess, never claim a call ran, no fabrication, batch calls, when to save, load a skill first; platform hint
+slot) and measured 11,415 chars / ~2,854 tokens, "seat" 0 / "founder" 0 (was 4 / 8); handler passes the platform.
+Red: replace Leeds->York blocked (4/6), prompt counts (5/6), handler options (1); green memory 50 / solo 129 /
+gateway 12. Gaps for a C15.1 follow-up after C11 lands: the platform field is dropped in runner-for-mode.ts ->
+router -> runner (one optional field per hop); approving a held replace/remove replays as a fleet seat and is
+refused (fix in tools/memory/holds.ts approveHeldMemoryWrite: replay under approval_<row id> bound with the solo
+taint); the memory section's fleet wording lives in fleet-memory/orchestrator-hook.ts:319 and blocks.ts.
+docs/solo.md: three edits; C15 staged (9 paths; solo.md as a variant without C11's hunk). Isolate running.
+### 14:35Z LANDED 2d95444 feat(solo,memory): correctable memory + solo prompt (C15); isolate 101 files / 753 tests, rc=0; pushed.
+Launched C13 (typing every 4 s on the gateway; token streaming with an incremental answer-field parser). Running: C6,
+C11, C13, C14. Queued: C12 (after C11 + C13: turn.ts, runner-for-mode.ts), C15.1 (after C11), C16 (after C6: README).
+CI 14:45Z: e0834e6 red on ONE file again, but a different reason: the attach suite now RUNS on ubuntu (Chrome starts
+with Playwright's switches; 511/512 files, 4883 tests) and fails in afterAll: `ENOTEMPTY rmdir
+/tmp/trent-attach-chrome-*/Default` (Chrome still writing during the recursive rm). Harness agent resumed: rm after
+the exit promise with retries, tolerant of a leftover dir. 7f58c25 green; 2d95444 running. Load 52 / 99 / 120.
+### 15:00Z C14 FINISHED (agent): model-gateway/anthropic-client.ts (Messages API streaming, native tool schemas, four
+cache_control breakpoints, cache read/write usage, abort closes the socket, TRENT_ANTHROPIC_TIMEOUT_MS, effort as
+output_config.effort or a thinking budget where documented, temperature only where accepted, in-stream errors
+classified by status); `anthropic` routed through it; pricing: cache write 1.25x / read 0.1x (0.05 Opus 5.5, 0.025
+Fable/Mythos 5.1) and a real error fixed (Opus 4.5-5 billed at 3x list); solo/parse.ts accepts native tool_use.
+All against a fake server on 127.0.0.1 with a guard fetch. Red per step (12 rows), green model-gateway 249 / solo
+133. Open for C14.1: solo/runner.ts and turn.ts do not yet put `tools` on the request nor hand toolCalls to the
+parser (C13 owns turn.ts now); the ledger bills cache writes at the input rate (RunModelCall lacks the write
+count). Docs: configuration.md providers + retry sentences applied (variant without C6's hunks); the pricing
+paragraph and the docs/solo.md lines deferred to C14.1 (solo.md is C11's until it lands). C14 staged (11 paths).
+### 15:20Z LANDED 6202bc4 feat(model-gateway): Anthropic native client (C14); isolate 90 files / 833 tests, rc=0; pushed.
+### 15:35Z C6 FINISHED (agent): docs-truth-pages.test.ts over all 31 docs pages + README/AGENTS/CONTRIBUTING (643 commands,
+218 flags, dotted config keys, backticked paths; the 11 "Not yet implemented" sections listed by name); red 3
+(`trent checkpoints`, `trent improve --live`, a desktop script path); every proven-wrong row corrected with evidence
+(iron-proxy row -> host-bound; adapters: 12 tested against fakes, 1 (LINE) end to end through gateway start;
+"(no client)" x2; test counts from CI run 36226144639; reranker not wired; audit export needs Bun; 31 pages; Hermes
+216 plugins); each of 17 README comparison rows names a runnable test (a test fails if a row has none); AGENTS.md
+gate 528 files / 2955 tests (2829 passed / 125 skipped) and defects item 10 (B1/B2/B3/pairing fixed, re-verified);
+fleet.ts help names the nine seats; improve.ts:6 claim corrected. Left: vitest.config.ts:25-26 and ci.yml:118-122
+still say 505/2743 (mine, later); CONTRIBUTING prisma/Bun steps (C5). C6 staged (12 paths; configuration.md as a
+variant without C11's hunk). Attach cleanup fix isolating; C6 next.
+### 15:50Z LANDED 99b123e test(browser): attach harness cleanup (isolate 6 files / 50 tests, rc=0); pushed. C6 isolating.
+Launched C16 (bench: smb-20 suite graded on fake-server end state; solo/fleet/Hermes runners; report with pass@1,
+pass^3, TTFT, wall, cents; fakes only here, live runs later one at a time). Running: C11, C13, C16.
+### 16:15Z LANDED 5434b9d docs(truth): docs-truth over every page (C6); isolate 59 files / 1269 passed / 1 skipped, rc=0; pushed.
+C11 FINISHED (agent; log docs/sessions/2026-09-26-c11-solo-live.md): solo sends response_format under a local
+alias (solo/turn-settings.ts; the seats' constrainedOutputApplies rule), max_tool_calls validated 1-500 and passed
+through (children too); two defects found LIVE and fixed: the envelope's top-level oneOf is not enforced by Ollama
+(run 1: tool name outside the enum, bare string/number) -> anyOf of two complete objects; with the schema enforced
+the model looped read_file 26x because the prompt teaches <tool_call> blocks -> a "Reply format" paragraph appended
+at request time only when a format is sent (stored conversation untouched). Doctor's Local Model check runs the
+five cases in the solo format too. LIVE: qwen3.5:9b 3 turns, a completed tool call each, TTFT 33.2/36.9/39.5 s
+first call and 3.8/3.6/6.0 s after tool results, 7,514 in / 250 out, load 42->168; gemini-3.5-flash-lite 3 turns,
+TTFT 0.97/0.53/0.79 s, 6,939 / 293, 3 cents charged (list 0.28c), no 429. Solo-format smoke on the 9B: 4/5
+(escaping: triple quotes; unconstrained seat format 1/5 in the same run). DECISION (chair §7 item 4, score >= 4/5):
+solo becomes the default for NEW profiles; the fleet stays available (C11.2: setup writes agent.mode solo for new
+profiles, a `--team` override beside `--solo`, README rows for solo and local; existing profiles unchanged).
+Open from C11: soloResponseFormat in prompt.ts still oneOf; repairPrompt teaches <tool_call> when constrained; the
+misuse stop misses a repeated successful call; stored turns lack their context block (TTFT suspect). C11 staged
+(20 paths; turn.ts / configuration.md / solo.md as variants) and isolating.
+### 16:40Z LANDED 8f3c70b feat(solo): constrained + proven live (C11); isolate 112 files / 727 tests, rc=0; pushed. C1-C11 landed.
+Launched C11.2 (solo default for NEW profiles, `--team`/`--fleet` override, README rows for solo and local) and CF
+(council follow-ups: platform hint plumbing, held solo replace/remove replay, memory-section wording per mode,
+soloResponseFormat anyOf + misuse loop stop, `tools` on anthropic requests, ledger cache-write pricing; turn.ts
+lines recorded for after C13). Running: C13, C16, C11.2, CF. Queued: C12 (after C13).
+CI 16:55Z: 99b123e red on the attach suite a third way: Chrome alive after 30 s, no DevToolsActivePort (only dbus
+noise), while 6202bc4 / 2d95444 / 5434b9d passed the same suite -> a slow start under runner load. Decision:
+the attach file joins the EXCLUSIVE project (a real Chrome is the one legitimate reason it exists), the port wait
+becomes 60 s, and a slow start SKIPS with Chrome's output ("a skip is NOT a pass") instead of failing. Harness
+agent resumed (third round). Greens so far: 5434b9d, 6202bc4, 2d95444, 7f58c25, 730fe21, 72ab0ea, 5f33024, 360d223.
+### 17:20Z harness round 3 (attach file in the EXCLUSIVE project, 60 s wait, slow start skips with output; Playwright's list
+has no --remote-debugging-pipe) isolating. C13 FINISHED (agent): solo/stream-parse.ts emits only the answer text
+(envelope, thought, calls, <think> withheld), turn.ts callModel streams when the gateway has stream(), step_delta
+frame, REPL prints per completed line (byte-identical transcript), TUI fold, typing loop every 4 s (real Telegram
+adapter vs fake Bot API: no gap over 5 s, none after the reply). Red: no deltas ("expected 0 > 40"), line 3945 ms;
+green solo 142, repl+gateway+tui 267. NOT WIRED yet (outside its list): runner-for-mode lazyGateway has no stream;
+servers.ts/service-daemon.ts pass no typing; REPL has no partial write (engine.ts 499); TUI runs the fleet only.
+Items G and H added to the CF agent's scope. C13 staged (16 paths).
+### 17:40Z LANDED d711691 test(browser,vitest): attach suite exclusive + slow start skips; isolate 8 files / 70 tests, rc=0;
+pushed. C13 isolating (16 paths; solo.md as a variant with only the Streaming section). Running: C16, C11.2, CF.
+Queued: C12 (after C13 and CF land: turn.ts + runner-for-mode.ts).
+### 18:00Z LANDED b1fcef5 feat(solo,repl,gateway): streaming + typing (C13); isolate 113 files / 740 tests, rc=0; pushed.
+### 18:20Z C11.2 FINISHED (agent): quick/full/blank-slate setup write agent.mode solo for a NEW profile (full setup asks;
+`setup --team|--fleet` writes fleet); DEFAULT_AGENT_MODE stays fleet so existing profiles keep their mode; `--team`
+and `--fleet` global options beside `--solo` (`--solo` with either: exit 2 everywhere); bare `trent --dry-run` prints
+{launch, mode, firstRun} and opens nothing; a pinned cron child gets `--team`; first-run screen and --help name both
+modes, no "164"; README lead + Agent shape row + Solo mode row + Local model row with tests; docs/solo.md "Turning it
+on", configuration.md, getting-started §5. Red 8+12+1 (right reasons), green setup 5 files / config 3 / commands 11
+(registry 777, both docs-truth) / runtime 16; real binary: `--team --json --dry-run` mode fleet, `--solo --team` 2.
+Staged (21 paths) with marker variants for registry.ts, index.ts (a C16 import shared a hunk: dropped by hand) and
+runner-for-mode.ts (CF's 14 marked lines excluded); isolating. Left: ui/banner.ts:235 "164 specialists" (no screen
+renders it); a profile written by `fleet install` before its first setup counts as existing (stays fleet).
+### 18:45Z LANDED cf1ef78 feat(setup,cli): solo default for new profiles, --team (C11.2); isolate 130 files / 1759 tests, rc=0; pushed.
+### 19:05Z C16 FINISHED (agent): packages/trent-core/src/bench/** (fake Stripe/Calendar/Square/Twilio + Bluesky + workspace
+world reset per attempt; smb-20 suite: 4 tasks x 5 classes at one spa; grader = the app's evals harness with
+state_check + forbidden tool_call, pass only at score 1; scripted owner approving only the task's tools at the tool
+seam; one tool build for all harnesses; runners for solo, fleet and headless Hermes (`hermes chat -q --oneshot
+--format stream-json -t mcp-trent` with the bench's tools served over the MCP http host); cost in whole cents + list
+micro-cents; report with pass@1, pass^k, TTFT, wall, cents/success, Hermes version, targets). Red-first per module
+(two modules by mutation). registry 792 / 158 commands; README -> 37/158; docs/bench.md (+ docs/README.md index).
+No live bench yet: first smoke command recorded in the C16 log (fresh `bench` profile, Gemini key, daily cap >= 500c).
+C16 staged (41 paths) and isolating. CF FINISHED items A-H: platform hint end to end; held solo replace replays under
+approval_<row id>; solo memory wording ("seat"/"founder" 0/0, fleet byte-identical); soloResponseFormat anyOf;
+repeat-stop module (5th identical successful call); native `tools` on anthropic requests (16 tools); ledger prices
+cache writes 1.25x; lazyGateway forwards stream (step_delta before step_end); gateway start/daemon pass typing. CF
+resumed to apply its three turn.ts lines (parser toolCalls: WITHOUT it anthropic solo runs fail as empty; charge
+cacheWrite; repeat-stop wiring) now that C13 landed. env.test.ts guard flake ("expected 1 > 1" on 8f3c70b, green
+before and after) -> agent making the guard deterministic. CI: b1fcef5, d711691 green.
+### 19:25Z LANDED 532b4c3 feat(bench): smb-20 bench (C16); isolate 69 files / 1345 passed / 1 skipped, rc=0; pushed.
+### 19:50Z Nightly scheduled task revised (Bobby's 02:11 routine "trent-daily-hermes-parity", per council §4 item 5 and the
+L2 "nightly local smoke" item): progress summary nightly; Hermes research and the five proposals on the 1st of the
+month only; the local smoke (doctor Local Model check on a scratch profile: seat and solo-format scores, TTFT, load)
+appended to 04_verification/output/nightly-local-smoke.md when no vitest runs and Ollama is idle; clean-HEAD check
+when load < 60 (the old "< 8" never held on this machine); commit + push the nightly log. Prompt at
+~/.claude/scheduled-tasks/trent-daily-hermes-parity/SKILL.md. docs/solo.md: "Cost: the fleet against solo,
+measured" (flash-lite: fleet 0.89-1.29c list / 2c charged per run vs solo 0.28c list / 3c charged for 3 turns; 9B:
+fleet 0 of 2 steps in 600 s vs solo 3 of 3), three Limits bullets closed by CF removed, the Streaming "not wired"
+sentence replaced; docs-truth-pages 11/11. CF fully finished (turn.ts: parser toolCalls, charge cacheWrite, repeat
+stop; spend-ledger row carries cacheWriteInputTokens). CF staged (32 paths incl. solo.md) and isolating.
+### 20:15Z LANDED f26e90f feat(solo,memory,gateway): council follow-ups (CF); isolate 252 files / 2868 passed / 1 skipped, rc=0; pushed.
+Launched C12 (context_overflow class; one compaction + one retry; a hosted context window per model; the todo list
+keyed by the solo session; a wrap-up note at 80 percent of max_tool_calls). Running: C12, env-guard fix. Then: full
+clean-HEAD suite, CI streak check, memory note, final report.
+### 20:40Z env.test.ts guard fixed (agent; log docs/sessions/2026-09-26-env-guard-flake.md): CI's failure was not a late
+second run: the fallback re-runs every enqueued job beside the drain, so jobs run MORE THAN ONCE (19 runs of 13 jobs,
+plan always twice) while `run_done` counts only consolidate, which doubled only sometimes. The guard now waits for the
+fallback runs to finish (45 s cap) and asserts a job ran twice, more runs than jobs, a billed phase started twice; the
+contract test asserts every job exactly once. 5 runs 0 0 0 0 0; under load exit 0. AGENTS.md:30 and the env.ts
+docstring reworded ("jobs run more than once"); the same "twice" wording remains in the error message, doctor.md,
+configuration.md, getting-started.md, troubleshooting.md and the env-defaults test (a docs-truth pass item, later).
+Isolating (4 paths).
+### 21:00Z LANDED ae843c8 test(runtime): env-contract guard measures job re-runs (isolate 23 files / 166 tests, rc=0); pushed.
+### 21:45Z FULL CLEAN-HEAD SUITE on ae843c8 (isolate, no files copied; load 8 at start): tsc 0, core build 0, repo-scan 0,
+vitest 543 files / 5103 passed / 21 skipped (the live-gated suites), ISOLATED rc=0. CI: five consecutive greens
+d711691, b1fcef5, cf1ef78, 532b4c3, f26e90f; ae843c8 running. Waiting on C12 (the last item); then its landing, a
+final suite on that HEAD if time allows, the log tail and the report.
+### 22:05Z C12 FINISHED (agent; log docs/sessions/2026-09-26-c12-long-sessions.md): retry.ts `context_overflow` class
+(seven providers' wording from existing fixtures, never blindly retried); solo/overflow.ts: one mid-turn compaction
+keeping at most half of the prior conversation (the provider's refusal beats our estimate) then one retry, a second
+refusal ends the run naming the window; hosted windows from model_overrides or pricing.ts (1,000,000 flash-lite,
+200,000 Claude), threshold half the window; the todo list keyed by the conversation (survives compaction and restart;
+fleet per run unchanged); wrap-up note once at 80 percent of max_tool_calls, appended to the tool results (system
+messages merge into Claude's cached block). Red 8+3+2+1+1+2 and the 60-turn acceptance (turns 20 and 41 failed
+until the half-keep rule); green solo 168 / model-gateway 258 / todo 6 / runtime 106 / repl 232 / wider 351.
+docs/solo.md "Long sessions" + Limits. Staged (20 paths) and isolating: the LAST plan item.
+### 22:25Z LANDED 8656320 feat(solo): sessions that last (C12); isolate 137 files / 1117 tests, rc=0; pushed. QUEUE EMPTY.
+
+## STATE AT CLOSE (2026-09-26 22:30Z; resume from here)
+HEAD 8656320 on feature/trent-fleet-v2 = origin; `git status --short` clean apart from notes/ (untracked scratch from
+2026-09-13). 31 commits since the handoff 79fa451, each landed through scripts/dev/isolate.sh from frozen staged
+copies committed by explicit paths (index blobs), each with a red-first log under docs/sessions/2026-09-26-*.md.
+Landed: the five waves (S2+H3 d25b673, H5 de73c39, L1 3719191, P3 d364755, S3 df1ce0f); the CI truth fixes (flake
+root cause 723ef22, vitest exclusive eaeedbd, live switch 0d73850 + GEMINI_API_KEY e0834e6, attach harness 360d223 /
+99b123e / d711691, env guard ae843c8); the council record 7f58c25; the plan C1 9fee7d2, C2 0ee887c, C3 5b2ff11, C4
+62abfc0, C6 5434b9d, C7 730fe21, C8 5f33024, C9 da38413, C10 72ab0ea, C11 8f3c70b, C11.2 cf1ef78 (solo default for
+new profiles), C12 8656320, C13 b1fcef5, C14 6202bc4, C15 2d95444, C16 532b4c3, follow-ups f26e90f.
+Clean-HEAD full suite on ae843c8: 543 files / 5103 passed / 21 skipped, tsc 0, build 0, scan 0, rc=0 (C12 landed after
+it; its own isolate covered solo, model-gateway, todo, governance, memory, delegate, sessions, runtime, repl).
+CI: six consecutive greens d711691 .. ae843c8; 8656320 running.
+Live proofs recorded (C11 log): qwen3.5:9b solo 3/3 turns with a tool call each, TTFT 33-40 s under load, 0 cents;
+gemini-3.5-flash-lite solo 3/3, 3 cents; 9B solo-format smoke 4/5.
+Bobby's steps (his alone; release gate §6 of the verdict): default branch carries the code + LICENSE; tag v1.0.0;
+repo rename, topics, private vulnerability reporting; platform applications; the one-line gates in
+apps/web/lib/wiki-embeddings.ts and semantic-router.ts; add the GEMINI_API_KEY repository secret and dispatch one CI
+run with the live input (record the run id); the live pairing proof from his phone (`trent gateway pair <platform>
+<code> --admin`, then decide a card by reaction); a signed LINE or WhatsApp delivery through a real tunnel (cloudflared
+is not installed here); the first live bench (`trent --profile bench bench run smb-20 --model gemini-3.5-flash-lite
+--harness trent-solo,hermes --tasks book-square-facial --runs 1 --json`, prerequisites in the C16 log); Square/Twilio
+sandbox credentials for the phone demo. The nightly scheduled task now runs the local smoke and a monthly Hermes delta.
+Next-session hygiene (not started): strip the wave markers ([S2]..[CF], about 2k comment lines) now that everything is
+landed; the "every job executes twice" shorthand in runtime/env.ts's error message, doctor.md, configuration.md,
+getting-started.md, troubleshooting.md and the env-defaults test (measured: more than once); ui/banner.ts:235 "164
+specialists"; vitest.config.ts:25-26 and ci.yml:118-122 stale 505/2743 comments; CONTRIBUTING.md prisma/Bun steps;
+C12's pre-send window check could route into the same compaction; the REPL streams per completed line (engine.ts at
+499 lines); the TUI runs the fleet only.
