@@ -26,8 +26,9 @@ trent budget status                    # the day's spend against the caps
 With a Gemini key, that run planned two steps, gave one to the content seat and one to the CEO, and
 finished in 15 seconds for 2 cents. Every cents figure is the answering model's list price, and the
 cost line the run prints is the ledger's own total. With no key the other three commands work the
-same, and the run is refused at every model call, costs $0.00 and exits 1.
-<!-- proof: install, show and budget status exit 0 on a keyless profile (output: "installed support, sales, finance, content", "skills booking-followup, invoice-draft, local-business-post, quote-estimate, review-response", "persona brain/system/persona-small-business.md (written, committed)"); the keyed run: 05_release/output/first-run-transcript-2026-09-25.txt ("$0.02 · 15035ms", ledger after `trent usage --json`: 2 cents, 5 rows, all at list price; captured after P2-8, docs/sessions/2026-09-25-p2-8-spend-truth.md); the keyless run: `trent run "Write a one-line tagline for a bakery" --no-color` exit 1, "$0.00" -->
+same, and the run is refused at every model call, costs $0.00 and exits 1. A run whose calls a
+provider refuses (a 429, say) exits 5.
+<!-- proof: install, show and budget status exit 0 on a keyless profile (output: "installed support, sales, finance, content", "skills booking-followup, invoice-draft, local-business-post, quote-estimate, review-response", "persona brain/system/persona-small-business.md (written, committed)"); the keyed run: 05_release/output/first-run-transcript-2026-09-25.txt ("$0.02 · 15035ms", ledger after `trent usage --json`: 2 cents, 5 rows, all at list price; captured after P2-8, docs/sessions/2026-09-25-p2-8-spend-truth.md); the keyless run: `trent run "Write a one-line tagline for a bakery" --no-color` exit 1, "$0.00" (re-run 2026-09-26 on a throwaway HOME: exit 1, and `--json` carries no `reason`, docs/sessions/2026-09-26-c6-docs-truth.md); exit 5 is `reason: model_calls_failed` (apps/cli/src/commands/groups/run.ts:170; apps/cli/src/commands/__tests__/run-verdict.test.ts, a provider 429) -->
 
 ## Install
 
@@ -169,20 +170,42 @@ feature set is measured against. Where the two differ:
 | Agent shape | Nine fixed role seats; a planner gives each step to one. 164 catalog specialists install profiles and skills the seats read; only the seats run | One agent that delegates to subagents (nested, parallel batches) |
 | Spend | Per-run and daily caps in integer cents on one ledger for every surface, each call at its model's list price; `trent run --max-cost-cents` stops a run with exit 6 | Usage and cost analytics, documented as a lower bound and off by default; turn and wall-clock budgets |
 | Side effects | Send, money-moving and customer-facing calls ask at every autonomy level; the approval is bound to the exact arguments | Approval modes smart, manual, off; YOLO skips prompts except a hardline blocklist |
-| Credential isolation | Egress proxy swaps an opaque token for the real key | The same design (iron-proxy) |
+| Credential isolation | Egress proxy swaps an opaque token for the real key, and a key reaches only the hosts its token was minted for | iron-proxy, which binds each key to its own hosts |
 | Checkpoints and rollback | Yes | Yes |
 | Self-improvement | Eval-gated drafts wait in quarantine; nothing goes live without `trent improve promote` | A background review writes memory and skills every few turns |
-| Audit trail | Hash-chained export with a detached Ed25519 signature | Not in our inventory |
-| Messaging | 12 adapters | 24+ platforms |
+| Audit trail | Hash-chained export with a detached Ed25519 signature; needs Bun | Not in our inventory |
+| Messaging | 12 adapters, each tested against a local fake of its platform; 1 (LINE) also end to end through `trent gateway start`; a new sender is admitted with `trent gateway pair` | 24+ platforms |
 | Runs after a reboot | `trent service install`: a launchd agent or systemd user unit that starts at login and restarts on exit; not yet tried through a real reboot | `hermes gateway install`: a systemd user or system unit, a launchd agent, or a Windows Scheduled Task |
 | Voice | Voice notes on Telegram, WhatsApp, Signal, Discord and Slack are transcribed on your machine after pairing; replies are text | Voice mode, local and hosted speech-to-text, ten text-to-speech backends, a wake word |
-| Plugins | Local plugin manifests; MCP servers | Curated, SHA-pinned plugin catalog (223 entries); 65 curated MCP presets |
-| Skills | One skill store with a pre-install scan and a curator; the three market packs ship 14 skills | 59 bundled and 149 optional skills |
+| Plugins | Local plugin manifests; MCP servers | Curated, SHA-pinned plugin catalog (216 entries in v0.21.3); 65 curated MCP presets |
+| Skills | One skill store with a pre-install scan and a curator; the three market packs ship 14 skills | 58 bundled and 150 optional skills |
 | Memory | A profile brain in files, versioned with git; imports md, txt, csv, pdf, docx, xlsx | Built-in memory plus external memory providers |
 | Desktop | Tauri app in the tree, not packaged | Electron app with macOS and Windows installers |
 | A2A | Server (0.3.0 and v1.0) and client: `a2a_list`, `a2a_discover`, `a2a_send`, `a2a_history`, every send behind the approval gate; Hermes discovers and calls it | Server and client |
-<!-- proof, Trent column: Install: release.yml, pages.yml, scripts/install.sh; no tag (`git ls-remote --tags` empty). Language: package.json, docs/getting-started.md section 1. Agent shape: `trent fleet list --json` (173); pack state lines ("the specialists install profiles and skills the seats can read and are not scheduled on their own"). Spend: `trent budget status`; `trent run --help` ("6 over --max-cost-cents"); list price: docs/sessions/2026-09-25-p2-8-spend-truth.md. Side effects: docs/security.md from line 494. Credential isolation: docs/security.md "Egress credential brokering" (line 13). Checkpoints: docs/checkpoints.md. Self-improvement: docs/improve.md. Audit trail: docs/security.md "Signed audit export" (line 129), `trent audit export|verify`. Messaging: packages/trent-core/src/gateway/platforms/ (discord, email, homeassistant, line, matrix, mattermost, ntfy, signal, slack, teams, telegram, whatsapp; registry.test.ts "registers exactly the twelve spec platforms"). Reboot: docs/service.md (RunAtLoad and KeepAlive; Restart=always, WantedBy=default.target), packages/trent-core/src/service/units.ts; the P2-D run wrote and linted the unit and ran the daemon in the foreground, and never loaded it into launchd (docs/sessions/2026-09-25-p2d-service.md). Voice: docs/gateway.md "Voice notes"; real transcript "Book me for Tuesday." in docs/sessions/2026-09-25-p2-3-voice-notes.md. Plugins: docs/mcp.md. Skills: docs/skills.md; `trent fleet packs` (5 + 4 + 5 skills). Memory: docs/brain.md; the doctor's Brain Import Extractors line. Desktop: docs/desktop.md; release.yml:298-307 (desktop job not wired). A2A: packages/trent-core/src/a2a/ (no client); docs/a2a.md.
-     proof, Hermes column: the inventory, lines 21-25 (install), 21 (Python 3.11), 308 and 334-337 (subagents), 317 and 89 (cost, budgets), 383 and 385 (approvals, YOLO), 204 (iron-proxy), 78 (checkpoints), 495 (background review), 96 (24+ platforms), 101 (service lifecycle), 91-94 (voice mode, speech-to-text, ten text-to-speech backends, wake word), 698 and 250 (plugin catalog 223, MCP presets 65, skills 59 and 149), 232 and 456 (memory providers), 406 (desktop), 143 (A2A in and out). "Not in our inventory" means the 913-line inventory has no such row, not that Hermes lacks it. -->
+<!-- proof, Trent column: Install: release.yml, pages.yml, scripts/install.sh; no tag (`git ls-remote --tags` empty). Language: package.json, docs/getting-started.md section 1. Agent shape: `trent fleet list --json` (173); pack state lines ("the specialists install profiles and skills the seats can read and are not scheduled on their own"). Spend: `trent budget status`; `trent run --help` ("6 over --max-cost-cents"); list price: docs/sessions/2026-09-25-p2-8-spend-truth.md. Side effects: docs/security.md from line 494. Credential isolation: docs/security.md "Egress credential brokering" (line 13, host binding at line 65); packages/trent-core/src/egress/EgressProxy.host-binding.test.ts (9fee7d2; `npx vitest run` exit 0, 6 passed, 2026-09-26: the provider host gets the key, another allowlisted host gets no credential). Checkpoints: docs/checkpoints.md. Self-improvement: docs/improve.md. Audit trail: docs/security.md "Signed audit export" (line 129), `trent audit export|verify`; export refuses without bun:sqlite (apps/cli/src/commands/groups/audit.ts:58-66; apps/cli/src/commands/__tests__/audit.test.ts "export refuses when the durable store cannot be opened"). Messaging: packages/trent-core/src/gateway/platforms/ (discord, email, homeassistant, line, matrix, mattermost, ntfy, signal, slack, teams, telegram, whatsapp; registry.test.ts "registers exactly the twelve spec platforms"); each adapter's `*.wire.test.ts` against a local fake (all 12 exit 0 on 2026-09-26). Counted end to end: of the four test files that drive `trent gateway start`, only apps/cli/src/commands/__tests__/gateway-webhooks.test.ts sends a message through an adapter (LINE: a signed POST over HTTP answers 200, a forged one 401); the others mock `startAllConfigured`. Pairing: apps/cli/src/commands/__tests__/gateway-pair.test.ts (730fe21), Telegram through the real GatewayManager. Reboot: docs/service.md (RunAtLoad and KeepAlive; Restart=always, WantedBy=default.target), packages/trent-core/src/service/units.ts; the P2-D run wrote and linted the unit and ran the daemon in the foreground, and never loaded it into launchd (docs/sessions/2026-09-25-p2d-service.md). Voice: docs/gateway.md "Voice notes"; real transcript "Book me for Tuesday." in docs/sessions/2026-09-25-p2-3-voice-notes.md. Plugins: docs/mcp.md. Skills: docs/skills.md; `trent fleet packs` (5 + 4 + 5 skills). Memory: docs/brain.md; the doctor's Brain Import Extractors line. Desktop: docs/desktop.md; release.yml:298-307 (desktop job not wired). A2A: packages/trent-core/src/a2a/ (the server) and packages/trent-core/src/tools/a2a/ (the client tools); docs/a2a.md.
+     proof, Hermes column: the inventory, lines 21-25 (install), 21 (Python 3.11), 308 and 334-337 (subagents), 317 and 89 (cost, budgets), 383 and 385 (approvals, YOLO), 204 (iron-proxy), 78 (checkpoints), 495 (background review), 96 (24+ platforms), 101 (service lifecycle), 91-94 (voice mode, speech-to-text, ten text-to-speech backends, wake word), 698 and 250 (MCP presets 65); the catalog and skill counts re-measured in the Hermes 0.21.3 checkout at 49eb7b5dba on 2026-09-26: `git ls-files plugin-catalog/*.yaml | wc -l` 216, `find skills -name SKILL.md` 58, `find optional-skills -name SKILL.md` 150, 232 and 456 (memory providers), 406 (desktop), 143 (A2A in and out). "Not in our inventory" means the 913-line inventory has no such row, not that Hermes lacks it. -->
+
+Each Trent cell above is checked by a test anyone can re-run from a clone with `npx vitest run <file>`
+(the desktop one with `npm test` in `apps/desktop`, the install one with `node --test`):
+
+- **Install**: `scripts/ci/pages-release-gate.test.mjs`
+- **Language**: `packages/trent-core/src/improve/store.test.ts` (the Node test run spawns Bun for the SQLite store), `apps/cli/src/commands/__tests__/store-durability.test.ts`
+- **Agent shape**: `packages/trent-core/src/fleet/seat-capabilities.test.ts`, `packages/trent-core/src/fleet/FleetManager.test.ts`
+- **Spend**: `apps/cli/src/commands/__tests__/run.test.ts`, `packages/trent-core/src/governance/spend-ledger.test.ts`
+- **Side effects**: `packages/trent-core/src/governance/bound-approvals.test.ts`, `packages/trent-core/src/governance/autonomy.test.ts`, `packages/trent-core/src/governance/auto-review-policy.test.ts`
+- **Credential isolation**: `packages/trent-core/src/egress/EgressProxy.host-binding.test.ts`
+- **Checkpoints and rollback**: `packages/trent-core/src/checkpoints/rollback.test.ts`
+- **Self-improvement**: `apps/cli/src/commands/__tests__/improve.test.ts`
+- **Audit trail**: `packages/trent-core/src/audit/export.test.ts`, `apps/cli/src/commands/__tests__/audit.test.ts`
+- **Messaging**: `apps/cli/src/commands/__tests__/gateway-webhooks.test.ts`, `apps/cli/src/commands/__tests__/gateway-pair.test.ts`
+- **Runs after a reboot**: `packages/trent-core/src/service/units.test.ts`
+- **Voice**: `packages/trent-core/src/gateway/voice-notes.test.ts`
+- **Plugins**: `packages/trent-core/src/tools/plugins/plugins.test.ts`, `apps/cli/src/commands/__tests__/mcp.test.ts`
+- **Skills**: `packages/trent-core/src/skills/skill-store.test.ts`, `packages/trent-core/src/fleet/pack-skills.test.ts`
+- **Memory**: `packages/trent-core/src/fleet-memory/ingest/extract.test.ts`
+- **Desktop**: `apps/desktop/tests/capabilities.test.ts`
+- **A2A**: `packages/trent-core/src/tools/a2a/a2a.test.ts`
+<!-- proof: each file run on its own on 2026-09-26, every one exit 0 (docs/sessions/2026-09-26-c6-docs-truth.md); apps/cli/src/commands/__tests__/docs-truth-pages.test.ts "names a test for every comparison row" fails when a row has no entry here or an entry names a file that does not exist -->
 
 If you already run Hermes, Trent is reachable from it over A2A. If you need many messaging platforms,
 a plugin catalog, spoken replies or a desktop app today, Hermes has them and Trent does not.
@@ -214,7 +237,8 @@ Where Trent is ahead:
    a candidate version.
 9. **An audit trail you can verify offline, and rules over tool sequences.** A signed, hash-chained
    export, and rules such as "read a secret, then send" denied before the second call.
-<!-- proof: 02_plan/output/hermes-parity-scorecard-2026-09-25.md section 3, items 1-9 in its words, each with its evidence there (fleet/seat-capabilities.ts; governance/bound-approvals.ts and idempotent-dispatch.ts; governance/spend-ledger.ts; fleet-memory/brain.ts and ingest/; improve/judge-model.ts, suite-split.ts, pass-k.ts, post-promote.ts; tools/business/ and tools/social/; tools/media/; fleet/export-{claude,codex,hermes}.ts and import-*; audit/signing.ts and governance/policy-rules.ts). Item 6 runs against fake servers only; see the next section. -->
+<!-- proof: 02_plan/output/hermes-parity-scorecard-2026-09-25.md section 3, items 1-9 in its words, each with its evidence there (fleet/seat-capabilities.ts; governance/bound-approvals.ts and idempotent-dispatch.ts; governance/spend-ledger.ts; fleet-memory/brain.ts and ingest/; improve/judge-model.ts, suite-split.ts, pass-k.ts, post-promote.ts; tools/business/ and tools/social/; tools/media/; fleet/export-{claude,codex,hermes}.ts and import-*; audit/signing.ts and governance/policy-rules.ts). Item 6 runs against fake servers only; see the next section.
+     tests a stranger can re-run, each run on its own on 2026-09-26 with exit 0 (docs/sessions/2026-09-26-c6-docs-truth.md): 1 `packages/trent-core/src/fleet/seat-capabilities.test.ts`; 2 `packages/trent-core/src/governance/bound-approvals.test.ts`, `packages/trent-core/src/governance/autonomy.test.ts`, `packages/trent-core/src/governance/auto-review-policy.test.ts`; 3 `apps/cli/src/commands/__tests__/run.test.ts`, `packages/trent-core/src/governance/spend-ledger.test.ts`; 4 `packages/trent-core/src/fleet-memory/brain.test.ts`, `packages/trent-core/src/fleet-memory/ingest/extract.test.ts`, `packages/trent-core/src/improve/docs-corpus.test.ts` (the gate reports a breach on real documents; see "Retrieval quality" below); 5 `packages/trent-core/src/improve/judge-model.test.ts`, `packages/trent-core/src/improve/suite-split.test.ts`, `packages/trent-core/src/improve/pass-k.test.ts`, `packages/trent-core/src/improve/post-promote.test.ts`; 6 `packages/trent-core/src/tools/business/stripe.test.ts`, `packages/trent-core/src/tools/business/square.test.ts`, `packages/trent-core/src/tools/business/calendar.test.ts`, `packages/trent-core/src/tools/business/sms.test.ts`, `packages/trent-core/src/tools/social/social.test.ts`; 7 `packages/trent-core/src/tools/media/media.test.ts`; 8 `packages/trent-core/src/fleet/export-claude.test.ts`, `packages/trent-core/src/fleet/export-codex.test.ts`, `packages/trent-core/src/fleet/export-hermes.test.ts`, `packages/trent-core/src/fleet/import-foreign.test.ts`; 9 `packages/trent-core/src/audit/export.test.ts`, `packages/trent-core/src/governance/policy-rules.test.ts` -->
 
 ## What is not done yet
 
@@ -231,8 +255,9 @@ Where Trent is ahead:
   <!-- proof: docs/business.md:13; docs/social.md:51 and :103; docs/sessions/2026-09-19-upgrade-round.md "Open after the follow-up wave" -->
 - **Retrieval quality.** On this repository's own 28 docs (625 chunks, 35 answerable questions),
   hybrid recall@8 is 0.629 (lexical alone 0.343; paraphrased questions 0.417), under the 0.9 the
-  design set. A reranker is decided, not landed.
-  <!-- proof: docs/sessions/2026-09-25-p2-6-recall.md (lexical baseline, live measurement, the gate fix 0.400 -> 0.629, "Trigger fired"); packages/trent-core/src/improve/docs-corpus.test.ts -->
+  design set. A reranker (`brain.rerank`) is built but not wired: only the retrieval eval calls it,
+  so no seat's recall uses it.
+  <!-- proof: docs/sessions/2026-09-25-p2-6-recall.md (lexical baseline, live measurement, the gate fix 0.400 -> 0.629, "Trigger fired"); packages/trent-core/src/improve/docs-corpus.test.ts; the reranker landed in 0f740e6, and `recallFromBrain(` is called only from fleet-memory/retrieval-eval.ts:83 and improve/retrieval-metrics.ts:73 (grep, 2026-09-26); docs/brain.md "Not wired yet" -->
 - **Prompt caching on the default model.** The stable part of a seat's prompt now leads its system
   prompt. On gemini-3.6-flash a second objective was served 8,164 of 10,808 input tokens from cache
   in one of two runs; the default gemini-3.5-flash-lite returned 0 cached tokens in 7 tries, so on
@@ -247,7 +272,7 @@ Where Trent is ahead:
   installer has never been executed.
   <!-- proof: CI run 36198887419 job "binaries / RUN trent-windows-x64.exe on windows-latest" success; 05_release/output/release-checklist-v1.md step 22 ("never executed") -->
 - **A2A** has no push notifications, no `tasks/resubscribe`, no non-text parts, and the client does not stream, poll or cancel a task yet.
-  <!-- proof: packages/trent-core/src/a2a/ (server files only); docs/a2a.md:131-150 -->
+  <!-- proof: packages/trent-core/src/a2a/ (the server) and packages/trent-core/src/tools/a2a/ (the client tools, a2a.test.ts); docs/a2a.md:131-150 -->
 - **Known defects in the wrapped application** are listed, not hidden:
   [docs/security.md](docs/security.md) ("Reported, not fixed") and `AGENTS.md`.
 
@@ -259,7 +284,8 @@ Where Trent is ahead:
 ```
 trent                                  # the REPL (quick setup on first launch); /exit or Ctrl+D ends it
 trent run "<objective>"                # one objective, no terminal; exit 0 done, 1 failed, 3 config,
-                                       # 6 over --max-cost-cents, 7 waiting on approval, 130 interrupted
+                                       # 5 a provider refused the calls, 6 over --max-cost-cents,
+                                       # 7 waiting on approval, 130 interrupted
 trent run "<objective>" --model <id>   # the whole run (planner, critic, consolidator, every seat) on one model
 trent run - --format stream-json       # objective on stdin, one JSON object per line
 trent --tui                            # full-screen terminal UI on the same session engine
@@ -298,16 +324,17 @@ Every page is indexed in [docs/README.md](docs/README.md). The ones to start wit
 | [gateway.md](docs/gateway.md), [a2a.md](docs/a2a.md), [desktop.md](docs/desktop.md) | Messaging adapters and voice notes; A2A and ACP; the Tauri app |
 | [security.md](docs/security.md) | Egress brokering, the sandbox, approvals, the side-effect gate, what is reported but not fixed |
 | [the rulebook](docs/development_methodology_and_coding_rulebook.md) | How this repository is planned, built and verified |
-<!-- proof: every linked file exists (`ls docs/*.md`: 28 pages including README.md); descriptions follow docs/README.md, whose index predates docs/service.md -->
+<!-- proof: every linked file exists (`ls docs/*.md`: 31 pages including README.md, 2026-09-26); descriptions follow docs/README.md, whose index predates docs/service.md -->
 
 ## Tests
 
-CI runs on every push to `main` and `feature/**`. Its last green run recorded on 2026-09-25 (run
-36198887419, commit 68894ea): the core and CLI suite 3953 passed, 23 skipped (404 files); the
-wrapped web app's suite 2829 passed, 125 skipped (528 files); the Docker-dependent suites 231 passed
-(33 files); typecheck, lint, the repo scan, the installer render from a clean checkout, and four
-binaries built with `bun build --compile`, each then run on its own OS.
-<!-- proof: .github/workflows/ci.yml:22-24; docs/sessions/2026-09-25-parity-push.md (the last CI line: the serial Bun suites commit green); `gh run view 36198887419 --json jobs` (every job success); job logs via `gh run view --job <id> --log`: 108281128569 "Tests 3953 passed | 23 skipped (3976)", "Test Files 404 passed (404)"; 108281128483 "Tests 2829 passed | 125 skipped (2955)", "Test Files 515 passed | 13 skipped (528)"; 108281128788 "Tests 231 passed (231)", "Test Files 33 passed (33)"; "binaries / RUN trent-<target> on <os>" x4 success -->
+CI runs on every push to `main` and `feature/**`. Its last green run recorded on 2026-09-26 (run
+36226144639, commit 7f58c25): the core and CLI suite 4882 passed, 23 skipped (512 files); the
+wrapped web app's suite 2829 passed, 125 skipped (528 files); the Docker-dependent suites 296 passed
+(38 files); typecheck, lint, the repo scan, the installer render from a clean checkout, and four
+binaries built with `bun build --compile`, each then run on its own OS. The live provider suites
+did not run in it: that job was skipped.
+<!-- proof: .github/workflows/ci.yml:22-24; `gh run list --branch feature/trent-fleet-v2 --workflow ci.yml` (36226144639 success on 7f58c25; the next, 36226196095 on e0834e6, failed); `gh run view 36226144639 --json jobs` (every job success except "live provider tests", skipped); job logs via `gh run view --job <id> --log`: 108360615545 "Tests 4882 passed | 23 skipped (4905)", "Test Files 512 passed (512)"; 108360615653 "Tests 2829 passed | 125 skipped (2955)", "Test Files 515 passed | 13 skipped (528)"; 108360615825 "Tests 296 passed (296)", "Test Files 38 passed (38)"; "binaries / RUN trent-<target> on <os>" x4 success; docs/sessions/2026-09-26-c6-docs-truth.md -->
 
 Locally: `npx vitest run` for the core and CLI, `npm run test:web` for the web app. The rules this
 repository is built under (failing test first, no claim without a command and its exit code,

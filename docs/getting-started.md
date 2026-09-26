@@ -466,9 +466,9 @@ model on a local provider. Set it to a second local model, for example
 
 - A published release for `curl … | bash` installation. The installer exists and is tested, and the
   pipeline that would publish it exists (`.github/workflows/release.yml` on a `v*` tag,
-  `.github/workflows/pages.yml` for `agent.let-trent.uk`), but no tag has been pushed, GitHub Pages
-  is not enabled, and the repository is private, so `agent.let-trent.uk/install.sh` returns 404 and
-  there is nothing to download. Blockers and the release procedure:
+  `.github/workflows/pages.yml` for `agent.let-trent.uk`), but no tag has been pushed and GitHub
+  Pages is not enabled, so `agent.let-trent.uk/install.sh` returns 404 and there is nothing to
+  download. Blockers and the release procedure:
   `05_release/output/release-runbook.md`; run `scripts/release/preflight.sh` before tagging.
 - A `trent` binary on your `PATH` without building it yourself (`npm run build:binary`). Use
   `npm run cli --`.

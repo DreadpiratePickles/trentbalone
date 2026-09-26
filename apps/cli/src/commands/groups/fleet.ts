@@ -22,7 +22,8 @@ const DEFAULT_BUDGET_USD = "1.0";
 
 export const fleetSpec: CommandSpec = {
   name: "fleet",
-  description: "Manage the 164-specialist agent fleet",
+  // [C6] was "Manage the 164-specialist agent fleet": the 164 specialists carry no tools (`fleet list --json`: toolsCount 0) and are not scheduled on their own (FleetPacks.ts:47)
+  description: "Manage the fleet: the nine role seats that run, and the catalog specialists whose profiles and skills they read",
   subcommands: [
     {
       name: "list",

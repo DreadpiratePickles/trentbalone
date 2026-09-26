@@ -37,8 +37,12 @@ DATABASE_URL                       # local SQLite in standalone; Postgres in con
 The CLI owns its own job drain loop. Nothing in `lib/` provides one outside the eval harness.
 
 ## Verification gate
-`cd apps/web && npm test` -> exit 0 (505 files, 2743 tests).
-The **root** `vitest run` is misconfigured and yields two phantom failures. Never use it as the gate.
+`cd apps/web && npm test` -> exit 0: 528 files (13 skipped), 2955 tests (2829 passed, 125 skipped),
+run 2026-09-26 (CI job 108360615653 agrees). One run at load 63-77 timed out three tests at 10 s;
+both files passed alone. The root `npx vitest run` collects `packages/trent-core` and `apps/cli` only
+(`vitest.config.ts` `include`; `npx vitest list --filesOnly`: 0 files under `apps/web`), and CI's core
+job runs it as `npx vitest run packages/trent-core apps/cli`. It is the second gate, never a
+substitute for the web one.
 
 ## Model routing
 Top model orchestrates and synthesizes. Opus subagents read, analyse and implement. Fable is reserved
@@ -100,15 +104,34 @@ Money is **integer cents**, never floats. Tenant data access goes through `withR
    - the prelude memoised with the first seat's scope: per seat since e7bfd4e;
      `fleet-memory/per-seat-prelude.test.ts` "gives each seat of one run its OWN recall and its OWN
      skills index".
+10. Wrapper-side, found by the 2026-09-26 council (`02_plan/output/hermes-council-verdict-2026-09-26.md`
+    section 2). **Fixed**, each re-verified 2026-09-26 by running its test (C6; the five files named
+    here exit 0, 46 tests):
+    - B1, the egress broker put the provider key on any allowlisted host: a secret reaches only the
+      hosts its token was minted for since 9fee7d2; `egress/EgressProxy.host-binding.test.ts` "the
+      provider host receives the key; another allowlisted host receives the request with no
+      credential; one withheld line names it", `egress/CredentialBroker.test.ts`.
+    - B2, a fleet run's memory write after an untrusted read skipped the provenance hold: held since
+      0ee887c; `apps/cli/src/runtime/headless.memory-gate.test.ts` "web_extract then memory add in one
+      step: needs_approval, one pending row, MEMORY.md byte-identical; approving writes it tagged".
+    - B3, nothing opened the webhook listener, so WhatsApp, LINE and Home Assistant could not receive:
+      `gateway start` opens it since d364755; `apps/cli/src/commands/__tests__/gateway-webhooks.test.ts`
+      "LINE up and no route: the listener opens where gateway.webhooks says, and /webhooks/line reaches
+      the adapter".
+    - pairing, no command could admit a new chat sender: `trent gateway pair|pairings|revoke` since
+      730fe21; `apps/cli/src/commands/__tests__/gateway-pair.test.ts` "pairs the sender who received the
+      code as an admin; their next message reaches the agent and their reaction decides a card with no
+      JSON in it".
 
 ## Deferred work — registered, not hidden
 Nothing is currently deferred out of `packages/trent-core/src` or `apps/cli/src`.
 
 **Do not "clean up" the marker grep.** `grep -rn "TODO\|FIXME" packages/trent-core/src apps/cli/src |
-grep -v "\.test\.ts"` prints 24 lines, and all 24 are substring matches on the `todo` tool's own
-identifiers (`TODO_ADAPTER_NAME`, `TODO_SCOPES`, `TODO_STATUSES`, `TODO_TOOL_SCHEMAS`, `TODO_FILE_MODE`,
-`TODO_DIR_MODE`, `TODO_LOCAL_RUN`) in `tools/todo/store.ts`, `tools/todo/index.ts` and the re-export at
-`tools/index.ts:77`. There is not one deferred-work comment among them, and
+grep -v "\.test\.ts"` prints 28 lines (2026-09-26), and all 28 are substring matches on the `todo`
+tool's own identifiers (`TODO_ADAPTER_NAME`, `TODO_SCOPES`, `TODO_STATUSES`, `TODO_TOOL_SCHEMAS`,
+`TODO_FILE_MODE`, `TODO_DIR_MODE`, `TODO_LOCAL_RUN`) in `tools/todo/store.ts`, `tools/todo/index.ts`,
+the re-export at `tools/index.ts:104`, and their importers `tools/tool-names.ts:38,80` and
+`mcp-server/toolset-tools.ts:27,60`. There is not one deferred-work comment among them, and
 `git log -S"// TODO"`/`-S"FIXME"` over both trees is empty, so there never was one. Renaming those
 constants to make the count read 0 would mutilate a public API to satisfy a metric. The honest check is
 anchored to a comment:

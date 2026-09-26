@@ -15,6 +15,12 @@
  * what does NOT exist, so its section is not scanned. And `/stop` is registered on the REPL engine
  * rather than in the command table, so the slash vocabulary is `commandNames()` plus that one
  * constant, imported rather than spelled.
+ *
+ * [C6] The command and subcommand checks moved to `docs-truth-pages.test.ts`, which reads every
+ * `docs/*.md` page plus README.md, AGENTS.md and CONTRIBUTING.md, checks flags and repository paths
+ * too, and lists its absence sections by name; the pattern skip here is held to that list. This
+ * file keeps the README command counts, and checks every dotted `a.b.c` key the configuration page
+ * names, at any depth, against the schema.
  */
 
 import { describe, expect, it } from "vitest";
@@ -110,15 +116,6 @@ function fencedBlocks(markdown: string, languages: readonly string[]): string[] 
 
 // ── the CLI surface ───────────────────────────────────────────────────────────
 
-/** A spec's Commander name carries its arguments (`install <agentId>`); the head is the name. */
-function head(spec: CommandSpec): string {
-  return spec.name.split(" ")[0] ?? spec.name;
-}
-
-function findSpec(specs: readonly CommandSpec[], name: string): CommandSpec | undefined {
-  return specs.find((spec) => head(spec) === name);
-}
-
 function countSpecs(specs: readonly CommandSpec[], includeHidden: boolean): number {
   let total = 0;
   for (const spec of specs) {
@@ -129,36 +126,7 @@ function countSpecs(specs: readonly CommandSpec[], includeHidden: boolean): numb
   return total;
 }
 
-interface Invocation {
-  readonly page: string;
-  readonly command: string;
-  readonly sub?: string;
-}
-
-/**
- * `trent <command> [<sub>]`, and the `npm run cli -- <command> [<sub>]` spelling the pages use
- * until a binary exists. A token that starts with `-`, `<`, `"` or a backtick is an option or an
- * argument, never a subcommand, so the capture demands a lowercase letter first. Separators are
- * horizontal whitespace only: a line ending in `--` must not borrow the next line's first word.
- */
-const INVOCATION = /(?:^|[\s`(])(?:trent|npm run cli --)[^\S\n]+([a-z][a-z0-9-]*)(?:[^\S\n]+([a-z][a-z0-9|\\-]*))?/g;
-
-function invocations(page: string, markdown: string): Invocation[] {
-  const found: Invocation[] = [];
-  for (const match of withoutNotYetSections(markdown).matchAll(INVOCATION)) {
-    const command = match[1]!;
-    const sub = match[2];
-    if (sub === undefined) {
-      found.push({ page, command });
-      continue;
-    }
-    // `trent mcp list\|add\|remove\|test` is four invocations written once.
-    for (const alternative of sub.split(/[\\|]+/).filter((part) => part !== "")) {
-      found.push({ page, command, sub: alternative });
-    }
-  }
-  return found;
-}
+// [C6] `head`, `findSpec`, `INVOCATION` and `invocations` moved to docs-truth-pages.test.ts.
 
 // ── the config schema ─────────────────────────────────────────────────────────
 
@@ -214,6 +182,61 @@ function configKeys(markdown: string): ConfigKey[] {
   return keys;
 }
 
+// [C6] dotted keys named in prose, at any depth ─────────────────────────────────
+
+/**
+ * Dotted names on the configuration page that are not settings, each listed with what it is, so a
+ * new one has to be classified by hand instead of passing unread. File names are recognised by
+ * their extension instead.
+ */
+const NOT_CONFIG_KEYS: readonly string[] = [
+  "trent.run", // a telemetry span name (the span table)
+  "gen_ai.agent.turn", // a telemetry span name
+  "service.name", // the OTLP resource attribute `telemetry.service_name` becomes
+  "embedder.local_unavailable", // a log event
+  "model_gateway.reasoning_effort_not_sent", // a log event
+  "model_gateway.escalation_unavailable", // a log event
+  "metadata.compaction", // a field on a stored session message
+  "prompt_tokens_details.cached_tokens", // a field in a provider's usage response
+];
+const FILE_NAME = /\.(?:ya?ml|md|json|jsonl|ndjson|ts|js|mjs|db|env|toml|txt|log|sh)$/;
+
+/** Every `a.b` or `a.b.c` code span in the page's prose, outside "Not yet implemented" sections. */
+function dottedKeys(markdown: string): string[] {
+  const prose = withoutFences(withoutNotYetSections(markdown));
+  return [...prose.matchAll(/`([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)+)`/g)]
+    .map((match) => match[1]!)
+    .filter((name) => !FILE_NAME.test(name) && !NOT_CONFIG_KEYS.includes(name));
+}
+
+/** The schema one key below `schema`; "open" where the names are the user's own (a record, an array). */
+function childSchema(schema: unknown, key: string): unknown {
+  let inner = unwrap(schema);
+  // `.refine()`/`.transform()` wrap the object in an effect whose own schema is one level down.
+  for (let depth = 0; depth < 4 && inner instanceof z.ZodEffects; depth += 1) inner = unwrap(inner._def.schema);
+  if (inner instanceof z.ZodRecord || inner instanceof z.ZodArray || inner instanceof z.ZodMap) return "open";
+  if (inner instanceof z.ZodUnion) {
+    for (const option of inner._def.options as unknown[]) {
+      const found = childSchema(option, key);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  if (!(inner instanceof z.ZodObject)) return undefined;
+  return (inner.shape as Record<string, unknown>)[key];
+}
+
+/** Walk `a.b.c` down the schema: every segment must be a key, until a record or an array opens. */
+function resolvesInSchema(dotted: string): boolean {
+  let schema: unknown = TrentConfigSchema;
+  for (const segment of dotted.split(".")) {
+    schema = childSchema(schema, segment);
+    if (schema === undefined) return false;
+    if (schema === "open") return true;
+  }
+  return true;
+}
+
 // ── the REPL vocabulary ───────────────────────────────────────────────────────
 
 /**
@@ -233,36 +256,9 @@ function slashCommands(markdown: string): string[] {
 
 // ── the suites ────────────────────────────────────────────────────────────────
 
-describe("the documents name commands the registry has", () => {
-  const found = DOCUMENTS.flatMap((page) => invocations(page, read(page)));
-
-  it("finds invocations in every document", () => {
-    for (const page of DOCUMENTS) {
-      expect(found.filter((entry) => entry.page === page).length).toBeGreaterThan(0);
-    }
-  });
-
-  it("resolves every documented command", () => {
-    const unknown = found
-      .filter((entry) => findSpec(COMMAND_SPECS, entry.command) === undefined)
-      .map((entry) => `${entry.page}: trent ${entry.command}`);
-    expect([...new Set(unknown)]).toEqual([]);
-  });
-
-  it("resolves every documented subcommand", () => {
-    const unknown: string[] = [];
-    for (const entry of found) {
-      if (entry.sub === undefined) continue;
-      const parent = findSpec(COMMAND_SPECS, entry.command);
-      // A command with no subcommand table takes arguments there instead; nothing to resolve.
-      if (parent?.subcommands === undefined) continue;
-      if (findSpec(parent.subcommands, entry.sub) === undefined) {
-        unknown.push(`${entry.page}: trent ${entry.command} ${entry.sub}`);
-      }
-    }
-    expect([...new Set(unknown)]).toEqual([]);
-  });
-
+// [C6] "finds invocations", "resolves every documented command" and "resolves every documented
+// subcommand" moved to docs-truth-pages.test.ts, where they cover every page.
+describe("README states the command counts the registry has", () => {
   it("states the command counts the registry actually has", () => {
     const claim = /(\d+)\s+commands,\s*(\d+)\s+with their subcommands/.exec(read("README.md"));
     expect(claim, "README must state the command count").not.toBeNull();
@@ -299,6 +295,20 @@ describe("the documents name config keys the schema has", () => {
       if (!(entry.key in sectionShape)) unknown.push(`docs/configuration.md: ${entry.section}.${entry.key}`);
     }
     expect([...new Set(unknown)]).toEqual([]);
+  });
+
+  // [C6] a key named in prose (`governance.auto_review.max_class`) is a claim at every depth.
+  it("resolves every dotted key the page names in prose", () => {
+    const named = dottedKeys(read("docs/configuration.md"));
+    expect(named.length).toBeGreaterThan(40);
+    expect([...new Set(named.filter((name) => !resolvesInSchema(name)))]).toEqual([]);
+  });
+
+  it("tells a real dotted key from a misspelt one, so the check above cannot pass vacuously", () => {
+    expect(resolvesInSchema("governance.auto_review.max_class")).toBe(true);
+    expect(resolvesInSchema("tools.browser.attach.enabled")).toBe(true);
+    expect(resolvesInSchema("governance.auto_review.max_clas")).toBe(false);
+    expect(resolvesInSchema("agent.mode.solo")).toBe(false);
   });
 
   it("documents every top-level key the schema carries", () => {

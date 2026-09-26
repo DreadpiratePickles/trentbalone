@@ -23,7 +23,7 @@ own beyond a splash page: the window shows `apps/web/` served by a runtime the b
   integer cents. A source that is unavailable renders as unavailable, not as zero. The tray icon
   itself does not change; only the labels do.
 - **A global shortcut**, `CommandOrControl+Shift+T`, which shows or hides the main window.
-- **Resources staged before build.** `scripts/prepare-resources.mjs` (wired as
+- **Resources staged before build.** `apps/desktop/scripts/prepare-resources.mjs` (wired as
   `build.beforeBuildCommand`) stages the Bun binary for the target triple and runs the Next.js
   standalone build from the repository root so `outputFileTracingRoot` resolves without editing
   `apps/web/`.
@@ -51,6 +51,10 @@ trent desktop uninstall [--yes]
 the same embedded key the CLI updater uses. No release has been published yet, so today it has
 nothing to download; build locally with the commands above.
 
+Outside the app, `trent web --start` runs the same `.next/standalone` tree on loopback
+([getting-started.md](getting-started.md), section 9); the app starts its own sidecar and does not
+use it.
+
 ## The "single binary" claim is retired for desktop
 
 Next.js cannot be compiled into one binary. A spike measured 20 unresolved specifiers, and building
@@ -64,5 +68,3 @@ install**, not "a single binary".
 - A code-signed installer: `signingIdentity` is `null` in `tauri.conf.json`, and no `.dmg`, `.msi`,
   `.AppImage` or `.deb` has been published.
 - A tray icon that changes with fleet state. The menu, title and tooltip change; the icon does not.
-- `trent web --start` as a way to run the same server outside the desktop app. The desktop app
-  starts its own sidecar; the CLI command still reports readiness only.

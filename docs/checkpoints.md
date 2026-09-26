@@ -111,5 +111,6 @@ session.beginTurn(seat); // once per REPL turn; `trent run` is a single turn and
 
 Until a surface opens one, nothing is ledgered and `/checkpoints` says so rather than showing an
 empty list that looks like "nothing was written". `CheckpointStore` is the same surface without
-the turn counter, which is what a `trent checkpoints list|rollback` command reads: it needs the
-profile directory, the workspace and a run id, and nothing from the running session.
+the turn counter: it needs the profile directory, the workspace and a run id, and nothing from the
+running session. There is no `checkpoints` CLI command; listing and undoing turns is `/checkpoints`
+and `/rollback` in the REPL.

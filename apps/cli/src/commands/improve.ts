@@ -3,7 +3,9 @@
  *
  *   status                 traces per agent, drafts in quarantine, last sweep, frontier best per agent
  *   sweep [--agent <id>]   one sweep over the nine seats and installed specialists (`--live` executes the gate)
- *   promote <draftId>      quarantine -> live; the only way an artifact reaches an agent (human command).
+ *   promote <draftId>      quarantine -> live; the only way an artifact goes live (human command).
+ *                          [C6] A promoted seat prompt (`__seat_prompt__`) is read only by the next sweep
+ *                          (`improve/seat-prompt.ts`, `improve/sweep.ts`); no live seat's run reads it yet.
  *                          Distils the clean exemplars of the promoted (agent, taskType) into
  *                          `<profile>/exemplars/` (I.13); `--live` rationalises each once (I.14).
  *   reject <draftId>       quarantine -> rejected

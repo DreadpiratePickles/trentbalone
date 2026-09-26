@@ -72,9 +72,11 @@ mode`, `webhook: https://...` off-domain, `curl ... | sh`, reads of `~/.ssh`, ..
   `flagged: [{ tool, categories }]` (categories only, never the matched text), `mcp list` shows it
   as flagged, and one warning line goes to stderr. `mcp remove` removes the entry and the record
   with it.
-- Every entry `add` writes carries `scanRan`. A server that cannot be reached at add time (stdio
-  command missing, http with no egress proxy running) is stored with `scanRan: false`; the `--json`
-  result carries the reason. Run `trent mcp test <name>` once it is reachable.
+- Every entry `add` writes carries `scanRan`. A server that cannot be reached at add time is stored
+  with `scanRan: false`; the `--json` result carries the reason. For a stdio server whose command
+  was missing, run `trent mcp test <name>` once it is installed. An http server is always stored
+  with `scanRan: false` from the CLI, and `test` cannot reach it either, because the CLI runs no
+  egress proxy (see the OAuth section below): its tool descriptions are not scanned at install.
 
 ### Result scrubbing
 

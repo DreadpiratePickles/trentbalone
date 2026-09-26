@@ -1047,7 +1047,7 @@ model's trained maximum. A prompt that does not fit is refused with the sizes an
 rather than cut silently by the server. Ollama's default window is 4k below 24 GiB of VRAM
 (https://docs.ollama.com/context-length); raise it with `OLLAMA_CONTEXT_LENGTH`. The block reaches a
 run through the session runtime (`TRENT_LOCAL_*` variables), and `trent heartbeat` and
-`trent improve --live`, which build their own gateways, pass it too.
+`trent improve sweep --live`, which build their own gateways, pass it too.
 
 **Small models.** A seat or the wrapper's consolidator on a local runtime sends `reasoning_effort:
 none` unless `reasoning_effort` above names another level; the planner and the critic keep
@@ -1242,9 +1242,10 @@ whenever the stored shape changes.
 - Cloud profiles or a hosted configuration store. `TRENT_CLOUD_TOKEN` is reserved in the secrets
   schema and nothing consumes it.
 - A `trent config edit` command. Edit the YAML directly.
-- Voice transcription. There is no `voice` section in the schema, no `/voice` command in the REPL
-  (typing one answers `Unknown command: /voice`), and no speech engine behind
-  `packages/trent-core/src/voice/`: its one entry point always throws a `TrentError`
-  (`voice.transcribe: voice transcription is not available in this release`, exit code 2). A
+- A `voice` section and a `/voice` command. There is no `voice` key in the schema and no `/voice` in
+  the REPL (typing one answers `Unknown command: /voice`). Transcription itself exists: a paired
+  sender's voice note on nine gateway adapters is transcribed on this machine (`gateway.voice_notes`;
+  [gateway.md](gateway.md), "Voice notes"), and `packages/trent-core/src/voice/` runs the media
+  toolset's engines, throwing a `TrentError` that names what to install when there is none. A
   `voice:` block left over in an older `config.yaml` is ignored, not migrated: the schema passes
   unknown top-level keys through untouched.
