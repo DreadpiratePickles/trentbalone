@@ -1,3 +1,4 @@
+import os from "node:os";
 import { ConfigManager } from "../config/index.js";
 import { TrentError, EXIT } from "../errors/TrentError.js";
 import { BlankSlate } from "./BlankSlate.js";
@@ -6,6 +7,7 @@ import { QuickSetup } from "./QuickSetup.js";
 import { InquirerPrompts } from "./InquirerPrompts.js";
 import { NoTerminalPrompts, noTerminalForMode } from "./no-terminal.js";
 import { ConsoleOutput } from "./ports.js";
+import { createLocalRuntime } from "./local-runtime.js";
 import { writeDefaultHeartbeatChecklist } from "../heartbeat/checklist.js";
 import type { SetupContext, SetupOptions, SetupResult } from "./types.js";
 
@@ -32,6 +34,8 @@ export class SetupWizard {
       ...(context.mediaBackendPresent ? { mediaBackendPresent: context.mediaBackendPresent } : {}),
       ...(context.socialProviderConnected ? { socialProviderConnected: context.socialProviderConnected } : {}),
       ...(context.businessProviderConnected ? { businessProviderConnected: context.businessProviderConnected } : {}),
+      localRuntime: context.localRuntime ?? createLocalRuntime(),
+      totalMemoryBytes: context.totalMemoryBytes ?? os.totalmem(),
     };
   }
 

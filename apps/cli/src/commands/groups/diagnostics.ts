@@ -156,6 +156,7 @@ export const setupSpec: CommandSpec = {
     { flags: "--portal", description: "Quick cloud login setup" },
     { flags: "--provider <provider>", description: "Default model provider" },
     { flags: "--model <model>", description: "Default model" },
+    { flags: "--pull", description: "Quick, Ollama: pull the model if it is missing, after a confirmation" },
   ],
   async run(ctx, opts) {
     const mode = (opts.portal === true ? "quick" : String(opts.mode ?? "quick")) as SetupMode;
@@ -227,6 +228,7 @@ export async function runSetup(
     setupOptions.provider = opts.provider as NonNullable<typeof setupOptions.provider>;
   }
   if (typeof opts.model === "string") setupOptions.model = opts.model;
+  if (opts.pull === true) setupOptions.pull = true; // [L0-3]
 
   const result = await wizard.run(setupOptions);
   return {

@@ -21,7 +21,11 @@ export const PROVIDER_ENV_VARS: Record<Provider, readonly string[]> = {
   lmstudio: [],
 };
 
-/** The model written when the user does not choose one. */
+/**
+ * The model written when the user does not choose one. For `ollama` this is the smallest tier's
+ * recommendation (`local-tiers.ts`); setup itself proposes the tier that fits the machine. It was
+ * `llama3.2`, which Berkeley's leaderboard scores at 21.95% overall and 4% multi-turn.
+ */
 export const DEFAULT_MODELS: Record<Provider, string> = {
   openai: "gpt-5.6-terra",
   anthropic: "claude-sonnet-4-6",
@@ -30,7 +34,7 @@ export const DEFAULT_MODELS: Record<Provider, string> = {
   openrouter: "openrouter/auto",
   deepseek: "deepseek-chat",
   groq: "llama-3.3-70b-versatile",
-  ollama: "llama3.2",
+  ollama: "qwen3.5:9b",
   lmstudio: "local-model",
 };
 
@@ -117,6 +121,7 @@ export function missingKeyGuidance(configManager: ConfigManager): string[] {
   }
   lines.push(
     `For example: echo 'OPENAI_API_KEY=your-key' >> ${configManager.getSecretsPath()}`,
+    "Or run a model on this machine, which needs no key: trent setup --mode quick --provider ollama (or lmstudio)",
   );
   return lines;
 }

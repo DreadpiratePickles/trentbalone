@@ -90,3 +90,49 @@ describe("[D1] the judge config block", () => {
     expect(TrentConfigSchema.parse({ improve: { judge_model: "gemini-2.5-pro" } }).improve.judge_model).toBe("gemini-2.5-pro");
   });
 });
+
+/**
+ * [L0-3] G6: under a local provider the judge never falls back to a hosted model.
+ *
+ * With `provider: ollama` and no `improve.judge_model`, the resolver used to return the strongest
+ * priced Gemini id, which Ollama was then asked for (01_discovery/output/trent-local-path-audit-2026-09-26.md,
+ * G6). A local profile grades with a second LOCAL model or refuses, by name.
+ */
+describe("[L0-3] the judge under a local provider", () => {
+  const refusal = "judge needs a second local model: set improve.judge_model";
+
+  it("refuses with no improve.judge_model instead of resolving a priced Gemini id", () => {
+    for (const provider of ["ollama", "lmstudio"]) {
+      try {
+        resolveJudgeModel({ executor: "qwen3.5:9b", provider });
+        expect.unreachable(`${provider}: a local profile must not fall back to a hosted judge`);
+      } catch (error) {
+        expect(isTrentError(error), provider).toBe(true);
+        expect((error as { code: number }).code, provider).toBe(EXIT.CONFIG);
+        expect((error as Error).message, provider).toContain(refusal);
+      }
+    }
+  });
+
+  it("does not take the planner tier either: only improve.judge_model names the second local model", () => {
+    expect(() => resolveJudgeModel({ executor: "qwen3.5:9b", planner: "qwen3.6:27b", provider: "ollama" })).toThrow(refusal);
+  });
+
+  it("takes a configured second local model", () => {
+    expect(resolveJudgeModel({ configured: "qwen3.6:27b", executor: "qwen3.5:9b", provider: "ollama" })).toEqual({ model: "qwen3.6:27b", source: "configured" });
+  });
+
+  it("refuses a configured hosted model, a priced id or an Ollama cloud model, under a local provider", () => {
+    const hosted = strongestPricedGemini("qwen3.5:9b")!;
+    expect(() => resolveJudgeModel({ configured: hosted, executor: "qwen3.5:9b", provider: "ollama" })).toThrow(/second local model/);
+    expect(() => resolveJudgeModel({ configured: "nemotron-3-ultra:cloud", executor: "qwen3.5:9b", provider: "ollama" })).toThrow(/second local model/);
+  });
+
+  it("still refuses a judge equal to the executor", () => {
+    expect(() => resolveJudgeModel({ configured: "qwen3.5:9b", executor: "qwen3.5:9b", provider: "ollama" })).toThrow(/must be different models/);
+  });
+
+  it("a hosted provider keeps the priced fallback", () => {
+    expect(resolveJudgeModel({ executor: EXECUTOR, provider: "google" }).source).toBe("priced_gemini");
+  });
+});

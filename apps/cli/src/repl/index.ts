@@ -18,7 +18,7 @@ import { playBoot, type BootStdin } from "../ui/boot.js";
 import { ReplEngine, bindApprovalAnswers, type ReplRunner } from "./engine.js";
 import { Conversation, historyLimits, historySeed, recapLines, sessionSink } from "./conversation.js";
 import { contextLimits, createSessionCompactor } from "./compact.js";
-import { isDegraded } from "./degraded.js";
+import { degradedState } from "./degraded.js";
 import { ESCAPE_TIMEOUT_MS, withKittyProtocol } from "./keys.js";
 import { withRawMode } from "./interrupt.js";
 import { toolsStatusLine, type ToolWiringDeps } from "./tools.js";
@@ -172,7 +172,8 @@ export class ClassicRepl {
     // Parses the profile's .env AND exports every key into process.env, which is where the
     // gateway reads them. Values are never read here.
     const secrets = this.#configManager.loadSecrets() as unknown as Record<string, string | undefined>;
-    const degraded = isDegraded({ ...process.env, ...secrets });
+    // [L0-3] G7: a hosted provider is degraded without a key; a local one when its runtime is down.
+    const { degraded, notice: degradedNotice } = await degradedState({ source: { ...process.env, ...secrets }, provider: config.provider, model: config.model });
     const width = io.width ?? terminalWidth();
     const writeLine = (line: string): void => io.write(`${line}\n`);
 
@@ -275,6 +276,7 @@ export class ClassicRepl {
         openingCents,
         traces: new InMemoryTraceStore(),
         degraded,
+        ...(degradedNotice === undefined ? {} : { degradedNotice }),
         width,
         write: writeLine,
         exit,

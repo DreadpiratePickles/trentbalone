@@ -842,7 +842,7 @@ for no usage frame and cannot send `reasoning_effort`.
 | `openrouter` | `OPENROUTER_API_KEY` | OpenRouter (`OPENROUTER_BASE_URL`) | `openrouter/auto` |
 | `deepseek` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/v1` (`DEEPSEEK_BASE_URL`) | `deepseek-chat` |
 | `groq` | `GROQ_API_KEY` | `https://api.groq.com/openai/v1` (`GROQ_BASE_URL`) | `llama-3.3-70b-versatile` |
-| `ollama` | none | `http://127.0.0.1:11434/v1` (`OLLAMA_BASE_URL`) | `llama3.2` |
+| `ollama` | none | `http://127.0.0.1:11434/v1` (`OLLAMA_BASE_URL`) | setup proposes by memory: `qwen3.5:9b`, `qwen3.6:27b` or `qwen3.6:35b-a3b` ([getting-started.md](getting-started.md) section 11) |
 | `lmstudio` | none | `http://127.0.0.1:1234/v1` (`LMSTUDIO_BASE_URL`) | `local-model` |
 
 `ollama` and `lmstudio` need no account. The OpenAI-compatible client always sends an

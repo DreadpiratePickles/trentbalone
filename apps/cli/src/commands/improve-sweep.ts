@@ -201,6 +201,7 @@ export async function liveModel(ctx: SweepContext, cfg: LoopConfig): Promise<{ a
   const judge = resolveJudgeModel({
     configured: cfg.gates.judgeModel,
     executor: cfg.model,
+    provider: cfg.provider, // [L0-3] G6: a local provider never falls back to a hosted judge
     ...(cfg.plannerModel === undefined ? {} : { planner: cfg.plannerModel }),
   });
   const judgeGateway = await createModelGateway({ preferredProvider, models: { executor: judge.model } });

@@ -1,3 +1,4 @@
+import os from "node:os";
 import { DEFAULT_MODELS, hasKeyFor, primaryEnvVar } from "./detect.js";
 import { centsToDollars, dollarsToCents } from "./money.js";
 import {
@@ -9,6 +10,8 @@ import {
   withFleet,
 } from "./steps.js";
 import { SetupRun } from "./SetupRun.js";
+import { createLocalRuntime, isLocalProvider, type LocalRuntimePort } from "./local-runtime.js";
+import { localModelDefault, reportLocalRuntime, reportModelPresence } from "./local-setup.js";
 import type { Provider, Toolset } from "../config/schema.js";
 import type { SetupOptions, SetupResult } from "./types.js";
 
@@ -34,11 +37,16 @@ export class FullSetup extends SetupRun {
         default: current.provider,
       }));
 
+    // [L0-3] G15: a local runtime is reported (reachable, what it has) instead of a key being hunted.
+    const local = isLocalProvider(provider) ? provider : undefined;
+    const pulled = local === undefined ? undefined : await reportLocalRuntime(local, this.localRuntime(), this.ctx.env, (line) => this.say(line));
+
     const modelDefault =
-      current.provider === provider ? current.model : DEFAULT_MODELS[provider];
+      current.provider === provider ? current.model : this.defaultModel(provider);
     const model =
       options.model ??
       (await prompts.input({ id: "model", message: "Model", default: modelDefault }));
+    if (local !== undefined) reportModelPresence(local, pulled, model, (line) => this.say(line));
 
     const toolsets =
       options.toolsets ??
@@ -80,7 +88,9 @@ export class FullSetup extends SetupRun {
         }),
       );
 
-    await this.ensureKey(provider, options.apiKey);
+    // A local runtime needs no key; one given explicitly (an authenticated remote Ollama) is still stored.
+    if (local === undefined) await this.ensureKey(provider, options.apiKey);
+    else if (options.apiKey) this.saveSecret(primaryEnvVar(provider), options.apiKey);
 
     this.blank();
     this.say(`Provider: ${provider}`);
@@ -112,6 +122,15 @@ export class FullSetup extends SetupRun {
       `Full setup complete. Provider ${provider}, model ${model}, ${toolsets.length} toolsets, ${agents.length} agents, daily cap ${dailyCents} cents. Config at ${configManager.getConfigPath()}.`,
       configManager.loadConfig(),
     );
+  }
+
+  private localRuntime(): LocalRuntimePort {
+    return this.ctx.localRuntime ?? createLocalRuntime();
+  }
+
+  /** The model question's pre-fill for a provider the profile is not on yet; a local one gets its tier's. */
+  private defaultModel(provider: Provider): string {
+    return isLocalProvider(provider) ? localModelDefault(provider, this.ctx.totalMemoryBytes ?? os.totalmem()) : DEFAULT_MODELS[provider];
   }
 
   /**

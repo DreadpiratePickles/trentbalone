@@ -1,3 +1,4 @@
+import os from "node:os";
 import {
   DEFAULT_MODELS,
   detectProviderKeys,
@@ -9,6 +10,8 @@ import { mediaBackendPresent } from "../tools/media/backend.js";
 import { ConnectStore } from "../connect/store.js";
 import { BUSINESS_PROVIDERS } from "../tools/business/http.js";
 import { SetupRun } from "./SetupRun.js";
+import { createLocalRuntime, isLocalProvider } from "./local-runtime.js";
+import { resolveLocalModel } from "./local-setup.js";
 import type { SetupOptions, SetupResult } from "./types.js";
 import type { Provider } from "../config/schema.js";
 import type { ConfigManager } from "../config/ConfigManager.js";
@@ -27,6 +30,22 @@ export class QuickSetup extends SetupRun {
 
     if (options.apiKey && options.provider) {
       this.saveSecret(primaryEnvVar(options.provider), options.apiKey);
+    }
+
+    // [L0-3] G3: a local runtime has no key to find; it has a runtime to reach and a model to pull.
+    if (isLocalProvider(options.provider)) {
+      const local = await resolveLocalModel({
+        provider: options.provider,
+        ...(options.model === undefined ? {} : { requested: options.model }),
+        ...(options.pull === undefined ? {} : { pull: options.pull }),
+        env,
+        runtime: this.ctx.localRuntime ?? createLocalRuntime(),
+        totalMemoryBytes: this.ctx.totalMemoryBytes ?? os.totalmem(),
+        prompts,
+        say: (line) => this.say(line),
+      });
+      if (!local.ok) return this.abort("quick", local.message, local.reason);
+      return await this.finish(options.provider, local.model, [`What to expect: ${local.expectation}`]);
     }
 
     const detected = detectProviderKeys(configManager, env, options.provider);
@@ -57,7 +76,12 @@ export class QuickSetup extends SetupRun {
             default: (detected[0] as (typeof detected)[number]).provider,
           });
 
-    const model = options.model ?? DEFAULT_MODELS[provider];
+    return await this.finish(provider, options.model ?? DEFAULT_MODELS[provider]);
+  }
+
+  /** The part every quick path shares: toolsets, the summary, one confirmation, the write. */
+  private async finish(provider: Provider, model: string, notes: readonly string[] = []): Promise<SetupResult> {
+    const { configManager, prompts, env } = this.ctx;
     // [B2] `media` needs ffmpeg and ffprobe on PATH or the media image; without one it is written
     // off explicitly, so a later `trent update` cannot switch it on unasked (docs/media.md).
     const media = await (this.ctx.mediaBackendPresent ?? (() => mediaBackendPresent(env)))();
@@ -81,6 +105,7 @@ export class QuickSetup extends SetupRun {
     this.say(`Model: ${model}`);
     this.say(off.length === 0 ? `Toolsets: all ${ALL_TOOLSETS.length} enabled` : `Toolsets: ${toolsets.length} of ${ALL_TOOLSETS.length} enabled; ${off.join("; ")}`);
     this.say(`Starter agents: ${STARTER_AGENTS.join(", ")}`);
+    for (const note of notes) this.say(note);
 
     const proceed = await prompts.confirm({
       id: "confirm",

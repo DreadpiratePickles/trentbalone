@@ -8,9 +8,10 @@
 
 import { describe, it, expect } from "vitest";
 import { createTheme, EMBER_SGR, sgrCodesIn } from "../../ui/index.js";
-import { isDegraded, renderDegradedBanner, DEGRADED_MARK } from "../degraded.js";
+import { isDegraded, degradedState, renderDegradedBanner, DEGRADED_MARK } from "../degraded.js";
 import { makeHarness } from "./harness.js";
 import { PROVIDER_ENV_VARS } from "@trent/core/setup/index.js";
+import { createLocalRuntime } from "@trent/core/setup/local-runtime.js";
 
 const plain = createTheme("none");
 
@@ -109,5 +110,85 @@ describe("the engine in degraded mode", () => {
     await h.engine.submit("one");
     expect(h.out.filter((l) => l.includes("DEGRADED MODE"))).toHaveLength(0);
     for (const line of h.transcript()) expect(line).not.toContain(DEGRADED_MARK);
+  });
+});
+
+/**
+ * [L0-3] G7: DEGRADED means no usable provider, not no key.
+ *
+ * Under `provider: ollama` the banner used to say "no model provider key was found" on every launch,
+ * though a local runtime needs none (01_discovery/output/trent-local-path-audit-2026-09-26.md, G7).
+ * Now a local provider is judged by its runtime: reachable with the model pulled boots normally; down
+ * says so in one line naming the URL and the start command. The runtime is a fake `fetch`.
+ */
+describe("[L0-3] a local provider is judged by its runtime, not by a key", () => {
+  const up = (models: string[]) =>
+    createLocalRuntime({
+      fetch: (async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.endsWith("/api/version")) return Response.json({ version: "0.32.9" });
+        if (url.endsWith("/api/tags")) return Response.json({ models: models.map((name) => ({ name })) });
+        if (url.endsWith("/v1/models")) return Response.json({ data: models.map((id) => ({ id })) });
+        return new Response("not found", { status: 404 });
+      }) as typeof fetch,
+    });
+  const down = createLocalRuntime({
+    fetch: (async () => {
+      throw new TypeError("fetch failed");
+    }) as typeof fetch,
+  });
+
+  it("isDegraded is false for a keyless local provider with no key anywhere", () => {
+    expect(isDegraded({}, "ollama")).toBe(false);
+    expect(isDegraded({}, "lmstudio")).toBe(false);
+    expect(isDegraded({}, "openai")).toBe(true);
+    expect(isDegraded({})).toBe(true);
+  });
+
+  it("reachable runtime and a pulled model: not degraded, no notice", async () => {
+    const state = await degradedState({ source: {}, provider: "ollama", model: "qwen3.5:9b", env: {}, runtime: up(["qwen3.5:9b"]) });
+    expect(state).toEqual({ degraded: false });
+  });
+
+  it("runtime down: degraded, with one line naming the URL and `ollama serve`", async () => {
+    const state = await degradedState({ source: {}, provider: "ollama", model: "qwen3.5:9b", env: {}, runtime: down });
+    expect(state.degraded).toBe(true);
+    expect(state.notice).toContain("http://127.0.0.1:11434");
+    expect(state.notice).toContain("ollama serve");
+    expect(state.notice).not.toContain("\n");
+    // One line at the width a piped or default terminal gets (80 columns), not merely at 120.
+    expect(renderDegradedBanner(plain, 80, state.notice)).toHaveLength(1);
+  });
+
+  it("names the endpoint OLLAMA_BASE_URL points at, and LM Studio's own start command", async () => {
+    const moved = await degradedState({ source: {}, provider: "ollama", model: "m", env: { OLLAMA_BASE_URL: "http://10.0.0.5:11434/v1" }, runtime: down });
+    expect(moved.notice).toContain("http://10.0.0.5:11434");
+    const lm = await degradedState({ source: {}, provider: "lmstudio", model: "m", env: {}, runtime: down });
+    expect(lm.notice).toContain("http://127.0.0.1:1234");
+    expect(lm.notice).toContain("lms server start");
+  });
+
+  it("runtime up but the model not pulled: degraded, and the line is the pull command", async () => {
+    const state = await degradedState({ source: {}, provider: "ollama", model: "qwen3.6:27b", env: {}, runtime: up(["qwen3.5:9b"]) });
+    expect(state.degraded).toBe(true);
+    expect(state.notice).toContain("ollama pull qwen3.6:27b");
+  });
+
+  it("a hosted provider keeps the key rule and never probes a runtime", async () => {
+    let probed = false;
+    const spy = createLocalRuntime({ fetch: (async () => ((probed = true), Response.json({}))) as typeof fetch });
+    expect(await degradedState({ source: {}, provider: "openai", model: "gpt-x", env: {}, runtime: spy })).toEqual({ degraded: true });
+    expect(await degradedState({ source: { OPENAI_API_KEY: "x" }, provider: "openai", model: "gpt-x", env: {}, runtime: spy })).toEqual({ degraded: false });
+    expect(probed).toBe(false);
+  });
+
+  it("the engine prints the one-line notice instead of the no-key paragraph, and still marks agent lines", async () => {
+    const notice = "DEGRADED MODE: Ollama is not answering at http://127.0.0.1:11434; start it with: ollama serve";
+    const h = makeHarness({ degraded: true, degradedNotice: notice });
+    await h.engine.start();
+    expect(h.out.filter((line) => line.includes("ollama serve"))).toHaveLength(1);
+    expect(h.out.join("\n")).not.toMatch(/no model provider key was found/);
+    await h.engine.submit("one");
+    for (const line of h.transcript().filter((l) => l.includes("["))) expect(line).toContain(DEGRADED_MARK);
   });
 });

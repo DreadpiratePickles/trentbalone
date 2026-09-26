@@ -26,7 +26,7 @@ export const MODEL_MODAL_PROVIDERS: ReadonlyArray<{ provider: Provider; model: s
   { provider: "openrouter", model: DEFAULT_MODELS.openrouter, name: "OpenRouter (auto)" },
   { provider: "deepseek", model: DEFAULT_MODELS.deepseek, name: "DeepSeek (Chat)" },
   { provider: "groq", model: DEFAULT_MODELS.groq, name: "Groq LPU (Llama 3.3 70B)" },
-  { provider: "ollama", model: DEFAULT_MODELS.ollama, name: "Ollama, local (llama3.2)" },
+  { provider: "ollama", model: DEFAULT_MODELS.ollama, name: "Ollama, local (Qwen3.5 9B)" },
   { provider: "lmstudio", model: DEFAULT_MODELS.lmstudio, name: "LM Studio, local" },
 ];
 

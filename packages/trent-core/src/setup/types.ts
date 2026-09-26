@@ -1,15 +1,18 @@
 import type { ConfigManager } from "../config/index.js";
 import type { Provider, Toolset, TrentConfig } from "../config/schema.js";
 import type { OutputPort, PromptPort } from "./ports.js";
+import type { LocalRuntimePort } from "./local-runtime.js";
 
 export type SetupMode = "quick" | "full" | "blank-slate";
 
 /**
  * Why a run did not complete. `no-key`: quick setup found no provider key, so there was nothing to
  * configure (the first launch still opens the REPL, degraded). `cancelled`: the user declined the
- * confirmation. A caller branches on this, never on the wording of `message`.
+ * confirmation. [L0-3] `runtime-unreachable`: a local provider's runtime (Ollama, LM Studio) did not
+ * answer. `model-not-pulled`: it answered without the model, and nothing was pulled. A caller
+ * branches on this, never on the wording of `message`.
  */
-export type SetupIncompleteReason = "no-key" | "cancelled";
+export type SetupIncompleteReason = "no-key" | "cancelled" | "runtime-unreachable" | "model-not-pulled";
 
 /**
  * Non-interactive overrides. Anything left undefined is prompted for (Full and Blank Slate) or
@@ -28,6 +31,8 @@ export interface SetupOptions {
   agents?: string[];
   dailyBudgetCents?: number;
   perRunCapCents?: number;
+  /** [L0-3] Quick, Ollama only: pull a model that is not there yet, after a confirmation. */
+  pull?: boolean;
 }
 
 export interface DoctorSummary {
@@ -73,6 +78,13 @@ export interface SetupContext {
    * readable line and exit 2, instead of an inquirer error from a closed stdin.
    */
   interactive?: boolean;
+  /**
+   * [L0-3] The local runtime (Ollama, LM Studio): is it up, what has it pulled, pull one more.
+   * Injected so a test answers with a fake `fetch`; defaults to the real endpoints.
+   */
+  localRuntime?: LocalRuntimePort;
+  /** [L0-3] The machine's memory, which picks the recommended local model. Defaults to `os.totalmem()`. */
+  totalMemoryBytes?: number;
 }
 
 export interface SetupResult {

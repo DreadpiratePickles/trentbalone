@@ -4,7 +4,7 @@
  * bind it to arrays, which is what makes the behaviour assertable.
  */
 
-import { terminalWidth, type Theme } from "../ui/index.js";
+import { GLYPHS, terminalWidth, type Theme } from "../ui/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { BUSY_STATUS_LINE, STOP_COMMAND } from "@trent/core/gateway/index.js";
 import { TranscriptRenderer, identityForRole } from "./render.js";
@@ -12,7 +12,6 @@ import { BudgetLedger } from "./budget.js";
 import { Conversation, doubleTextPolicy, historyLimits, TurnOutcome, type HistoryMessage } from "./conversation.js";
 import { ApprovalGate, renderApprovalCard, type GateAnswer } from "./approvals.js";
 import { questionFromEvent, renderQuestion } from "@trent/core/tools/human/index.js";
-import { GLYPHS } from "../ui/index.js";
 import { runCommand, commandNames } from "./commands.js";
 import { autocomplete, applyCompletion, renderDropdown } from "./autocomplete.js";
 import { renderDegradedBanner } from "./degraded.js";
@@ -54,6 +53,7 @@ export interface ReplEngineDeps {
   write(text: string): void;
   exit(code: number): void;
   degraded?: boolean;
+  degradedNotice?: string;
   traces?: ReplTraceStore;
   width?: number;
   /** This session's transcript, seeded on resume and persisted per turn. Its own, when absent. */
@@ -184,7 +184,7 @@ export class ReplEngine {
   async start(): Promise<void> {
     if (this.#started) return;
     this.#started = true;
-    if (this.#deps.degraded === true) this.#render(renderDegradedBanner(this.#deps.theme, this.#width()));
+    if (this.#deps.degraded === true) this.#render(renderDegradedBanner(this.#deps.theme, this.#width(), this.#deps.degradedNotice));
     const restored = await this.approvals.restore();
     for (const approval of restored) {
       this.#emit(this.#deps.theme.meta("An approval from an earlier session is still pending:"));

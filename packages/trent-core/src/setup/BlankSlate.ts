@@ -1,7 +1,10 @@
+import os from "node:os";
 import { DEFAULT_MODELS, primaryEnvVar } from "./detect.js";
 import { FullSetup } from "./FullSetup.js";
 import { MINIMAL_TOOLSETS, applyToolsets, providerChoices, withFleet } from "./steps.js";
 import { SetupRun } from "./SetupRun.js";
+import { isLocalProvider } from "./local-runtime.js";
+import { localModelDefault } from "./local-setup.js";
 import type { Provider } from "../config/schema.js";
 import type { SetupOptions, SetupResult } from "./types.js";
 
@@ -29,8 +32,13 @@ export class BlankSlate extends SetupRun {
         default: current.provider,
       }));
 
+    // [L0-3] A local provider is pre-filled with its tier's model, never the static table's.
     const modelDefault =
-      current.provider === provider ? current.model : DEFAULT_MODELS[provider];
+      current.provider === provider
+        ? current.model
+        : isLocalProvider(provider)
+          ? localModelDefault(provider, this.ctx.totalMemoryBytes ?? os.totalmem())
+          : DEFAULT_MODELS[provider];
     const model =
       options.model ??
       (await prompts.input({ id: "model", message: "Model", default: modelDefault }));

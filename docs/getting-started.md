@@ -116,7 +116,8 @@ Three modes exist:
   until `a2a.peers` names a peer). It asks one
   confirmation before writing. With no key present it names the environment variables and the
   `.env` path, writes nothing, prints `Setup did not complete: No provider key found. ...` and exits
-  3. It does not fake an OAuth flow.
+  3. It does not fake an OAuth flow. With `--provider ollama` or `--provider lmstudio` it looks for
+  no key at all: it checks the runtime and the model instead (section 11).
 - `--mode full` walks every provider, messaging platform and toolset interactively, and offers to
   store a key through a masked prompt.
 - `--mode blank-slate` keeps `file_ops` and `terminal` and writes every other toolset name into
@@ -144,7 +145,7 @@ those are what you run when the config is the broken thing.
 
 Setup exits 0 when it wrote a configuration and 3 when it did not. `--json` prints exactly one JSON
 document on stdout in every outcome, with `"reason": "no-key"` or `"cancelled"` when it did not
-complete, and sends the wizard's own lines and prompts to stderr. The prompts need a terminal: with
+complete (`"runtime-unreachable"` or `"model-not-pulled"` on a local provider, section 11), and sends the wizard's own lines and prompts to stderr. The prompts need a terminal: with
 stdin redirected, `full` and `blank-slate` refuse before touching the profile, and `quick` refuses at
 its confirmation, each with one line and exit 2:
 
@@ -228,7 +229,9 @@ Setup did not complete: No provider key found. Set OPENAI_API_KEY (or another pr
   one) in your shell or in the profile .env file, then run: trent setup
 ```
 
-If you see `DEGRADED`, nothing on the screen came from a model. `trent connect` does not add a model
+If you see `DEGRADED`, nothing on the screen came from a model. A local provider (section 11) needs
+no key, so this paragraph never appears for one; its REPL is degraded only when the runtime is down
+or lacks the configured model, and then it says so in one line. `trent connect` does not add a model
 key: it connects business and social providers (see [connect.md](connect.md)).
 
 ## 8. Start a conversation
@@ -371,6 +374,71 @@ npm run cli -- security audit                       # read-only; exit 1 on a fin
 `sessions export` is the boundary a transcript crosses on its way off the machine: bodies are left
 out unless `--include-content` says otherwise, and what does leave has been through the redactor, so
 a key someone pasted into a prompt does not travel with it. `--out` writes the file mode 0600.
+
+## 11. Local models
+
+Trent can run on a model served from your own machine by Ollama or LM Studio. Neither needs a key.
+
+```bash
+ollama serve                                                  # if Ollama is not already running
+npm run cli -- setup --mode quick --provider ollama           # checks Ollama, proposes the model for this machine
+npm run cli -- setup --mode quick --provider ollama --pull    # the same, and offers to pull a missing model
+npm run cli -- setup --mode quick --provider ollama --model qwen3.5:9b   # any model Ollama has
+npm run cli -- setup --mode quick --provider lmstudio         # LM Studio's server
+```
+
+Quick setup on a local provider asks for no key and never claims one is set. It checks that the
+runtime answers where a run will send its calls (Ollama at `http://127.0.0.1:11434` or
+`OLLAMA_BASE_URL`; LM Studio at `http://127.0.0.1:1234` or `LMSTUDIO_BASE_URL`), lists the models it
+has, and proposes the one that fits the machine's memory, read from the operating system:
+
+| Memory | Ollama tag | Download |
+|---|---|---|
+| under 32 GB (a 16 GB or 24 GB Mac) | `qwen3.5:9b` | 6.6 GB |
+| 32 GB up to 64 GB | `qwen3.6:27b` | 18 GB |
+| 64 GB and up | `qwen3.6:35b-a3b` | 23 GB |
+
+The tags and sizes were read from the Ollama library on 2026-09-26, and the tiers come from
+`01_discovery/output/local-models-2026-09-26.md` section 6. The old default, `llama3.2`, is gone:
+Berkeley's function-calling leaderboard scores Llama 3.2 3B at 21.95% overall and 4% on multi-turn
+tasks. `--model` takes any model the runtime has instead. LM Studio downloads models in its own app,
+and setup matches them by name, so `qwen/qwen3.5-9b` counts as the 9B.
+
+When the runtime does not answer, setup names the URL and the start command (`ollama serve`, or
+`lms server start`) and exits 3 with `"reason": "runtime-unreachable"`. When the model is not there,
+it prints the exact `ollama pull <tag>` line and exits 3 with `"reason": "model-not-pulled"`.
+`--pull` offers to pull it instead, after a confirmation, so it needs a terminal. Neither stop asks a
+question, so both work from a script. Full setup (`--mode full`) reports the same things and writes
+the configuration anyway, because you may start the runtime afterwards.
+
+What to expect, by tier. Setup prints the line for the model it wrote.
+
+- 16 GB, `qwen3.5:9b`: Single tool calls mostly work at 9B. Multi-step plans are unreliable and
+  chains of three or more tool calls fail often, so keep each objective short and explicit. Every
+  cold prompt pays for prefill first, so expect tens of seconds before the first token on a Mac.
+- 32 GB, `qwen3.6:27b`: Tool calls work well on short chains at 27B. Planning is adequate for
+  bounded, well-specified tasks but below hosted frontier models. Every cold prompt pays for prefill
+  first, and a dense 27B on a Mac can spend a minute or more on one long seat prompt.
+- 64 GB, `qwen3.6:35b-a3b`: Tool calls work well on short chains with this 35B mixture-of-experts
+  model. Planning is adequate for bounded, well-specified tasks but below hosted frontier models.
+  Only 3B parameters are active per token, so prefill is faster than a dense 27B, but a cold long
+  prompt still costs seconds to tens of seconds.
+
+The minute on a 27B is measured: a 27B on an M1 Max evaluated prompts at 34.7 tokens per second
+(`01_discovery/output/trent-local-path-audit-2026-09-26.md`), and a seat prompt is about 6,200 tokens.
+
+On a local provider the REPL does not print the no-key paragraph of section 7. It is degraded only
+when the runtime is down or lacks the configured model, and then it prints one line:
+
+```
+◆ DEGRADED — Ollama not answering at http://127.0.0.1:11434. Run: ollama serve
+◆ DEGRADED — Ollama at http://127.0.0.1:11434 has no qwen3.6:27b. Run: ollama pull qwen3.6:27b
+```
+
+The improvement judge (`improve.judge_model`, [improve.md](improve.md)) never falls back to a hosted
+model on a local provider. Set it to a second local model, for example
+`npm run cli -- config set improve.judge_model qwen3.6:27b`. Otherwise a live sweep refuses with
+`judge needs a second local model: set improve.judge_model`.
 
 ## Not yet implemented
 

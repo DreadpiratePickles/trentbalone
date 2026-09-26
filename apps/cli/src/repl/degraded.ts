@@ -15,6 +15,15 @@
  */
 
 import { PROVIDER_ENV_VARS } from "@trent/core/setup/detect.js";
+import {
+  createLocalRuntime,
+  hasLocalModel,
+  isLocalProvider,
+  LOCAL_RUNTIME_LABEL,
+  pullCommand,
+  START_COMMAND,
+  type LocalRuntimePort,
+} from "@trent/core/setup/local-runtime.js";
 import { GLYPHS, truncate, visibleWidth, type Theme } from "../ui/index.js";
 
 /**
@@ -30,9 +39,53 @@ export interface KeySource {
   [name: string]: string | undefined;
 }
 
-/** True when not one provider key is present. Never returns or logs a key. */
-export function isDegraded(source: KeySource): boolean {
+/**
+ * True when not one provider key is present. Never returns or logs a key.
+ *
+ * [L0-3] G7: DEGRADED means no usable provider, not no key. A local provider (`ollama`, `lmstudio`)
+ * needs no key, so the key rule does not apply to it: its runtime decides, in `degradedState`.
+ */
+export function isDegraded(source: KeySource, provider?: string): boolean {
+  if (isLocalProvider(provider)) return false;
   return !PROVIDER_KEY_VARS.some((name) => (source[name] ?? "").trim() !== "");
+}
+
+export interface DegradedState {
+  readonly degraded: boolean;
+  /** One line on why, when it is not a missing key: the local runtime is down or lacks the model. */
+  readonly notice?: string;
+}
+
+export interface DegradedInput {
+  source: KeySource;
+  provider?: string;
+  model?: string;
+  env?: NodeJS.ProcessEnv;
+  /** The local runtime; a test injects a fake `fetch`. Defaults to the real endpoints. */
+  runtime?: LocalRuntimePort;
+}
+
+/**
+ * [L0-3] G7. A hosted provider keeps the key rule and is never probed. A local one is usable when
+ * its runtime answers at the gateway's own URL and lists the configured model; otherwise the REPL
+ * says so in one line naming the URL and the command that fixes it (`ollama serve`, `ollama pull`).
+ */
+export async function degradedState(input: DegradedInput): Promise<DegradedState> {
+  const { provider } = input;
+  if (!isLocalProvider(provider)) return { degraded: isDegraded(input.source, provider) };
+  const status = await (input.runtime ?? createLocalRuntime()).probe(provider, input.env ?? process.env);
+  const label = LOCAL_RUNTIME_LABEL[provider];
+  // Short enough that the Ollama line fits one 80-column terminal, the width a piped REPL gets.
+  const lead = `${GLYPHS.needsApproval} DEGRADED — ${label}`;
+  if (!status.reachable) {
+    return { degraded: true, notice: `${lead} not answering at ${status.url}. Run: ${START_COMMAND[provider]}` };
+  }
+  const model = input.model?.trim() ?? "";
+  if (model !== "" && !hasLocalModel(status.models, model)) {
+    const pull = pullCommand(provider, model);
+    return { degraded: true, notice: `${lead} at ${status.url} has no ${model}. ${pull === undefined ? `Load it in ${label}` : `Run: ${pull}`}` };
+  }
+  return { degraded: false };
 }
 
 const PARAGRAPH = [
@@ -61,7 +114,10 @@ function wrap(text: string, width: number): string[] {
   return lines.map((l) => truncate(l, width));
 }
 
-/** The banner, in ember, because a human needs to notice it. */
-export function renderDegradedBanner(theme: Theme, width: number): string[] {
-  return wrap(PARAGRAPH, Math.max(1, Math.floor(width))).map((line) => theme.needsApproval(line));
+/**
+ * The banner, in ember, because a human needs to notice it. With a `notice` (a local runtime that is
+ * down or lacks the model, [L0-3]) that one line replaces the no-key paragraph, which would be false.
+ */
+export function renderDegradedBanner(theme: Theme, width: number, notice?: string): string[] {
+  return wrap(notice ?? PARAGRAPH, Math.max(1, Math.floor(width))).map((line) => theme.needsApproval(line));
 }

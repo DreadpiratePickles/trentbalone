@@ -190,6 +190,11 @@ resolve one at run time (`improve/judge-model.ts`), in this order:
 3. otherwise the strongest model in the wrapper's own price table (`model-gateway/pricing.ts`)
    whose id differs from the executor's.
 
+Under a local provider (`ollama`, `lmstudio`) only step 1 applies, because the price table is hosted
+models: `improve.judge_model` must name a second local model, a priced id or an Ollama `:cloud` model
+is refused, and with none set the sweep stops with `judge needs a second local model: set
+improve.judge_model`. The judge never falls back to a hosted model on a local profile.
+
 The judge and the executor may never be the same id: equal models are a configuration error that
 names both, because a judge that is the executor shares its blind spots and its idea of a good
 answer, and the rate that would expose that (TNR, gate 6) is exactly the one a self-grading judge

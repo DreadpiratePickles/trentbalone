@@ -195,6 +195,8 @@ export interface HarnessOptions {
   events?: OrcEvent[];
   config?: TrentConfig;
   degraded?: boolean;
+  /** [L0-3] The one line a local runtime that is down prints instead of the no-key paragraph. */
+  degradedNotice?: string;
   store?: MemoryStore;
   /** Told when a gate is answered; the questions test asserts the answer text reaches it. */
   onApprovalAnswer?: ReplEngineDeps["onApprovalAnswer"];
@@ -252,6 +254,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
     store,
     companyId: "cmp_test",
     degraded: options.degraded ?? false,
+    ...(options.degradedNotice === undefined ? {} : { degradedNotice: options.degradedNotice }),
     write: (text: string) => void out.push(text),
     exit: (code: number) => void exit(code),
     ...(options.onApprovalAnswer ? { onApprovalAnswer: options.onApprovalAnswer } : {}),
