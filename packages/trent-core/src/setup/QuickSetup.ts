@@ -1,7 +1,10 @@
 import os from "node:os";
 import {
   DEFAULT_MODELS,
+  LOCAL_SETUP_COMMAND, // [C9]
+  describeKeylessLocal, // [C9]
   detectProviderKeys,
+  findKeylessLocal, // [C9]
   missingKeyGuidance,
   primaryEnvVar,
 } from "./detect.js";
@@ -51,14 +54,22 @@ export class QuickSetup extends SetupRun {
     const detected = detectProviderKeys(configManager, env, options.provider);
 
     if (detected.length === 0) {
-      for (const line of missingKeyGuidance(configManager)) this.say(line);
-      return this.abort(
+      // [C9] No key and no provider named: a model already on this machine may need none. The check is
+      // local setup's own (L2), so the command suggested is one that then works.
+      const local = options.provider === undefined
+        ? await findKeylessLocal({ env, ...(this.ctx.localDiscovery === undefined ? {} : { discovery: this.ctx.localDiscovery }), ...(this.ctx.totalMemoryBytes === undefined ? {} : { totalMemoryBytes: this.ctx.totalMemoryBytes }) })
+        : undefined;
+      for (const line of missingKeyGuidance(configManager, local)) this.say(line);
+      const stopped = this.abort(
         "quick",
         options.provider
           ? `No key found for ${options.provider}. Set ${primaryEnvVar(options.provider)} in your environment or in ${configManager.getSecretsPath()}, then run setup again.`
-          : `No provider key found. Set OPENAI_API_KEY (or another provider variable listed above) in your environment or in ${configManager.getSecretsPath()}, then run setup again.`,
+          : local !== undefined // [C9]
+            ? `No provider key found, but ${describeKeylessLocal(local)}, which needs no key. Run: ${LOCAL_SETUP_COMMAND} (or set OPENAI_API_KEY or another provider variable listed above in your environment or in ${configManager.getSecretsPath()}, then run setup again).`
+            : `No provider key found. Set OPENAI_API_KEY (or another provider variable listed above) in your environment or in ${configManager.getSecretsPath()}, then run setup again.`,
         "no-key",
       );
+      return local === undefined ? stopped : { ...stopped, suggested: "local" }; // [C9]
     }
 
     this.say("Found the following provider keys:");

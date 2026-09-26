@@ -110,6 +110,11 @@ export interface SetupResult {
   message: string;
   /** Set only when `success` is false. */
   reason?: SetupIncompleteReason;
+  /**
+   * [C9] Quick, `no-key` only: a model on this machine needs no key and `trent setup --mode local`
+   * would use it now (`findKeylessLocal`, `detect.ts`). Absent when no local runtime could.
+   */
+  suggested?: "local";
   /** `null` when the run deliberately wrote nothing. */
   config: TrentConfig | null;
   /** Names of secrets written to the profile `.env`. Never their values. */

@@ -296,6 +296,9 @@ describe("trent setup", () => {
   describe("the real wizard on a profile with no provider key", () => {
     beforeEach(() => {
       for (const name of Object.values(PROVIDER_ENV_VARS).flat()) vi.stubEnv(name, "");
+      // [C9] And no local runtime: with one, the text leads with `trent setup --mode local` (setup-keyless.test.ts).
+      vi.stubEnv("OLLAMA_BASE_URL", "http://127.0.0.1:9/v1");
+      vi.stubEnv("LMSTUDIO_BASE_URL", "http://127.0.0.1:9/v1");
     });
     afterEach(() => vi.unstubAllEnvs());
 

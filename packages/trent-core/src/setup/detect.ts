@@ -1,7 +1,10 @@
 import fs from "node:fs";
+import os from "node:os"; // [C9]
 import dotenv from "dotenv";
 import type { ConfigManager } from "../config/index.js";
 import type { Provider } from "../config/schema.js";
+import { RUNTIME_LABEL, createLocalDiscovery, type LocalDiscoveryPort } from "./local-detect.js"; // [C9]
+import { chooseChat, chooseRuntime } from "./local-plan.js"; // [C9]
 
 /**
  * Which environment variable holds each provider's key. `ollama` and `lmstudio` run locally and need
@@ -101,14 +104,63 @@ export function hasKeyFor(
   return detectProviderKeys(configManager, env, provider).length > 0;
 }
 
+// [C9] A keyless first run finds the model already on the machine.
+/** The one command that sets Trent up on a model this machine already runs. It needs no key. */
+export const LOCAL_SETUP_COMMAND = "trent setup --mode local";
+
+/** A local runtime `trent setup --mode local` could use right now, and the chat model it would choose. */
+export interface KeylessLocal {
+  /** As a person says it: `Ollama`, `LM Studio`, `llama.cpp`. */
+  readonly runtime: string;
+  /** The server root, without `/v1`. */
+  readonly url: string;
+  readonly model: string;
+}
+
+export interface KeylessLocalInput {
+  env: NodeJS.ProcessEnv;
+  /** Which runtimes answer and what each has; defaults to the real endpoints. A test injects a fake. */
+  discovery?: LocalDiscoveryPort;
+  /** Picks the memory tier's model, as local setup does; defaults to `os.totalmem()`. */
+  totalMemoryBytes?: number;
+}
+
+/**
+ * [C9] What `trent setup --mode local` would choose with no flags and no pull, or undefined when that
+ * command would stop. It is L2's own detection (`local-detect.ts`) and L2's own choices
+ * (`local-plan.ts`: `chooseRuntime`, then `chooseChat`), so a suggestion is made only where the
+ * suggested command then works, and never for an Ollama cloud model or a model its runtime lists
+ * without `tools`. Only GET requests to the runtimes' listing routes: no key is sent, no model is called.
+ */
+export async function findKeylessLocal(input: KeylessLocalInput): Promise<KeylessLocal | undefined> {
+  const probes = await (input.discovery ?? createLocalDiscovery()).detect({ env: input.env });
+  const choice = chooseRuntime(probes, {});
+  if (!choice.ok) return undefined;
+  const chat = chooseChat(choice.runtime, { totalMemoryBytes: input.totalMemoryBytes ?? os.totalmem(), pull: false });
+  if (chat.model === undefined) return undefined;
+  return { runtime: RUNTIME_LABEL[choice.runtime.kind], url: choice.runtime.url, model: chat.model };
+}
+
+/** [C9] `Ollama at http://127.0.0.1:11434 has qwen3.5:9b`: the one phrase every surface uses. */
+export function describeKeylessLocal(local: KeylessLocal): string {
+  return `${local.runtime} at ${local.url} has ${local.model}`;
+}
+
 /**
  * The message shown when nothing was found. There is no hosted portal to sign into, so this names the
- * exact variables and the exact file instead of pretending to run an authorization flow.
+ * exact variables and the exact file instead of pretending to run an authorization flow. [C9] With a
+ * `local` model that needs no key, the first thing it says is that model and the command that uses it.
  */
-export function missingKeyGuidance(configManager: ConfigManager): string[] {
+export function missingKeyGuidance(configManager: ConfigManager, local?: KeylessLocal): string[] { // [C9] local
   const lines = [
-    "No provider API key was found.",
-    "Trent has no hosted sign-in. A key is read from one of two places:",
+    ...(local === undefined ? [ // [C9]
+      "No provider API key was found.",
+      "Trent has no hosted sign-in. A key is read from one of two places:",
+    ] : [
+      "No provider API key was found, but a model on this machine needs none.",
+      `${describeKeylessLocal(local)}. To use it, run: ${LOCAL_SETUP_COMMAND}`,
+      "Or use a hosted provider. Trent has no hosted sign-in. A key is read from one of two places:",
+    ]),
     `  1. your shell environment`,
     `  2. the profile env file at ${configManager.getSecretsPath()}`,
     "Set one of these variables, then run setup again:",
@@ -119,10 +171,9 @@ export function missingKeyGuidance(configManager: ConfigManager): string[] {
     if (vars.length === 0) continue;
     lines.push(`  ${provider}: ${vars.join(" or ")}`);
   }
-  lines.push(
-    `For example: echo 'OPENAI_API_KEY=your-key' >> ${configManager.getSecretsPath()}`,
-    "Or run a model on this machine, which needs no key: trent setup --mode quick --provider ollama (or lmstudio)",
-  );
+  lines.push(`For example: echo 'OPENAI_API_KEY=your-key' >> ${configManager.getSecretsPath()}`);
+  // [C9] Unchanged when no local model was found; with one, the command above already leads.
+  if (local === undefined) lines.push("Or run a model on this machine, which needs no key: trent setup --mode quick --provider ollama (or lmstudio)");
   return lines;
 }
 

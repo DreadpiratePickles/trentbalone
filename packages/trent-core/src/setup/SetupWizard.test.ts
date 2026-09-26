@@ -12,6 +12,11 @@ import { DEFAULT_HEARTBEAT_MD, HEARTBEAT_MD } from "../heartbeat/checklist.js";
 import { EXIT, TrentError } from "../errors/index.js";
 import { InquirerPrompts } from "./InquirerPrompts.js";
 import { PassThrough } from "node:stream";
+import { createLocalDiscovery } from "./local-detect.js"; // [C9]
+import { fakeLocal } from "./local-fakes.test-helpers.js"; // [C9]
+
+/** [C9] No local runtime answers (every origin refuses), so a keyless quick run keeps today's text. */
+const NOTHING_LOCAL = createLocalDiscovery({ fetch: fakeLocal({}).fetch });
 
 const EMOJI = /\p{Extended_Pictographic}/u;
 
@@ -36,6 +41,7 @@ describe("SetupWizard", () => {
       prompts,
       output,
       env,
+      localDiscovery: NOTHING_LOCAL, // [C9]
       ...(runDoctor ? { runDoctor } : {}),
     });
     return { wizard, prompts };
@@ -392,7 +398,7 @@ describe("SetupWizard", () => {
     });
 
     it("quick with no key needs no terminal: it reports the missing key", async () => {
-      const res = await new SetupWizard({ configManager, output, env: {}, interactive: false }).run({ mode: "quick" });
+      const res = await new SetupWizard({ configManager, output, env: {}, interactive: false, localDiscovery: NOTHING_LOCAL }).run({ mode: "quick" }); // [C9]
       expect(res.success).toBe(false);
       expect(res.reason).toBe("no-key");
     });

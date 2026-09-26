@@ -12,6 +12,8 @@ import { isDegraded, degradedState, renderDegradedBanner, DEGRADED_MARK } from "
 import { makeHarness } from "./harness.js";
 import { PROVIDER_ENV_VARS } from "@trent/core/setup/index.js";
 import { createLocalRuntime } from "@trent/core/setup/local-runtime.js";
+import { createLocalDiscovery } from "@trent/core/setup/local-detect.js"; // [C9]
+import { CHAT_CAPS, fakeLocal } from "@trent/core/setup/local-fakes.test-helpers.js"; // [C9]
 
 const plain = createTheme("none");
 
@@ -177,9 +179,27 @@ describe("[L0-3] a local provider is judged by its runtime, not by a key", () =>
   it("a hosted provider keeps the key rule and never probes a runtime", async () => {
     let probed = false;
     const spy = createLocalRuntime({ fetch: (async () => ((probed = true), Response.json({}))) as typeof fetch });
-    expect(await degradedState({ source: {}, provider: "openai", model: "gpt-x", env: {}, runtime: spy })).toEqual({ degraded: true });
+    const nothingLocal = createLocalDiscovery({ fetch: fakeLocal({}).fetch }); // [C9] no local runtime answers
+    expect(await degradedState({ source: {}, provider: "openai", model: "gpt-x", env: {}, runtime: spy, discovery: nothingLocal })).toEqual({ degraded: true }); // [C9]
     expect(await degradedState({ source: { OPENAI_API_KEY: "x" }, provider: "openai", model: "gpt-x", env: {}, runtime: spy })).toEqual({ degraded: false });
     expect(probed).toBe(false);
+  });
+
+  // [C9] No key, but a model on this machine needs none: the banner names the local setup first.
+  it("[C9] a keyless hosted profile with a usable local runtime: the banner names trent setup --mode local", async () => {
+    const ollama = fakeLocal({ ollama: { models: [{ name: "qwen3.5:9b", capabilities: [...CHAT_CAPS] }] } });
+    const state = await degradedState({ source: {}, provider: "openai", model: "gpt-x", env: {}, discovery: createLocalDiscovery({ fetch: ollama.fetch }) });
+    expect(state.degraded).toBe(true);
+    const text = renderDegradedBanner(plain, 80, state.notice).join(" ").replace(/\s+/g, " ");
+    expect(text).toContain("DEGRADED MODE");
+    expect(text).toContain("Ollama at http://127.0.0.1:11434 has qwen3.5:9b");
+    expect(text).toContain("trent setup --mode local");
+    expect(text.indexOf("trent setup --mode local")).toBeLessThan(text.indexOf("OPENAI_API_KEY"));
+    for (const line of renderDegradedBanner(plain, 80, state.notice)) expect(line.length).toBeLessThanOrEqual(80);
+    // With a key there is nothing to suggest and nothing is probed.
+    const calls = ollama.calls.length;
+    expect(await degradedState({ source: { OPENAI_API_KEY: "x" }, provider: "openai", env: {}, discovery: createLocalDiscovery({ fetch: ollama.fetch }) })).toEqual({ degraded: false });
+    expect(ollama.calls).toHaveLength(calls);
   });
 
   it("the engine prints the one-line notice instead of the no-key paragraph, and still marks agent lines", async () => {

@@ -1,7 +1,9 @@
 import fs from "node:fs";
-import type { CheckResult, DoctorCheck, DoctorContext } from "../types.js";
+import type { CheckResult, DoctorCheck, DoctorContext, FetchLike } from "../types.js"; // [C9] FetchLike
 import { DEFAULT_PROBE_TIMEOUT_MS } from "../probe.js";
 import { KEYLESS_PROVIDERS, PROVIDER_CREDENTIALS, credentialForProvider } from "../providers.js";
+import { LOCAL_SETUP_COMMAND, findKeylessLocal, type KeylessLocal } from "../../setup/detect.js"; // [C9]
+import { createLocalDiscovery } from "../../setup/local-detect.js"; // [C9]
 
 const CATEGORY = "Credentials";
 const NAME = "API Credentials";
@@ -42,6 +44,17 @@ function otherConfigured(ctx: DoctorContext, activeProvider: string): string[] {
     .map((cred) => cred.id);
 }
 
+/**
+ * [C9] With no key: the model `trent setup --mode local` would use on this machine, if any (setup's own
+ * finder, L2's detection and choice), probed through the doctor's `fetchImpl` and deadline.
+ */
+async function keylessLocal(ctx: DoctorContext): Promise<KeylessLocal | undefined> {
+  const impl: FetchLike | undefined = ctx.fetchImpl;
+  const fetchFor = impl === undefined ? {} : { fetch: ((input: string | URL | Request, init?: RequestInit) => impl(input instanceof Request ? input.url : String(input), init)) as typeof fetch };
+  const discovery = createLocalDiscovery({ ...fetchFor, timeoutMs: ctx.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS });
+  return await findKeylessLocal({ env: ctx.env ?? process.env, discovery });
+}
+
 export const checkCredentials: DoctorCheck = {
   id: "check_credentials",
   name: NAME,
@@ -72,11 +85,16 @@ export const checkCredentials: DoctorCheck = {
     const found = readKey(ctx, credential.envVars);
     if (!found) {
       const where = fs.existsSync(secretsPath) ? "is not set in it" : "does not exist yet";
+      // [C9] A model on this machine needs no key: the hint names the command that uses it, first.
+      const local = await keylessLocal(ctx);
+      const setKey = `trent config set ${credential.envVars[0]} <your-api-key>`;
       return result({
         status: "fail",
         message: `Active provider "${provider}" needs ${credential.envVars[0]}; the secrets file ${where}.`,
-        fixHint: `Run \`trent config set ${credential.envVars[0]} <your-api-key>\`.`,
-        details: { provider, envVar: credential.envVars[0], secretsPath },
+        fixHint: local === undefined // [C9]
+          ? `Run \`${setKey}\`.`
+          : `Run \`${LOCAL_SETUP_COMMAND}\` to use ${local.model} on ${local.runtime} at ${local.url}, which needs no key; or \`${setKey}\`.`,
+        details: { provider, envVar: credential.envVars[0], secretsPath, ...(local === undefined ? {} : { suggested: "local" }) }, // [C9]
       });
     }
 

@@ -14,7 +14,8 @@
  * echoed anywhere — AGENTS.md invariant 7.
  */
 
-import { PROVIDER_ENV_VARS } from "@trent/core/setup/detect.js";
+import { LOCAL_SETUP_COMMAND, PROVIDER_ENV_VARS, describeKeylessLocal, findKeylessLocal, type KeylessLocal } from "@trent/core/setup/detect.js"; // [C9]
+import type { LocalDiscoveryPort } from "@trent/core/setup/local-detect.js"; // [C9]
 import {
   createLocalRuntime,
   hasLocalModel,
@@ -52,7 +53,11 @@ export function isDegraded(source: KeySource, provider?: string): boolean {
 
 export interface DegradedState {
   readonly degraded: boolean;
-  /** One line on why, when it is not a missing key: the local runtime is down or lacks the model. */
+  /**
+   * One line on why, when it is not a missing key: the local runtime is down or lacks the model. [C9]
+   * Or, for a missing key while a model on this machine needs none, the no-key paragraph naming that
+   * model and `trent setup --mode local` first. Either way it replaces the plain no-key paragraph.
+   */
   readonly notice?: string;
 }
 
@@ -63,6 +68,8 @@ export interface DegradedInput {
   env?: NodeJS.ProcessEnv;
   /** The local runtime; a test injects a fake `fetch`. Defaults to the real endpoints. */
   runtime?: LocalRuntimePort;
+  /** [C9] Keyless hosted profile: which local runtimes answer (setup's own detection). Defaults to the real endpoints. */
+  discovery?: LocalDiscoveryPort;
 }
 
 /**
@@ -72,7 +79,12 @@ export interface DegradedInput {
  */
 export async function degradedState(input: DegradedInput): Promise<DegradedState> {
   const { provider } = input;
-  if (!isLocalProvider(provider)) return { degraded: isDegraded(input.source, provider) };
+  if (!isLocalProvider(provider)) {
+    // [C9] No key, but a model on this machine may need none: the banner names it and the command.
+    if (!isDegraded(input.source, provider)) return { degraded: false };
+    const local = await findKeylessLocal({ env: input.env ?? process.env, ...(input.discovery === undefined ? {} : { discovery: input.discovery }) });
+    return local === undefined ? { degraded: true } : { degraded: true, notice: keylessLocalParagraph(local) };
+  }
   const status = await (input.runtime ?? createLocalRuntime()).probe(provider, input.env ?? process.env);
   const label = LOCAL_RUNTIME_LABEL[provider];
   // Short enough that the Ollama line fits one 80-column terminal, the width a piped REPL gets.
@@ -88,13 +100,19 @@ export async function degradedState(input: DegradedInput): Promise<DegradedState
   return { degraded: false };
 }
 
-const PARAGRAPH = [
+// [C9] Split so the keyless-local paragraph says the same things; PARAGRAPH's text is unchanged.
+const PARAGRAPH_HEAD = [
   `${GLYPHS.needsApproval} DEGRADED MODE — no model provider key was found, so nothing typed here reaches a model:`,
   "an objective gets a deterministic fallback plan, the critic auto-passes, and the run fails when its model calls are refused.",
   "Without a key these still work: /help, trent doctor, trent config get|set, trent fleet list and trent brain status|log|show.",
-  "To fix it, put a provider key (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY; trent setup lists every one)",
-  "in your shell or in the profile .env file, then run: trent setup",
-].join(" ");
+];
+const KEY_FIX = "put a provider key (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY; trent setup lists every one) in your shell or in the profile .env file, then run: trent setup";
+const PARAGRAPH = [...PARAGRAPH_HEAD, `To fix it, ${KEY_FIX}`].join(" ");
+
+/** [C9] The no-key paragraph when a model on this machine needs no key: that model and its command first. */
+function keylessLocalParagraph(local: KeylessLocal): string {
+  return [...PARAGRAPH_HEAD, `${describeKeylessLocal(local)}, which needs no key. To use it, run: ${LOCAL_SETUP_COMMAND} — or ${KEY_FIX}`].join(" ");
+}
 
 /** Word-wrap to `width`, continuation lines indented two columns. A word wider than a line is cut. */
 function wrap(text: string, width: number): string[] {
@@ -117,6 +135,7 @@ function wrap(text: string, width: number): string[] {
 /**
  * The banner, in ember, because a human needs to notice it. With a `notice` (a local runtime that is
  * down or lacks the model, [L0-3]) that one line replaces the no-key paragraph, which would be false.
+ * [C9] A keyless profile with a usable local model gets the paragraph that names it, the same way.
  */
 export function renderDegradedBanner(theme: Theme, width: number, notice?: string): string[] {
   return wrap(notice ?? PARAGRAPH, Math.max(1, Math.floor(width))).map((line) => theme.needsApproval(line));

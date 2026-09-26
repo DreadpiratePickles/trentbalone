@@ -35,14 +35,23 @@ class ScriptedStdin extends EventEmitter {
 
 let home = "";
 const savedHome = process.env.TRENT_HOME;
+/**
+ * [C9] No local runtime answers here (closed port 9). A keyless profile's banner probes for one before
+ * the boot (`degradedState`); a real Ollama on the machine would be asked for its model list, would
+ * change the no-key text, and under load would delay the boot past the 100 ms Ctrl+C below.
+ */
+const LOCAL_URLS = ["OLLAMA_BASE_URL", "LMSTUDIO_BASE_URL"] as const;
+const savedLocal = LOCAL_URLS.map((name) => process.env[name]);
 
 beforeAll(() => {
   home = mkdtempSync(path.join(os.tmpdir(), "trent-boot-"));
   process.env.TRENT_HOME = home;
+  for (const name of LOCAL_URLS) process.env[name] = "http://127.0.0.1:9/v1"; // [C9]
 });
 afterAll(() => {
   if (savedHome === undefined) delete process.env.TRENT_HOME;
   else process.env.TRENT_HOME = savedHome;
+  LOCAL_URLS.forEach((name, i) => (savedLocal[i] === undefined ? delete process.env[name] : (process.env[name] = savedLocal[i]))); // [C9]
   rmSync(home, { recursive: true, force: true });
 });
 

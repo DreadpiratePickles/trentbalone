@@ -5,6 +5,7 @@ import path from "node:path";
 import { ConfigManager } from "../../config/ConfigManager.js";
 import { checkCredentials } from "./credentials.js";
 import type { DoctorContext } from "../types.js";
+import { CHAT_CAPS, fakeLocal } from "../../setup/local-fakes.test-helpers.js"; // [C9]
 
 const REAL_SHAPED_ANTHROPIC = "sk-ant-api03-" + "z".repeat(95);
 const PLACEHOLDER_ANTHROPIC = "sk-ant-placeh0ld"; // 16 chars, exactly what sits in ~/.trent/.env
@@ -137,9 +138,25 @@ describe("credentials check", () => {
   });
 
   it("fails when the active provider has no key at all", async () => {
-    const result = await checkCredentials.run(context());
+    // [C9] No local runtime answers (every origin refuses), so the hint is exactly today's.
+    const result = await checkCredentials.run(context({ env: {}, fetchImpl: fakeLocal({}).fetch }));
     expect(result.status).toBe("fail");
     expect(result.message).toContain("ANTHROPIC_API_KEY");
-    expect(result.fixHint).toBeTruthy();
+    expect(result.fixHint).toBe("Run `trent config set ANTHROPIC_API_KEY <your-api-key>`."); // [C9]
+  });
+
+  // [C9] A keyless machine with a model on it: the hint names the local setup first.
+  it("[C9] with no key and a local runtime that has a tools-capable model, the hint names trent setup --mode local", async () => {
+    const ollama = fakeLocal({ ollama: { models: [{ name: "qwen3.5:9b", capabilities: [...CHAT_CAPS] }] } });
+    const result = await checkCredentials.run(context({ env: {}, fetchImpl: ollama.fetch }));
+    expect(result.status).toBe("fail");
+    expect(result.message).toContain("ANTHROPIC_API_KEY");
+    expect(result.fixHint).toMatch(/^Run `trent setup --mode local`/);
+    expect(result.fixHint).toContain("qwen3.5:9b");
+    expect(result.fixHint).toContain("http://127.0.0.1:11434");
+    expect(result.fixHint).toContain("trent config set ANTHROPIC_API_KEY <your-api-key>");
+    expect(result.details).toMatchObject({ suggested: "local" });
+    // Only the runtime's read routes were asked; nothing reached a model.
+    expect(ollama.calls.every((call) => call.startsWith("GET "))).toBe(true);
   });
 });

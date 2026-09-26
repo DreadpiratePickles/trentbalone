@@ -223,7 +223,7 @@ export async function runSetup(
   ctx: CommandContext,
   mode: SetupMode,
   opts: Record<string, unknown>,
-): Promise<SetupSummary & { local?: LocalSetupPlan }> { // [L2] local mode adds its plan
+): Promise<SetupSummary & { local?: LocalSetupPlan; suggested?: "local" }> { // [L2] local mode adds its plan; [C9] a keyless quick run its suggestion
   if (ctx.overrides.runSetup) return await ctx.overrides.runSetup(mode, opts);
 
   const wizard = new SetupWizard({
@@ -252,6 +252,7 @@ export async function runSetup(
     // Names only. A value never leaves the secrets file.
     secretsConfigured: result.secretsConfigured,
     ...(result.local === undefined ? {} : { local: result.local }), // [L2]
+    ...(result.suggested === undefined ? {} : { suggested: result.suggested }), // [C9] `trent setup --mode local` would work now
   };
 }
 

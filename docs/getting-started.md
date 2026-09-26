@@ -118,6 +118,11 @@ Three modes exist:
   `.env` path, writes nothing, prints `Setup did not complete: No provider key found. ...` and exits
   3. It does not fake an OAuth flow. With `--provider ollama` or `--provider lmstudio` it looks for
   no key at all: it checks the runtime and the model instead (section 11).
+  When there is no key but a model on this machine could run Trent now (Ollama or LM Studio at its
+  usual loopback address, listing a chat model that can call tools: the one `trent setup --mode local`
+  would choose), setup leads with it instead: `Ollama at http://127.0.0.1:11434 has qwen3.5:9b. To use
+  it, run: trent setup --mode local`. It still writes nothing and exits 3 with `"reason": "no-key"`, and
+  `--json` adds `"suggested": "local"`.
 - `--mode full` walks every provider, messaging platform and toolset interactively, and offers to
   store a key through a masked prompt.
 - `--mode blank-slate` keeps `file_ops` and `terminal` and writes every other toolset name into
@@ -144,7 +149,7 @@ up a key once there is one. `doctor`, `setup`, `config` and `uninstall` never ru
 those are what you run when the config is the broken thing.
 
 Setup exits 0 when it wrote a configuration and 3 when it did not. `--json` prints exactly one JSON
-document on stdout in every outcome, with `"reason": "no-key"` or `"cancelled"` when it did not
+document on stdout in every outcome, with `"reason": "no-key"` (plus `"suggested": "local"` when a local model is ready) or `"cancelled"` when it did not
 complete (`"runtime-unreachable"` or `"model-not-pulled"` on a local provider, section 11), and sends the wizard's own lines and prompts to stderr. The prompts need a terminal: with
 stdin redirected, `full` and `blank-slate` refuse before touching the profile, and `quick` refuses at
 its confirmation, each with one line and exit 2:
@@ -228,6 +233,11 @@ Setup did not complete: No provider key found. Set OPENAI_API_KEY (or another pr
   (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY; trent setup lists every
   one) in your shell or in the profile .env file, then run: trent setup
 ```
+
+When a local runtime already has a usable model, the first-run screen names it first: `Ollama at
+http://127.0.0.1:11434 has qwen3.5:9b, which needs no key. To use it, run: trent setup --mode local`,
+and the DEGRADED MODE banner and the API Credentials hint in `trent doctor` name the same command
+(`apps/cli/src/commands/__tests__/setup-keyless.test.ts`).
 
 If you see `DEGRADED`, nothing on the screen came from a model. A local provider (section 11) needs
 no key, so this paragraph never appears for one; its REPL is degraded only when the runtime is down
