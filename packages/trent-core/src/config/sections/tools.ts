@@ -22,6 +22,8 @@ export const ToolsetSchema = z.enum([
   "media",
   "social",
   "business",
+  // [P2-9] the A2A client: list, discover, send to and read history with configured peers (docs/a2a.md).
+  "a2a",
 ]);
 
 export type Toolset = z.infer<typeof ToolsetSchema>;

@@ -123,11 +123,11 @@ Three modes exist:
   `disabled_toolsets`, `agent.disabled_toolsets` and `platform_toolsets.cli`, so a later update
   reading any of the three cannot re-enable something you never asked for.
 
-The `toolsets` list in `config.yaml` is what the seats get, and it accepts sixteen names:
+The `toolsets` list in `config.yaml` is what the seats get, and it accepts seventeen names:
 `file_ops`, `terminal`, `web`, `browser`, `code`, `vision`, `memory`, `delegation`, `cron`,
-`skills`, `plugins`, `mcp`, `human`, `media`, `social` and `business`. A `config.yaml` with no
+`skills`, `plugins`, `mcp`, `human`, `media`, `social`, `business` and `a2a`. A `config.yaml` with no
 `toolsets` key gets nine of them — everything except `browser`, `vision`, `memory`, `mcp`, `media`,
-`social` and `business`. `web` needs the egress proxy, and when it
+`social`, `business` and `a2a`. `web` needs the egress proxy, and when it
 is off the banner says `skipped web (...)` instead of dropping it silently. `memory` rides in
 through the fleet-memory hook whether or not the list names it, and the run's `todo`, `clarify` and
 `session_search` tools are registered on every build rather than enabled here. Above

@@ -119,6 +119,11 @@ const NAME_CLASSES: ReadonlyArray<readonly [RegExp, PolicyClass]> = [
   tokenRule(["execute", "exec", "terminal", "process", "code", "run"], "execute"),
   tokenRule(["send", "email", "message", "post", "publish", "notify", "reply", "sms"], "external_send"),
   tokenRule(["network", "web", "browser", "http", "fetch", "download", "upload", "curl"], "network"),
+  // [P2-9] a2a: `a2a_discover` fetches a peer's card (network) and `a2a_history` reads this
+  // profile's own store (a read). Without a word of its own each fell through to the adapter's
+  // scope list, found `a2a_send` there and was floored as `external_send`.
+  tokenRule(["discover"], "network"),
+  tokenRule(["history"], "read_only"),
   tokenRule(["secret", "secrets", "token", "tokens", "credential", "credentials", "password", "api_key", "apikey", "private_key"], "secret_access"),
   tokenRule(["delete", "destroy", "remove", "purge", "drop", "revoke", "truncate"], "destructive"),
   tokenRule(["charge", "refund", "payment", "payout", "transfer", "invoice", "stripe", "checkout", "billing", "pay"], "money_moving"),

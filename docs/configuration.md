@@ -190,6 +190,10 @@ agent:
 connect:
   inherit_default: true       # another profile reads a provider it never connected (trent connect) from default's .env, read-only
 
+a2a:
+  peers: []                   # the A2A agents the a2a toolset may reach: {name, url, token_env?} (a2a.md)
+                              # token_env is the NAME of a .env variable ending _TOKEN/_KEY/_SECRET/_PASSWORD, never a value
+
 goals:
   verify_on_stop: true        # a turn that edited code needs fresh test or build evidence to finish
   verify_commands:            # what counts as that evidence

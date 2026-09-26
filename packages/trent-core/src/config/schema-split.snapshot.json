@@ -215,6 +215,9 @@
     "connect": {
       "inherit_default": true
     },
+    "a2a": {
+      "peers": []
+    },
     "personality": "default",
     "theme": "dark",
     "improve": {
@@ -568,6 +571,19 @@
     },
     "connect": {
       "inherit_default": false
+    },
+    "a2a": {
+      "peers": [
+        {
+          "name": "hermes",
+          "url": "https://hermes.fixture.test/",
+          "token_env": "HERMES_A2A_TOKEN"
+        },
+        {
+          "name": "local-trent",
+          "url": "http://127.0.0.1:7899"
+        }
+      ]
     },
     "personality": "fixture-personality",
     "theme": "light",

@@ -41,6 +41,7 @@ import { askVision, createVisionAdapter, type VisionGateway } from "./vision/ind
 import { createMediaAdapter } from "./media/index.js";
 import { buildBusinessToolset, type BusinessBuildSeams } from "./business/build.js";
 import { createSocialAdapter, type SocialAdapterOptions } from "./social/index.js";
+import { buildA2aToolset, type A2aBuildSeams } from "./a2a/build.js"; // [P2-9] a2a
 import { seatCapability } from "../fleet/seat-capabilities.js";
 // [D5] tool descriptions: what a promoted improvement draft replaced, read at registration.
 import { applyToolDescriptions, readToolOverrides, type AppliedToolOverride } from "../improve/tool-overrides.js";
@@ -130,6 +131,7 @@ export type ToolBuildConfig = Pick<TrentConfig, "toolsets" | "disabled_toolsets"
   readonly curator?: { readonly scan_agent_skills?: boolean };
   /** [B2] `media`: the backend preference, the hosted-transcription opt-in and the whisper model path. */
   readonly media?: TrentConfig["media"];
+  readonly a2a?: TrentConfig["a2a"]; // [P2-9] `a2a.peers`: the only origins the a2a toolset reaches (docs/a2a.md)
 };
 
 export interface ToolBuildDeps {
@@ -212,6 +214,7 @@ export interface ToolBuildDeps {
   readonly social?: SocialAdapterOptions;
   /** [B3] Test seams for `business` (a direct transport, fake endpoints, a token stub); absent means the egress proxy and `tokenResolver`. */
   readonly business?: BusinessBuildSeams;
+  readonly a2a?: A2aBuildSeams; // [P2-9] test seams for `a2a`: a direct transport and a token lookup
 }
 
 /** One toolset that was enabled in config but could not be built here, and why the seat cannot use it. */
@@ -259,7 +262,7 @@ export interface TrentToolBuild {
  */
 export const ALWAYS_ON_ADAPTERS: readonly string[] = ["todo", "clarify", "session_search"];
 
-export const IMPLEMENTED_TOOLSETS = ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp", "human", "media", "social", "business"] as const satisfies readonly Toolset[];
+export const IMPLEMENTED_TOOLSETS = ["file_ops", "terminal", "web", "code", "delegation", "cron", "skills", "plugins", "browser", "vision", "mcp", "human", "media", "social", "business", "a2a"] as const satisfies readonly Toolset[]; // [P2-9] a2a
 
 /** Enum values this builder does NOT produce, each with the reason a seat will see. */
 export const NOT_YET_IMPLEMENTED: readonly { readonly toolset: Toolset; readonly reason: string }[] = [
@@ -334,6 +337,9 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
       const business = buildBusinessToolset(deps.business, egress, egressReason, deps.seat, deps.profileDir);
       if (business.adapter !== undefined) adapters.push(business.adapter);
       else skipped.push({ toolset, reason: business.reason });
+    } else if (toolset === "a2a") {
+      const a2a = buildA2aToolset(config.a2a, deps.a2a, egress, egressReason, deps.profileDir, deps.seat); // [P2-9] peers through the egress proxy only
+      if (a2a.adapter !== undefined) adapters.push(a2a.adapter); else skipped.push({ toolset, reason: a2a.reason });
     } else if (toolset === "web" || toolset === "browser") {
       // web and browser only ever go out through the egress proxy: no proxy, no network.
       if (!egress) {
@@ -463,6 +469,7 @@ export const TOOLSET_BY_ADAPTER: Readonly<Record<string, Toolset>> = {
   media: "media",
   social: "social",
   business: "business",
+  a2a: "a2a", // [P2-9] a2a
   memory: "memory",
   fleet_search: "memory",
   // A3. `clarify` is the founder card, so it follows `human`; `session_search` reads this profile's

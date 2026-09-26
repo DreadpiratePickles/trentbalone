@@ -66,11 +66,14 @@ export class QuickSetup extends SetupRun {
     const social = (this.ctx.socialProviderConnected ?? (() => socialProviderConnected(configManager)))();
     // [B3] `business` likewise: on only when `trent connect stripe|google|square|twilio` holds one.
     const business = (this.ctx.businessProviderConnected ?? (() => businessProviderConnected(configManager)))();
-    const toolsets = ALL_TOOLSETS.filter((t) => (t !== "media" || media) && (t !== "social" || social) && (t !== "business" || business));
+    // [P2-9] `a2a` reaches only the peers `a2a.peers` names, so with none it has nothing to talk to.
+    const a2a = (configManager.loadConfig().a2a?.peers ?? []).length > 0;
+    const toolsets = ALL_TOOLSETS.filter((t) => (t !== "media" || media) && (t !== "social" || social) && (t !== "business" || business) && (t !== "a2a" || a2a));
     const off = [
       ...(media ? [] : ["media is off because no ffmpeg/ffprobe or media image was found (docs/media.md)"]),
       ...(social ? [] : ["social is off because no social provider is connected; run trent connect meta, bluesky or buffer, then enable it (docs/social.md)"]),
       ...(business ? [] : ["business is off because no business provider is connected; run trent connect stripe, google, square or twilio, then enable it (docs/business.md)"]),
+      ...(a2a ? [] : ["a2a is off because no A2A peer is configured; add one under a2a.peers, then enable it (docs/a2a.md)"]), // [P2-9]
     ];
 
     this.blank();

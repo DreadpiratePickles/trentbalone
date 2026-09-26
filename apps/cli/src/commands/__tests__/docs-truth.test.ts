@@ -354,7 +354,8 @@ function countWord(word: string): number {
   return /^\d+$/.test(word) ? Number(word) : NUMBER_WORDS.indexOf(word.toLowerCase()) === -1 ? Number.NaN : NUMBER_WORDS.indexOf(word.toLowerCase());
 }
 
-const codeNames = (text: string): string[] => [...text.matchAll(/`([a-z_]+)`/g)].map((match) => match[1]!);
+// [P2-9] a toolset name may carry a digit (`a2a`); a letters-only span would drop it from the list silently.
+const codeNames = (text: string): string[] => [...text.matchAll(/`([a-z][a-z0-9_]*)`/g)].map((match) => match[1]!);
 
 describe("the documents state the toolsets the schema accepts", () => {
   it("list every ToolsetSchema name with its count, and what a config with no toolsets key gets", () => {

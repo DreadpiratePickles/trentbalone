@@ -82,7 +82,9 @@ export const CAPABILITY_TOOLSETS: Readonly<Record<string, Toolset>> = {
  * `media` is here for the same reason `vision` is: local computation over workspace files, with
  * its one egress path (hosted transcription) gated by the adapter itself, not by a manifest.
  */
-export const SHARED_SEAT_TOOLSETS: readonly Toolset[] = ["skills", "delegation", "cron", "plugins", "mcp", "vision", "human", "memory", "media"];
+// [P2-9] `a2a` is shared for the reason `mcp` and `delegation` are: asking another agent is the wrapper's own
+// capability, which no app manifest models, and every send asks a human at every level (the class floor).
+export const SHARED_SEAT_TOOLSETS: readonly Toolset[] = ["skills", "delegation", "cron", "plugins", "mcp", "vision", "human", "memory", "media", "a2a"];
 
 /** The toolsets a seat gets ONLY when its manifest names a capability that maps to one. */
 export const GATED_TOOLSETS: readonly Toolset[] = ["file_ops", "terminal", "code", "web", "browser", "social", "business"];

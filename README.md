@@ -125,13 +125,12 @@ against local fake servers; neither has been run against a live account.
 
 ## Toolsets
 
-The `toolsets` list in `config.yaml` accepts sixteen names: `file_ops`, `terminal`, `web`,
+The `toolsets` list in `config.yaml` accepts seventeen names: `file_ops`, `terminal`, `web`,
 `browser`, `code`, `vision`, `memory`, `delegation`, `cron`, `skills`, `plugins`, `mcp`, `human`,
-`media`, `social` and `business`. A `config.yaml` with no `toolsets` key gets nine of them:
-everything except `browser`, `vision`, `memory`, `mcp`, `media`, `social` and `business`. Quick
-setup writes all sixteen, except that `media` needs a media backend and `social` and `business` need
-a connected provider.
-<!-- proof: ToolsetSchema in packages/trent-core/src/config/sections/tools.ts:8-25; DEFAULT_CONFIG.toolsets in config/defaults.ts:20; `trent tools` on a keyless profile lists the nine; setup/QuickSetup.ts:61-69; checked by apps/cli/src/commands/__tests__/docs-truth.test.ts "the documents state the toolsets the schema accepts" -->
+`media`, `social`, `business` and `a2a`. A `config.yaml` with no `toolsets` key gets nine of them:
+everything except `browser`, `vision`, `memory`, `mcp`, `media`, `social`, `business` and `a2a`.
+Quick setup writes all seventeen, except that `media` needs a media backend, `social` and
+`business` need a connected provider, and `a2a` needs a peer under `a2a.peers`.
 
 | Toolset | Tools | State |
 |---|---|---|
@@ -180,7 +179,7 @@ feature set is measured against. Where the two differ:
 | Skills | One skill store with a pre-install scan and a curator; the three market packs ship 14 skills | 59 bundled and 149 optional skills |
 | Memory | A profile brain in files, versioned with git; imports md, txt, csv, pdf, docx, xlsx | Built-in memory plus external memory providers |
 | Desktop | Tauri app in the tree, not packaged | Electron app with macOS and Windows installers |
-| A2A | Server only, answering A2A 0.3.0 and v1.0 methods; Hermes discovers and calls it | Server and client |
+| A2A | Server (0.3.0 and v1.0) and client: `a2a_list`, `a2a_discover`, `a2a_send`, `a2a_history`, every send behind the approval gate; Hermes discovers and calls it | Server and client |
 <!-- proof, Trent column: Install: release.yml, pages.yml, scripts/install.sh; no tag (`git ls-remote --tags` empty). Language: package.json, docs/getting-started.md section 1. Agent shape: `trent fleet list --json` (173); pack state lines ("the specialists install profiles and skills the seats can read and are not scheduled on their own"). Spend: `trent budget status`; `trent run --help` ("6 over --max-cost-cents"); list price: docs/sessions/2026-09-25-p2-8-spend-truth.md. Side effects: docs/security.md from line 494. Credential isolation: docs/security.md "Egress credential brokering" (line 13). Checkpoints: docs/checkpoints.md. Self-improvement: docs/improve.md. Audit trail: docs/security.md "Signed audit export" (line 129), `trent audit export|verify`. Messaging: packages/trent-core/src/gateway/platforms/ (discord, email, homeassistant, signal, slack, teams, telegram, whatsapp). Reboot: docs/service.md (RunAtLoad and KeepAlive; Restart=always, WantedBy=default.target), packages/trent-core/src/service/units.ts; the P2-D run wrote and linted the unit and ran the daemon in the foreground, and never loaded it into launchd (docs/sessions/2026-09-25-p2d-service.md). Voice: docs/gateway.md "Voice notes"; real transcript "Book me for Tuesday." in docs/sessions/2026-09-25-p2-3-voice-notes.md. Plugins: docs/mcp.md. Skills: docs/skills.md; `trent fleet packs` (5 + 4 + 5 skills). Memory: docs/brain.md; the doctor's Brain Import Extractors line. Desktop: docs/desktop.md; release.yml:298-307 (desktop job not wired). A2A: packages/trent-core/src/a2a/ (no client); docs/a2a.md.
      proof, Hermes column: the inventory, lines 21-25 (install), 21 (Python 3.11), 308 and 334-337 (subagents), 317 and 89 (cost, budgets), 383 and 385 (approvals, YOLO), 204 (iron-proxy), 78 (checkpoints), 495 (background review), 96 (24+ platforms), 101 (service lifecycle), 91-94 (voice mode, speech-to-text, ten text-to-speech backends, wake word), 698 and 250 (plugin catalog 223, MCP presets 65, skills 59 and 149), 232 and 456 (memory providers), 406 (desktop), 143 (A2A in and out). "Not in our inventory" means the 913-line inventory has no such row, not that Hermes lacks it. -->
 
@@ -246,7 +245,7 @@ Where Trent is ahead:
 - **Windows.** The `windows-x64` binary is built and run on a Windows CI runner; the PowerShell
   installer has never been executed.
   <!-- proof: CI run 36198887419 job "binaries / RUN trent-windows-x64.exe on windows-latest" success; 05_release/output/release-checklist-v1.md step 22 ("never executed") -->
-- **A2A** has no client, no push notifications, no `tasks/resubscribe` and no non-text parts.
+- **A2A** has no push notifications, no `tasks/resubscribe`, no non-text parts, and the client does not stream, poll or cancel a task yet.
   <!-- proof: packages/trent-core/src/a2a/ (server files only); docs/a2a.md:131-150 -->
 - **Known defects in the wrapped application** are listed, not hidden:
   [docs/security.md](docs/security.md) ("Reported, not fixed") and `AGENTS.md`.

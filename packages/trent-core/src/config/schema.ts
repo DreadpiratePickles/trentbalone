@@ -53,6 +53,8 @@ import { CronConfigSchema } from "../cron/config-schema.js";
 import { RecoveryConfigSchema } from "../orchestrator/recovery-config-schema.js";
 // [P1-D] connect inherit
 import { ConnectConfigSchema } from "./sections/connect.js";
+// [P2-9] a2a peers
+import { A2aConfigSchema } from "./sections/a2a.js";
 
 /** Every name this module exported before the sections moved out; importers are unaffected. */
 export {
@@ -215,6 +217,9 @@ export const TrentConfigSchema = z.object({
   // [P1-D] connect inherit
   /** `inherit_default`: another profile reads a `trent connect` provider it never connected from the default profile's `.env`, read-only (`config/sections/connect.ts`, docs/connect.md). */
   connect: ConnectConfigSchema.default({}),
+  // [P2-9] a2a peers
+  /** The A2A peers the `a2a` toolset may reach: name, url and the NAME of the bearer's secrets-file variable, never a value (`config/sections/a2a.ts`, docs/a2a.md). */
+  a2a: A2aConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   improve: ImproveConfigSchema.default({}),

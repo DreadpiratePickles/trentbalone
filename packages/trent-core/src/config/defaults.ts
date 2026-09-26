@@ -206,6 +206,9 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // A second profile reads a `trent connect` provider it never connected from the default
   // profile's secrets file, read-only: one grant per machine, which is what people want.
   connect: { inherit_default: true },
+  // [P2-9] a2a peers
+  // No peer until the founder names one: the `a2a` toolset reaches only a configured peer's origin.
+  a2a: { peers: [] },
   personality: "default",
   theme: "dark",
   // [D0] improvement gates
@@ -251,6 +254,8 @@ export const BLANK_SLATE_CONFIG: TrentConfig = {
     "media",
     "social",
     "business",
+    // [P2-9] a2a
+    "a2a",
   ],
   egress: {
     ...DEFAULT_CONFIG.egress,

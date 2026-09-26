@@ -23,6 +23,7 @@ import { SESSION_SEARCH_TOOL_SCHEMAS } from "../tools/session_search/index.js";
 import { SKILL_TOOL_SCHEMAS } from "../tools/skills/index.js";
 import { SOCIAL_TOOL_SCHEMAS } from "../tools/social/schemas.js";
 import { BUSINESS_TOOL_SCHEMAS } from "../tools/business/schemas.js";
+import { A2A_TOOL_SCHEMAS } from "../tools/a2a/schemas.js"; // [P2-9] a2a
 import { TODO_TOOL_SCHEMAS } from "../tools/todo/index.js";
 import { VISION_TOOL_SCHEMAS } from "../tools/vision/index.js";
 import { WEB_TOOL_SCHEMAS } from "../tools/web/schemas.js";
@@ -50,6 +51,8 @@ export const MCP_TOOLS_BY_TOOLSET: Readonly<Record<Toolset, readonly string[]>> 
   social: names(SOCIAL_TOOL_SCHEMAS),
   // [B3] the business toolset; its writes come back as `needs_approval` results like every floored call.
   business: names(BUSINESS_TOOL_SCHEMAS),
+  // [P2-9] the a2a client; `a2a_send` comes back as a `needs_approval` result like every floored call.
+  a2a: names(A2A_TOOL_SCHEMAS),
   memory: [...names(MEMORY_TOOL_SCHEMAS), ...names(FLEET_SEARCH_TOOL_SCHEMAS), ...names(BRAIN_READ_TOOL_SCHEMAS)],
 };
 

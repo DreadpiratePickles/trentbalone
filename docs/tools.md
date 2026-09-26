@@ -85,6 +85,16 @@ complete:
 |---|---|---|---|
 | `social` | `social_platforms_list`, `social_post`, `social_reply`, `social_inbox_list`, `social_insights_read`, `social_schedule` | The app's live adapter for Facebook and Instagram (Meta Graph) and YouTube replies and insights, the AT Protocol for Bluesky, Buffer's GraphQL API for X, LinkedIn, TikTok, Threads and any other Buffer channel; tokens from `trent connect` | Every post, reply and queued post asks at every level and is bound to the exact text, platform, media URL and time; the inbox is returned `untrusted`, so a reply after reading it asks again; no DMs on any platform |
 
+## `a2a`
+
+Trent as an A2A client: the other direction of `trent a2a serve`, in its own section of
+docs/a2a.md ("Calling other agents"). Off until `a2a.peers` names a peer. One row here so the
+toolset table is complete:
+
+| Toolset | Tools | Backend | Approval |
+|---|---|---|---|
+| `a2a` | `a2a_list`, `a2a_discover`, `a2a_send`, `a2a_history` | JSON-RPC to the peers named in `a2a.peers`, A2A v1.0 (`SendMessage`) or 0.3.0 (`message/send`) as each peer's Agent Card advertises, through the egress proxy; the bearer read by the name `token_env` gives from the profile secrets file | `a2a_send` asks at every autonomy level (the class floor), bound to the exact peer and message it previewed, and is keyed so a replay does not send twice; `a2a_list` and `a2a_history` read the profile and `a2a_discover` fetches a card, none of them asks; only a configured peer's origin is reachable; everything a peer wrote comes back `untrusted` |
+
 ## `todo`
 
 The run's task list: `todo {"action":"add","items":[...]}`, `todo {"action":"update","id":"t1",

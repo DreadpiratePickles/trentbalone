@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyCredentials, extractToken, isHostAllowed } from "./CredentialBroker.js";
+import { applyCredentials, extractToken, isHostAllowed, OWN_CREDENTIAL_HEADER } from "./CredentialBroker.js";
 import type { ProxyTokenRecord } from "./TokenStorePort.js";
 
 const TOKEN = `trnt_egress_${"a".repeat(32)}`;
@@ -90,5 +90,46 @@ describe("applyCredentials", () => {
       record({ realCredentials: { apiKey: SECRET, headerName: "X-Custom-Key" } })
     );
     expect(out["x-custom-key"]).toBe(SECRET);
+  });
+});
+
+// [P2-9] own credential
+/**
+ * A tool that authenticates to its own peer (an A2A agent's bearer) or to nobody marks its request
+ * with the own-credential header. The broker then removes only what is its own (the proxy token,
+ * the marker, the proxy headers) and adds nothing: the caller's Authorization passes through, and
+ * the record's secret, which in the REPL is the model provider key, is never written onto a request
+ * bound for somebody else.
+ */
+describe("applyCredentials with the own-credential marker", () => {
+  it("keeps the caller's own Authorization, drops the broker token and the marker, and adds no secret", () => {
+    const out = applyCredentials(
+      { authorization: "Bearer peer-bearer", "x-trent-proxy-token": TOKEN, [OWN_CREDENTIAL_HEADER]: "1", "proxy-authorization": "x" },
+      "agent.example.test",
+      record()
+    );
+    expect(out.authorization).toBe("Bearer peer-bearer");
+    expect(out[OWN_CREDENTIAL_HEADER]).toBeUndefined();
+    expect(out["x-trent-proxy-token"]).toBeUndefined();
+    expect(out["proxy-authorization"]).toBeUndefined();
+    expect(out.host).toBe("agent.example.test");
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+    expect(JSON.stringify(out)).not.toContain(TOKEN);
+  });
+
+  it("adds nothing when the caller carries no credential, and still strips a broker token from any credential header", () => {
+    const bare = applyCredentials({ "x-trent-proxy-token": TOKEN, [OWN_CREDENTIAL_HEADER]: "1" }, "api.openai.com", record());
+    expect(bare.authorization).toBeUndefined();
+    expect(JSON.stringify(bare)).not.toContain(SECRET);
+    const smuggled = applyCredentials({ authorization: `Bearer ${TOKEN}`, "x-api-key": TOKEN, [OWN_CREDENTIAL_HEADER]: "1" }, "agent.example.test", record());
+    expect(smuggled.authorization).toBeUndefined();
+    expect(smuggled["x-api-key"]).toBeUndefined();
+    expect(JSON.stringify(smuggled)).not.toContain(SECRET);
+    expect(JSON.stringify(smuggled)).not.toContain(TOKEN);
+  });
+
+  it("changes nothing for a request without the marker: the broker still swaps its credential in", () => {
+    const out = applyCredentials({ authorization: `Bearer ${TOKEN}` }, "api.openai.com", record());
+    expect(out.authorization).toBe(`Bearer ${SECRET}`);
   });
 });

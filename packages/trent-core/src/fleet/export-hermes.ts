@@ -75,6 +75,9 @@ export const HERMES_TOOLSET_NAMES: Readonly<Record<string, string | null>> = {
   media: null,
   business: null,
   social: null,
+  // [P2-9] Hermes's own A2A client is its a2a platform plugin, configured under `a2a_agents` rather than
+  // enabled as a toolset; the exported seat reaches Trent's through the trent server.
+  a2a: null,
 };
 
 /** The `trent connect` providers a toolset executes against; a toolset absent here needs none. */

@@ -15,6 +15,7 @@
  * names in a leaf `names.ts`, so there is no import cycle.
  */
 import { FLEET_SEARCH_ADAPTER_NAME, FLEET_SEARCH_TOOL_SCHEMAS } from "../fleet-memory/search.js";
+import { A2A_ADAPTER_NAME, A2A_TOOL_NAMES } from "./a2a/schemas.js"; // [P2-9] a2a
 import { BROWSER_ADAPTER_NAME } from "./browser/index.js";
 import { BROWSER_TOOL_SCHEMAS } from "./browser/schemas.js";
 import { BUSINESS_ADAPTER_NAME, BUSINESS_TOOL_NAMES } from "./business/schemas.js";
@@ -71,6 +72,7 @@ export const BUILTIN_TOOLS_BY_TOOLSET: Readonly<Record<string, readonly string[]
   media: family(MEDIA_ADAPTER_NAME, MEDIA_TOOL_NAMES),
   social: family(SOCIAL_ADAPTER_NAME, SOCIAL_TOOL_NAMES),
   business: family(BUSINESS_ADAPTER_NAME, BUSINESS_TOOL_NAMES),
+  a2a: family(A2A_ADAPTER_NAME, A2A_TOOL_NAMES), // [P2-9] a2a
   // A3. The disclosure bridges. `tools` is the bridge adapter's own name; a plugin that tried to
   // claim it would be claiming the way out of the deferred set, which is exactly what the
   // reservation is for.

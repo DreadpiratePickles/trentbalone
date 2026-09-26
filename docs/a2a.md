@@ -12,6 +12,9 @@ Both run one **real orchestration run** per request. Neither composes an answer 
 comes back is the run's own output, and a server started without an agent runtime refuses instead
 of inventing a result.
 
+A2A also goes the other way: the `a2a` toolset lets a seat discover and message other A2A agents
+(Hermes, another Trent) named in `config.yaml`. See [Calling other agents](#a2a--calling-other-agents-the-a2a-toolset).
+
 ---
 
 ## A2A — Agent-to-Agent
@@ -164,6 +167,88 @@ payload — the shape Trent served before it spoke the specification — still w
 release**. Every response to it carries `Deprecation: true` and a `Link` header pointing at the
 Agent Card. It is a translation layer over the same task lifecycle
 (`packages/trent-core/src/a2a/legacy.ts`); when it goes, nothing else changes.
+
+---
+
+## A2A — calling other agents (the `a2a` toolset)
+
+The client half: a seat asks another agent something and gets its answer back. It is off until a
+peer is configured, and it reaches nothing that is not configured.
+
+```yaml
+toolsets: [..., a2a]
+a2a:
+  peers:
+    - name: hermes                        # what a seat types: a2a_send {"peer": "hermes", ...}
+      url: https://hermes.internal.example/
+      token_env: HERMES_A2A_TOKEN         # the NAME of the variable in the profile's .env, never a value
+    - name: local-trent
+      url: http://127.0.0.1:7899          # another Trent: trent a2a serve --port 7899
+egress:
+  intercept_domains: [..., hermes.internal.example, 127.0.0.1]
+```
+
+`trent config set HERMES_A2A_TOKEN <token>` puts the bearer in the profile's `.env` (0600). The
+schema refuses a `token` key in a peer entry and a `token_env` that `trent config set` would not
+route to the secrets file, so the value can never end up in `config.yaml`. The bearer is read by
+that name when a call is made, from the profile's own `.env` and then the environment.
+
+| Tool | Arguments | What it does | Asks |
+|---|---|---|---|
+| `a2a_list` | none | The configured peers: name, URL, whether the named bearer is set, and the card last discovered | No: reads the profile |
+| `a2a_discover` | `peer` or `url` | Fetches the Agent Card at the peer's origin (`/.well-known/agent-card.json`, then `/.well-known/agent.json`), validates it and caches it for an hour | No (a network read; asks under `autonomy: ask_always`) |
+| `a2a_send` | `peer` or `url`, `message`, `context_id?`, `task_id?` | Sends one text message and returns the task id, context id, state and the reply text; on `input-required`, the peer's question and the exact `a2a_send` to answer it | **Yes, at every autonomy level**, bound to the exact peer and message it previewed |
+| `a2a_history` | `peer`, `context_id?` | The tasks this profile sent to that peer, oldest first, from `<profile>/a2a/history.json` | No: reads the profile |
+
+**Dialect.** The client speaks what the card advertises. A `supportedInterfaces` entry with
+`protocolBinding: "JSONRPC"` and a 1.x `protocolVersion` means v1.0: `SendMessage`, a `ROLE_USER`
+message with parts `{text, mediaType}`, the `A2A-Version: 1.0` header, and `TASK_STATE_*` states
+back. A top-level `url` with a 0.x `protocolVersion` means 0.3.0: `message/send` with
+`{kind: "message", role: "user", parts: [{kind: "text", text}]}`. A card that advertises both, as
+Trent's own does, is spoken to in v1.0, as Hermes does. Both are normalised to the 0.3.0 state
+names in what the seat reads. `packages/trent-core/src/a2a/client.ts` is the client;
+`a2a/client.test.ts` proves it against a scripted peer in each dialect and against Trent's own
+server.
+
+**Continuing.** When a task ends `input-required`, the answer carries the peer's question, its
+`task_id` and `context_id`, and the `a2a_send` line that answers it; sending with both ids continues
+that task on the peer (Trent's server keeps the task's id and context). `context_id` alone opens a
+new task in the same conversation.
+
+**What stops a send.**
+
+- **The class floor.** `a2a_send` is `external_send`, so a human approves it at every autonomy
+  level, and `execute` runs only against an approval bound to exactly that peer and message
+  (`governance/bound-approvals.ts`). A replay in the same step is answered from the idempotency
+  store (the name carries `send`), and inside a run the message id is derived from the same key,
+  so a replay that reaches the peer anyway is one message to a peer that deduplicates.
+- **The allowlist.** Only a configured peer's origin (scheme, host, port) is reachable, checked
+  before a socket opens; the endpoint a card names must be at that same origin, so a card cannot
+  point a send somewhere else. A `url` argument is only another way to name a configured peer.
+- **The egress proxy.** Every request goes through the egress client, so the host must also be in
+  `egress.intercept_domains`; a peer that is not is refused by the proxy, and the tool says to add
+  it. The requests carry the broker's own-credential marker (`x-trent-own-credential`,
+  `egress/CredentialBroker.ts`): the proxy lets the peer's own `Authorization` through and adds none
+  of its own. Without it the proxy would strip the peer's bearer and write the credential its token
+  stands for (in the REPL, the model provider key) onto a request bound for the peer;
+  `tools/a2a/egress.test.ts` runs through the real proxy and fails that way when the marker is
+  removed. The card is fetched with no credential at all.
+- **Provenance.** A card, a reply, a question and a history listing are text the peer wrote. They
+  come back fenced, labelled untrusted and tagged `untrusted`, so a memory write in that step is
+  held and a later send in the run asks again (`send-after-untrusted`).
+
+**Hermes's names.** `a2a_list`, `a2a_discover` and a history listing exist under the same names.
+Hermes's `a2a_call` is `a2a_send` here: the class floor and the idempotency wrapper both read the
+tool's name, and `send` is the word both know. `a2a_discover` is classified a network call and
+`a2a_history` a read because the classifier knows `discover` and `history`
+(`governance/policy-rules.ts`); without those words both would have inherited `send` from the
+adapter's scope list and asked a human at every level.
+
+**Not implemented in the client.** Hermes's `a2a_orchestrate` (routing a message to a peer by
+capability); streaming (`SendStreamingMessage` / `message/stream`), `GetTask` polling and
+`CancelTask` (a send waits up to five minutes for the peer's answer); non-text parts; a peer's
+bearer inherited from the default profile's `.env` (each profile names its own). No doctor line:
+`a2a_list` says for each peer whether its named bearer is set.
 
 ---
 
