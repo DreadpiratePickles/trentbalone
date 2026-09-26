@@ -50,6 +50,7 @@ import { workspaceSpec } from "./groups/workspace.js";
 import { brainSpec } from "./groups/brain.js";
 import { securitySpec } from "./groups/security.js";
 import { connectSpec } from "./groups/connect.js";
+import { benchSpec } from "./groups/bench.js"; // [C16]
 import { FLEET_FLAG_HELP, TEAM_FLAG_HELP, bareLaunchPlan, launchModeOf } from "../runtime/launch-mode.js"; // [C11.2]
 
 export { CLI_VERSION } from "./registry.js";
@@ -127,6 +128,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   updateSpec,
   uninstallSpec,
   serveShimSpec,
+  benchSpec, // [C16] the head-to-head bench
 ];
 
 /** Commands that must work when there is no config on disk, so first run never blocks them. */

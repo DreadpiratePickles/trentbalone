@@ -21,6 +21,9 @@ then [configuration.md](configuration.md) and [security.md](security.md).
   export to and import from other harnesses.
 - [solo.md](solo.md): solo mode, one agent with one tool loop and no seats: `trent solo`, `--solo`,
   `agent.mode`, which surfaces park a held call and which refuse it, spend and audit rows.
+- [bench.md](bench.md): `trent bench run smb-20`: twenty small-business tasks graded on the fake
+  servers' end state, run by Trent solo, the fleet and headless Hermes on the same model and tools;
+  pass@1, pass^3, time to first token, wall time and cents per success, with the pre-registered targets.
 - [goals.md](goals.md): standing goals with a completion contract and shell quality gates that must
   pass before any model judge.
 - [jobs.md](jobs.md): the concurrent-run cap and the failed-jobs view.
