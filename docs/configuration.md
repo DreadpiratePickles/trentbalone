@@ -290,8 +290,9 @@ memory:
 
 | Key | Meaning |
 |---|---|
-| `provider` | `auto` (default) takes the first provider that has a key, preferring the family the top-level `provider` already routes chat through, then Gemini, then OpenAI. `gemini` posts to Google's OpenAI-compatible surface (`https://generativelanguage.googleapis.com/v1beta/openai/embeddings`), `openai` to `https://api.openai.com/v1/embeddings` — or, when `provider` is one of the four OpenAI-dialect aliases, to that alias's own base URL. A named provider with no key falls back to lexical rather than failing a run. `none` is lexical only. |
-| `model` | Overrides the route default (`gemini-embedding-001`, `text-embedding-3-small`). |
+| `provider` | `auto` (default) takes the first provider that has a key, preferring the family the top-level `provider` already routes chat through, then Gemini, then OpenAI. `gemini` (or `google`) posts to Google's OpenAI-compatible surface (`https://generativelanguage.googleapis.com/v1beta/openai/embeddings`), `openai` to `https://api.openai.com/v1/embeddings` — or, when `provider` is one of the hosted aliases (`deepseek`, `groq`), to that alias's own base URL. `ollama`, `lmstudio` and `llamacpp` embed on this machine, need no key, and never ask for `text-embedding-3-small`: Ollama through its native `/api/embed` with `truncate: false` (an over-long chunk is split and averaged, never cut), LM Studio and llama.cpp through `/v1/embeddings`. Under a local chat `provider` (`ollama`, `lmstudio`), `auto` and `openai` mean that runtime's embedder. A named hosted provider with no key falls back to lexical rather than failing a run. `none` is lexical only; `trent doctor` says so. |
+| `model` | Overrides the route default (`gemini-embedding-001`, `text-embedding-3-small`; `qwen3-embedding:0.6b` on Ollama, `text-embedding-qwen3-embedding-0.6b` on LM Studio, `qwen3-embedding-0.6b` on llama.cpp). |
+| `base_url` | Moves the route's endpoint and wins over its variable. Local defaults: `http://127.0.0.1:11434` (Ollama; a trailing `"/v1"` is dropped, since its native `/api/embed` sits at the server root), `http://127.0.0.1:1234/v1` (LM Studio), `http://127.0.0.1:8080/v1` (llama.cpp). |
 | `batch_size` | Inputs per request. One recall corpus is split into batches of this size. |
 
 Keys are read from the profile `.env` first, then the process environment: `GEMINI_API_KEY`,
@@ -875,6 +876,19 @@ A provider that cannot be routed fails at startup with exit code 3 and says whic
 It is never quietly swapped for another provider: that was the old behaviour and it billed you for
 a model you did not choose.
 
+Routing is by provider, never by a word in the model id. Under one of the four aliases every model
+the run names is the alias's, so a pulled `mistral:7b`, `gemini-distill:2b` or `claude-local:8b` is
+sent to your endpoint like any other (it used to be refused as a seat, or sent to api.mistral.ai).
+Under `ollama` or `lmstudio` nothing is sent anywhere else: the run's provider chain is the local
+endpoint alone (`MODEL_ALLOWED_PROVIDERS` is set to it, over any wider value), a pinned model does
+not fall back even with `models.fallback_on_pin: true`, and a failed local call fails the call
+rather than reaching a hosted provider you happen to hold a key for.
+
+An Ollama model tagged `cloud` (`nemotron-3-ultra:cloud`, `gpt-oss:120b-cloud`) is served from
+ollama.com: the request goes to your local Ollama, and Ollama sends the prompt off the machine. It
+is labelled `hosted via ollama`, not priced as local: Ollama bills its cloud by plan, not per token,
+so the ledger row carries the tier estimate and `unpriced: true`.
+
 ### Model tiers
 
 `model` is one model for everything. The wrapped application routes each seat to a `haiku`,
@@ -903,7 +917,10 @@ A tier nothing names falls back to `executor`, and `executor` itself to the top-
 profile with no `models` block reaches exactly the variables and values it reached before this key
 existed. An unknown key inside the block is a config error rather than a setting that does nothing.
 An environment variable you set yourself always wins over the file — only unset or empty variables
-are filled — and values are never logged, only names. The OpenAI-compatible aliases (`ollama`,
+are filled — and values are never logged, only names. The `trent` entry writes these names from the
+active profile's `config.yaml` (`--profile`, else `TRENT_PROFILE`, else `default`) before any other
+module loads, because the wrapped app reads its OpenAI and Anthropic tier names once, when it is
+first loaded; a `trent run --model <id>` pin is written over them at the same point. The OpenAI-compatible aliases (`ollama`,
 `lmstudio`, `deepseek`, `groq`) resolve to `openai` plus a base URL and their tiers are written
 first, so aliasing and tiering compose.
 

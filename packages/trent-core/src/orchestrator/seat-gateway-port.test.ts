@@ -7,7 +7,8 @@
  * and the gateway's own priced record riding back for the meter.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { ALIAS_ENV } from "../model-gateway/providers.js";
 import type { GatewayCompletion, GatewayStreamRequest, ModelGateway, ModelProvider } from "../model-gateway/types.js";
 import { createSeatChatPort, isMeteredSeatPort, readSeatCallUsage, SEAT_JSON_INSTRUCTION } from "./seat-gateway-port.js";
 import type { SeatChatRequest } from "./types.js";
@@ -132,5 +133,32 @@ describe("the seat port answers through the wrapper's model gateway", () => {
     expect(isMeteredSeatPort(createSeatChatPort(gateway))).toBe(true);
     expect(isMeteredSeatPort(async () => ({ choices: [] }))).toBe(false);
     expect(isMeteredSeatPort(undefined)).toBe(false);
+  });
+});
+
+// [L0-1] G4 (local-path audit 2026-09-26): under `provider: ollama` a seat model whose id contains
+// "mistral", "gemini" or "claude" was refused by name ("mistral is not configured"), and the same name
+// sent through the gateway reached api.mistral.ai. Under a provider alias the port routes by provider.
+describe("[L0-1] under a provider alias the seat port never judges a model by its name", () => {
+  const before = process.env[ALIAS_ENV];
+  afterEach(() => {
+    if (before === undefined) delete process.env[ALIAS_ENV];
+    else process.env[ALIAS_ENV] = before;
+  });
+
+  it("accepts every local model id as a seat, whatever it contains, and leaves the provider to the alias", async () => {
+    process.env[ALIAS_ENV] = "ollama";
+    const { gateway, requests } = fakeGateway({ configured: ["openai"] });
+    const ids = ["mistral:7b", "gemini-distill:2b", "claude-local:8b", "anthropic/claude-q4:latest", "gpt-oss:20b"];
+    for (const id of ids) await createSeatChatPort(gateway)(seatRequest(id));
+    expect(requests.map((req) => req.model)).toEqual(ids);
+    expect(requests.every((req) => req.provider === undefined)).toBe(true);
+  });
+
+  it("without an alias the name rule still refuses a provider this profile has no key for", async () => {
+    delete process.env[ALIAS_ENV];
+    const { gateway, requests } = fakeGateway({ configured: ["openai"] });
+    await expect(createSeatChatPort(gateway)(seatRequest("mistral-large-latest"))).rejects.toThrow(/mistral is not configured/);
+    expect(requests).toEqual([]);
   });
 });

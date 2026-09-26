@@ -26,8 +26,15 @@
  * of the input price on every listed model (flash-lite $0.30 -> $0.03, 3.5-flash $1.50 -> $0.15,
  * 3.6-flash $0.75 -> $0.075, 2.5-pro $1.25 -> $0.125, 2.5-flash $0.30 -> $0.03). The 0.25 default is
  * deliberately the higher figure: a row nobody checked overstates a cache hit's cost, never hides it.
+ *
+ * [L0-1] An Ollama CLOUD tag (`nemotron-3-ultra:cloud`, `gpt-oss:120b-cloud`) is served from
+ * ollama.com: the request goes to the local runtime and the prompt leaves the machine. It is not
+ * the local row. Ollama's cloud is billed by plan, not per token, and no page we hold lists a per-token
+ * price, so nothing prices it: the tier stands in and the call is flagged `unpriced`, labelled
+ * `hosted via ollama` (`call-policy.ts` `isLocalModel`, `modelHostingLabel`).
  */
 
+import { isHostedModelTag, modelHostingLabel } from "./call-policy.js";
 import { isLocalAlias, type ProviderAlias } from "./providers.js";
 import type { ModelOverride, ModelOverrides, ModelProvider, ModelTier } from "./types.js";
 
@@ -166,6 +173,8 @@ export interface PricedCall {
   /** True when nothing priced this model: the cost is an estimate, not a bill. */
   readonly unpriced: boolean;
   readonly source: PriceSource | "default";
+  /** [L0-1] Where the tokens were made, when the call went through an alias: `local via ollama`, `hosted via ollama`. */
+  readonly hosting?: string;
 }
 
 /** The tier pricer the overlay falls back to: the app's `estimateModelCostCents`, or any equivalent. */
@@ -177,9 +186,10 @@ export function normaliseModelId(model: string): string {
   return bare.trim().toLowerCase().replace(/-latest$/, "");
 }
 
-/** Exact id, then the longest matching family prefix, then the local-runtime rule. */
+/** The local-runtime rule, then the exact id, then the longest matching family prefix. */
 export function priceRowFor(model: string, alias?: ProviderAlias): ModelPriceRow | undefined {
-  if (isLocalAlias(alias)) return LOCAL_ROW;
+  // [L0-1] A cloud tag on a local runtime is hosted, and no page we hold prices it per token.
+  if (isLocalAlias(alias)) return isHostedModelTag(model) ? undefined : LOCAL_ROW;
   const id = normaliseModelId(model);
   const exact = MODEL_PRICE_TABLE[id];
   if (exact) return exact;
@@ -228,6 +238,11 @@ function centsFrom(row: ModelPriceRow, inputTokens: number, outputTokens: number
 }
 
 export function priceCall(input: PriceCallInput, tierDefault: TierPricer): PricedCall {
+  const hosting = input.alias === undefined ? {} : { hosting: modelHostingLabel(input.alias, input.model) }; // [L0-1]
+  return { ...priceCallBody(input, tierDefault), ...hosting };
+}
+
+function priceCallBody(input: PriceCallInput, tierDefault: TierPricer): PricedCall {
   const override = overrideFor(input.model, input.overrides);
   const hasOverridePrice =
     typeof override?.input_cents_per_million === "number" || typeof override?.output_cents_per_million === "number";

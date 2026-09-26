@@ -21,8 +21,16 @@
  *
  * Both reach a gateway built with no arguments (the orchestrator's) through an env bridge written
  * from config by `orchestrator/model-env.ts`, the same road `model_overrides` takes.
+ *
+ * [L0-1] ROUTING BY PROVIDER (local-path audit 2026-09-26, G4). Under a provider ALIAS (`ollama`,
+ * `lmstudio`, `deepseek`, `groq`; `providers.ts`) a pinned model belongs to the alias's endpoint,
+ * whatever its id contains: the app's `inferProviderFromModel` reads substrings, so a pulled
+ * `mistral:7b` was sent to api.mistral.ai with the local placeholder bearer. Under a LOCAL alias the
+ * plan never names another provider at all: no pin fallback and no chain fallback, so no request
+ * leaves the machine (hosted escalation is the L1 `models.escalate` design, behind approval).
  */
 
+import { PROVIDER_ALIAS_ROUTES, activeProviderAlias, resolveProviderAlias, type ProviderAlias } from "./providers.js";
 import type { ModelProvider } from "./types.js";
 
 /** Google's accepted values, in the order the docs list them after `none`. */
@@ -87,9 +95,11 @@ export interface AttemptPlanInput {
   /** The configured chain, in order (`GatewayRoute.providers`). */
   readonly routeProviders: readonly ModelProvider[];
   readonly modelForProvider: (provider: ModelProvider) => string;
-  /** Which provider serves a model id (`apps/web` `inferProviderFromModel`). */
+  /** Which provider serves a model id (`apps/web` `inferProviderFromModel`). Never asked under an alias. */
   readonly inferProvider: (model: string) => ModelProvider | undefined;
   readonly fallbackOnPin: boolean;
+  /** [L0-1] The alias this process routes through; `null` for none. Absent: read from the env (`ALIAS_ENV`). */
+  readonly alias?: ProviderAlias | null;
 }
 
 export interface AttemptPlan {
@@ -99,17 +109,55 @@ export interface AttemptPlan {
 }
 
 export function planAttempts(input: AttemptPlanInput): AttemptPlan {
+  // [L0-1] The alias decides the provider; under a local one, nothing else is ever planned.
+  const alias = input.alias === undefined ? activeProviderAlias() : (input.alias ?? undefined);
+  const aliasRoute = alias === undefined ? undefined : PROVIDER_ALIAS_ROUTES[alias];
+  const localOnly = aliasRoute?.local === true;
   const pin = input.requestModel?.trim();
   if (pin === undefined || pin === "") {
-    const providers = input.requestProvider ? [input.requestProvider] : input.routeProviders;
+    const chain = localOnly ? input.routeProviders.filter((provider) => provider === aliasRoute?.provider) : input.routeProviders;
+    const providers = input.requestProvider ? [input.requestProvider] : chain;
     return { attempts: providers.map((provider) => ({ provider, model: input.modelForProvider(provider) })), pinned: false };
   }
-  const provider = input.requestProvider ?? input.inferProvider(pin) ?? input.routeProviders[0];
+  const provider = input.requestProvider ?? aliasRoute?.provider ?? input.inferProvider(pin) ?? input.routeProviders[0];
   if (provider === undefined) return { attempts: [], pinned: true };
   const primary: PlannedAttempt = { provider, model: pin };
-  if (input.requestProvider !== undefined || !input.fallbackOnPin) return { attempts: [primary], pinned: true };
+  if (input.requestProvider !== undefined || !input.fallbackOnPin || localOnly) return { attempts: [primary], pinned: true };
   const rest = input.routeProviders
     .filter((other) => other !== provider)
     .map((other) => ({ provider: other, model: input.modelForProvider(other) }));
   return { attempts: [primary, ...rest], pinned: true };
+}
+
+// [L0-1] G11 — local or hosted ──────────────────────────────────────────────────────────────────
+
+/**
+ * An Ollama CLOUD model: the tag is `cloud` or ends in `-cloud` (`nemotron-3-ultra:cloud`,
+ * `gpt-oss:120b-cloud`). Ollama serves it from ollama.com, so the prompt leaves this machine even
+ * though the request goes to the local runtime. Only the tag counts: `cloud-coder:7b` is local.
+ */
+export function isHostedModelTag(model: string): boolean {
+  const id = model.trim().toLowerCase();
+  const colon = id.lastIndexOf(":");
+  if (colon < 0) return false;
+  const tag = id.slice(colon + 1);
+  return tag === "cloud" || tag.endsWith("-cloud");
+}
+
+/**
+ * True when this provider/model pair produces its tokens on the operator's own machine: a local
+ * runtime alias serving a model that is not a cloud tag. Nothing in the approval gate tells a local
+ * model from a hosted one (searched 2026-09-26), so this is used for the label and the price only.
+ */
+export function isLocalModel(provider: string | undefined, model: string): boolean {
+  const route = resolveProviderAlias(provider);
+  return route?.local === true && !isHostedModelTag(model);
+}
+
+/** Where a call's tokens are made, in words: `local via ollama`, `hosted via ollama`, `hosted by google`. */
+export function modelHostingLabel(provider: string | undefined, model: string): string {
+  const name = provider?.trim().toLowerCase() ?? "";
+  if (name === "") return "hosted";
+  if (resolveProviderAlias(name) === undefined) return `hosted by ${name}`;
+  return `${isLocalModel(name, model) ? "local" : "hosted"} via ${name}`;
 }

@@ -24,6 +24,7 @@ const KEYS = [
   "TRENT_MODEL_OVERRIDES",
   "WORKBENCH_EXECUTOR_MODEL",
   "WORKBENCH_PLANNER_MODEL",
+  "MODEL_ALLOWED_PROVIDERS", // [L0-1]
 ] as const;
 const saved: Record<string, string | undefined> = {};
 
@@ -152,6 +153,24 @@ describe("applyModelEnv", () => {
 
   it("is a no-op without a config", () => {
     expect(applyModelEnv(undefined)).toEqual({ written: [], kept: [], unsupportedProvider: false });
+  });
+
+  // [L0-1] G4: under a local runtime the app's seat loop asked the port for every provider's tier model
+  // (claude-..., gemini-..., mistral-...). The chain is the local endpoint alone; no request leaves the machine.
+  it("[L0-1] narrows the app's provider chain to the local endpoint, over an operator's wider list", () => {
+    process.env.MODEL_ALLOWED_PROVIDERS = "openai,google";
+    const report = applyModelEnv({ provider: "ollama", model: "qwen3:4b" });
+    expect(process.env.MODEL_ALLOWED_PROVIDERS).toBe("openai");
+    expect(report.written).toContain("MODEL_ALLOWED_PROVIDERS");
+    delete process.env.MODEL_ALLOWED_PROVIDERS;
+    applyModelEnv({ provider: "lmstudio", model: "local-model" });
+    expect(process.env.MODEL_ALLOWED_PROVIDERS).toBe("openai");
+  });
+
+  it("[L0-1] leaves a hosted alias's chain alone", () => {
+    process.env.DEEPSEEK_API_KEY = "test-key";
+    applyModelEnv({ provider: "deepseek", model: "deepseek-chat" });
+    expect(process.env.MODEL_ALLOWED_PROVIDERS).toBeUndefined();
   });
 });
 

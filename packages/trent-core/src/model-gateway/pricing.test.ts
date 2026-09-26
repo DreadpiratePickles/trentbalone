@@ -340,3 +340,33 @@ describe("priceCallMicroCents — the exact list price before any rounding", () 
     expect(Number.isInteger(micro?.microCents)).toBe(true);
   });
 });
+
+// [L0-1] G11 (local-path audit 2026-09-26): `nemotron-3-ultra:cloud` is an Ollama CLOUD model. Ollama
+// forwards it to ollama.com, so the prompt leaves this machine; it was priced 0 as local.
+describe("[L0-1] an Ollama cloud tag is hosted, not local", () => {
+  const cloudTags = ["nemotron-3-ultra:cloud", "gpt-oss:120b-cloud", "deepseek-v3.1:671b-cloud"];
+
+  it("is not the local row and not priced at zero: the tier stands in and the call is flagged unpriced", () => {
+    for (const model of cloudTags) {
+      expect(priceRowFor(model, "ollama"), model).toBeUndefined();
+      const priced = priceCall({ model, alias: "ollama", modelTier: "opus", inputTokens: MILLION, outputTokens: MILLION }, tierDefault);
+      expect(priced.source, model).not.toBe("local");
+      expect(priced.unpriced, model).toBe(true);
+      expect(priced.costCents, model).toBe(tierDefault());
+      expect(priceCallMicroCents({ model, alias: "ollama", inputTokens: 5_000, outputTokens: 5_000 }), model).toBeUndefined();
+    }
+  });
+
+  it("says where the tokens were made: the priced call is labelled hosted via ollama", () => {
+    const priced = priceCall({ model: "nemotron-3-ultra:cloud", alias: "ollama", modelTier: "sonnet", inputTokens: 10, outputTokens: 10 }, tierDefault);
+    expect(priced.hosting).toBe("hosted via ollama");
+    const local = priceCall({ model: "qwen3:4b", alias: "ollama", modelTier: "sonnet", inputTokens: 10, outputTokens: 10 }, tierDefault);
+    expect(local.hosting).toBe("local via ollama");
+  });
+
+  it("leaves every pulled local model, whatever its name, on the local row", () => {
+    for (const model of ["qwen3:4b", "hf.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF:latest", "wordcloud:latest", "cloud-coder:7b"]) {
+      expect(priceRowFor(model, "ollama")?.source, model).toBe("local");
+    }
+  });
+});

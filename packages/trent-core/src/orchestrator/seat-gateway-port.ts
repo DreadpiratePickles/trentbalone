@@ -23,9 +23,15 @@
  *
  * The gateway's own record of the call rides back on the reply under `trent_usage`, which the app
  * ignores and the run meter (`./spend-meter.ts`) reads. It carries counts and cents, never text.
+ *
+ * [L0-1] Under a provider ALIAS (`ollama`, `lmstudio`, `deepseek`, `groq`) the name rule below is not
+ * asked: a pulled `mistral:7b` or `claude-local:8b` is the alias's model, and the gateway routes it by
+ * the alias (`call-policy.ts` `planAttempts`). Under a local alias the app's provider chain is the
+ * alias alone (`model-env.ts` writes `MODEL_ALLOWED_PROVIDERS`), so this port only ever sees its models.
  */
 
 import { extractJsonObject } from "../model-gateway/completion-port.js";
+import { activeProviderAlias } from "../model-gateway/providers.js";
 import type { GatewayCompletion, GatewayMessage, ModelGateway, ModelProvider } from "../model-gateway/types.js";
 import type { SeatChatCompletionFn, SeatChatRequest, SeatChatResponse } from "./types.js";
 
@@ -98,7 +104,7 @@ function usageOf(completion: GatewayCompletion): SeatCallUsage {
 /** The gateway-backed `createChatCompletion` the orchestrator installs for every seat by default. */
 export function createSeatChatPort(gateway: ModelGateway): SeatChatCompletionFn {
   const port = async (request: SeatChatRequest): Promise<MeteredSeatChatResponse> => {
-    const provider = inferSeatProvider(request.model);
+    const provider = activeProviderAlias() === undefined ? inferSeatProvider(request.model) : undefined; // [L0-1] by provider, never by name
     if (provider !== undefined && !gateway.configuredProviders().includes(provider)) {
       throw new Error(`${provider} is not configured for this profile (no API key); ${request.model} was not called`);
     }
