@@ -8,10 +8,16 @@
  * It holds two tabs, an empty one and "the owner's" page, so the test can prove the empty tab is
  * the one used and the owner's is left alone, before and after detaching.
  *
- * Skipped, not passed, when no Chromium is installed.
+ * [CI] It is spawned by hand, not through Playwright's launcher, so that no second automation client
+ * sits in the browser Trent attaches to. It gets the switches Playwright itself would pass (see
+ * PLAYWRIGHT_SWITCHES), its output is kept, and its exit is watched: a Chromium that dies before
+ * writing DevToolsActivePort skips the suite with its exit status and last output; one that is alive
+ * but never writes it fails the suite with that output.
+ *
+ * Skipped, not passed, when no Chromium is installed or the one found cannot start. A skip is NOT a pass.
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { spawn, type ChildProcess } from "node:child_process";
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -27,19 +33,63 @@ const EGRESS = { proxyUrl: "http://127.0.0.1:9", token: "trent-tok-never-sent", 
 const chromiumPath = findChromium(process.env);
 if (!chromiumPath) console.error("[browser.attach.chromium] SKIPPED: no Chromium found. A skip is NOT a pass.");
 
+/**
+ * [CI] The switches Playwright 1.63 puts on every Chromium it launches (`chromiumSwitches` and
+ * `_innerDefaultArgs` in playwright-core's coreBundle.js; not exported), minus the ones that serve
+ * only its pipe connection, its emulation or Edge. They are why the sibling browser.chromium.test.ts
+ * starts the same binary on the Linux runner. `--no-sandbox` is the one that matters there: on
+ * ubuntu-24.04, `/usr/bin/chromium` is an unzipped Chromium snapshot with no AppArmor profile and no
+ * setuid chrome-sandbox, so with its sandbox on it aborts ("No usable sandbox!") before
+ * DevToolsActivePort exists. This Chromium is a throwaway that loads only this file's loopback fixture.
+ */
+const PLAYWRIGHT_SWITCHES = [
+  "--disable-field-trial-config",
+  "--disable-background-networking",
+  "--disable-background-timer-throttling",
+  "--disable-backgrounding-occluded-windows",
+  "--disable-back-forward-cache",
+  "--disable-breakpad",
+  "--disable-client-side-phishing-detection",
+  "--disable-component-extensions-with-background-pages",
+  "--disable-component-update",
+  "--no-default-browser-check",
+  "--disable-default-apps",
+  "--disable-dev-shm-usage",
+  "--disable-extensions",
+  "--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,PaintHolding",
+  "--disable-hang-monitor",
+  "--disable-ipc-flooding-protection",
+  "--disable-popup-blocking",
+  "--disable-prompt-on-repost",
+  "--disable-renderer-backgrounding",
+  "--force-color-profile=srgb",
+  "--metrics-recording-only",
+  "--no-first-run",
+  "--password-store=basic",
+  "--use-mock-keychain",
+  "--no-service-autorun",
+  "--disable-search-engine-choice-screen",
+  "--disable-sync",
+  "--no-sandbox",
+];
+const PORT_FILE_TIMEOUT_MS = 30_000;
+const OUTPUT_TAIL_LINES = 25;
+
 const ACCOUNT_PAGE =
   "<html><head><title>Account</title></head><body>" +
   "<button id=\"send\" onclick=\"fetch('/clicked').then(function(){document.title='Clicked'})\">Send</button>" +
   '<input name="subject" placeholder="Subject"><input type="password" name="pw" placeholder="Password">' +
   "</body></html>";
 
-async function until<T>(probe: () => Promise<T | undefined>, what: string, timeoutMs = 20_000): Promise<T> {
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function until<T>(probe: () => Promise<T | undefined>, what: string, timeoutMs = 20_000, explain?: () => string): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = await probe().catch(() => undefined);
     if (value !== undefined) return value;
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}${explain ? `\n${explain()}` : ""}`);
+    await sleep(100);
   }
 }
 
@@ -50,11 +100,85 @@ function refOf(snapshot: string, pattern: RegExp): string {
   return ref;
 }
 
+/** [CI] A spawned throwaway Chromium whose output and exit are kept, so a failure can say why. */
+interface ThrowawayChromium {
+  /** How it ended ("exit code 1", "signal SIGTRAP", "spawn error ..."), or undefined while it runs. */
+  ended: () => string | undefined;
+  /** Its status and last lines of stdout and stderr, for an error or a skip message. */
+  report: () => string;
+  stop: () => Promise<void>;
+}
+
+function startThrowawayChromium(executable: string, userDataDir: string): ThrowawayChromium {
+  const child = spawn(
+    executable,
+    [
+      "--headless=new",
+      "--disable-gpu",
+      ...PLAYWRIGHT_SWITCHES,
+      "--remote-debugging-port=0",
+      `--user-data-dir=${userDataDir}`,
+      `--host-resolver-rules=MAP ${HOST} 127.0.0.1`,
+      // Headless Chrome takes one start URL ("Multiple targets are not supported"); the owner's
+      // tab is opened next through the DevTools HTTP endpoint, as a second window would be.
+      "about:blank",
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let output = "";
+  const keep = (chunk: Buffer) => {
+    output = (output + chunk.toString("utf8")).slice(-16_384);
+  };
+  child.stdout?.on("data", keep);
+  child.stderr?.on("data", keep);
+  let ended: string | undefined;
+  // Created now, so it resolves even when the process is already gone by the time anyone waits.
+  // `exitCode` alone cannot tell: it stays null for a process killed by a signal.
+  const gone = new Promise<void>((resolve) => {
+    child.once("exit", (code, signal) => {
+      ended = signal ? `signal ${signal}` : `exit code ${code}`;
+      resolve();
+    });
+    child.once("error", (error) => {
+      ended ??= `spawn error: ${error.message}`;
+      resolve();
+    });
+  });
+  const tail = () => output.split("\n").filter((line) => line.trim()).slice(-OUTPUT_TAIL_LINES).join("\n");
+  return {
+    ended: () => ended,
+    report: () => `Chromium (${executable}) ${ended ? `is gone: ${ended}` : "is still running"}. Its last output:\n${tail() || "(none)"}`,
+    stop: async () => {
+      if (ended) return;
+      child.kill("SIGTERM");
+      const soft = await Promise.race([gone.then(() => true), sleep(5_000).then(() => false)]);
+      if (!soft) {
+        child.kill("SIGKILL");
+        await gone;
+      }
+    },
+  };
+}
+
+/** The DevTools port once Chromium has written it, or undefined if Chromium ended first. Throws on timeout. */
+async function devToolsPort(chrome: ThrowawayChromium, userDataDir: string): Promise<string | undefined> {
+  const portFile = path.join(userDataDir, "DevToolsActivePort");
+  const deadline = Date.now() + PORT_FILE_TIMEOUT_MS;
+  for (;;) {
+    const port = fs.existsSync(portFile) ? fs.readFileSync(portFile, "utf8").split("\n")[0]?.trim() : undefined;
+    if (port && /^\d+$/.test(port)) return port;
+    if (chrome.ended()) return undefined;
+    if (Date.now() > deadline) throw new Error(`timed out after ${PORT_FILE_TIMEOUT_MS} ms waiting for DevToolsActivePort\n${chrome.report()}`);
+    await sleep(100);
+  }
+}
+
 describe.skipIf(!chromiumPath)("browser attach (real throwaway Chromium over CDP)", () => {
   const hits: string[] = [];
   let server: http.Server;
   let origin: string;
-  let child: ChildProcess;
+  let chrome: ThrowawayChromium | undefined;
+  let unavailable: string | undefined;
   let userDataDir: string;
   let cdpUrl: string;
   let profileDir: string;
@@ -91,34 +215,27 @@ describe.skipIf(!chromiumPath)("browser attach (real throwaway Chromium over CDP
     origin = `http://${HOST}:${port}`;
 
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-attach-chrome-"));
-    child = spawn(
-      chromiumPath!,
-      [
-        "--headless=new",
-        "--remote-debugging-port=0",
-        `--user-data-dir=${userDataDir}`,
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-background-networking",
-        "--disable-component-update",
-        "--disable-sync",
-        `--host-resolver-rules=MAP ${HOST} 127.0.0.1`,
-        // Headless Chrome takes one start URL ("Multiple targets are not supported"); the owner's
-        // tab is opened next through the DevTools HTTP endpoint, as a second window would be.
-        "about:blank",
-      ],
-      { stdio: "ignore" },
-    );
-    const portFile = path.join(userDataDir, "DevToolsActivePort");
-    const cdpPort = await until(async () => (fs.existsSync(portFile) ? fs.readFileSync(portFile, "utf8").split("\n")[0] || undefined : undefined), "DevToolsActivePort");
+    const started = startThrowawayChromium(chromiumPath!, userDataDir);
+    chrome = started;
+    const cdpPort = await devToolsPort(started, userDataDir);
+    if (!cdpPort) {
+      unavailable = `Chromium could not start (${started.ended()}), so nothing was attached to. A skip is NOT a pass.`;
+      console.error(`[browser.attach.chromium] SKIPPED: ${unavailable}\n${started.report()}`);
+      return;
+    }
     cdpUrl = `http://127.0.0.1:${cdpPort}`;
-    await until(async () => ((await pageUrls()).length === 1 ? true : undefined), "the empty starting tab");
+    await until(async () => ((await pageUrls()).length === 1 ? true : undefined), "the empty starting tab", 10_000, started.report);
     const opened = await fetch(`${cdpUrl}/json/new?${encodeURIComponent(`${origin}/owner`)}`, { method: "PUT" });
     expect(opened.ok).toBe(true);
-    await until(async () => {
-      const urls = await pageUrls();
-      return urls.length === 2 && urls.includes(`${origin}/owner`) ? urls : undefined;
-    }, "the two starting tabs");
+    await until(
+      async () => {
+        const urls = await pageUrls();
+        return urls.length === 2 && urls.includes(`${origin}/owner`) ? urls : undefined;
+      },
+      "the two starting tabs",
+      10_000,
+      started.report,
+    );
 
     profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-attach-profile-"));
     store = createBoundApprovalStore({ profileDir });
@@ -134,13 +251,13 @@ describe.skipIf(!chromiumPath)("browser attach (real throwaway Chromium over CDP
     });
   }, 60_000);
 
+  beforeEach((context) => {
+    if (unavailable) context.skip(unavailable);
+  });
+
   afterAll(async () => {
     await adapter?.cleanup();
-    if (child && child.exitCode === null) {
-      const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-      child.kill();
-      await exited;
-    }
+    await chrome?.stop();
     await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
     if (userDataDir) fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     if (profileDir) fs.rmSync(profileDir, { recursive: true, force: true });
