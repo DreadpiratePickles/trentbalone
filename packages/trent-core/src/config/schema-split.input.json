@@ -340,5 +340,18 @@
   "an_unknown_future_key": {
     "kept": true,
     "by": "passthrough"
+  },
+  "governance": {
+    "auto_review": {
+      "enabled": true,
+      "model": "qwen3.5:9b",
+      "max_class": "money",
+      "max_amount_cents": 5000,
+      "currency": "CAD",
+      "recipients": [
+        "+15550100",
+        "*@fixture.test"
+      ]
+    }
   }
 }

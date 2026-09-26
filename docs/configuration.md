@@ -195,6 +195,15 @@ a2a:
   peers: []                   # the A2A agents the a2a toolset may reach: {name, url, token_env?} (a2a.md)
                               # token_env is the NAME of a .env variable ending _TOKEN/_KEY/_SECRET/_PASSWORD, never a value
 
+governance:
+  auto_review:                # a reviewer model decides held calls inside this written policy (security.md, "Auto review")
+    enabled: false            # off: every held call waits for a person
+    # model: qwen3.5:9b       # a pin for the reviewer (a local model is fine); absent = the profile's model
+    max_class: read           # read | write | external_send | money: the highest class it may approve
+    max_amount_cents: 0       # INTEGER CENTS per money call, in currency; 0 = no money call is in policy
+    currency: usd
+    recipients: []            # who a send may reach: exact address, number or host, or "*@example.com"; empty = no send
+
 goals:
   verify_on_stop: true        # a turn that edited code needs fresh test or build evidence to finish
   verify_commands:            # what counts as that evidence
@@ -574,6 +583,18 @@ autonomy level, bound to the exact call. The shipped floor is `external_send`, `
 `customer_facing` (a post, a send, a booking, an invoice, a charge) and is a constant, not a key;
 `never` does not lift it and no setting lowers it. Name `deploy` or `destructive` here to have
 those asked about at `never` too. See [security.md](security.md), "Side-effecting tools: the gate".
+
+### Auto review
+
+`governance.auto_review` lets a second model decide a held call instead of you, inside a policy you
+write down: the highest class it may approve (`max_class`), a cap in integer cents for money
+(`max_amount_cents`, in `currency`), and the recipients a send may reach (`recipients`). Off by
+default, and `max_class: read` is below every class a held call carries, so turning it on approves
+nothing until the ceiling, the cap or the list says otherwise. It never approves what the hardline
+blocklist, the approval floor or an `approvals.deny` glob refuses, never a call carrying an
+untrusted-provenance marker, and never a call that executes, destroys, deploys or touches a secret.
+`trent approvals list --review` runs it; `trent approvals list --policy` prints the policy. See
+[security.md](security.md), "Auto review".
 
 ### Goals
 

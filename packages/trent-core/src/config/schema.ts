@@ -55,6 +55,8 @@ import { AgentConfigSchema } from "./sections/agent.js"; // [S1] solo: the X5 bl
 import { ConnectConfigSchema } from "./sections/connect.js";
 // [P2-9] a2a peers
 import { A2aConfigSchema } from "./sections/a2a.js";
+// [H1] auto review
+import { GovernanceConfigSchema } from "./sections/governance.js";
 
 /** Every name this module exported before the sections moved out; importers are unaffected. */
 export {
@@ -220,6 +222,9 @@ export const TrentConfigSchema = z.object({
   // [P2-9] a2a peers
   /** The A2A peers the `a2a` toolset may reach: name, url and the NAME of the bearer's secrets-file variable, never a value (`config/sections/a2a.ts`, docs/a2a.md). */
   a2a: A2aConfigSchema.default({}),
+  // [H1] auto review
+  /** What an auto reviewer may approve among the held calls, written down (`config/sections/governance.ts`, docs/security.md "Auto review"); off by default. */
+  governance: GovernanceConfigSchema.default({}),
   personality: z.string().default("default"),
   theme: z.enum(["dark", "light"]).default("dark"),
   improve: ImproveConfigSchema.default({}),

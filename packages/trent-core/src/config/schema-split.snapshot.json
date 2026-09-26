@@ -218,6 +218,15 @@
     "a2a": {
       "peers": []
     },
+    "governance": {
+      "auto_review": {
+        "enabled": false,
+        "max_class": "read",
+        "max_amount_cents": 0,
+        "currency": "usd",
+        "recipients": []
+      }
+    },
     "personality": "default",
     "theme": "dark",
     "improve": {
@@ -591,6 +600,19 @@
           "url": "http://127.0.0.1:7899"
         }
       ]
+    },
+    "governance": {
+      "auto_review": {
+        "enabled": true,
+        "model": "qwen3.5:9b",
+        "max_class": "money",
+        "max_amount_cents": 5000,
+        "currency": "cad",
+        "recipients": [
+          "+15550100",
+          "*@fixture.test"
+        ]
+      }
     },
     "personality": "fixture-personality",
     "theme": "light",

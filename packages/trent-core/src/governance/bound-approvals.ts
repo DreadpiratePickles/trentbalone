@@ -32,6 +32,7 @@ import path from "node:path";
 import { FileGatewayStore, type ApprovalRow, type GatewayStore } from "../gateway/store/GatewayStore.js";
 import { record } from "../tools/action.js";
 import type { ToolCallRecord } from "../tools/types.js";
+import { stampAutoReviewGrantUse } from "./auto-review-config.js"; // [H1] auto review
 import { toolCallKey } from "./IdempotencyManager.js";
 
 export const BOUND_CALL_KIND = "bound_call";
@@ -192,7 +193,11 @@ export function createBoundApprovalStore(options: { readonly profileDir: string 
           const row = insert(state.approvals, call, key, preview);
           return { granted: false, row, record: parkedRecord(call, row) };
         }
-        if (existing.status === "approved") return { granted: true, row: structuredClone(existing) };
+        if (existing.status === "approved") {
+          // [H1] auto review: a grant the reviewer decided is stamped the first time it is honoured (the call runs now), so a human's reversal can tell whether it ran. A human's grant is untouched.
+          stampAutoReviewGrantUse(existing);
+          return { granted: true, row: structuredClone(existing) };
+        }
         if (existing.status === "denied") return { granted: false, row: structuredClone(existing), record: deniedRecord(call, existing) };
         if (inStep && existing.details.previewedAt !== undefined) {
           existing.status = "approved";

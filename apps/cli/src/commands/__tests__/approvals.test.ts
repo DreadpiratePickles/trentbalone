@@ -15,6 +15,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EXIT } from "@trent/core/errors/index.js";
 import { FileGatewayStore } from "@trent/core/gateway/index.js";
 import { holdMemoryWrite } from "@trent/core/tools/index.js";
+// [H1] auto review: the reviewer is driven here with a fake model; the CLI only lists and reverses.
+import { approvalAuditPath } from "@trent/core/governance/auto-review-audit.js";
+import { AutoReviewConfigSchema } from "@trent/core/governance/auto-review-config.js";
+import { reviewHeldApprovals, type ReviewGateway } from "@trent/core/governance/auto-review.js";
+import { createBoundApprovalStore, type BoundCall } from "@trent/core/governance/bound-approvals.js";
 import { runCli } from "../index.js";
 
 const ACTION = 'memory {"action":"add","content":"the vendor page lists net-30 terms"}';
@@ -123,5 +128,129 @@ describe("trent approvals", () => {
     const missing = await runCli(["approvals", "approve", "appr_nothing", "--json"]);
     expect(missing.exitCode).not.toBe(EXIT.OK);
     expect(missing.stdout + missing.stderr).toContain("appr_nothing");
+  });
+});
+
+// [H1] auto review ───────────────────────────────────────────────────────────────────────────────
+
+const REVIEW_MODEL = "qwen3.5:9b";
+const REVIEW_ACTOR = `auto-review:${REVIEW_MODEL}`;
+
+function smsCall(body: string): BoundCall {
+  const args = { to: "+15550100", from: "+15550000", body };
+  return { adapter: "business", action: `sms_send ${JSON.stringify(args)}`, tool: "sms_send", args, seat: "support", classes: ["external_send", "customer_facing"] };
+}
+const SMS = smsCall("Your table is booked for 7pm tonight.");
+const previewOf = (call: BoundCall): string => `SMS to +15550100: ${(call.args as { body: string }).body}`;
+
+/** Parks a floored call out of a seat turn, as the class floor does, and returns its row id. */
+function park(call: BoundCall = SMS): string {
+  const decision = createBoundApprovalStore({ profileDir: home }).require(call, previewOf(call));
+  expect(decision.granted).toBe(false);
+  return decision.row!.id;
+}
+
+/** One reviewer pass over this profile with a fake model answering `reply`; no call leaves the process. */
+async function review(reply: Record<string, string>): Promise<void> {
+  const gateway: ReviewGateway = {
+    async complete() {
+      return { text: JSON.stringify(reply), provider: "openai", model: REVIEW_MODEL, modelTier: "haiku", inputTokens: 1, outputTokens: 1, costCents: 0, estimated: false, priced_as_default: false, finishReason: "stop" };
+    },
+  };
+  await reviewHeldApprovals({
+    store: new FileGatewayStore(path.join(home, "gateway.json")),
+    profileDir: home,
+    policy: AutoReviewConfigSchema.parse({ enabled: true, model: REVIEW_MODEL, max_class: "external_send", recipients: ["+15550100"] }),
+    hardline: { home, profileDir: home },
+    gateway: async () => gateway,
+  });
+}
+
+function writeConfig(governance: string[]): void {
+  fs.writeFileSync(path.join(home, "config.yaml"), ["version: 3", "profile: default", "provider: openai", "model: gpt-5.6-terra", "governance:", "  auto_review:", ...governance.map((line) => `    ${line}`), ""].join("\n"));
+}
+
+interface ReviewedJson {
+  id: string;
+  status: string;
+  actor: string;
+  reason: string;
+  ran: boolean;
+}
+interface ReviewListJson {
+  pending: { id: string; review?: { decision: string; actor: string; reason: string; rule?: string } }[];
+  reviewed: ReviewedJson[];
+  review?: { outcomes: { id: string; decision: string; rule?: string; modelCalled: boolean }[] };
+  policy?: Record<string, unknown>;
+}
+
+describe("trent approvals and the auto reviewer [H1]", () => {
+  it("list shows every reviewer decision with its actor and reason, and how to reverse an approval that has not run", async () => {
+    const id = park();
+    await review({ decision: "approve", reason: "a booking confirmation to an allowlisted number" });
+
+    const listed = await json<ReviewListJson>(["approvals", "list"]);
+
+    expect(listed.pending.map((row) => row.id)).not.toContain(id);
+    expect(listed.reviewed).toEqual([expect.objectContaining({ id, status: "approved", actor: REVIEW_ACTOR, reason: "a booking confirmation to an allowlisted number", ran: false })]);
+    const human = await runCli(["approvals", "list"]);
+    expect(human.exitCode).toBe(EXIT.OK);
+    expect(human.stdout).toContain(REVIEW_ACTOR);
+    expect(human.stdout).toContain(`trent approvals reject ${id}`);
+  });
+
+  it("list shows an escalated call as still pending, with the reviewer's reason", async () => {
+    const id = park();
+    await review({ decision: "escalate", reason: "unsure whether the customer asked for this" });
+
+    const listed = await json<ReviewListJson>(["approvals", "list"]);
+
+    expect(listed.pending).toEqual([expect.objectContaining({ id, review: expect.objectContaining({ decision: "escalate", actor: REVIEW_ACTOR, reason: "unsure whether the customer asked for this" }) })]);
+    expect(listed.reviewed).toEqual([]);
+  });
+
+  it("list --review refuses while governance.auto_review is off, and changes nothing", async () => {
+    park();
+    const before = fs.readFileSync(path.join(home, "gateway.json"));
+
+    const refused = await runCli(["approvals", "list", "--review", "--json"]);
+
+    expect(refused.exitCode).toBe(EXIT.CONFIG);
+    expect(refused.stdout + refused.stderr).toContain("governance.auto_review.enabled");
+    expect(fs.readFileSync(path.join(home, "gateway.json")).equals(before)).toBe(true);
+    expect(fs.existsSync(approvalAuditPath(home))).toBe(false);
+  });
+
+  it("list --review escalates a call above the policy's ceiling without asking any model", async () => {
+    writeConfig(["enabled: true", "max_class: write", "recipients: ['+15550100']"]);
+    const id = park();
+
+    const listed = await json<ReviewListJson>(["approvals", "list", "--review"]);
+
+    expect(listed.review?.outcomes).toEqual([expect.objectContaining({ id, decision: "escalate", rule: "class_above_max", modelCalled: false })]);
+    expect(listed.pending).toEqual([expect.objectContaining({ id, review: expect.objectContaining({ decision: "escalate", actor: "auto-review:policy", rule: "class_above_max" }) })]);
+  });
+
+  it("list --policy prints the written policy", async () => {
+    writeConfig(["enabled: true", `model: ${REVIEW_MODEL}`, "max_class: money", "max_amount_cents: 5000", "currency: USD", "recipients: ['*@example.com']"]);
+
+    const listed = await json<ReviewListJson>(["approvals", "list", "--policy"]);
+
+    expect(listed.policy).toEqual({ enabled: true, model: REVIEW_MODEL, max_class: "money", max_amount_cents: 5000, currency: "usd", recipients: ["*@example.com"] });
+  });
+
+  it("reject reverses an auto-approved call that has not run, and refuses one that already ran", async () => {
+    const waiting = park();
+    const ran = park(smsCall("Reminder: your table is at 7pm."));
+    await review({ decision: "approve", reason: "allowlisted number, booking text" });
+    expect(createBoundApprovalStore({ profileDir: home }).require(smsCall("Reminder: your table is at 7pm."), previewOf(smsCall("Reminder: your table is at 7pm."))).granted).toBe(true);
+
+    const reversed = await json<{ id: string; status: string; reversed: boolean }>(["approvals", "reject", waiting]);
+    expect(reversed).toMatchObject({ id: waiting, status: "denied", reversed: true });
+    expect(new FileGatewayStore(path.join(home, "gateway.json")).snapshot().approvals[waiting]).toMatchObject({ status: "denied", decidedBy: "human" });
+
+    const refused = await runCli(["approvals", "reject", ran, "--json"]);
+    expect(refused.exitCode).not.toBe(EXIT.OK);
+    expect(refused.stdout + refused.stderr).toContain("already ran");
   });
 });

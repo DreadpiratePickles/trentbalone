@@ -209,6 +209,10 @@ export const DEFAULT_CONFIG: TrentConfig = {
   // [P2-9] a2a peers
   // No peer until the founder names one: the `a2a` toolset reaches only a configured peer's origin.
   a2a: { peers: [] },
+  // [H1] auto review
+  // Off: every held call reaches a person until the founder writes down what a reviewer may approve.
+  // `max_class: read` is below every class a held call carries, so the switch alone approves nothing.
+  governance: { auto_review: { enabled: false, max_class: "read", max_amount_cents: 0, currency: "usd", recipients: [] } },
   personality: "default",
   theme: "dark",
   // [D0] improvement gates

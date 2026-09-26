@@ -563,6 +563,71 @@ Tested in `governance/autonomy.test.ts`, `autonomy-dispatch.test.ts`, `bound-app
 `idempotent-dispatch.test.ts`, `provenance.test.ts`, `policy-rules.test.ts`, `spend-ledger.test.ts`
 and, through `buildTrentTools` on fake executors at `autonomy: never`, `gate-chain.test.ts`.
 
+## Auto review
+
+Every call the gate above holds used to wait for a person. `governance.auto_review` lets a second
+model decide some of them, the way Claude's auto mode has a classifier review each action and Codex's
+auto-review has a reviewer agent decide approvals at the sandbox edge: it changes who reviews, not
+what is allowed. It is off by default and it only ever narrows (`governance/auto-review*.ts`).
+
+**What it reviews.** Only a held call bound to its arguments (`details.kind: "bound_call"`, the rows
+the class floor parks). A run approval is released the instant it is decided and carries no
+arguments to hold against a policy; an `ask_human` question is for you; a held memory write is
+untrusted by construction. Those are always left for a person.
+
+**The written policy, checked in code first.** A row is eligible only when every rule passes, and
+an ineligible row is escalated with the rule named without any model being built or called
+(`auto-review-policy.ts`):
+
+| Rule | Escalates when |
+|---|---|
+| `untrusted_provenance` | the preview, the action or the arguments carry `[provenance: untrusted` or `[untrusted]` |
+| `hardline`, `approval_floor`, `deny_glob` | the hardline blocklist, the approval floor or an `approvals.deny` glob names the call, re-checked on the stored row |
+| `never_class` | the call executes, destroys, deploys or touches a secret: no policy makes that approvable |
+| `class_above_max` | its tier is above `max_class`; the ladder is `read` < `write` < `external_send` (sends, customer-facing calls, network) < `money` |
+| `money_amount_unknown`, `money_currency`, `money_over_cap` | a money call whose integer-cent total cannot be read from its lines, is in another currency than `currency`, or exceeds `max_amount_cents` |
+| `recipient_unknown`, `recipient_not_allowed` | a send that names no recipient (a public post, an invoice send naming only the invoice), or any recipient not on `recipients` |
+
+**The reviewer.** An eligible row is put to the model (`governance.auto_review.model` pins it; a
+local model is fine when the profile's `provider` is that local runtime, because the pin is sent
+through the profile's own provider and a pin it cannot answer fails, leaving the row held) at
+temperature 0 with the exact preview, the bound arguments and the policy, and
+must reply with exactly `{"decision": "approve"|"deny"|"escalate", "reason": "..."}`. The gateway
+request has no response-format field, so the shape is asked for in the prompt and enforced on the
+reply: prose, an unknown decision, a missing reason, an extra key or two objects is no verdict. No
+verdict — a malformed reply, a failed call, or `escalate` — leaves the row pending, so the call stays
+blocked for you. A failed call is asked again on the next pass; everything else is reviewed once.
+
+**Same path as your decision.** Approve and deny go through `ApprovalBridge.decide(id, decision,
+"auto-review:<model>")`, the call `trent approvals approve` makes with `human`: the same row fields,
+the same `approval_decided` event, the same store mirror where one is wired. The reviewer's own model
+spend is charged to the profile's spend ledger as `surface: "auto-review"`.
+
+**The audit chain.** Every reviewer decision, every escalation and every override is one row of
+`<profile>/approvals-audit.ndjson` (0600), in the app's `AuditLog` row shape, hashed with the same
+formula and linked to the row before it, so the verifier `trent audit verify` uses re-walks it and
+names the first edited line. `trent approvals list` shows the rows the reviewer decided with their
+actor and reason, and each escalated row with why; `trent approvals list --policy` prints the policy.
+
+**Reversing it.** A bound approval runs nothing by itself: the identical call's replay does, and the
+first replay a reviewer's approval grants is stamped on the row (the one `[H1]` line in
+`bound-approvals.ts` `require()`). Until then `trent approvals reject <id>` reverses it and the replay
+is refused; after, the call has run and the reject is refused with the time it ran.
+`trent approvals approve <id>` on a row the reviewer denied approves exactly that call. To stop the
+reviewer altogether, set `enabled: false`: already-granted approvals stay granted, and the chain
+records every one.
+
+**Limits, stated.** Nothing runs the reviewer on its own yet: `trent approvals list --review` runs one
+pass over the held calls. Inside a seat turn the step itself still pauses for a person (the app's
+step gate, `seat-agent-loop.ts:209`); the reviewer's decision is what the replay then finds on the
+bound row, so a deny there blocks the call even after the step is approved. A bound row does not
+record whether its step read untrusted text, so the recipient allowlist and the money cap are what
+bound a send an injected instruction steered (`send-after-untrusted` still pauses such a step).
+
+Tested in `governance/auto-review-policy.test.ts` (each rule), `governance/auto-review.test.ts` (the
+reviewer against a fake model: approve, deny, escalate, malformed, absent; the chain; reversal; and
+that with the switch off nothing changes) and `apps/cli/src/commands/__tests__/approvals.test.ts`.
+
 ## Auditing a profile
 
 Everything above is spread over `config.yaml`, four records beside it and two directories, so in

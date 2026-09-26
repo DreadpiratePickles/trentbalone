@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import { PolicyRuleSchema } from "../../governance/policy-rules.js";
+import { AutoReviewConfigSchema } from "../../governance/auto-review-config.js"; // [H1] auto review
 
 // [A2.2] autonomy and hooks
 export { ApprovalsConfigSchema, AutonomyLevelSchema, DEFAULT_AUTONOMY } from "../../governance/autonomy.js";
@@ -22,3 +23,18 @@ export const PrivacyConfigSchema = z.object({
 export const PolicyConfigSchema = z.object({
   rules: z.array(PolicyRuleSchema).default([]),
 });
+
+// [H1] auto review
+/**
+ * `governance`: the written policy an auto reviewer works inside (docs/security.md, "Auto review").
+ * `auto_review` is defined beside the code that enforces it (`governance/auto-review-config.ts`,
+ * evaluated by `governance/auto-review-policy.ts`); off by default, and with `max_class: read` even
+ * turning it on approves nothing until a ceiling, a cap or a recipient list is written down.
+ */
+export const GovernanceConfigSchema = z
+  .object({
+    auto_review: AutoReviewConfigSchema.default({}),
+  })
+  .strict();
+export { AutoReviewConfigSchema };
+// [/H1]
