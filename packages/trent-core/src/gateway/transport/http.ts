@@ -106,6 +106,13 @@ export function buttonsAsText(rows: Array<Array<{ id: string; label: string }>> 
   return "\n\n" + rows.flat().map((b) => `[${b.label}] ${b.id}`).join("\n");
 }
 
+// [H4] An adapter without the `files` capability names what it could not send, so the loss is
+// visible in the chat instead of silent (rulebook section 6: partial failure must be visible).
+export function unsentAttachmentsAsText(attachments: Array<{ filename: string }> | undefined): string {
+  if (!attachments || attachments.length === 0) return "";
+  return "\n\n" + attachments.map((a) => `[attachment not sent: ${a.filename}]`).join("\n");
+}
+
 /** Copies bytes into a plain ArrayBuffer-backed view, which is what Blob accepts under strict lib typings. */
 export function toBlobPart(data: Uint8Array): Uint8Array<ArrayBuffer> {
   const copy = new Uint8Array(new ArrayBuffer(data.byteLength));

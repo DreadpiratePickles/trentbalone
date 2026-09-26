@@ -726,13 +726,25 @@ See [gateway.md](gateway.md), "Email: only an authenticated From gets through".
 ### Voice notes
 
 `gateway.voice_notes.enabled` (default `true`) transcribes a voice note or audio file sent on
-Telegram, WhatsApp, Signal, Discord or Slack, after pairing, with the same local engines as
-`media_transcribe` (whisper.cpp or faster-whisper, on the host or in the media image; never the
-hosted path), and the run sees `[voice note, <n>s] <transcript>`. `max_seconds` (default 300) and
-`max_bytes` (default 20971520, 20 MiB) are the caps; a note over either is refused with a reply
-naming it. With no local engine installed the sender is told what to install and nothing runs.
-Set `enabled: false` to refuse voice notes (a caption still runs). See [gateway.md](gateway.md),
-"Voice notes".
+Telegram, WhatsApp, Signal, Discord, Slack, Matrix, Mattermost, LINE or ntfy, after pairing, with
+the same local engines as `media_transcribe` (whisper.cpp or faster-whisper, on the host or in the
+media image; never the hosted path), and the run sees `[voice note, <n>s] <transcript>`.
+`max_seconds` (default 300) and `max_bytes` (default 20971520, 20 MiB) are the caps; a note over
+either is refused with a reply naming it. With no local engine installed the sender is told what
+to install and nothing runs. Set `enabled: false` to refuse voice notes (a caption still runs). See
+[gateway.md](gateway.md), "Voice notes".
+
+### Webhook routes
+
+`gateway.webhooks.routes` lists signed HTTP paths that start a run. Each route has a `name`, a
+`path` under `/hooks/`, a `signature` (`github`, `stripe`, `hmac-sha256` or `none-localhost-only`),
+a `secret_env` (the NAME of the variable holding the secret, never the secret itself) and an
+`objective_template` with `{{payload.a.b}}` references. Optional keys: `dedupe_key` (default: the
+body's SHA-256), `events`, `mode` (`fleet` by default), `seat`, `max_cost_cents` (integer cents),
+`rate_per_minute` (default 30), `tolerance_seconds` (Stripe, default 300) and `signature_header`
+(`hmac-sha256`, default `x-webhook-signature`). The listener is `gateway.webhooks.host` and
+`port` (default `127.0.0.1:8644`). `trent gateway start` serves the routes and `trent gateway
+status` shows the last deliveries. See [webhooks.md](webhooks.md).
 
 ### Conversation history
 
@@ -1062,8 +1074,11 @@ Recognised secret names include `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_A
 `OLLAMA_API_KEY`, `LMSTUDIO_API_KEY`, `E2B_API_KEY`,
 `DAYTONA_API_KEY`, the messaging tokens (`TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`,
 `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `WHATSAPP_TOKEN`, `SIGNAL_NUMBER`, the `EMAIL_SMTP_*`
-group, the `TEAMS_*` group) and `TRENT_CLOUD_TOKEN`. Any other key found in `.env` is kept rather
-than dropped on parse, so a provider key added by a newer release survives a round trip.
+group, the `TEAMS_*` group, `MATRIX_HOMESERVER_URL` and `MATRIX_ACCESS_TOKEN`, `MATTERMOST_URL` and
+`MATTERMOST_BOT_TOKEN`, `LINE_CHANNEL_ACCESS_TOKEN` and `LINE_CHANNEL_SECRET`, and `NTFY_TOPIC` with
+the optional `NTFY_URL`, `NTFY_TOKEN` and `NTFY_REPLY_TOPIC`) and `TRENT_CLOUD_TOKEN`. Any other
+key found in `.env` is kept rather than dropped on parse, so a provider key added by a newer release
+survives a round trip.
 
 Writes are atomic: write to a temporary file, then rename, with the mode re-asserted afterwards.
 

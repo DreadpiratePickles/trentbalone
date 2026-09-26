@@ -1,9 +1,9 @@
 # Messaging gateway
 
 The gateway lets an agent reach you on a messaging platform, and lets you answer an approval from
-your phone. Eight adapters are implemented against each platform's real protocol, and each is tested
-against a local server speaking that protocol. Live tests against the real services are gated behind
-`TRENT_TEST_LIVE=1` plus a per-platform credential and skip without one.
+your phone. Twelve adapters are implemented against each platform's real protocol, and each is
+tested against a local server speaking that protocol. Live tests against the real services are
+gated behind `TRENT_TEST_LIVE=1` plus a per-platform credential and skip without one.
 
 ```bash
 npm run cli -- gateway status
@@ -24,13 +24,55 @@ npm run cli -- gateway start --dry-run
 | email | `EMAIL_SMTP_*` | Own thin SMTP and IMAP clients |
 | teams | `TEAMS_CLIENT_ID`, `TEAMS_CLIENT_SECRET`, `TEAMS_TENANT_ID` | Microsoft Graph with OAuth token fetch |
 | homeassistant | — | REST notify services and webhooks |
+| matrix | `MATRIX_HOMESERVER_URL`, `MATRIX_ACCESS_TOKEN` | Client-server API v1.11: `/sync` long poll, `m.room.message` and `m.reaction` sends |
+| mattermost | `MATTERMOST_URL`, `MATTERMOST_BOT_TOKEN` | API v4 REST plus the `/api/v4/websocket` event stream |
+| line | `LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET` | Messaging API v2: reply and push; signed webhook at `/webhooks/line`; quick-reply buttons |
+| ntfy | `NTFY_TOPIC` (optional `NTFY_URL`, `NTFY_TOKEN`, `NTFY_REPLY_TOPIC`) | Publish as JSON; the reply topic's `/json` stream; `http` action buttons |
 
 Each adapter has a `*.wire.test.ts` (local HTTP, WebSocket or TCP server speaking the platform's
-protocol) and a `*.live.test.ts`. The registry test asserts exactly these eight platforms. Around
-the adapters sit a durable file-backed gateway store (queue, pairing and approval rows), device
-pairing (default deny, random codes with a one-hour expiry, rate limited, admin and regular tiers),
-a per-platform circuit breaker and health, and approvals that are checked against the durable row so
-a forged or replayed callback is rejected.
+protocol); the first eight also have a `*.live.test.ts`. The registry test asserts exactly these
+twelve platforms. Around the adapters sit a durable file-backed gateway store (queue, pairing and
+approval rows), device pairing (default deny, random codes with a one-hour expiry, rate limited,
+admin and regular tiers), a per-platform circuit breaker and health, and approvals that are checked
+against the durable row so a forged or replayed callback is rejected.
+
+## Matrix, Mattermost, LINE and ntfy
+
+Four platforms with clean public APIs, added for gap 5 of
+`01_discovery/output/harness-landscape-2026-09-26.md`. Each wire test drives the real
+`GatewayManager` too: an unknown sender gets a pairing code and no run, a paired one is routed, and
+an approval card is decided on the platform. Each keeps a cursor in `gateway.json` (`cursors`), so a
+restart resumes where it stopped and never hands the agent the same message twice:
+
+| Platform | Inbound | Cursor | Approval card | Reply in a thread |
+|---|---|---|---|---|
+| matrix | `/sync` long poll; with no stored token the first sync is history and is skipped; an invite is joined | `matrix.since`, the last `next_batch`, stored before its batch is dispatched | text with the `APPROVE <id> <nonce>` line; a reaction decides | `m.thread` relation |
+| mattermost | the WebSocket, authenticated with an `authentication_challenge` frame | `mattermost.last`, `<create_at>:<post id>`; an older post, or that one again, is dropped | text with the reply line; a reaction (`+1`, `white_check_mark`, `-1`, `x`) decides | `root_id` |
+| line | the webhook, `POST /webhooks/line` | `line.seen`, the last 512 `webhookEventId`s; a redelivery is dropped | quick-reply postback buttons | none; the event's reply token while fresh (single use, 50 s here), else a push with `X-Line-Retry-Key` |
+| ntfy | the reply topic's `/<topic>/json` stream | `ntfy.since`, the last message id, sent back as `since=` | `http` action buttons that publish the action id to the reply topic | none |
+
+- **LINE** checks `X-Line-Signature` (base64 HMAC-SHA256 of the raw body with the channel secret)
+  before it parses anything: a bad or missing signature is 401 and nothing is routed or sent. The
+  webhook rides the same `WebhookServer` path as WhatsApp's. `gateway start` listens only when
+  `gateway.webhooks` has a route ([webhooks.md](webhooks.md)); without one, nothing receives LINE's
+  webhook yet, which is equally true of WhatsApp. Set the webhook URL in the LINE Developers Console
+  to `https://<your host>/webhooks/line`.
+- **ntfy has no sender identity.** Whoever can publish to the reply topic is the sender, so the
+  reply topic is what gets paired (`trent gateway pair ntfy <code>`), and its name, or an access
+  list on your own server, is the credential. Use a long random topic on ntfy.sh. The action buttons
+  carry no `Authorization` header, because anyone who can read the topic can read a notification
+  and the token must never ride inside one; tap-to-approve therefore needs a reply topic the phone
+  can publish to without a token, and publishing the `trent:approve:<id>:<nonce>` line from the app
+  always works. Trent tags what it publishes `robot` and ignores that tag on the reply topic, so one
+  topic can carry both ways.
+- **Mattermost** interactive buttons are not used: Mattermost posts a button press to an
+  integration URL unsigned, so anyone who can reach that URL could press as the admin.
+- **Matrix** encrypted rooms are not read (one warning per room); invite the bot to an unencrypted
+  room. `m.notice` messages (what bots send) and edits are ignored. A room with two joined members is
+  a DM; larger rooms are groups, where pairing is granted by the operator, never offered.
+
+Sources for every endpoint, cited in each adapter's header: spec.matrix.org (client-server API
+v1.11), api.mattermost.com, developers.line.biz (Messaging API reference), docs.ntfy.sh.
 
 ## Email: only an authenticated From gets through
 
@@ -178,7 +220,8 @@ gated run stays parked until it is answered from the REPL or the TUI.
 
 ### Reactions decide the card too
 
-On Slack, Discord and Telegram a reaction on the delivered card is a decision: thumbs up (Slack
+On Slack, Discord, Telegram, Matrix and Mattermost a reaction on the delivered card is a decision:
+thumbs up (Slack
 `+1` or `thumbsup`, unicode U+1F44D) or a check mark (`white_check_mark`, `heavy_check_mark`,
 U+2705) approves; thumbs down (`-1`, `thumbsdown`, U+1F44E) or a cross mark (`x`, U+274C) denies.
 Skin-tone and variation-selector suffixes are stripped; any other emoji is ignored. The adapters
@@ -186,7 +229,9 @@ surface these as `InboundReaction { platform, channelId, messageId, emoji, sende
 through `onReaction` (Slack `reaction_added` over Socket Mode or the Events API; Discord
 `MESSAGE_REACTION_ADD`, which needs the `GUILD_MESSAGE_REACTIONS` and `DIRECT_MESSAGE_REACTIONS`
 intents the adapter now identifies with; Telegram `message_reaction`, which only arrives when
-`allowed_updates` names it, as the adapter's `getUpdates` call does). A reaction carries no
+`allowed_updates` names it, as the adapter's `getUpdates` call does; Matrix `m.reaction` with an
+`m.annotation` relation from `/sync`; Mattermost `reaction_added` on its WebSocket, with Slack's
+names). A reaction carries no
 approval id or nonce: `ApprovalBridge.resolveReaction` finds the pending row by the card's
 delivery record (`deliveredTo` platform, channel and message id: `sendApproval` puts the approval id
 on the queued row's metadata, and the queue's `onSent` hook calls `recordDelivery` with the platform's
@@ -274,10 +319,11 @@ turn of its own. The REPL applies the same three modes from `repl.double_text_po
 
 ## Voice notes
 
-A voice note (or an audio file) sent to Trent on Telegram, WhatsApp, Signal, Discord or Slack is
-transcribed, and the run sees text: `[voice note, <n>s] <transcript>`, with any caption on the next
-line. From there it is an ordinary message, so a spoken reply can also answer an `ask_human`
-question. `packages/trent-core/src/gateway/voice-notes.ts` does the work, called once from
+A voice note (or an audio file) sent to Trent on Telegram, WhatsApp, Signal, Discord, Slack,
+Matrix, Mattermost, LINE or ntfy is transcribed, and the run sees text:
+`[voice note, <n>s] <transcript>`, with any caption on the next line. From there it is an ordinary
+message, so a spoken reply can also answer an `ask_human` question.
+`packages/trent-core/src/gateway/voice-notes.ts` does the work, called once from
 `GatewayManager.handleInbound` **after** the pairing gate: an unpaired sender's audio is never
 downloaded or transcribed, it gets the pairing code like any other message.
 
@@ -288,6 +334,10 @@ downloaded or transcribed, it gets the pairing code like any other message.
 | signal | attachments with an `audio/*` content type (a voice note has no text) | JSON-RPC `getAttachment` from signal-cli's store |
 | discord | attachments with an `audio/*` content type (a voice message has `duration_secs`) | the attachment URL on `cdn.discordapp.com` / `media.discordapp.net`, no token |
 | slack | shared files with an `audio/*` mimetype (`duration_ms`) | `url_private_download` on `files.slack.com`, with the bot token |
+| matrix | `m.audio` messages (`info.duration` in ms, `info.size`) | `/_matrix/client/v1/media/download/<server>/<id>` on your homeserver, with the access token |
+| mattermost | post files with an `audio/*` `mime_type` | `/api/v4/files/<id>` on your server, with the bot token |
+| line | `audio` messages from LINE's own content provider (`duration` in ms) | `api-data.line.me/v2/bot/message/<id>/content`, with the channel token |
+| ntfy | attachments with an `audio/*` type | the attachment URL, only on your ntfy server's own origin, with the token if one is set |
 
 An adapter only declares the attachment and a lazy `open()`; it downloads nothing in its own
 dispatch, which runs before pairing. A credential goes only to that platform's own file host (or
@@ -306,7 +356,7 @@ Refusals are one reply each, and the message does not run: a note longer than
 on ffprobe's length after it), a download over `gateway.voice_notes.max_bytes` (default 20 MiB),
 a failed download, a failed transcription, or a note with no speech. `gateway.voice_notes.enabled:
 false` refuses voice notes (a caption still runs as text). Email, Teams and Home Assistant carry no
-audio. Tests: one voice case in each of the five `*.wire.test.ts` files, and
+audio. Tests: one voice case in each of the nine `*.wire.test.ts` files, and
 `gateway/voice-notes.test.ts` for the dispatch order and every refusal.
 
 ## Not yet implemented

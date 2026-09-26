@@ -12,6 +12,11 @@ import { SignalAdapter } from "./platforms/signal.js";
 import { EmailAdapter } from "./platforms/email.js";
 import { TeamsAdapter } from "./platforms/teams.js";
 import { HomeAssistantAdapter } from "./platforms/homeassistant.js";
+// [H4] the four clean-API platforms of wave H4 (gap 5 of the 2026-09-26 landscape).
+import { MatrixAdapter } from "./platforms/matrix.js";
+import { MattermostAdapter } from "./platforms/mattermost.js";
+import { LineAdapter } from "./platforms/line.js";
+import { NtfyAdapter } from "./platforms/ntfy.js";
 
 export interface PlatformEntry {
   id: string;
@@ -68,6 +73,28 @@ export const PLATFORM_REGISTRY: Record<string, PlatformEntry> = {
     requiredSecrets: ["HASS_URL", "HASS_TOKEN"], optionalSecrets: ["HASS_WEBHOOK_SECRET"],
     liveTestEnv: "HASS_TOKEN", docsUrl: "https://developers.home-assistant.io/docs/api/rest/",
   },
+  // [H4] Matrix, Mattermost, LINE and ntfy.
+  matrix: {
+    id: "matrix", name: "Matrix", create: (ctx) => new MatrixAdapter(ctx),
+    requiredSecrets: ["MATRIX_HOMESERVER_URL", "MATRIX_ACCESS_TOKEN"], optionalSecrets: [],
+    liveTestEnv: "MATRIX_ACCESS_TOKEN", docsUrl: "https://spec.matrix.org/v1.11/client-server-api/",
+  },
+  mattermost: {
+    id: "mattermost", name: "Mattermost", create: (ctx) => new MattermostAdapter(ctx),
+    requiredSecrets: ["MATTERMOST_URL", "MATTERMOST_BOT_TOKEN"], optionalSecrets: [],
+    liveTestEnv: "MATTERMOST_BOT_TOKEN", docsUrl: "https://api.mattermost.com/",
+  },
+  line: {
+    id: "line", name: "LINE", create: (ctx) => new LineAdapter(ctx),
+    requiredSecrets: ["LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET"], optionalSecrets: [],
+    liveTestEnv: "LINE_CHANNEL_ACCESS_TOKEN", docsUrl: "https://developers.line.biz/en/reference/messaging-api/",
+  },
+  ntfy: {
+    id: "ntfy", name: "ntfy", create: (ctx) => new NtfyAdapter(ctx),
+    requiredSecrets: ["NTFY_TOPIC"], optionalSecrets: ["NTFY_URL", "NTFY_TOKEN", "NTFY_REPLY_TOPIC"],
+    liveTestEnv: "NTFY_TOPIC", docsUrl: "https://docs.ntfy.sh/",
+  },
+  // [H4] end
 };
 
 export function listPlatformIds(): string[] {

@@ -19,5 +19,10 @@ export { SignalAdapter } from "./platforms/signal.js";
 export { EmailAdapter } from "./platforms/email.js";
 export { TeamsAdapter } from "./platforms/teams.js";
 export { HomeAssistantAdapter } from "./platforms/homeassistant.js";
+// [H4]
+export { MatrixAdapter } from "./platforms/matrix.js";
+export { MattermostAdapter } from "./platforms/mattermost.js";
+export { LineAdapter } from "./platforms/line.js";
+export { NtfyAdapter } from "./platforms/ntfy.js";
 /** Compatibility alias for the previous adapter surface. */
 export type { InboundMessage as GatewayMessage } from "./transport/types.js";

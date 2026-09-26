@@ -9,9 +9,10 @@ const CONTRACT_METHODS = ["isConfigured", "capabilities", "start", "stop", "send
 describe("platform registry", () => {
   const ids = listPlatformIds();
 
-  it("registers exactly the eight spec platforms", () => {
+  // [H4] matrix, mattermost, line and ntfy joined the eight (gap 5 of the 2026-09-26 landscape).
+  it("registers exactly the twelve spec platforms", () => {
     expect(ids.sort()).toEqual(
-      ["discord", "email", "homeassistant", "signal", "slack", "teams", "telegram", "whatsapp"].sort(),
+      ["discord", "email", "homeassistant", "line", "matrix", "mattermost", "ntfy", "signal", "slack", "teams", "telegram", "whatsapp"].sort(),
     );
   });
 
@@ -56,5 +57,11 @@ describe("platform registry", () => {
     expect(matrix.telegram.buttons).toBe(true);
     expect(matrix.homeassistant.buttons).toBe(false);
     expect(matrix.email.threads).toBe(true);
+    // [H4] what each new platform really has: Matrix and Mattermost threads and reactions, LINE
+    // quick-reply buttons and no reactions API, ntfy action buttons and nothing else.
+    expect(matrix.matrix).toEqual(expect.objectContaining({ threads: true, reactions: true, buttons: false }));
+    expect(matrix.mattermost).toEqual(expect.objectContaining({ threads: true, reactions: true, buttons: false }));
+    expect(matrix.line).toEqual(expect.objectContaining({ threads: false, reactions: false, buttons: true }));
+    expect(matrix.ntfy).toEqual(expect.objectContaining({ threads: false, reactions: false, buttons: true }));
   });
 });

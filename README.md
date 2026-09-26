@@ -172,7 +172,7 @@ feature set is measured against. Where the two differ:
 | Checkpoints and rollback | Yes | Yes |
 | Self-improvement | Eval-gated drafts wait in quarantine; nothing goes live without `trent improve promote` | A background review writes memory and skills every few turns |
 | Audit trail | Hash-chained export with a detached Ed25519 signature | Not in our inventory |
-| Messaging | 8 adapters | 24+ platforms |
+| Messaging | 12 adapters | 24+ platforms |
 | Runs after a reboot | `trent service install`: a launchd agent or systemd user unit that starts at login and restarts on exit; not yet tried through a real reboot | `hermes gateway install`: a systemd user or system unit, a launchd agent, or a Windows Scheduled Task |
 | Voice | Voice notes on Telegram, WhatsApp, Signal, Discord and Slack are transcribed on your machine after pairing; replies are text | Voice mode, local and hosted speech-to-text, ten text-to-speech backends, a wake word |
 | Plugins | Local plugin manifests; MCP servers | Curated, SHA-pinned plugin catalog (223 entries); 65 curated MCP presets |
