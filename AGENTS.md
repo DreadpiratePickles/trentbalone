@@ -27,7 +27,7 @@ Routing lives in `CONTEXT.md`. Each numbered stage owns its own contract in `<st
    Never invent colours. There is no purple in this product.
 
 ## The standalone environment contract — non-negotiable
-Measured, not assumed. Without the first line, **every job runs twice** and still reports success:
+Measured, not assumed. Without the first line, **jobs run more than once** (the app's in-process fallback re-runs every enqueued job beside the CLI's drain: 19 runs of 13 jobs on one CI run, the plan job always twice; `runtime/env.test.ts`) and the run still reports success:
 ```
 TRENT_QUEUE_FALLBACK=disabled      # required; omitting it ~4x the model bill, silently
 TRENT_EVAL_SYNC_QUEUE              # must stay unset

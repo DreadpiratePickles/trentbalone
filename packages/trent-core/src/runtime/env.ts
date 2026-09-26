@@ -4,7 +4,8 @@
  * A compiled Trent binary does not run under vitest, so it does not inherit the `NODE_ENV=test`
  * escape hatch that suppresses the queue's inline fallback processor (`apps/web/lib/queue.ts:189`).
  * Left at its default, that fallback fires each job through `setTimeout` while the CLI is also
- * draining the queue explicitly, so **every job executes twice**.
+ * draining the queue explicitly, so **jobs execute more than once** (the plan job always twice; measured 19
+ * runs of 13 jobs on one CI run, `env.test.ts`).
  *
  * Measured on a three-step run: 31 worker invocations, 13 step executions, `run_done` emitted ten
  * times, zero bytes on stderr, and a final status of `completed`. The overspend is invisible.
