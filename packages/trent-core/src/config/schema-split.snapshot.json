@@ -567,7 +567,8 @@
       "quota_hold_minutes": 45
     },
     "agent": {
-      "auto_recovery_cycles": 2
+      "auto_recovery_cycles": 2,
+      "mode": "solo"
     },
     "connect": {
       "inherit_default": false

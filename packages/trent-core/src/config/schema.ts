@@ -50,7 +50,7 @@ import { RetrievalGateConfigSchema } from "../improve/retrieval-config-schema.js
 // [X4] cron incidents
 import { CronConfigSchema } from "../cron/config-schema.js";
 // [X5] auto recovery
-import { RecoveryConfigSchema } from "../orchestrator/recovery-config-schema.js";
+import { AgentConfigSchema } from "./sections/agent.js"; // [S1] solo: the X5 block plus `mode`
 // [P1-D] connect inherit
 import { ConnectConfigSchema } from "./sections/connect.js";
 // [P2-9] a2a peers
@@ -212,8 +212,8 @@ export const TrentConfigSchema = z.object({
   /** The runner's incident threshold and quota hold (`cron/config-schema.ts`, docs/cron.md "Incidents"). */
   cron: CronConfigSchema.default({}),
   // [X5] auto recovery
-  /** Re-runs of a step that failed on a transient provider or tool error (`orchestrator/recovery-config-schema.ts`, docs/jobs.md). */
-  agent: RecoveryConfigSchema.default({}),
+  /** Re-runs of a step that failed on a transient provider or tool error (`orchestrator/recovery-config-schema.ts`, docs/jobs.md); [S1] `mode: fleet | solo` picks the runner (`config/sections/agent.ts`). */
+  agent: AgentConfigSchema.default({}),
   // [P1-D] connect inherit
   /** `inherit_default`: another profile reads a `trent connect` provider it never connected from the default profile's `.env`, read-only (`config/sections/connect.ts`, docs/connect.md). */
   connect: ConnectConfigSchema.default({}),

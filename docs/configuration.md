@@ -186,6 +186,7 @@ cron:
 
 agent:
   auto_recovery_cycles: 1     # re-runs of a step that failed on a transient provider or tool error; 0 turns it off
+  mode: fleet                 # fleet (planner and seats) or solo (one agent, one tool loop); absent is fleet. No surface reads it yet (S2)
 
 connect:
   inherit_default: true       # another profile reads a provider it never connected (trent connect) from default's .env, read-only
@@ -618,6 +619,16 @@ before the run reports the failure. It counts re-runs, not attempts, and sits ab
 own per-call retry, which has already been spent by the time a step fails. An approval park, a
 budget stop, a refusal, a gated result and any non-transient error are never re-run. 0 turns it
 off. See [jobs.md](jobs.md), "Auto-recovery cycles".
+
+### Agent mode
+
+`agent.mode` (`fleet`; absent is `fleet`, and no default is written into a profile) names the
+runner: `fleet` is the planner, the seats, the critic and the consolidator; `solo` is one agent
+with one tool loop and no seats (`packages/trent-core/src/solo/`, the design in
+`02_plan/output/solo-harness-design-2026-09-26.md`). Any other value is refused when the config
+loads. The solo runner exists and is tested behind the same `AgentRunner` port the protocol
+servers use, but no surface is wired to it yet: until the surfaces wave (S2) lands, every surface
+runs `fleet` whatever this key says.
 
 ### Workspace context files
 
