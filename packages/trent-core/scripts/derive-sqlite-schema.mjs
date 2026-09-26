@@ -22,6 +22,12 @@
 // binary has no `prisma/init.sql` beside its code (`import.meta.url` resolves into the compiled
 // filesystem, where the file is absent), so the DDL must travel inside the bundle. The two files
 // are written from one string in one run; `createStore.test.ts` asserts they never drift.
+//
+// `--out-root <dir>` writes all of it (both prisma/ files, src/store/derived-ddl.ts and the
+// generated client, which the schema places at ../src/store/generated) under <dir> instead of the
+// package. The test uses it: `prisma generate` deletes and recreates every file of its output, so
+// deriving in place during a vitest run pulled internal/class.ts out from under concurrent Bun
+// children ("Cannot find module './internal/class'"; docs/sessions/2026-09-26-approvals-restart-flake.md).
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -32,10 +38,18 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(here, "..");
 const repoRoot = path.resolve(pkgRoot, "../..");
 
+/** The package, or the directory named by `--out-root`; anything else is refused, never guessed. */
+function outRootFrom(argv) {
+  if (argv.length === 0) return pkgRoot;
+  if (argv.length === 2 && argv[0] === "--out-root" && argv[1] !== "") return path.resolve(argv[1]);
+  throw new Error(`derive-sqlite-schema: usage: derive-sqlite-schema.mjs [--out-root <dir>], got: ${argv.join(" ")}`);
+}
+
+const outRoot = outRootFrom(process.argv.slice(2));
 const CANONICAL = path.join(repoRoot, "apps/web/prisma/schema.prisma");
-const OUT_SCHEMA = path.join(pkgRoot, "prisma/schema.sqlite.prisma");
-const OUT_DDL = path.join(pkgRoot, "prisma/init.sql");
-const OUT_DDL_MODULE = path.join(pkgRoot, "src/store/derived-ddl.ts");
+const OUT_SCHEMA = path.join(outRoot, "prisma/schema.sqlite.prisma");
+const OUT_DDL = path.join(outRoot, "prisma/init.sql");
+const OUT_DDL_MODULE = path.join(outRoot, "src/store/derived-ddl.ts");
 const PRISMA_CLI = path.join(repoRoot, "node_modules/prisma/build/index.js");
 
 const HEADER = [
@@ -131,6 +145,7 @@ function main() {
   }
 
   mkdirSync(path.dirname(OUT_SCHEMA), { recursive: true });
+  mkdirSync(path.dirname(OUT_DDL_MODULE), { recursive: true });
   writeFileSync(OUT_SCHEMA, derived, "utf8");
 
   const ddl = execFileSync(
