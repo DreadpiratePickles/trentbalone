@@ -118,6 +118,12 @@ export class ConfigManager {
     );
   }
 
+  // [C11.2] setup writes `agent.mode: solo` only into a profile it creates, so it asks this before its write
+  /** True when this profile's `config.yaml` is on disk (`exists` is also true for a `.env` alone). */
+  public hasConfigFile(): boolean {
+    return this.io.existsSync(this.getConfigPath());
+  }
+
   // --------------------------------------------------------------- config
 
   public loadConfig(): TrentConfig {

@@ -132,6 +132,14 @@ Three modes exist:
   `disabled_toolsets`, `agent.disabled_toolsets` and `platform_toolsets.cli`, so a later update
   reading any of the three cannot re-enable something you never asked for.
 
+A profile that setup creates runs solo: one agent with one tool loop and no seats, and every mode
+writes `agent.mode: solo` into it (`--mode full` asks, with solo pre-filled). The fleet is the
+option: `trent setup --team` (or `--fleet`) writes `agent.mode: fleet`, the planner and the nine role
+seats, and `trent --team` runs the fleet for one launch without writing anything. On a profile that
+already has a config, quick and blank-slate leave its mode alone and full pre-fills it
+(`--mode local` writes solo unless `--team`, section 11); a profile without the key runs the fleet,
+as before ([solo.md](solo.md)). <!-- [C11.2] -->
+
 The `toolsets` list in `config.yaml` is what the seats get, and it accepts seventeen names:
 `file_ops`, `terminal`, `web`, `browser`, `code`, `vision`, `memory`, `delegation`, `cron`,
 `skills`, `plugins`, `mcp`, `human`, `media`, `social`, `business` and `a2a`. A `config.yaml` with no

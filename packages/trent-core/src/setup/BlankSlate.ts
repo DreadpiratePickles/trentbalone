@@ -1,7 +1,7 @@
 import os from "node:os";
 import { DEFAULT_MODELS, primaryEnvVar } from "./detect.js";
 import { FullSetup } from "./FullSetup.js";
-import { MINIMAL_TOOLSETS, applyToolsets, providerChoices, withFleet } from "./steps.js";
+import { MINIMAL_TOOLSETS, applyToolsets, chosenAgentMode, providerChoices, setupAgentMode, withAgentMode, withFleet } from "./steps.js"; // [C11.2] the agent mode
 import { SetupRun } from "./SetupRun.js";
 import { isLocalProvider } from "./local-runtime.js";
 import { localModelDefault } from "./local-setup.js";
@@ -22,6 +22,7 @@ export class BlankSlate extends SetupRun {
   async execute(options: Partial<SetupOptions> = {}): Promise<SetupResult> {
     const { configManager, prompts } = this.ctx;
     const current = configManager.loadConfig();
+    const mode = setupAgentMode(configManager, chosenAgentMode(options)); // [C11.2] before the save below
 
     const provider =
       options.provider ??
@@ -46,7 +47,7 @@ export class BlankSlate extends SetupRun {
     if (options.apiKey) this.saveSecret(primaryEnvVar(provider), options.apiKey);
 
     const base = { ...current, provider, model };
-    const config = withFleet(applyToolsets(base, MINIMAL_TOOLSETS), ["ceo"]);
+    const config = withAgentMode(withFleet(applyToolsets(base, MINIMAL_TOOLSETS), ["ceo"]), mode.write); // [C11.2]
     configManager.saveConfig(config);
 
     this.say(`Provider: ${provider}`);
@@ -55,6 +56,7 @@ export class BlankSlate extends SetupRun {
     this.say(
       `Explicitly disabled: ${config.disabled_toolsets.join(", ")} (written to disabled_toolsets, agent.disabled_toolsets and platform_toolsets.cli)`,
     );
+    for (const modeLine of mode.lines) this.say(modeLine); // [C11.2]
     this.say(`Config at ${configManager.getConfigPath()}.`);
 
     const walkthrough = await prompts.confirm({

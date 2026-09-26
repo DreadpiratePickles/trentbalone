@@ -19,6 +19,12 @@ export type AgentMode = (typeof AGENT_MODES)[number];
 /** What a profile without `agent.mode` runs. */
 export const DEFAULT_AGENT_MODE: AgentMode = "fleet";
 
+// [C11.2] the runner setup writes into a profile it creates: solo, since the 9B solo-format smoke scored 4/5
+// (02_plan/output/hermes-council-verdict-2026-09-26.md §7 item 4). DEFAULT_AGENT_MODE is unchanged, so a profile
+// written before setup wrote the key keeps the fleet it always ran; the fleet stays the option (`--team`).
+/** What setup writes into a NEW profile, unless the user chose the fleet (`setup/steps.ts`, `setupAgentMode`). */
+export const NEW_PROFILE_AGENT_MODE: AgentMode = "solo";
+
 // [C11] `agent.solo.max_tool_calls`: validated here, because until it had a schema any value parsed and
 // nothing read it (council C11). The runner's default (25, `solo/types.ts`) applies when it is absent;
 // above the ceiling a value is a typo, not a budget (`budget.per_run_cap` bounds the spend either way).

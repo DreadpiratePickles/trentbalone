@@ -23,6 +23,7 @@ import {
   type ExitCode,
 } from "@trent/core/errors/index.js";
 import type { CommandContext } from "./context.js";
+import { FLEET_FLAG_HELP, TEAM_FLAG_HELP, launchModeOf } from "../runtime/launch-mode.js"; // [C11.2]
 
 export const CLI_VERSION = "1.0.0";
 
@@ -91,6 +92,9 @@ const GLOBAL_OPTIONS: readonly OptionSpec[] = [
   },
   // [S2] a launch override of `agent.mode` (runtime/runner-for-mode.ts); it writes nothing
   { flags: "--solo", description: "Run on the solo agent (one agent, no seats) for this launch, overriding agent.mode" },
+  // [C11.2] the fleet, the option beside solo, with the same one-launch semantics (runtime/launch-mode.ts)
+  { flags: "--team", description: TEAM_FLAG_HELP },
+  { flags: "--fleet", description: FLEET_FLAG_HELP },
 ];
 
 export const GLOBAL_LONG_FLAGS: readonly string[] = GLOBAL_OPTIONS.map(
@@ -150,6 +154,7 @@ export function defineCommand(
       ...(actionArgs[actionArgs.length - 2] as Record<string, unknown>),
       ...self.optsWithGlobals(),
     };
+    launchModeOf(opts, label); // [C11.2] `--solo` with `--team`/`--fleet` is a usage error on every command, before it runs
     const ctx = factory(opts);
 
     if (opts.version === true) {

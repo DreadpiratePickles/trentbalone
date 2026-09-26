@@ -160,7 +160,7 @@ export const setupSpec: CommandSpec = {
     { flags: "--pull", description: "Quick, Ollama: pull the model if it is missing, after a confirmation" },
     // [L2] local mode
     { flags: "--base-url <url>", description: "Local: also probe a runtime at this URL (a llama.cpp llama-server, or Ollama/LM Studio elsewhere); it wins" },
-    { flags: "--fleet", description: "Local: keep the fleet (planner, critic, seats) instead of agent.mode solo" },
+    // [C11.2] `--fleet` moved to the global set (with `--team` and `--solo`): at setup they choose the runner written
     // [/L2]
   ],
   async run(ctx, opts) {
@@ -239,7 +239,8 @@ export async function runSetup(
   if (opts.pull === true) setupOptions.pull = true; // [L0-3]
   // [L2] local mode
   if (typeof opts.baseUrl === "string") setupOptions.baseUrl = opts.baseUrl;
-  if (opts.fleet === true) setupOptions.fleet = true;
+  if (opts.fleet === true || opts.team === true) setupOptions.fleet = true; // [C11.2] `--team`/`--fleet`, every mode
+  if (opts.solo === true) setupOptions.solo = true; // [C11.2]
   if (mode === "local" && ctx.dryRun) setupOptions.dryRun = true;
   // [/L2]
 

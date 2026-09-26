@@ -8,7 +8,7 @@ import {
   missingKeyGuidance,
   primaryEnvVar,
 } from "./detect.js";
-import { ALL_TOOLSETS, STARTER_AGENTS, applyToolsets, withFleet } from "./steps.js";
+import { ALL_TOOLSETS, STARTER_AGENTS, applyToolsets, chosenAgentMode, setupAgentMode, withAgentMode, withFleet } from "./steps.js"; // [C11.2] the agent mode
 import { mediaBackendPresent } from "../tools/media/backend.js";
 import { ConnectStore } from "../connect/store.js";
 import { BUSINESS_PROVIDERS } from "../tools/business/http.js";
@@ -18,6 +18,7 @@ import { resolveLocalModel } from "./local-setup.js";
 import type { SetupContext, SetupOptions, SetupResult } from "./types.js";
 import type { Provider, Toolset } from "../config/schema.js";
 import type { ConfigManager } from "../config/ConfigManager.js";
+import type { AgentMode } from "../config/sections/agent.js"; // [C11.2]
 
 /**
  * Quick: use what is already here.
@@ -28,8 +29,11 @@ import type { ConfigManager } from "../config/ConfigManager.js";
  * of miming an authorization flow.
  */
 export class QuickSetup extends SetupRun {
+  private chosenMode: AgentMode | undefined; // [C11.2] `--team`/`--fleet` or `--solo`, read once before anything runs
+
   async execute(options: Partial<SetupOptions> = {}): Promise<SetupResult> {
     const { configManager, prompts, env } = this.ctx;
+    this.chosenMode = chosenAgentMode(options); // [C11.2]
 
     if (options.apiKey && options.provider) {
       this.saveSecret(primaryEnvVar(options.provider), options.apiKey);
@@ -94,12 +98,14 @@ export class QuickSetup extends SetupRun {
   private async finish(provider: Provider, model: string, notes: readonly string[] = []): Promise<SetupResult> {
     const { configManager, prompts } = this.ctx;
     const { toolsets, line } = await quickToolsets(this.ctx); // [L2] shared with local mode
+    const mode = setupAgentMode(configManager, this.chosenMode); // [C11.2] solo into a profile this run creates
 
     this.blank();
     this.say(`Provider: ${provider}`);
     this.say(`Model: ${model}`);
     this.say(line);
     this.say(`Starter agents: ${STARTER_AGENTS.join(", ")}`);
+    for (const modeLine of mode.lines) this.say(modeLine); // [C11.2] the two modes, one line each
     for (const note of notes) this.say(note);
 
     const proceed = await prompts.confirm({
@@ -113,7 +119,7 @@ export class QuickSetup extends SetupRun {
     }
 
     const base = { ...configManager.loadConfig(), provider, model };
-    const config = withFleet(applyToolsets(base, toolsets), STARTER_AGENTS);
+    const config = withAgentMode(withFleet(applyToolsets(base, toolsets), STARTER_AGENTS), mode.write); // [C11.2]
     configManager.saveConfig(config);
 
     await this.doctor();

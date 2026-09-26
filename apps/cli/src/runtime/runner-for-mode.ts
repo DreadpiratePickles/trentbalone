@@ -52,6 +52,7 @@ import type { SoloCompactionOutcome } from "@trent/core/solo/compaction.js"; // 
 import { conversationRunners, soloAgentSettings, soloDelegationFor, soloMemoryAdapters, soloSkillsOf } from "./solo-continuity.js"; // [S3]
 import type { ToolWiringDeps } from "../repl/tools.js";
 import type { ReplConfig } from "../repl/types.js";
+import { launchModeOf } from "./launch-mode.js"; // [C11.2] --solo, --team/--fleet
 
 export type { AgentMode };
 export type { SoloHoldPolicy };
@@ -61,9 +62,9 @@ export function resolveAgentMode(config: { readonly agent?: { readonly mode?: Ag
   return override ?? agentMode(config);
 }
 
-/** The launch override a command's merged options carry: `--solo`, or nothing. */
+/** The launch override a command's merged options carry: `--solo`, [C11.2] `--team`/`--fleet`, or nothing; both is a usage error. */
 export function modeOverride(opts: Readonly<Record<string, unknown>>): AgentMode | undefined {
-  return opts.solo === true ? "solo" : undefined;
+  return launchModeOf(opts); // [C11.2]
 }
 
 /** One run through the port. The fleet reads trigger, history and surface; solo reads the conversation. */

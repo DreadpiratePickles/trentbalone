@@ -141,6 +141,23 @@ describe("[P2-1] openChildRun", () => {
     await child.cleanup();
   });
 
+  // [C11.2] `--team` over a solo profile must reach the child too, or a pinned job runs on the profile's solo
+  it("[C11.2] a launch on the team carries --team to the child, so a pinned job runs on the fleet over a solo profile", async () => {
+    const spawned: Spawned[] = [];
+    const child = openChildRun({
+      profile: "work",
+      model: PIN,
+      surface: "cron",
+      mode: "fleet",
+      program: ["/opt/trent/bin/trent"],
+      spawn: fakeSpawn(spawned, { stdout: [SYSTEM, line({ type: "result", status: "completed", cost_cents: 0, run_id: "run_child", model: PIN, models: [] })], code: 0 }),
+      env: {},
+    });
+    await collect(child.run(PROMPT, { trigger: "scheduled", model: PIN }));
+    expect(spawned[0]?.args).toEqual(["--profile", "work", "run", "-", "--model", PIN, "--format", "stream-json", "--no-color", "--team"]);
+    await child.cleanup();
+  });
+
   it("a result that did not complete throws its reason after the events it did carry", async () => {
     const spawned: Spawned[] = [];
     const failed = openChildRun({

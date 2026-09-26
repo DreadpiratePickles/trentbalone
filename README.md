@@ -5,13 +5,15 @@
 [![CI](https://github.com/DreadpiratePickles/trentbalone/actions/workflows/ci.yml/badge.svg?branch=feature/trent-fleet-v2)](https://github.com/DreadpiratePickles/trentbalone/actions/workflows/ci.yml)
 <!-- proof: .github/workflows/ci.yml:22-24 runs on push to main and feature/**; run 36198887419 on 68894ea: all-checks-pass success (`gh run view 36198887419 --json jobs`) -->
 
-Trent is an agent team that runs in your terminal, on your machine, with your own model key. A
-planner splits an objective into steps and gives each one to one of nine role seats (CEO, engineer,
-growth, sales, content, support, analyst, finance and escalation), each with its own toolsets,
-approvals, per-run budget in integer cents and eval suite. Anything that sends a message, moves
-money or touches a customer asks you first at every autonomy level, whether or not the optional
-reviewer model is on (`governance.auto_review` stops at `write`), and your yes covers that exact
-call only.
+Trent is an agent that runs in your terminal, on your machine, with your own model key. A profile
+that setup creates runs solo: one agent with one tool loop. The fleet is the optional team
+(`trent --team` for one launch, `agent.mode: fleet` to keep it): a planner splits an objective into
+steps and gives each one to one of nine role seats (CEO, engineer, growth, sales, content, support,
+analyst, finance and escalation), each with its own toolsets, approvals, per-run budget in integer
+cents and eval suite. Anything that sends a message, moves money or touches a customer asks you
+first at every autonomy level, whether or not the optional reviewer model is on
+(`governance.auto_review` stops at `write`), and your yes covers that exact call only.
+<!-- [C11.2] proof: setup writes `agent.mode: solo` into a profile it creates, and a profile without the key still runs the fleet (packages/trent-core/src/setup/solo-default.test.ts); `--team` and `--fleet` run the fleet for one launch (apps/cli/src/commands/__tests__/team-mode.test.ts); docs/solo.md. -->
 <!-- proof: `trent fleet list --json` exit 0, 173 agents including the nine seats; `trent fleet show finance` exit 0 (toolsets, denied, gates, "budget 125 cents per run", "eval suite finance"); docs/security.md "Side-effecting tools: the gate" (from line 494); packages/trent-core/src/governance/bound-approvals.ts -->
 
 ## The first minute
@@ -19,16 +21,17 @@ call only.
 ```
 trent fleet install small-business     # four seats, five skills and a persona land in the company brain
 trent fleet show finance               # what one seat may do, may not do, must ask about, and may spend
-trent run "Write a one-line tagline for a neighbourhood bakery that opens at 6 am"
+trent run --team "Write a one-line tagline for a neighbourhood bakery that opens at 6 am"
 trent budget status                    # the day's spend against the caps
 ```
 
-With a Gemini key, that run planned two steps, gave one to the content seat and one to the CEO, and
-finished in 15 seconds for 2 cents. Every cents figure is the answering model's list price, and the
-cost line the run prints is the ledger's own total. With no key the other three commands work the
-same, and the run is refused at every model call, costs $0.00 and exits 1. A run whose calls a
-provider refuses (a 429, say) exits 5.
+With a Gemini key, that team run (`--team` runs the fleet whatever the profile's mode) planned two <!-- [C11.2] -->
+steps, gave one to the content seat and one to the CEO, and finished in 15 seconds for 2 cents.
+Every cents figure is the answering model's list price, and the cost line the run prints is the
+ledger's own total. With no key the other three commands work the same, and the run is refused at
+every model call, costs $0.00 and exits 1. A run whose calls a provider refuses (a 429, say) exits 5.
 <!-- proof: install, show and budget status exit 0 on a keyless profile (output: "installed support, sales, finance, content", "skills booking-followup, invoice-draft, local-business-post, quote-estimate, review-response", "persona brain/system/persona-small-business.md (written, committed)"); the keyed run: 05_release/output/first-run-transcript-2026-09-25.txt ("$0.02 · 15035ms", ledger after `trent usage --json`: 2 cents, 5 rows, all at list price; captured after P2-8, docs/sessions/2026-09-25-p2-8-spend-truth.md); the keyless run: `trent run "Write a one-line tagline for a bakery" --no-color` exit 1, "$0.00" (re-run 2026-09-26 on a throwaway HOME: exit 1, and `--json` carries no `reason`, docs/sessions/2026-09-26-c6-docs-truth.md); exit 5 is `reason: model_calls_failed` (apps/cli/src/commands/groups/run.ts:170; apps/cli/src/commands/__tests__/run-verdict.test.ts, a provider 429) -->
+<!-- [C11.2] proof: the keyed run was captured before `--team` existed, on a profile that ran the fleet by default; `--team` selects that same runner over any profile (apps/cli/src/commands/__tests__/team-mode.test.ts "reaches a command's runtime"). -->
 
 ## Install
 
@@ -66,7 +69,8 @@ curl -fsSL https://agent.let-trent.uk/install.sh | bash
 
 ## First run
 
-A real run with a Gemini key on a fresh profile (colour off):
+A real run of the team with a Gemini key, captured on 2026-09-25, when a fresh profile ran the fleet
+(today that is `trent run --team`; a profile setup creates runs solo); colour off: <!-- [C11.2] -->
 
 ```
 $ trent run "Write a one-line tagline for a neighbourhood bakery that opens at 6 am"
@@ -167,7 +171,9 @@ feature set is measured against. Where the two differ:
 |---|---|---|
 | Install | From a clone. The installer and the release workflow that signs its downloads exist; no tag has been pushed, so there is nothing to download yet | One-line installer, native Windows, Docker, Nix, Termux; tagged releases |
 | Language | TypeScript, Node 22 or Bun | Python 3.11 |
-| Agent shape | Nine fixed role seats; a planner gives each step to one. 164 catalog specialists install profiles and skills the seats read; only the seats run | One agent that delegates to subagents (nested, parallel batches) |
+| Agent shape | Solo on a profile that setup creates (next row). The fleet is the optional team (`--team`): nine fixed role seats, a planner giving each step to one; the catalog specialists install profiles and skills the seats read, and only the seats run <!-- [C11.2] --> | One agent that delegates to subagents (nested, parallel batches) |
+| Solo mode | One agent with one tool loop and no seats, on the same tools, approvals, ledger and memory as the fleet; `trent --team` or `agent.mode: fleet` runs the fleet instead. Live on `gemini-3.5-flash-lite`: 3 of 3 turns answered after a real tool call, 3 cents | One agent with one tool loop, which delegates to subagents |
+| Local model | `trent setup --mode local` finds Ollama, LM Studio or a llama.cpp server, picks the chat model by memory tier and writes solo; each solo call on a local model is decoded under a JSON schema. Live on `qwen3.5:9b` (an M1 Max under load): 3 of 3 turns with a real tool call, 33 to 40 s to a turn's first token, solo-format smoke 4/5 | A managed llama.cpp runtime that downloads a pinned build and picks the quantization that fits; Ollama, vLLM, SGLang, LM Studio and others as custom endpoints |
 | Spend | Per-run and daily caps in integer cents on one ledger for every surface, each call at its model's list price; `trent run --max-cost-cents` stops a run with exit 6 | Usage and cost analytics, documented as a lower bound and off by default; turn and wall-clock budgets |
 | Side effects | Send, money-moving and customer-facing calls ask at every autonomy level; the approval is bound to the exact arguments | Approval modes smart, manual, off; YOLO skips prompts except a hardline blocklist |
 | Credential isolation | Egress proxy swaps an opaque token for the real key, and a key reaches only the hosts its token was minted for | iron-proxy, which binds each key to its own hosts |
@@ -182,15 +188,17 @@ feature set is measured against. Where the two differ:
 | Memory | A profile brain in files, versioned with git; imports md, txt, csv, pdf, docx, xlsx | Built-in memory plus external memory providers |
 | Desktop | Tauri app in the tree, not packaged | Electron app with macOS and Windows installers |
 | A2A | Server (0.3.0 and v1.0) and client: `a2a_list`, `a2a_discover`, `a2a_send`, `a2a_history`, every send behind the approval gate; Hermes discovers and calls it | Server and client |
-<!-- proof, Trent column: Install: release.yml, pages.yml, scripts/install.sh; no tag (`git ls-remote --tags` empty). Language: package.json, docs/getting-started.md section 1. Agent shape: `trent fleet list --json` (173); pack state lines ("the specialists install profiles and skills the seats can read and are not scheduled on their own"). Spend: `trent budget status`; `trent run --help` ("6 over --max-cost-cents"); list price: docs/sessions/2026-09-25-p2-8-spend-truth.md. Side effects: docs/security.md from line 494. Credential isolation: docs/security.md "Egress credential brokering" (line 13, host binding at line 65); packages/trent-core/src/egress/EgressProxy.host-binding.test.ts (9fee7d2; `npx vitest run` exit 0, 6 passed, 2026-09-26: the provider host gets the key, another allowlisted host gets no credential). Checkpoints: docs/checkpoints.md. Self-improvement: docs/improve.md. Audit trail: docs/security.md "Signed audit export" (line 129), `trent audit export|verify`; export refuses without bun:sqlite (apps/cli/src/commands/groups/audit.ts:58-66; apps/cli/src/commands/__tests__/audit.test.ts "export refuses when the durable store cannot be opened"). Messaging: packages/trent-core/src/gateway/platforms/ (discord, email, homeassistant, line, matrix, mattermost, ntfy, signal, slack, teams, telegram, whatsapp; registry.test.ts "registers exactly the twelve spec platforms"); each adapter's `*.wire.test.ts` against a local fake (all 12 exit 0 on 2026-09-26). Counted end to end: of the four test files that drive `trent gateway start`, only apps/cli/src/commands/__tests__/gateway-webhooks.test.ts sends a message through an adapter (LINE: a signed POST over HTTP answers 200, a forged one 401); the others mock `startAllConfigured`. Pairing: apps/cli/src/commands/__tests__/gateway-pair.test.ts (730fe21), Telegram through the real GatewayManager. Reboot: docs/service.md (RunAtLoad and KeepAlive; Restart=always, WantedBy=default.target), packages/trent-core/src/service/units.ts; the P2-D run wrote and linted the unit and ran the daemon in the foreground, and never loaded it into launchd (docs/sessions/2026-09-25-p2d-service.md). Voice: docs/gateway.md "Voice notes"; real transcript "Book me for Tuesday." in docs/sessions/2026-09-25-p2-3-voice-notes.md. Plugins: docs/mcp.md. Skills: docs/skills.md; `trent fleet packs` (5 + 4 + 5 skills). Memory: docs/brain.md; the doctor's Brain Import Extractors line. Desktop: docs/desktop.md; release.yml:298-307 (desktop job not wired). A2A: packages/trent-core/src/a2a/ (the server) and packages/trent-core/src/tools/a2a/ (the client tools); docs/a2a.md.
-     proof, Hermes column: the inventory, lines 21-25 (install), 21 (Python 3.11), 308 and 334-337 (subagents), 317 and 89 (cost, budgets), 383 and 385 (approvals, YOLO), 204 (iron-proxy), 78 (checkpoints), 495 (background review), 96 (24+ platforms), 101 (service lifecycle), 91-94 (voice mode, speech-to-text, ten text-to-speech backends, wake word), 698 and 250 (MCP presets 65); the catalog and skill counts re-measured in the Hermes 0.21.3 checkout at 49eb7b5dba on 2026-09-26: `git ls-files plugin-catalog/*.yaml | wc -l` 216, `find skills -name SKILL.md` 58, `find optional-skills -name SKILL.md` 150, 232 and 456 (memory providers), 406 (desktop), 143 (A2A in and out). "Not in our inventory" means the 913-line inventory has no such row, not that Hermes lacks it. -->
+<!-- proof, Trent column: Install: release.yml, pages.yml, scripts/install.sh; no tag (`git ls-remote --tags` empty). Language: package.json, docs/getting-started.md section 1. Agent shape: `trent fleet list --json` (173); pack state lines ("the specialists install profiles and skills the seats can read and are not scheduled on their own"); [C11.2] solo written into a new profile: packages/trent-core/src/setup/solo-default.test.ts. Solo mode and Local model [C11.2]: docs/solo.md; docs/local-models.md "Solo on this machine" (the measured table; transcripts in docs/sessions/2026-09-26-c11-solo-live.md): flash-lite 3 of 3 turns, 2 model calls a turn, 3 cents charged; qwen3.5:9b 3 of 3 turns, first token of a turn's first call 33.2, 36.9 and 39.5 s at load averages 42 to 168, doctor solo-format smoke 4/5. Spend: `trent budget status`; `trent run --help` ("6 over --max-cost-cents"); list price: docs/sessions/2026-09-25-p2-8-spend-truth.md. Side effects: docs/security.md from line 494. Credential isolation: docs/security.md "Egress credential brokering" (line 13, host binding at line 65); packages/trent-core/src/egress/EgressProxy.host-binding.test.ts (9fee7d2; `npx vitest run` exit 0, 6 passed, 2026-09-26: the provider host gets the key, another allowlisted host gets no credential). Checkpoints: docs/checkpoints.md. Self-improvement: docs/improve.md. Audit trail: docs/security.md "Signed audit export" (line 129), `trent audit export|verify`; export refuses without bun:sqlite (apps/cli/src/commands/groups/audit.ts:58-66; apps/cli/src/commands/__tests__/audit.test.ts "export refuses when the durable store cannot be opened"). Messaging: packages/trent-core/src/gateway/platforms/ (discord, email, homeassistant, line, matrix, mattermost, ntfy, signal, slack, teams, telegram, whatsapp; registry.test.ts "registers exactly the twelve spec platforms"); each adapter's `*.wire.test.ts` against a local fake (all 12 exit 0 on 2026-09-26). Counted end to end: of the four test files that drive `trent gateway start`, only apps/cli/src/commands/__tests__/gateway-webhooks.test.ts sends a message through an adapter (LINE: a signed POST over HTTP answers 200, a forged one 401); the others mock `startAllConfigured`. Pairing: apps/cli/src/commands/__tests__/gateway-pair.test.ts (730fe21), Telegram through the real GatewayManager. Reboot: docs/service.md (RunAtLoad and KeepAlive; Restart=always, WantedBy=default.target), packages/trent-core/src/service/units.ts; the P2-D run wrote and linted the unit and ran the daemon in the foreground, and never loaded it into launchd (docs/sessions/2026-09-25-p2d-service.md). Voice: docs/gateway.md "Voice notes"; real transcript "Book me for Tuesday." in docs/sessions/2026-09-25-p2-3-voice-notes.md. Plugins: docs/mcp.md. Skills: docs/skills.md; `trent fleet packs` (5 + 4 + 5 skills). Memory: docs/brain.md; the doctor's Brain Import Extractors line. Desktop: docs/desktop.md; release.yml:298-307 (desktop job not wired). A2A: packages/trent-core/src/a2a/ (the server) and packages/trent-core/src/tools/a2a/ (the client tools); docs/a2a.md.
+     proof, Hermes column: the inventory, lines 21-25 (install), 21 (Python 3.11), 308 and 334-337 (subagents), 317 and 89 (cost, budgets), 383 and 385 (approvals, YOLO), 204 (iron-proxy), 78 (checkpoints), 495 (background review), 96 (24+ platforms), 101 (service lifecycle), 91-94 (voice mode, speech-to-text, ten text-to-speech backends, wake word), 698 and 250 (MCP presets 65); the catalog and skill counts re-measured in the Hermes 0.21.3 checkout at 49eb7b5dba on 2026-09-26: `git ls-files plugin-catalog/*.yaml | wc -l` 216, `find skills -name SKILL.md` 58, `find optional-skills -name SKILL.md` 150, 232 and 456 (memory providers), 406 (desktop), 143 (A2A in and out); [C11.2] Solo mode: 308 and 334-337 (one agent, subagents); Local model: 296 (the managed llama.cpp runtime) and 298 (other local backends). "Not in our inventory" means the 913-line inventory has no such row, not that Hermes lacks it. -->
 
 Each Trent cell above is checked by a test anyone can re-run from a clone with `npx vitest run <file>`
 (the desktop one with `npm test` in `apps/desktop`, the install one with `node --test`):
 
 - **Install**: `scripts/ci/pages-release-gate.test.mjs`
 - **Language**: `packages/trent-core/src/improve/store.test.ts` (the Node test run spawns Bun for the SQLite store), `apps/cli/src/commands/__tests__/store-durability.test.ts`
-- **Agent shape**: `packages/trent-core/src/fleet/seat-capabilities.test.ts`, `packages/trent-core/src/fleet/FleetManager.test.ts`
+- **Agent shape**: `packages/trent-core/src/fleet/seat-capabilities.test.ts`, `packages/trent-core/src/fleet/FleetManager.test.ts`, `packages/trent-core/src/setup/solo-default.test.ts` <!-- [C11.2] -->
+- **Solo mode**: `packages/trent-core/src/solo/solo.live.test.ts` with `TRENT_TEST_LIVE=1` and `-t "gemini"` (3 turns, 3 cents; needs a Gemini key), and with no key: `apps/cli/src/runtime/runner-for-mode.test.ts`, `apps/cli/src/commands/__tests__/team-mode.test.ts`
+- **Local model**: `packages/trent-core/src/solo/solo.live.test.ts` with `TRENT_TEST_LIVE=1` and `-t "qwen"`, then `-t "doctor"` (3 turns, 33 to 40 s to a turn's first token under load, smoke 4/5; needs Ollama with `qwen3.5:9b`), and with no runtime: `packages/trent-core/src/setup/local-mode.test.ts`, `packages/trent-core/src/solo/turn-settings.test.ts`
 - **Spend**: `apps/cli/src/commands/__tests__/run.test.ts`, `packages/trent-core/src/governance/spend-ledger.test.ts`
 - **Side effects**: `packages/trent-core/src/governance/bound-approvals.test.ts`, `packages/trent-core/src/governance/autonomy.test.ts`, `packages/trent-core/src/governance/auto-review-policy.test.ts`
 - **Credential isolation**: `packages/trent-core/src/egress/EgressProxy.host-binding.test.ts`
@@ -213,9 +221,10 @@ a plugin catalog, spoken replies or a desktop app today, Hermes has them and Tre
 
 Where Trent is ahead:
 
-1. **Nine role seats in one run.** Each seat has its own toolsets, the toolsets it may not touch,
-   the approvals it needs, a per-run budget in integer cents, a model tier and an eval suite;
-   `trent fleet show <seat>` prints them.
+1. **Nine role seats in one run, as the optional team.** Solo is the default for a profile setup
+   creates; `trent --team` (or `agent.mode: fleet`) runs the fleet, where each seat has its own
+   toolsets, the toolsets it may not touch, the approvals it needs, a per-run budget in integer
+   cents, a model tier and an eval suite; `trent fleet show <seat>` prints them. <!-- [C11.2] -->
 2. **Money, messages and bookings always ask, and a yes covers exactly one call.** At every autonomy
    level, including `never`, a send, charge or booking asks first, and the approval is bound to that
    exact recipient, amount, text and time; a repeat is answered from the idempotency store instead of
@@ -283,6 +292,7 @@ Where Trent is ahead:
 
 ```
 trent                                  # the REPL (quick setup on first launch); /exit or Ctrl+D ends it
+trent --team                           # the REPL on the fleet for this launch; a profile setup creates runs solo
 trent run "<objective>"                # one objective, no terminal; exit 0 done, 1 failed, 3 config,
                                        # 5 a provider refused the calls, 6 over --max-cost-cents,
                                        # 7 waiting on approval, 130 interrupted
@@ -300,7 +310,7 @@ trent security audit                   # read-only report over this profile; exi
 trent a2a serve                        # Agent-to-Agent server; `trent acp` speaks ACP over stdio
 trent connect <provider>               # stripe, google, square, twilio, buffer, meta, bluesky
 ```
-<!-- proof: descriptions and exit codes from `trent --help`, `trent run --help` (--model, --format, --max-cost-cents, --verbose), `trent service --help` (daemon, install, uninstall, status) and `trent fleet --help`; `/exit` is registered in apps/cli/src/repl/commands.ts (P2-5a); text-mode `trent run` writes the wrapped app's own lines to <profile>/logs/run.log unless `--verbose` -->
+<!-- proof: descriptions and exit codes from `trent --help`, `trent run --help` (--model, --format, --max-cost-cents, --verbose), `trent service --help` (daemon, install, uninstall, status) and `trent fleet --help`; `/exit` is registered in apps/cli/src/repl/commands.ts (P2-5a); [C11.2] `trent --team`: apps/cli/src/commands/__tests__/team-mode.test.ts; text-mode `trent run` writes the wrapped app's own lines to <profile>/logs/run.log unless `--verbose` -->
 
 ## Documentation
 

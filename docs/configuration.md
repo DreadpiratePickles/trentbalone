@@ -679,11 +679,13 @@ off. See [jobs.md](jobs.md), "Auto-recovery cycles".
 
 ### Agent mode
 
-`agent.mode` (`fleet`; absent is `fleet`, and no default is written into a profile) names the
-runner: `fleet` is the planner, the seats, the critic and the consolidator; `solo` is one agent
-with one tool loop and no seats (`packages/trent-core/src/solo/`, the design in
-`02_plan/output/solo-harness-design-2026-09-26.md`). Any other value is refused when the config
-loads. Which surfaces read it, and the launch flags that override it, are in [solo.md](solo.md). <!-- [C11] -->
+`agent.mode` names the runner: `solo` is one agent with one tool loop and no seats
+(`packages/trent-core/src/solo/`, the design in `02_plan/output/solo-harness-design-2026-09-26.md`);
+`fleet`, the optional team, is the planner, the seats, the critic and the consolidator. Setup writes
+`solo` into a profile it creates, and `fleet` when you choose the team (`trent setup --team`); a
+profile without the key, such as one written before setup wrote it, runs `fleet`. Any other value is
+refused when the config loads. Which surfaces read it, what setup writes into an existing profile,
+and the launch flags that override it (`--solo`, `--team`) are in [solo.md](solo.md). <!-- [C11] [C11.2] -->
 
 `agent.solo.max_tool_calls` (absent: 25) is the most tool calls one solo run may make; the next one
 stops the run with a verdict naming the cap. A whole number from 1 to 500, checked when the config

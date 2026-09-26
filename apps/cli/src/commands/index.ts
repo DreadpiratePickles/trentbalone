@@ -50,6 +50,7 @@ import { workspaceSpec } from "./groups/workspace.js";
 import { brainSpec } from "./groups/brain.js";
 import { securitySpec } from "./groups/security.js";
 import { connectSpec } from "./groups/connect.js";
+import { FLEET_FLAG_HELP, TEAM_FLAG_HELP, bareLaunchPlan, launchModeOf } from "../runtime/launch-mode.js"; // [C11.2]
 
 export { CLI_VERSION } from "./registry.js";
 
@@ -173,6 +174,8 @@ export function buildProgram(options: BuildOptions = {}): Command {
     .option("--dry-run", "Report what would happen; perform no writes or network calls")
     .option("--tui", "Launch the interactive terminal UI")
     .option("--solo", "Run on the solo agent (one agent, no seats) for this launch, overriding agent.mode") // [S2]
+    .option("--team", TEAM_FLAG_HELP) // [C11.2] the fleet, the option beside solo
+    .option("--fleet", FLEET_FLAG_HELP) // [C11.2]
     .version(CLI_VERSION, "--version", "Print the Trent version and exit")
     .allowExcessArguments(false);
 
@@ -190,8 +193,8 @@ export interface RunResult {
   keepAlive: boolean;
   /** Set when the invocation asked for an interactive surface the binary entry point owns. */
   launch?: "repl" | "tui";
-  /** [S2] Set with `launch` when the launch overrides `agent.mode` (`trent solo`, `--solo`). */
-  mode?: "solo";
+  /** [S2] Set with `launch` when the launch overrides `agent.mode` (`trent solo`, `--solo`; [C11.2] `--team`, `--fleet`). */
+  mode?: "solo" | "fleet";
 }
 
 export interface RunOptions {
@@ -217,7 +220,7 @@ export async function runCli(argv: readonly string[], options: RunOptions = {}):
   const out: string[] = [];
   const err: string[] = [];
   let launch: "repl" | "tui" | undefined;
-  let mode: "solo" | undefined; // [S2]
+  let mode: "solo" | "fleet" | undefined; // [S2] [C11.2]
   launchRequest = undefined; // [S2]
 
   const io: CliIo = {
@@ -272,7 +275,7 @@ export async function runCli(argv: readonly string[], options: RunOptions = {}):
       const handled = await handleTopLevel(ctx, globals);
       if (handled.exitCode !== undefined) {
         if (handled.launch !== undefined) launch = handled.launch;
-        if (globals.solo) mode = "solo"; // [S2]
+        if (handled.mode !== undefined) mode = handled.mode; // [S2] [C11.2] --solo, --team or --fleet
         return finish(handled.exitCode);
       }
     }
@@ -293,6 +296,8 @@ interface Globals {
   tui: boolean;
   /** [S2] `--solo` or the `trent solo` alias. */
   solo: boolean;
+  /** [C11.2] `--team` or `--fleet`. */
+  team: boolean;
   opts: Record<string, unknown>;
 }
 
@@ -314,6 +319,7 @@ function extractGlobals(argv: readonly string[]): Globals {
     help: has("--help") || has("-h"),
     tui: has("--tui"),
     solo: has("--solo") || isSoloAlias(argv), // [S2]
+    team: has("--team") || has("--fleet"), // [C11.2]
     opts,
   };
 }
@@ -325,13 +331,20 @@ function extractGlobals(argv: readonly string[]): Globals {
 async function handleTopLevel(
   ctx: CommandContext,
   globals: Globals,
-): Promise<{ exitCode?: ExitCode; launch?: "repl" | "tui" }> {
+): Promise<{ exitCode?: ExitCode; launch?: "repl" | "tui"; mode?: "solo" | "fleet" }> { // [C11.2] mode
   if (globals.version) {
     // Must work with no config: this is what a user runs when everything else is broken.
     ctx.out(globals.json ? JSON.stringify({ version: CLI_VERSION }, null, 2) : CLI_VERSION);
     return { exitCode: EXIT.OK };
   }
   if (globals.help) return {};
+
+  const mode = launchModeOf(globals); // [C11.2] --solo, --team (--fleet) or nothing; naming both is a usage error
+  if (ctx.dryRun) { // [C11.2] opens nothing and writes nothing (it opened the REPL, or ran first-run setup): names what would start
+    const plan = { dryRun: true, command: "trent", profile: ctx.profile, ...bareLaunchPlan(ctx.config(), mode, globals.tui) };
+    ctx.out(globals.json ? JSON.stringify(plan, null, 2) : `would open the ${plan.launch.toUpperCase()} on ${plan.mode}${plan.firstRun ? ", after first-run setup" : ""}`);
+    return { exitCode: EXIT.OK };
+  }
 
   const manager = ctx.config();
   if (!manager.exists()) {
@@ -353,12 +366,12 @@ async function handleTopLevel(
   }
 
   if (ctx.overrides.startRepl) {
-    await ctx.overrides.startRepl({ profile: ctx.profile, continueSession: ctx.continueSession, ...(globals.solo ? { mode: "solo" as const } : {}) }); // [S2]
+    await ctx.overrides.startRepl({ profile: ctx.profile, continueSession: ctx.continueSession, ...(mode === undefined ? {} : { mode }) }); // [S2] [C11.2]
     return { exitCode: EXIT.OK };
   }
 
   // Config exists and no harness is driving: the binary entry point owns the interactive surface.
-  return { exitCode: EXIT.OK, launch: globals.tui ? "tui" : "repl" };
+  return { exitCode: EXIT.OK, launch: globals.tui ? "tui" : "repl", ...(mode === undefined ? {} : { mode }) }; // [C11.2] mode
 }
 
 /** Back-compatible entry point for callers that already own a Commander program. */

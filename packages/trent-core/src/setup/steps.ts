@@ -1,6 +1,9 @@
 import { ProviderSchema, ToolsetSchema } from "../config/schema.js";
 import type { Provider, Toolset, TrentConfig } from "../config/schema.js";
 import type { Choice } from "./ports.js";
+import { NEW_PROFILE_AGENT_MODE, agentMode, type AgentMode } from "../config/sections/agent.js"; // [C11.2]
+import type { ConfigManager } from "../config/ConfigManager.js"; // [C11.2]
+import { EXIT, TrentError } from "../errors/TrentError.js"; // [C11.2]
 
 export const ALL_PROVIDERS: readonly Provider[] = ProviderSchema.options;
 export const ALL_TOOLSETS: readonly Toolset[] = ToolsetSchema.options;
@@ -65,4 +68,48 @@ export function withBudget(config: TrentConfig, dailyCents: number, perRunCents:
     ...config,
     budget: { ...config.budget, daily_cap: dailyCents, per_run_cap: perRunCents },
   };
+}
+
+// [C11.2] the runner a setup run writes
+/** The two runners, one line each, as every setup screen shows them (quick's is the first-run screen). */
+export const AGENT_MODE_LINES: Readonly<Record<AgentMode, string>> = {
+  solo: "solo  one agent with one tool loop and no seats (the default for a new profile)",
+  fleet: "team  the fleet, the option: a planner and a critic over nine role seats (trent setup --team keeps it; trent --team runs it for one launch)",
+};
+
+/** Full setup's question: the same two runners. */
+export const AGENT_MODE_CHOICES: ReadonlyArray<Choice<AgentMode>> = [
+  { name: "solo: one agent with one tool loop and no seats", value: "solo" },
+  { name: "fleet: the team, a planner and a critic over nine role seats", value: "fleet" },
+];
+
+/** The runner the user named at setup: `fleet` (`--team`, `--fleet`), `solo` (`--solo`), or none. */
+export function chosenAgentMode(options: { readonly fleet?: boolean; readonly solo?: boolean }): AgentMode | undefined {
+  if (options.fleet === true && options.solo === true) {
+    throw new TrentError({ code: EXIT.USAGE, operation: "setup.options", message: "--solo and --team (--fleet) name two runners; pick one" });
+  }
+  return options.fleet === true ? "fleet" : options.solo === true ? "solo" : undefined;
+}
+
+/**
+ * `agent.mode` for the config a setup run is about to write, and the lines that say so. The user's choice wins;
+ * else a profile this run creates (no `config.yaml` yet) gets `NEW_PROFILE_AGENT_MODE`; else nothing is written and
+ * the profile keeps what it has, so one without the key stays on the fleet. Called BEFORE the run saves.
+ */
+export function setupAgentMode(
+  configManager: Pick<ConfigManager, "hasConfigFile" | "loadConfig">,
+  chosen: AgentMode | undefined,
+): { write: AgentMode | undefined; lines: string[] } {
+  const isNewProfile = !configManager.hasConfigFile();
+  const write = chosen ?? (isNewProfile ? NEW_PROFILE_AGENT_MODE : undefined);
+  const why = chosen !== undefined ? "as chosen" : isNewProfile ? "a new profile" : "this profile's own, unchanged";
+  return {
+    write,
+    lines: [`Agent mode: ${write ?? agentMode(configManager.loadConfig())} (${why})`, `  ${AGENT_MODE_LINES.solo}`, `  ${AGENT_MODE_LINES.fleet}`],
+  };
+}
+
+/** The config with `agent.mode` set, or unchanged when there is nothing to write. */
+export function withAgentMode(config: TrentConfig, mode: AgentMode | undefined): TrentConfig {
+  return mode === undefined ? config : { ...config, agent: { ...config.agent, mode } };
 }

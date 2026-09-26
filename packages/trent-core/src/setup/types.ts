@@ -39,8 +39,10 @@ export interface SetupOptions {
   // [L2] local mode
   /** Local: probe a runtime at this URL too (a llama.cpp `llama-server`, or Ollama/LM Studio elsewhere); it wins. */
   baseUrl?: string;
-  /** Local: keep the fleet (planner, critic, seats) instead of writing `agent.mode: solo`. */
+  /** [C11.2] Every mode (was local only): write `agent.mode: fleet`, the team, instead of solo (`--team`, `--fleet`). */
   fleet?: boolean;
+  /** [C11.2] Every mode: write `agent.mode: solo`, also into a profile that already has a config (`--solo`). */
+  solo?: boolean;
   /** Local: probe and print the plan; ask nothing, pull nothing, write nothing. */
   dryRun?: boolean;
   // [/L2]

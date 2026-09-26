@@ -8,18 +8,30 @@ review that shaped it is `02_plan/output/solo-harness-review-2026-09-26.md`.
 
 ## Turning it on
 
+A profile that setup creates runs solo: quick, full, blank-slate and local setup write
+`agent.mode: solo` into it (full asks, with solo pre-filled). `trent setup --team` (or `--fleet`)
+writes `agent.mode: fleet` instead: the fleet is the optional team. A profile that already has a
+config keeps its mode: quick and blank-slate setup leave `agent.mode` as it is, full asks with the
+profile's current runner pre-filled, and local setup writes solo unless `--team`. A profile without
+the key runs the fleet, as every profile did before, so no existing profile changes runner
+(`packages/trent-core/src/setup/solo-default.test.ts`). <!-- [C11.2] -->
+
 | How | Scope |
 |---|---|
-| `agent.mode: solo` in `config.yaml` | every surface of this profile, until you change it back |
+| `agent.mode: solo` (or `fleet`) in `config.yaml` | every surface of this profile, until you change it back <!-- [C11.2] --> |
 | `trent solo` | the REPL, for this launch |
-| `trent --solo` | the REPL, for this launch (`-c` and `--profile` work as usual) |
-| `trent run --solo "<objective>"` | one run |
-| `--solo` on `trent cron run`, `trent cron start`, `trent gateway start`, `trent a2a serve`, `trent acp` | that process |
+| `trent --solo`, or `trent --team` (alias `--fleet`) for the fleet | the REPL, for this launch (`-c` and `--profile` work as usual) |
+| `trent run --solo "<objective>"`, `trent run --team "<objective>"` | one run <!-- [C11.2] --> |
+| `--solo` or `--team` on `trent cron run`, `trent cron start`, `trent gateway start`, `trent a2a serve`, `trent acp` | that process |
 
-A launch flag beats `agent.mode`, which beats the default `fleet`. The flag writes nothing: the next
-launch without it is back on `agent.mode`. `--solo` is a global flag, so every command accepts it;
-the commands not listed above (`trent service daemon`, `trent heartbeat`, `trent jobs`, `trent goal`,
-`trent mcp serve`) follow `agent.mode`. The TUI (`trent --tui`) runs the fleet only.
+A launch flag beats `agent.mode`, which beats the default for a profile without the key, `fleet`.
+The flag writes nothing: the next launch without it is back on `agent.mode`. `--solo` and `--team`
+are global flags, so every command accepts them, and naming both is a usage error (exit 2); a pinned
+cron job's child run gets the same flag. The commands not listed above (`trent service daemon`,
+`trent heartbeat`, `trent jobs`, `trent goal`, `trent mcp serve`) follow `agent.mode`. The TUI
+(`trent --tui`) runs the fleet only. `trent --dry-run` opens nothing and names the runner a launch
+would start, by this precedence; with `--json` its document carries `launch`, `mode` and `firstRun`
+(a first run reports solo, what setup would write; `apps/cli/src/commands/__tests__/team-mode.test.ts`). <!-- [C11.2] -->
 
 The REPL's banner says which runner you are on: `solo · <model>` or `fleet · 9 seats`.
 `trent run --json` and the `system` line of `--format stream-json` carry `"mode"`.

@@ -2,10 +2,13 @@ import os from "node:os";
 import { DEFAULT_MODELS, hasKeyFor, primaryEnvVar } from "./detect.js";
 import { centsToDollars, dollarsToCents } from "./money.js";
 import {
+  AGENT_MODE_CHOICES, // [C11.2]
   applyToolsets,
+  chosenAgentMode, // [C11.2]
   parseAgentList,
   providerChoices,
   toolsetChoices,
+  withAgentMode, // [C11.2]
   withBudget,
   withFleet,
 } from "./steps.js";
@@ -13,6 +16,7 @@ import { SetupRun } from "./SetupRun.js";
 import { createLocalRuntime, isLocalProvider, type LocalRuntimePort } from "./local-runtime.js";
 import { localModelDefault, reportLocalRuntime, reportModelPresence } from "./local-setup.js";
 import type { Provider, Toolset } from "../config/schema.js";
+import { NEW_PROFILE_AGENT_MODE, agentMode, type AgentMode } from "../config/sections/agent.js"; // [C11.2]
 import type { SetupOptions, SetupResult } from "./types.js";
 
 /**
@@ -27,6 +31,7 @@ export class FullSetup extends SetupRun {
   async execute(options: Partial<SetupOptions> = {}): Promise<SetupResult> {
     const { configManager, prompts } = this.ctx;
     const current = configManager.loadConfig();
+    const isNewProfile = !configManager.hasConfigFile(); // [C11.2] asked before anything is written
 
     const provider =
       options.provider ??
@@ -47,6 +52,16 @@ export class FullSetup extends SetupRun {
       options.model ??
       (await prompts.input({ id: "model", message: "Model", default: modelDefault }));
     if (local !== undefined) reportModelPresence(local, pulled, model, (line) => this.say(line));
+
+    // [C11.2] the runner: the flag the user gave, else asked, pre-filled with this profile's own (solo when setup creates it)
+    const mode =
+      chosenAgentMode(options) ??
+      (await prompts.select<AgentMode>({
+        id: "agent_mode",
+        message: "Agent mode (solo: one agent; fleet: the team of nine role seats)",
+        choices: [...AGENT_MODE_CHOICES],
+        default: isNewProfile ? NEW_PROFILE_AGENT_MODE : agentMode(current),
+      }));
 
     const toolsets =
       options.toolsets ??
@@ -95,6 +110,7 @@ export class FullSetup extends SetupRun {
     this.blank();
     this.say(`Provider: ${provider}`);
     this.say(`Model: ${model}`);
+    this.say(`Agent mode: ${mode}`); // [C11.2]
     this.say(`Toolsets: ${toolsets.join(", ") || "none"}`);
     this.say(`Agents: ${agents.join(", ")}`);
     this.say(`Daily cap: ${dailyCents} cents (USD ${centsToDollars(dailyCents)})`);
@@ -108,11 +124,11 @@ export class FullSetup extends SetupRun {
     if (!proceed) return this.abort("full", "Setup cancelled. No configuration was written.", "cancelled");
 
     const base = { ...current, provider, model };
-    const config = withBudget(
+    const config = withAgentMode(withBudget( // [C11.2] the runner, written explicitly
       withFleet(applyToolsets(base, toolsets), agents),
       dailyCents,
       perRunCents,
-    );
+    ), mode); // [C11.2]
     configManager.saveConfig(config);
 
     await this.doctor();
