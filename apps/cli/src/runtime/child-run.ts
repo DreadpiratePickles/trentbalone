@@ -22,12 +22,14 @@
  * maintenance refuses while it runs, exactly as for any other run.
  */
 import { spawn as nodeSpawn } from "node:child_process";
+import fs from "node:fs";
 import process from "node:process";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { parseModelPin } from "@trent/core/orchestrator/model-env.js";
+import { resolveServiceProgram, type ProgramRequester, type ServiceProcessView } from "@trent/core/service/program.js";
 import type { HeadlessRunOptions } from "./headless.js";
 
 /** Set on the child: the surface its spend is charged to. `trent run` accepts `cron` only. */
@@ -66,33 +68,26 @@ export interface ChildRun {
   cleanup(): Promise<void>;
 }
 
-/** The slice of `process` that says which `trent` this is. */
-export interface SelfProcessView {
-  readonly execPath: string;
-  readonly argv: readonly string[];
-  readonly execArgv: readonly string[];
-  readonly bunVersion?: string | undefined;
-}
-
-const COMPILED_ENTRY = /^(?:\/\$bunfs\/|[A-Za-z]:[\\/]~BUN[\\/])/;
-const SOURCE_ENTRY = /\.(?:ts|mts|cts|tsx)$/;
-const INSPECTOR_FLAG = /^--(?:inspect|inspect-brk|inspect-port|inspect-wait|debug-port)(?:=|$)/;
 const ERROR_LINE = "error: ";
 
+/** A refusal from the resolver names this module's operation and what a pinned run needs. */
+const CHILD_RUN_REQUESTER: ProgramRequester = {
+  operation: "run.child",
+  starter: "a pinned run's child process",
+  remedy: "a pinned run starts this trent as its own process, so start trent from its binary or its entry script",
+};
+
 /**
- * The `trent` this process is, as an argv prefix: the compiled binary alone; otherwise the runtime
- * and the entry script, with the parent's loader flags (tsx) only for a source entry and never an
- * inspector flag, so a child does not open the parent's debugging port. Mirrors the service unit's
- * resolution (`@trent/core/service/program.ts`), without the absolute-path rule a unit file needs.
+ * The `trent` this process is, as an argv prefix, through the one resolver the service unit uses
+ * (`@trent/core/service/program.ts`): the compiled binary alone; otherwise the runtime and the entry
+ * script, with the parent's loader flags (tsx) only for a source entry and never an inspector flag,
+ * so a child does not open the parent's debugging port. Symlinks are resolved, as for the unit.
  */
-export function selfProgram(view: SelfProcessView = { execPath: process.execPath, argv: process.argv, execArgv: process.execArgv, bunVersion: process.versions.bun }): string[] {
-  const entry = view.argv[1];
-  if (view.bunVersion !== undefined && (entry === undefined || COMPILED_ENTRY.test(entry))) return [view.execPath];
-  if (entry === undefined || entry === "") {
-    throw new TrentError({ code: EXIT.CONFIG, operation: "run.child", message: "cannot tell which trent to start for a pinned run: this process has no entry script and is not the compiled binary" });
-  }
-  const flags = SOURCE_ENTRY.test(entry) ? view.execArgv.filter((flag) => !INSPECTOR_FLAG.test(flag)) : [];
-  return [view.execPath, ...flags, entry];
+export function selfProgram(
+  view: ServiceProcessView = { execPath: process.execPath, argv: process.argv, execArgv: process.execArgv, bunVersion: process.versions.bun },
+  realpath: (p: string) => string = (p) => fs.realpathSync(p),
+): string[] {
+  return resolveServiceProgram(view, realpath, CHILD_RUN_REQUESTER).argv;
 }
 
 const defaultSpawn: ChildRunSpawn = (command, args, options) =>

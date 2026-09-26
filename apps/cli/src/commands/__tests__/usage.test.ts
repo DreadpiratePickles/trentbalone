@@ -28,6 +28,9 @@ interface Window {
   tokens: number;
   cachedInputTokens: number;
   rows: number;
+  /** [P2-10] Rows the P2-8 ledger flagged `estimated` (chars/4 tokens) and `unpriced` (no price row). */
+  estimatedRows: number;
+  unpricedRows: number;
   groups: Group[];
 }
 
@@ -53,6 +56,8 @@ interface Charge {
   cents: number;
   tokens?: number;
   cachedInputTokens?: number;
+  estimated?: boolean;
+  unpriced?: boolean;
   at?: string;
 }
 
@@ -67,6 +72,8 @@ function charge(c: Charge): void {
     cents: c.cents,
     tokens: c.tokens ?? 100,
     ...(c.cachedInputTokens === undefined ? {} : { cachedInputTokens: c.cachedInputTokens }),
+    ...(c.estimated === undefined ? {} : { estimated: c.estimated }),
+    ...(c.unpriced === undefined ? {} : { unpriced: c.unpriced }),
   });
 }
 
@@ -108,6 +115,8 @@ describe("trent usage", () => {
       tokens: 2300,
       cachedInputTokens: 0,
       rows: 4,
+      estimatedRows: 0,
+      unpricedRows: 0,
       groups: [
         { key: "repl", cents: 120, tokens: 1000, rows: 1 },
         { key: "cron", cents: 75, tokens: 1300, rows: 2 },
@@ -168,8 +177,8 @@ describe("trent usage", () => {
 
   it("reports a profile that has never spent as zeros rather than failing", async () => {
     const data = await usage([]);
-    expect(data.today).toEqual({ cents: 0, tokens: 0, cachedInputTokens: 0, rows: 0, groups: [] });
-    expect(data.period).toEqual({ cents: 0, tokens: 0, cachedInputTokens: 0, rows: 0, groups: [] });
+    expect(data.today).toEqual({ cents: 0, tokens: 0, cachedInputTokens: 0, rows: 0, estimatedRows: 0, unpricedRows: 0, groups: [] });
+    expect(data.period).toEqual({ cents: 0, tokens: 0, cachedInputTokens: 0, rows: 0, estimatedRows: 0, unpricedRows: 0, groups: [] });
     expect(data.remainingCents).toBe(1000);
   });
 
@@ -198,5 +207,41 @@ describe("trent usage", () => {
     expect(data.period.cachedInputTokens).toBe(800_000);
     const human = await runCli(["usage", "--no-color"], { overrides: { now: () => at } });
     expect(human.stdout).toContain("800000 cached");
+  });
+
+  // [P2-10] P2-8 writes `estimated` and `unpriced` on ledger rows; the report counts them and the text names them.
+  it("counts estimated and unpriced rows in --json, and the text names each, one line, only when the period has some", async () => {
+    seedProfile();
+    const clean = await usage([]);
+    expect(clean.today).toMatchObject({ estimatedRows: 0, unpricedRows: 0 });
+    expect(clean.period).toMatchObject({ estimatedRows: 0, unpricedRows: 0 });
+    const before = await runCli(["usage", "--no-color"], { overrides: { now: () => at } });
+    expect(before.stdout).not.toContain("estimated");
+    expect(before.stdout).not.toContain("unpriced");
+
+    charge({ surface: "run", seat: "content", model: "gemini-3.6-flash", provider: "google", cents: 1, tokens: 500, estimated: true });
+    const onlyEstimated = await runCli(["usage", "--no-color"], { overrides: { now: () => at } });
+    expect(onlyEstimated.stdout).toContain("1 of 6 charges");
+    expect(onlyEstimated.stdout).toContain("chars/4");
+    expect(onlyEstimated.stdout).not.toContain("unpriced");
+
+    charge({ surface: "run", seat: "critic", model: "gemini-3.6-flash", provider: "google", cents: 2, tokens: 700, estimated: true, unpriced: true });
+    charge({ surface: "run", seat: "ceo", model: "house-model-1", provider: "openai", cents: 4, tokens: 900, unpriced: true, at: "2026-09-03T10:00:00.000Z" });
+    const data = await usage([]);
+    expect(data.today).toMatchObject({ rows: 6, estimatedRows: 2, unpricedRows: 1 });
+    expect(data.period).toMatchObject({ rows: 8, estimatedRows: 2, unpricedRows: 2 });
+    const week = await usage(["--since", "7d"]);
+    expect(week.period).toMatchObject({ rows: 6, estimatedRows: 2, unpricedRows: 1 });
+
+    const human = await runCli(["usage", "--no-color"], { overrides: { now: () => at } });
+    const lines = human.stdout.split("\n");
+    const estimatedLines = lines.filter((line) => line.includes("estimated"));
+    const unpricedLines = lines.filter((line) => line.includes("unpriced"));
+    expect(estimatedLines).toHaveLength(1);
+    expect(unpricedLines).toHaveLength(1);
+    expect(estimatedLines[0]).toContain("2 of 8 charges");
+    expect(estimatedLines[0]).toContain("chars/4");
+    expect(unpricedLines[0]).toContain("2 of 8 charges");
+    expect(unpricedLines[0]).toContain("no price row");
   });
 });

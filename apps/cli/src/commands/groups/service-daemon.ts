@@ -18,25 +18,25 @@
  * (`../../signals.ts`). A component that cannot start stops the ones already started and the
  * command exits non-zero (`@trent/core/service` `ServiceSupervisor`).
  *
- * The cron wiring mirrors `openRunner` in `./cron.ts` (deliver, the incident alert, the social
- * publish handler, the [P1-D] refusal of a pinned model), which is not exported; the two must be
- * kept in step until it is.
+ * [P2-10] The cron runner is `./cron.ts`'s own (`buildCronRunner`: the run, each delivery, the
+ * incident alert, the social publish handler), so a pinned job runs on its pin here exactly as under
+ * `cron start`: a child `trent run - --model <pin>` (`../../runtime/child-run.ts`).
  */
 import process from "node:process";
 import type { TrentConfig } from "@trent/core";
-import { CronRunner, cronRunnerActive, cronRunnerLockPath, readCronRunnerLock, type CronRunOptions } from "@trent/core/cron/index.js";
+import { cronRunnerActive, cronRunnerLockPath, readCronRunnerLock } from "@trent/core/cron/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { GatewayManager, linkRunApprovals, type RunApprovalLink } from "@trent/core/gateway/index.js";
 import { heartbeatLockPath, heartbeatRunnerActive, type HeartbeatLoop } from "@trent/core/heartbeat/index.js";
 import { acquireProfileWriter, gatewayRunningError, liveGatewayHolder, profileLockPath } from "@trent/core/profile/locks.js";
 import { ServiceLog, ServiceSupervisor, serviceLogPaths, type ServiceComponentReport, type ServiceEntry } from "@trent/core/service/index.js";
-import { SOCIAL_PUBLISH_HANDLER, createSocialPublishHandler } from "@trent/core/tools/social/index.js";
 import type { CommandOutcome } from "../registry.js";
 import type { CommandContext } from "../context.js";
 import { createAgentHandler } from "../../gateway/agent-handler.js";
 import type { ReplConfig } from "../../repl/types.js";
 import { createHeadlessRuntime, type HeadlessRuntime } from "../../runtime/headless.js";
 import { releaseOnSignal } from "../../signals.js";
+import { buildCronRunner } from "./cron.js";
 import { openHeartbeat } from "./heartbeat.js";
 
 type BuildManager = NonNullable<CommandContext["overrides"]["gatewayManager"]>;
@@ -73,69 +73,6 @@ function refuseLiveHolders(profileDir: string, config: TrentConfig): void {
   if (config.heartbeat.enabled && heartbeatRunnerActive(profileDir)) {
     throw new TrentError({ code: EXIT.CONFIG, operation: "service.daemon", message: "a heartbeat loop is already running for this profile; stop it before starting the service", target: heartbeatLockPath(profileDir) });
   }
-}
-
-/** `platform:channel`, split at the first colon, exactly as `./cron.ts` reads a job's deliver target. */
-function parseDeliverTarget(target: string): { platform: string; channelId: string } {
-  const colon = target.indexOf(":");
-  const platform = colon > 0 ? target.slice(0, colon).trim().toLowerCase() : "";
-  const channelId = colon > 0 ? target.slice(colon + 1).trim() : "";
-  if (platform === "" || channelId === "") {
-    throw new TrentError({ code: EXIT.CONFIG, operation: "cron.deliver", message: "deliver target must be <platform>:<channel>, e.g. slack:#sales or telegram:123456", target });
-  }
-  return { platform, channelId };
-}
-
-/** [P1-D] A pinned job never runs on a model it did not name: the same refusal `./cron.ts` makes. */
-function refusePinnedModel(options: CronRunOptions): void {
-  const model = (options as { readonly model?: string }).model;
-  if (model === undefined) return;
-  throw new TrentError({
-    code: EXIT.CONFIG,
-    operation: "cron.run",
-    message: `this job is pinned to model ${model}, and the runtime runs one configured model per process, so it cannot honour a per-job pin yet; the job was not run and no model was called. Re-add it without --model to run it on the configured model`,
-    target: model,
-  });
-}
-
-interface Wiring {
-  readonly ctx: CommandContext;
-  readonly config: TrentConfig;
-  readonly runtime: HeadlessRuntime;
-  readonly buildManager: BuildManager;
-  /** The gateway's manager once started, else one built on the first delivery. */
-  readonly sharedManager: () => GatewayManager;
-}
-
-function cronRunner(w: Wiring): CronRunner {
-  const configManager = w.ctx.config();
-  const owner = w.config.gateway.owner;
-  const send = async (platform: string, channelId: string, text: string, subject: string, operation: string): Promise<void> => {
-    const receipt = await w.sharedManager().send(platform, { channelId, text, metadata: { subject } });
-    if (!receipt.sent) {
-      throw new TrentError({ code: EXIT.PROVIDER, operation, message: `queued as ${receipt.queued} but not sent; the gateway will retry when ${platform} is reachable`, target: `${platform}:${channelId}` });
-    }
-  };
-  return new CronRunner({
-    profileDir: configManager.getProfileDir(),
-    run: (prompt, options) => {
-      refusePinnedModel(options);
-      return w.runtime.run(prompt, { ...options, surface: "cron" });
-    },
-    handlers: { [SOCIAL_PUBLISH_HANDLER]: createSocialPublishHandler({ profileDir: configManager.getProfileDir(), social: { manager: configManager } }) },
-    now: w.ctx.overrides.now,
-    log: (line) => w.ctx.err(line),
-    failureAlertAfter: w.config.cron.failure_alert_after,
-    quotaHoldMinutes: w.config.cron.quota_hold_minutes,
-    deliver: async (target, text, job) => {
-      const { platform, channelId } = parseDeliverTarget(target);
-      await send(platform, channelId, text, `Trent cron: ${job.name}`, "cron.deliver");
-    },
-    alert: async (text) => {
-      if (owner === undefined) throw new TrentError({ code: EXIT.CONFIG, operation: "cron.alert", message: "gateway.owner is not configured; set gateway.owner { platform, channelId } in config.yaml" });
-      await send(owner.platform, owner.channelId, text, "Trent cron: failure incident", "cron.alert");
-    },
-  });
 }
 
 export async function runServiceDaemon(ctx: CommandContext): Promise<CommandOutcome> {
@@ -181,7 +118,8 @@ export async function runServiceDaemon(ctx: CommandContext): Promise<CommandOutc
     throw error;
   }
   const built = runtime;
-  const wiring: Wiring = { ctx, config, runtime: built, buildManager, sharedManager: () => manager ?? (deliveryManager ??= buildManager(configManager, {})) };
+  /** The gateway's manager once started, else one built on the first delivery. */
+  const sharedManager = (): GatewayManager => manager ?? (deliveryManager ??= buildManager(configManager, {}));
 
   const entries: ServiceEntry[] = [];
   if (gatewayOn) {
@@ -215,7 +153,7 @@ export async function runServiceDaemon(ctx: CommandContext): Promise<CommandOutc
       },
     });
   } else entries.push({ name: "gateway", skipped: "gateway.enabled is false" });
-  const runner = cronRunner(wiring);
+  const runner = buildCronRunner(ctx, { configManager, config, runtime: built, manager: sharedManager });
   entries.push({
     name: "cron",
     start: () => {
@@ -227,7 +165,7 @@ export async function runServiceDaemon(ctx: CommandContext): Promise<CommandOutc
   let loop: HeartbeatLoop | undefined;
   if (config.heartbeat.enabled) {
     // The loop only: `openHeartbeat().close()` would stop the shared manager before the gateway's own stop.
-    const heartbeat = openHeartbeat({ configManager, config, runtime: built, buildManager: () => wiring.sharedManager(), now: ctx.overrides.now, log: (line) => ctx.err(line) }).loop;
+    const heartbeat = openHeartbeat({ configManager, config, runtime: built, buildManager: sharedManager, now: ctx.overrides.now, log: (line) => ctx.err(line) }).loop;
     loop = heartbeat;
     entries.push({
       name: "heartbeat",

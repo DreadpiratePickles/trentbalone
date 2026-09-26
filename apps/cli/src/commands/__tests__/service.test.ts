@@ -18,12 +18,13 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { ConfigManager } from "@trent/core/config/index.js";
-import { cronRunnerLockPath } from "@trent/core/cron/index.js";
+import { DEFAULT_TICK_MS, cronRunnerLockPath, readCronRuns } from "@trent/core/cron/index.js";
 import { EXIT } from "@trent/core/errors/index.js";
 import { GatewayManager } from "@trent/core/gateway/index.js";
 import { HeartbeatLoop, heartbeatLockPath } from "@trent/core/heartbeat/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { liveGatewayHolder, liveWriters, profileLockPath } from "@trent/core/profile/locks.js";
+import { newCronJob, writeCronJobs } from "@trent/core/tools/cron/index.js";
 import type { CliOverrides } from "../context.js";
 import type { HeadlessRuntime, HeadlessRuntimeDeps } from "../../runtime/headless.js";
 import { runCli } from "../index.js";
@@ -263,6 +264,24 @@ describe("trent service daemon", () => {
     await f.signals.raise("SIGINT");
     expect(mine()).toEqual([]);
     expect(f.order.at(-1)).toBe(`exit:${String(EXIT.INTERRUPT)}`);
+  });
+
+  // [P2-10] The daemon's runner is cron.ts's (`cronJobRun`): a pin is honoured there too, not refused.
+  it("a pinned job under the daemon runs on its pin (the child-run port is called with the pin) instead of being refused", async () => {
+    configure({ gateway: false, heartbeat: false });
+    const PIN = "gemini-3.6-flash";
+    const job = { ...newCronJob({ name: "pinned digest", schedule: "@hourly", prompt: "summarise the pipeline", model: PIN }, "2026-09-25T08:00:00.000Z"), next_run_at: "2026-09-25T09:00:00.000Z" };
+    writeCronJobs(trentHome, [job]);
+    const f = fakes();
+    expect((await runCli(["service", "daemon", "--json"], { overrides: f.overrides })).exitCode).toBe(EXIT.OK);
+    await vi.advanceTimersByTimeAsync(DEFAULT_TICK_MS);
+    await vi.waitFor(() => expect(readCronRuns(trentHome, job.id)).toHaveLength(1));
+    // The port that builds a pin's runtime (a child `trent run - --model <pin>` in production) was handed the pin.
+    expect(f.runtimeDeps.map((deps) => [deps.surface, deps.model])).toEqual([["service", undefined], ["cron", PIN]]);
+    expect(f.runs).toEqual([{ objective: job.prompt, surface: "cron" }]);
+    expect(readCronRuns(trentHome, job.id)[0]).toMatchObject({ status: "completed", trigger: "scheduled", model: PIN });
+    expect(f.cleanup).toHaveBeenCalledTimes(1); // the pin's runtime is released when its run ends
+    await f.signals.raise("SIGTERM");
   });
 
   it("the gateway enabled with no platform listening is a start failure: exit 3, runtime released, no lock left", async () => {

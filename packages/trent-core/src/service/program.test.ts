@@ -61,6 +61,9 @@ describe("resolveServiceProgram", () => {
     }
     expect(caught).toBeInstanceOf(TrentError);
     expect((caught as TrentError).code).toBe(EXIT.CONFIG);
+    // [P2-10] The default requester is the service install; a pinned run's child names its own.
+    expect((caught as TrentError).operation).toBe("service.program");
+    expect((caught as TrentError).message).toContain("run the install");
   });
 
   it("refuses a relative entry it cannot make absolute", () => {

@@ -7,9 +7,17 @@
  * and every way the child can end without completing turned into a thrown reason.
  */
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import process from "node:process";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
+import { resolveServiceProgram, type ServiceProcessView } from "@trent/core/service/program.js";
+import { setServiceHostForTests } from "../commands/groups/service.js";
+import { runCli } from "../commands/index.js";
 import { openChildRun, selfProgram, type ChildRunProcess, type ChildRunSpawn } from "./child-run.js";
 
 const PIN = "gemini-3.6-flash";
@@ -192,14 +200,74 @@ describe("[P2-1] openChildRun", () => {
 });
 
 describe("[P2-1] selfProgram: the trent this process is", () => {
+  // [P2-10] The process state is stated outright, its symlinks included: none here.
+  const noLinks = (p: string): string => p;
+
   it("the compiled binary is its own executable", () => {
-    expect(selfProgram({ execPath: "/usr/local/bin/trent", argv: ["/usr/local/bin/trent", "/$bunfs/root/trent"], execArgv: [], bunVersion: "1.3.0" })).toEqual(["/usr/local/bin/trent"]);
+    expect(selfProgram({ execPath: "/usr/local/bin/trent", argv: ["/usr/local/bin/trent", "/$bunfs/root/trent"], execArgv: [], bunVersion: "1.3.0" }, noLinks)).toEqual(["/usr/local/bin/trent"]);
   });
 
   it("the bundled CLI under Node is node and its entry; a source checkout keeps tsx's loader flags but never an inspector", () => {
-    expect(selfProgram({ execPath: "/usr/bin/node", argv: ["/usr/bin/node", "/opt/trent/dist/index.js"], execArgv: ["--inspect=9229"] })).toEqual(["/usr/bin/node", "/opt/trent/dist/index.js"]);
+    expect(selfProgram({ execPath: "/usr/bin/node", argv: ["/usr/bin/node", "/opt/trent/dist/index.js"], execArgv: ["--inspect=9229"] }, noLinks)).toEqual(["/usr/bin/node", "/opt/trent/dist/index.js"]);
     expect(
-      selfProgram({ execPath: "/usr/bin/node", argv: ["/usr/bin/node", "/repo/apps/cli/src/index.ts"], execArgv: ["--require", "/repo/node_modules/tsx/dist/preflight.cjs", "--import", "file:///repo/node_modules/tsx/dist/loader.mjs", "--inspect-brk"] }),
+      selfProgram({ execPath: "/usr/bin/node", argv: ["/usr/bin/node", "/repo/apps/cli/src/index.ts"], execArgv: ["--require", "/repo/node_modules/tsx/dist/preflight.cjs", "--import", "file:///repo/node_modules/tsx/dist/loader.mjs", "--inspect-brk"] }, noLinks),
     ).toEqual(["/usr/bin/node", "--require", "/repo/node_modules/tsx/dist/preflight.cjs", "--import", "file:///repo/node_modules/tsx/dist/loader.mjs", "/repo/apps/cli/src/index.ts"]);
   });
+
+  it("[P2-10] a process with no entry script is refused as the pinned run's own refusal, not the service install's", () => {
+    let caught: unknown;
+    try {
+      selfProgram({ execPath: "/usr/bin/node", argv: ["/usr/bin/node"], execArgv: [] }, noLinks);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(TrentError);
+    expect(caught).toMatchObject({ code: EXIT.CONFIG, operation: "run.child" });
+    expect((caught as Error).message).toContain("pinned run");
+    expect((caught as Error).message).not.toContain("install");
+  });
+});
+
+/** Symlinks resolved as `fs.realpathSync` would: a fixed table, so no file is needed. */
+const links: Record<string, string> = {
+  "/usr/local/bin/trent": "/usr/local/lib/node_modules/trent-cli/dist/index.js",
+  "/opt/homebrew/bin/trent-bin": "/opt/homebrew/Cellar/trent/1.0.0/bin/trent",
+};
+const realpath = (p: string): string => links[p] ?? p;
+const TSX = ["--require", "/repo/node_modules/tsx/dist/preflight.cjs", "--import", "file:///repo/node_modules/tsx/dist/loader.mjs"];
+
+// [P2-10] One resolver (`@trent/core/service/program.ts`): the unit `trent service install` writes and
+// a pinned job's child start the same trent, whatever this process is.
+describe("[P2-10] a pinned run's child and the service unit start the same trent", () => {
+  const states: Record<string, ServiceProcessView> = {
+    "the compiled binary through a symlink": { execPath: "/opt/homebrew/bin/trent-bin", argv: ["bun", "/$bunfs/root/trent"], execArgv: [], bunVersion: "1.3.0" },
+    "the npm-installed CLI through its bin symlink": { execPath: "/usr/local/bin/node", argv: ["/usr/local/bin/node", "/usr/local/bin/trent"], execArgv: ["--max-old-space-size=4096"] },
+    "a source checkout under tsx with an inspector": { execPath: "/usr/bin/node", argv: ["/usr/bin/node", "/repo/apps/cli/src/index.ts"], execArgv: [...TSX, "--inspect=9229"] },
+    "Bun running the source": { execPath: "/Users/f/.bun/bin/bun", argv: ["/Users/f/.bun/bin/bun", "/repo/apps/cli/src/index.ts"], execArgv: [], bunVersion: "1.3.0" },
+  };
+  let scratch: string;
+
+  beforeEach(() => {
+    scratch = fs.mkdtempSync(path.join(os.tmpdir(), "trent-child-program-"));
+    process.env.TRENT_HOME = path.join(scratch, ".trent");
+  });
+
+  afterEach(() => {
+    setServiceHostForTests(undefined);
+    delete process.env.TRENT_HOME;
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  for (const [state, view] of Object.entries(states)) {
+    it(`${state}: the same argv from both call sites`, async () => {
+      setServiceHostForTests({ platform: "darwin", homeDir: scratch, uid: 501, exec: () => ({ code: 0, stdout: "", stderr: "" }), processView: view, realpath, cwd: scratch, pathEnv: "/usr/bin:/bin" });
+      const install = await runCli(["service", "install", "--dry-run", "--json"]);
+      expect(install.exitCode, install.stdout).toBe(EXIT.OK);
+      const unit = (JSON.parse(install.stdout) as { programArguments: string[] }).programArguments;
+      const daemon = ["service", "daemon", "--profile", "default", "--no-color"];
+      expect(unit.slice(-daemon.length)).toEqual(daemon);
+      expect(selfProgram(view, realpath)).toEqual(unit.slice(0, -daemon.length));
+      expect(selfProgram(view, realpath)).toEqual(resolveServiceProgram(view, realpath).argv);
+    });
+  }
 });

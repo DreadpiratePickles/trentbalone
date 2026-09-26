@@ -717,8 +717,9 @@ app's Anthropic-tier estimate; the planner, the critic and the consolidator have
 a run's rows add up to its exact cost rounded up to the next cent (largest remainder, so a sub-cent
 row can read 0 cents beside its tokens), and the cost line `trent run` prints, the sum of its
 `step_end` and `consolidate_end` frames, is the same number. A row whose provider reported no usage
-says `estimated: true` (chars/4 tokens) and one no table prices says `unpriced: true`; the text of
-`trent usage` does not name either flag yet. Still not metered: with an `OPENAI_API_KEY` the app's
+says `estimated: true` (chars/4 tokens) and one no table prices says `unpriced: true`; every
+`trent usage` total counts them (`estimatedRows`, `unpricedRows`), and its text names each in one
+line when the period has some. Still not metered: with an `OPENAI_API_KEY` the app's
 own consolidator answers through `callText` and its usage never leaves the app.
 
 ### Money is integer cents

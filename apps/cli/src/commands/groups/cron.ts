@@ -22,7 +22,7 @@
  */
 import process from "node:process";
 import { CronRunner, DEFAULT_TICK_MS, readCronRuns, type CronRunOptions, type CronRunRow, type CronRunnerDeps } from "@trent/core/cron/index.js";
-import type { ConfigManager } from "@trent/core/config/index.js";
+import type { ConfigManager, TrentConfig } from "@trent/core/config/index.js";
 import { SOCIAL_PUBLISH_HANDLER, createSocialPublishHandler } from "@trent/core/tools/social/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { GatewayManager } from "@trent/core/gateway/index.js";
@@ -137,31 +137,25 @@ export function cronJobRun(ctx: CommandContext, input: { readonly configManager:
 }
 
 /**
- * The runner over this profile's schedule, on the headless runtime. The gateway manager is built
- * on first delivery only, so a job with no `deliver` target never touches the gateway config.
- * [P2-1] `inProcess: false` (`run <id>` on a pinned job) builds no in-process runtime; the command
- * still registers as a live writer on the profile for as long as it writes the job's history.
+ * [P2-10] The runner over this profile's schedule, wired once for every process that runs it
+ * (`openRunner` below and `trent service daemon`): the run (`cronJobRun`), the social publish
+ * handler, each job's delivery and the incident alert, both sent through `manager()`, which the
+ * caller builds on first use or shares.
  */
-async function openRunner(ctx: CommandContext, { inProcess = true }: { inProcess?: boolean } = {}): Promise<{ runner: CronRunner; close: () => Promise<void> }> {
-  const configManager = ctx.config();
-  const config = configManager.loadConfig();
-  const runtime = inProcess ? await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config: config as unknown as ReplConfig }) : undefined;
-  const releaseWriter = runtime === undefined ? acquireProfileWriter(configManager.getProfileDir(), "cron") : undefined;
-  const buildManager = ctx.overrides.gatewayManager ?? ((cm, options) => new GatewayManager(cm, options));
-  let manager: GatewayManager | undefined;
+export function buildCronRunner(ctx: CommandContext, input: { readonly configManager: ConfigManager; readonly config: TrentConfig; readonly runtime: Pick<HeadlessRuntime, "run"> | undefined; readonly manager: () => GatewayManager }): CronRunner {
+  const { configManager, config } = input;
   const owner = config.gateway.owner;
   const send = async (platform: string, channelId: string, text: string, subject: string, operation: string): Promise<void> => {
-    manager ??= buildManager(configManager, {});
-    const receipt = await manager.send(platform, { channelId, text, metadata: { subject } });
+    const receipt = await input.manager().send(platform, { channelId, text, metadata: { subject } });
     if (!receipt.sent) {
       throw new TrentError({ code: EXIT.PROVIDER, operation, message: `queued as ${receipt.queued} but not sent; the gateway will retry when ${platform} is reachable`, target: `${platform}:${channelId}` });
     }
   };
-  const runner = new CronRunner({
+  return new CronRunner({
     profileDir: configManager.getProfileDir(),
     // [G3.1] A scheduled job's cost is cron's, even when it rides the gateway's runtime.
     // [P2-1] A pinned job runs on a runtime built on its pin; an unpinned one on this process's.
-    run: cronJobRun(ctx, { configManager, config: config as unknown as ReplConfig, runtime }),
+    run: cronJobRun(ctx, { configManager, config: config as unknown as ReplConfig, runtime: input.runtime }),
     // [B1] A queued social post is a handled job: the approval bound at queue time is re-read
     // from this profile's rows and the post leaves once through the idempotent path; no prompt.
     handlers: { [SOCIAL_PUBLISH_HANDLER]: createSocialPublishHandler({ profileDir: configManager.getProfileDir(), social: { manager: configManager } }) },
@@ -179,6 +173,22 @@ async function openRunner(ctx: CommandContext, { inProcess = true }: { inProcess
       await send(owner.platform, owner.channelId, text, "Trent cron: failure incident", "cron.alert");
     },
   });
+}
+
+/**
+ * The runner over this profile's schedule, on the headless runtime. The gateway manager is built
+ * on first delivery only, so a job with no `deliver` target never touches the gateway config.
+ * [P2-1] `inProcess: false` (`run <id>` on a pinned job) builds no in-process runtime; the command
+ * still registers as a live writer on the profile for as long as it writes the job's history.
+ */
+async function openRunner(ctx: CommandContext, { inProcess = true }: { inProcess?: boolean } = {}): Promise<{ runner: CronRunner; close: () => Promise<void> }> {
+  const configManager = ctx.config();
+  const config = configManager.loadConfig();
+  const runtime = inProcess ? await (ctx.overrides.gatewayRuntime ?? createHeadlessRuntime)({ configManager, config: config as unknown as ReplConfig }) : undefined;
+  const releaseWriter = runtime === undefined ? acquireProfileWriter(configManager.getProfileDir(), "cron") : undefined;
+  const buildManager = ctx.overrides.gatewayManager ?? ((cm, options) => new GatewayManager(cm, options));
+  let manager: GatewayManager | undefined;
+  const runner = buildCronRunner(ctx, { configManager, config, runtime, manager: () => (manager ??= buildManager(configManager, {})) });
   return {
     runner,
     close: async () => {

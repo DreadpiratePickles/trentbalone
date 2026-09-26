@@ -16,6 +16,8 @@ import {
   resolveSpendWindow,
   SPEND_GROUP_KEYS,
   type SpendGroupKey,
+  type SpendReportOptions,
+  type SpendRow,
   type SpendTotals,
   type SpendWindow,
 } from "@trent/core/governance/index.js";
@@ -25,6 +27,15 @@ import { formatCents } from "../../repl/budget.js";
 
 const FULL_PERCENT = 100;
 const KEY_WIDTH = 18;
+/** "estimated", the longer of the two flag labels, so their counts line up. */
+const FLAG_WIDTH = 9;
+
+/**
+ * [P2-10] A window's totals plus how many of its rows carry the P2-8 flags: `estimated` (the
+ * provider reported no usage, so the tokens are chars/4) and `unpriced` (no price row, so the cents
+ * are the app's tier stand-in). Always present in `--json`, zero included, like `cachedInputTokens`.
+ */
+export type UsageTotals = SpendTotals & { estimatedRows: number; unpricedRows: number };
 
 export interface UsageData {
   /** Today on `heartbeat.active_hours.tz`: the day `today` covers and the last day of `since`. */
@@ -39,9 +50,35 @@ export interface UsageData {
   /** Headroom under `budget.daily_cap` for the rest of today; zero when there is no cap. */
   remainingCents: number;
   percent: number;
-  today: SpendTotals;
-  period: SpendTotals;
+  today: UsageTotals;
+  period: UsageTotals;
   [key: string]: unknown;
+}
+
+/**
+ * The flag counts come from the same report over the flagged rows only, so the window and the day
+ * key are the report's and are not re-derived here.
+ */
+function flaggedTotals(rows: readonly SpendRow[], options: SpendReportOptions): { today: UsageTotals; period: UsageTotals } {
+  const report = buildSpendReport(rows, options);
+  const estimated = buildSpendReport(rows.filter((row) => row.estimated === true), options);
+  const unpriced = buildSpendReport(rows.filter((row) => row.unpriced === true), options);
+  return {
+    today: { ...report.today, estimatedRows: estimated.today.rows, unpricedRows: unpriced.today.rows },
+    period: { ...report.period, estimatedRows: estimated.period.rows, unpricedRows: unpriced.period.rows },
+  };
+}
+
+/** One line per flag the window's rows carry; nothing when none do. */
+function renderFlags(totals: UsageTotals, ctx: CommandContext): string[] {
+  const lines: string[] = [];
+  if (totals.estimatedRows > 0) {
+    lines.push(`  ${ctx.theme.meta("estimated".padEnd(FLAG_WIDTH, " "))} ${ctx.theme.body(`${totals.estimatedRows} of ${totals.rows} charges: the provider reported no usage, so their tokens are chars/4`)}`);
+  }
+  if (totals.unpricedRows > 0) {
+    lines.push(`  ${ctx.theme.meta("unpriced".padEnd(FLAG_WIDTH, " "))} ${ctx.theme.body(`${totals.unpricedRows} of ${totals.rows} charges: no price row for the model, so their cents are the app's tier stand-in`)}`);
+  }
+  return lines;
 }
 
 function renderTotals(label: string, totals: SpendTotals, ctx: CommandContext): string[] {
@@ -69,7 +106,7 @@ export const usageSpec: CommandSpec = {
     const now = (ctx.overrides.now ?? ((): Date => new Date()))();
     const window = resolveSpendWindow(opts.since === undefined ? undefined : String(opts.since), now, tz);
     const by = resolveSpendGroupKey(opts.by);
-    const report = buildSpendReport(ledger.rows(), { now, tz, window, by });
+    const report = flaggedTotals(ledger.rows(), { now, tz, window, by });
 
     const dailyCapCents = config.budget.daily_cap;
     const data: UsageData = {
@@ -96,6 +133,7 @@ export const usageSpec: CommandSpec = {
       ...renderTotals("today", d.today, ctx),
       `  ${ctx.theme.meta("headroom")} ${over ? ctx.theme.needsApproval(headroom) : ctx.theme.body(headroom)}`,
       ...renderTotals(d.since.requested, d.period, ctx),
+      ...renderFlags(d.period, ctx),
       `  ${ctx.theme.meta(`period ${d.since.from} to ${d.since.to}, ${d.since.days} days; every surface appends to ${d.path}`)}`,
     ];
     return lines;

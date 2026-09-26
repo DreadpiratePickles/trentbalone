@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useApp, useInput } from "ink";
 import { P } from "./palette.js";
 import {
   ConfigManager,
@@ -65,6 +65,7 @@ export const App: React.FC<AppProps> = (props) => {
   const approvalBridge = props.approvalBridge || new ApprovalBridge();
   const doctorRunner = new DoctorRunner(configManager);
   const [orchestrator] = useState<Orchestrator>(() => props.orchestrator ?? createOrchestrator());
+  const { exit } = useApp();
 
   const fleet = useFleet(fleetManager);
   const { pending, approve, deny } = useApprovals(approvalBridge);
@@ -204,7 +205,10 @@ export const App: React.FC<AppProps> = (props) => {
       return;
     }
     if (trimmed === "/exit" || trimmed === "/quit") {
-      process.exit(0);
+      // [P2-10] The session's own way out, as the REPL's `/exit`: unmount, so `runTui` releases the
+      // writer registration and returns, and the binary exits 0. Typing is off while a run is in flight.
+      exit();
+      return;
     }
 
     if (busy) return;
