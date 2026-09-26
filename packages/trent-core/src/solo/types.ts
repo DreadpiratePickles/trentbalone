@@ -9,7 +9,9 @@
  */
 import type { AgentRunInput, AgentRunner } from "../agent-runner/index.js";
 import type { ContextBlock } from "../fleet-memory/tiers.js";
-import type { GatewayCompletion, GatewayStreamRequest } from "../model-gateway/types.js";
+import type { BoundApprovalStore } from "../governance/bound-approvals.js";
+import type { SessionTaintSnapshot } from "../governance/provenance.js";
+import type { GatewayCompletion, GatewayMessage, GatewayStreamRequest } from "../model-gateway/types.js";
 import type { RunModelCall } from "../orchestrator/run-hooks.js";
 import type { OrcEvent } from "../orchestrator/types.js";
 import type { HumanAnswers } from "../tools/human/index.js";
@@ -24,14 +26,35 @@ export const DEFAULT_SOLO_MAX_TOOL_CALLS = 25;
 /** How many times the SAME call may fail (or be refused) before the run stops on it. */
 export const SOLO_MISUSE_REPEATS = 3;
 
+/** [S1.1] C2: what one tool result may put in front of the model, `agent.solo.max_tool_result_chars`. */
+export const DEFAULT_SOLO_MAX_TOOL_RESULT_CHARS = 8_000;
+export const SOLO_MAX_TOOL_RESULT_CHARS_KEY = "agent.solo.max_tool_result_chars";
+
+/** [S1.1] C2: the output a call reserves in the window when no `maxTokens` is configured. */
+export const DEFAULT_SOLO_OUTPUT_RESERVE_TOKENS = 4_096;
+
+/**
+ * [S1.1] C1: constrained decoding for the reply, sent as the request's `responseFormat` when set
+ * (the OpenAI-compatible `response_format` a local server grammar-constrains: Ollama `format`,
+ * llama.cpp `json_schema`, LM Studio, vLLM). `soloResponseFormat` builds the solo turn's envelope.
+ */
+export type SoloResponseFormat =
+  | { readonly type: "json_object" }
+  | { readonly type: "json_schema"; readonly json_schema: { readonly name: string; readonly schema: Record<string, unknown>; readonly strict?: boolean } };
+
+/** A request as the loop sends it: the gateway's, plus the constrained-output seam. */
+export type SoloGatewayRequest = GatewayStreamRequest & { readonly responseFormat?: SoloResponseFormat };
+
 /** The gateway slice the loop calls. `ModelGateway` satisfies it. */
 export interface SoloGateway {
-  complete(request: GatewayStreamRequest): Promise<GatewayCompletion>;
+  complete(request: SoloGatewayRequest): Promise<GatewayCompletion>;
 }
 
 /** The tool build slice the loop reads: the adapters, already wrapped in the gate chain. `TrentToolBuild` satisfies it. */
 export interface SoloTools {
   readonly adapters: readonly TrentToolAdapter[];
+  /** [S1.1] The bound approval rows the chain files (B6, the restart): which row a hold is, and whether a human decided it. */
+  readonly bindings?: BoundApprovalStore;
 }
 
 export type SoloMessageRole = "user" | "assistant" | "system" | "tool";
@@ -101,6 +124,64 @@ export interface SoloConfig {
   readonly maxTokens?: number;
   /** `context.ceiling_chars` for the injected tiers; the stable tier is never trimmed (`tiers.ts`). */
   readonly ceilingChars?: number;
+  /** [S1.1] C2: `agent.solo.max_tool_result_chars`; default {@link DEFAULT_SOLO_MAX_TOOL_RESULT_CHARS}. */
+  readonly maxToolResultChars?: number;
+  /**
+   * [S1.1] C2: the model's effective context window in tokens (the local probe's figure). When set, a
+   * request whose estimated prompt plus the output reservation (`maxTokens`, else
+   * {@link DEFAULT_SOLO_OUTPUT_RESERVE_TOKENS}) exceeds it is refused before it is sent.
+   */
+  readonly contextWindowTokens?: number;
+  /** [S1.1] C1: constrained output, passed through on every request and read back as the envelope. */
+  readonly responseFormat?: SoloResponseFormat;
+}
+
+/** [S1.1] A run parked on a held call, as it is saved with the session so a restart can continue it. */
+export interface SoloParkRecord {
+  readonly runId: string;
+  readonly stepId: string;
+  readonly sessionId?: string;
+  readonly objective: string;
+  readonly startedAt: string;
+  readonly parkedAt: string;
+  /** The approval row the hold filed, when it names one. */
+  readonly approvalId?: string;
+  readonly held: ToolCallRecord;
+  /** The held call first, then the calls of the same reply not run yet, by adapter name. */
+  readonly pending: ReadonlyArray<{ readonly adapter: string; readonly action: string }>;
+  /** The run's own messages from its opening on, exactly as the model was sent them. */
+  readonly runMessages: readonly GatewayMessage[];
+  /** Results of the reply's earlier calls, not yet handed back to the model. */
+  readonly results: readonly string[];
+  readonly toolCalls: readonly ToolCallRecord[];
+  readonly callsMade: number;
+  readonly costCents: number;
+  readonly tokens: number;
+  readonly model?: string;
+  /** Calls a human approved in this run (B6): the same call again is not asked again. */
+  readonly approved: ReadonlyArray<{ readonly adapter: string; readonly action: string; readonly approvalId?: string }>;
+  /** A decision taken while the run was parked and not yet acted on. */
+  readonly decision?: "approved" | "rejected";
+}
+
+/** [S1.1] Everything the runner keeps for one conversation between processes. */
+export interface SoloSessionState {
+  readonly version: 1;
+  readonly taint: SessionTaintSnapshot;
+  readonly parked: readonly SoloParkRecord[];
+}
+
+/** [S1.1] Where the state lives: `sessionStoreState` (`park.ts`) over the session store's sidecar. */
+export interface SoloStateStore {
+  /** What `save` last wrote, as read back (validated by the runner); undefined when nothing was. */
+  load(): unknown;
+  save(state: SoloSessionState): void;
+}
+
+/** [S1.1] What happens to the approval row of a park that is abandoned (superseded, or not rebuildable after a restart). */
+export interface SoloApprovals {
+  /** Marks the row abandoned, with the reason; false when there is no such pending row. */
+  abandon(approvalId: string, reason: string): boolean;
 }
 
 export interface SoloRunnerDeps {
@@ -122,6 +203,12 @@ export interface SoloRunnerDeps {
   readonly humanAnswers?: HumanAnswers;
   /** Test seam for run ids. */
   readonly newId?: (prefix: string) => string;
+  /** [S1.1] The surface's session id: named on every park, so a restart knows the conversation. */
+  readonly sessionId?: string;
+  /** [S1.1] B1 and the restart: the conversation's taint and parks, saved with the session. Absent keeps them in this process only. */
+  readonly state?: SoloStateStore;
+  /** [S1.1] Absent, an abandoned park's bound row is decided `denied` by "abandoned: <reason>" through `tools.bindings`. */
+  readonly approvals?: SoloApprovals;
 }
 
 /** A run parked on a held call, as a surface lists it. */
@@ -132,6 +219,8 @@ export interface SoloParkedCall {
   readonly action: string;
   /** The held record's own summary: what the human is being asked. */
   readonly summary: string;
+  /** [S1.1] The approval row the hold filed, when it names one (`trent approvals approve <id>`). */
+  readonly approvalId?: string;
 }
 
 /**

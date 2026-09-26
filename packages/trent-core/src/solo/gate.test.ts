@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { collectAgentRun } from "../agent-runner/index.js";
 import type { OrcEvent } from "../orchestrator/types.js";
-import { HumanAnswers } from "../tools/human/index.js";
+import { HumanAnswers, questionFromEvent } from "../tools/human/index.js";
 import { FIXED_NOW, collect, fakeAdapter, fakeMemory, fakeMeter, kinds, memorySession, scriptedGateway, sequentialIds, toolCall, toolCallsOf, transcriptOf } from "./fakes.test-helpers.js";
 import { createSoloRunner } from "./runner.js";
 
@@ -53,7 +53,7 @@ describe("[S1] a held call parks the run", () => {
 
     expect(social.calls).toEqual([]);
     expect(social.dryRuns).toEqual([{ action: POST, payload: {}, context: { runId: "solo_1", stepId: "solo_1-trent" } }]);
-    expect(runner.parked()).toEqual([{ runId: "solo_1", stepId: "solo_1-trent", adapter: "social", action: POST, summary: `social: ${POST} is held as appr_test until a human approves exactly this call.` }]);
+    expect(runner.parked()).toEqual([{ runId: "solo_1", stepId: "solo_1-trent", adapter: "social", action: POST, summary: `social: ${POST} is held as appr_test until a human approves exactly this call.`, approvalId: "appr_test" }]);
     // The hold is the call's result for now: the transcript never shows a call with no answer.
     expect(session.messages.map((m) => [m.role, m.record?.status])).toEqual([["user", undefined], ["assistant", undefined], ["tool", "needs_approval"]]);
     // A parked run's spend reaches the ledger now; the scope reopens on resume.
@@ -133,7 +133,8 @@ describe("[S1] a held call parks the run", () => {
     await expect(collect(runner.resume("solo_9"))).rejects.toThrow(/no parked solo run solo_9/);
   });
 
-  it("a new run on the session abandons the parked one: its decision is refused and its hold stays the call's last word", async () => {
+  // [S1.1] The abandoned hold is no longer left as the call's last word (review B9): one line says it did not run.
+  it("a new run on the session abandons the parked one: its decision is refused and one line says the call did not run", async () => {
     const { runner, social, session } = setup([toolCall(POST), "Something else, answered."]);
     await collect(runner.run({ objective: "Announce the new tables." }));
     const next = await collect(runner.run({ objective: "Never mind, what time is it?" }));
@@ -145,9 +146,11 @@ describe("[S1] a held call parks the run", () => {
       ["user", undefined],
       ["assistant", undefined],
       ["tool", "needs_approval"],
+      ["tool", "blocked"],
       ["user", undefined],
       ["assistant", undefined],
     ]);
+    expect(session.messages[3]?.record?.summary).toMatch(/^not run: a new message started another run/);
   });
 
   it("resume with no decision yet re-raises the gate and ends again as input-required", async () => {
@@ -156,5 +159,52 @@ describe("[S1] a held call parks the run", () => {
     const again = await collect(runner.resume("solo_1"));
     expect(kinds(again)).toEqual(["step_awaiting_approval", "run_awaiting_approval"]);
     expect(runner.parked()).toHaveLength(1);
+  });
+});
+
+describe("[S1.1] B2: a typed answer never releases a held tool call", () => {
+  const ASK = 'ask_human {"question": "Walnut or oak stain?"}';
+
+  function afterAnsweredQuestion() {
+    const answers = new HumanAnswers();
+    const human = fakeAdapter({ name: "human", tools: ["ask_human"], approval: () => true });
+    const social = fakeAdapter({ name: "social", tools: ["social_post"], approval: (action) => action.startsWith("social_post") });
+    const gateway = scriptedGateway([toolCall(ASK), toolCall(POST), "unused"]);
+    const runner = createSoloRunner({ gateway, tools: { adapters: [human, social] }, session: memorySession(), memory: fakeMemory().memory, meter: fakeMeter(), now: FIXED_NOW, newId: sequentialIds(), humanAnswers: answers });
+    return { runner, social };
+  }
+
+  it("the gate frames of a later social_post name that call, so no surface shows the answered question as its card", async () => {
+    const { runner } = afterAnsweredQuestion();
+    await collect(runner.run({ objective: "Pick a stain and announce it." }));
+    expect(await runner.answer("solo_1", "solo_1-trent", "walnut")).toBe(true);
+    const resumed = await collect(runner.resume("solo_1"));
+    const gates = resumed.filter((event) => event.kind === "step_awaiting_approval" || event.kind === "run_awaiting_approval");
+    expect(gates).toHaveLength(2);
+    for (const gate of gates) {
+      // The answered ask_human record is still in the cumulative list; the gate names the held post.
+      expect(toolCallsOf(gate).map((r) => [r.adapter, r.status])).toContainEqual(["human", "needs_approval"]);
+      expect((gate.step as { seatLoopState?: unknown }).seatLoopState).toEqual({ pendingToolCall: { name: "social", action: POST } });
+      expect(questionFromEvent(gate)).toBeUndefined();
+    }
+  });
+
+  it("answer() on a held post is refused and releases nothing; the gate is raised again on resume", async () => {
+    const { runner, social } = afterAnsweredQuestion();
+    await collect(runner.run({ objective: "Pick a stain and announce it." }));
+    await runner.answer("solo_1", "solo_1-trent", "walnut");
+    await collect(runner.resume("solo_1"));
+
+    expect(await runner.answer("solo_1", "solo_1-trent", "yes, post it")).toBe(false);
+    expect(kinds(await collect(runner.resume("solo_1")))).toEqual(["step_awaiting_approval", "run_awaiting_approval"]);
+    expect(social.calls).toEqual([]);
+  });
+
+  it("an ask_human gate still reads as its question", async () => {
+    const { runner } = afterAnsweredQuestion();
+    const events = await collect(runner.run({ objective: "Pick a stain." }));
+    const gate = events.at(-1);
+    expect(gate?.kind).toBe("run_awaiting_approval");
+    expect(questionFromEvent(gate!)?.question).toBe("Walnut or oak stain?");
   });
 });

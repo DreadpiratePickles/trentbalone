@@ -184,7 +184,14 @@ export function questionFromEvent(event: OrcEvent): QuestionDetails | undefined 
     const details = parseDetails(pending.action);
     if (typeof details !== "string") return details;
   }
-  const parked = [...(step?.toolCalls ?? [])].reverse().find((call) => CARD_ADAPTER_NAMES.includes(call.adapter) && call.status === "needs_approval");
+  // [S1.1] A gate that names its held call is answered by THAT call's record only (council B2). An
+  // older `ask_human` stays in the step's cumulative list as `needs_approval` after it was answered,
+  // so the newest card record is not the held call's: a `social_post` held later in the same step
+  // must open an approval card, never the old question, or a typed reply would release the post.
+  const named = pending?.name !== undefined && typeof pending.action === "string";
+  const parked = [...(step?.toolCalls ?? [])]
+    .reverse()
+    .find((call) => CARD_ADAPTER_NAMES.includes(call.adapter) && call.status === "needs_approval" && (!named || call.action === pending?.action));
   const details = (parked as { details?: QuestionDetails | QuestionsDetails } | undefined)?.details;
   if (details?.kind === "questions" && Array.isArray(details.questions)) return fromQuestions(details);
   if (details?.kind === "question" && typeof details.question === "string") return details;

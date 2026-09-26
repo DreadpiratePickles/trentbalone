@@ -24,6 +24,7 @@
 import { record } from "../tools/action.js";
 import type { Provenance, ToolCallRecord, TrentToolAdapter } from "../tools/types.js";
 import { toolNameOf } from "./idempotent-dispatch.js";
+import type { PolicyClass } from "./policy-rules.js"; // [S1.1] type only: policy-rules imports this module
 import { currentToolCallContext } from "./tool-call-context.js";
 
 export type { Provenance } from "../tools/types.js";
@@ -121,6 +122,66 @@ export interface ProvenanceLedger {
 
 const NO_STEP_KEY = "no-step";
 
+// [S1.1] Session scope (council review B1). In solo mode one conversation spans many runs and the
+// model reads every earlier turn on each new one, so a taint that resets with the run launders it:
+// `.env` read in turn 1 and a URL carrying it fetched in turn 2, or a page read in turn 1 and a
+// memory write steered by it in turn 2. A run bound to a session taint keeps its policy history
+// ring (`policy-dispatch.ts`) and its untrusted sources HERE, one object per conversation, which the
+// runner saves with the session and restores when it next opens it. Nothing clears it but a new
+// session; `clear` below forgets per-step tags only and never touches a session's.
+/** One entry of a session's policy history ring: `policy-rules.ts` `PolicyCall`, mutable in place. */
+export interface SessionTaintCall {
+  tool: string;
+  classes: PolicyClass[];
+  at: number;
+}
+
+/** A conversation's taint, shared by every run bound to it. */
+export interface SessionTaint {
+  /** The policy ring, oldest first, trimmed by the dispatcher to its longest rule window. */
+  readonly calls: SessionTaintCall[];
+  /** Untrusted tools any turn of the conversation called, in call order, without repeats. */
+  readonly sources: string[];
+}
+
+/** What is saved with the session: plain JSON. */
+export interface SessionTaintSnapshot {
+  readonly calls: ReadonlyArray<{ readonly tool: string; readonly classes: readonly PolicyClass[]; readonly at: number }>;
+  readonly sources: readonly string[];
+}
+
+export function createSessionTaint(seed?: SessionTaintSnapshot): SessionTaint {
+  return {
+    calls: (seed?.calls ?? []).map((call) => ({ tool: call.tool, classes: [...call.classes], at: call.at })),
+    sources: [...new Set(seed?.sources ?? [])],
+  };
+}
+
+export function snapshotSessionTaint(taint: SessionTaint): SessionTaintSnapshot {
+  return { calls: taint.calls.map((call) => ({ tool: call.tool, classes: [...call.classes], at: call.at })), sources: [...taint.sources] };
+}
+
+/** Run id -> the session taint it is bound to. Bounded: a run left bound by a crash cannot grow it. */
+const SESSION_BINDINGS = new Map<string, SessionTaint>();
+const MAX_SESSION_BINDINGS = 1024;
+
+/** Binds a run to its conversation's taint for as long as it may call tools. */
+export function bindSessionTaint(runId: string, taint: SessionTaint): void {
+  SESSION_BINDINGS.delete(runId);
+  if (SESSION_BINDINGS.size >= MAX_SESSION_BINDINGS) SESSION_BINDINGS.delete(SESSION_BINDINGS.keys().next().value as string);
+  SESSION_BINDINGS.set(runId, taint);
+}
+
+export function unbindSessionTaint(runId: string): void {
+  SESSION_BINDINGS.delete(runId);
+}
+
+/** The session taint of the run the current tool call belongs to, if it is bound to one. */
+export function currentSessionTaint(): SessionTaint | undefined {
+  const context = currentToolCallContext();
+  return context === undefined ? undefined : SESSION_BINDINGS.get(context.runId);
+}
+
 export function createProvenanceLedger(): ProvenanceLedger {
   const steps = new Map<string, string[]>();
   const keyFor = (runId?: string, stepId?: string): string => {
@@ -131,15 +192,16 @@ export function createProvenanceLedger(): ProvenanceLedger {
   return {
     note(tool, provenance) {
       if (provenance === "untrusted") {
+        const session = currentSessionTaint(); // [S1.1] a session-bound run tags its conversation
         const key = keyFor();
-        const seen = steps.get(key) ?? [];
+        const seen = session?.sources ?? steps.get(key) ?? [];
         if (!seen.includes(tool)) seen.push(tool);
-        steps.set(key, seen);
+        if (session === undefined) steps.set(key, seen);
       }
       return provenance;
     },
-    sources: () => steps.get(keyFor()) ?? [],
-    isUntrusted: () => (steps.get(keyFor()) ?? []).length > 0,
+    sources: () => currentSessionTaint()?.sources ?? steps.get(keyFor()) ?? [], // [S1.1]
+    isUntrusted: () => (currentSessionTaint()?.sources ?? steps.get(keyFor()) ?? []).length > 0, // [S1.1]
     clear(runId, stepId) {
       steps.delete(keyFor(runId, stepId));
     },

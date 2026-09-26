@@ -9,7 +9,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FIXED_NOW, collect, fakeAdapter, fakeMemory, fakeMeter, memorySession, scriptedGateway, sequentialIds } from "./fakes.test-helpers.js";
-import { DEFAULT_SOLO_PERSONA, SOLO_TOOL_PROTOCOL } from "./prompt.js";
+import { parseReply } from "./parse.js";
+import { DEFAULT_SOLO_PERSONA, SOLO_TOOL_PROTOCOL, renderToolDisclosure, soloResponseFormat } from "./prompt.js";
 import { createSoloRunner } from "./runner.js";
 import type { SoloMessage } from "./types.js";
 
@@ -110,5 +111,53 @@ describe("[S1] the messages after the prefix", () => {
     expect(last).toContain("Today is 2026-09-26 (UTC).");
     expect(last).toContain("Workspace: /work/oak-shop");
     expect(last).toContain("Last week the founder chose walnut stain.");
+  });
+});
+
+describe("[S1.1] C1: the prompt teaches ONE tool-call format, the model's own", () => {
+  const HERMES = '<tool_call>\n{"name": "read_file", "arguments": {"path": "README.md"}}\n</tool_call>';
+
+  it("the protocol shows the Hermes/Qwen body, and nothing in the system prompt shows an action string", async () => {
+    const { gateway, runner } = runnerWith();
+    await collect(runner.run({ objective: "Hello" }));
+    const system = systemOf(gateway.requests[0]?.messages);
+    expect(system).toContain(HERMES);
+    expect(system).not.toMatch(/action = "/);
+    expect(system).not.toContain("toolCall.");
+    expect(system).not.toContain('read_file {"path": "README.md"}');
+    // The tool is still described: its name and description survive the rewrite.
+    expect(system).toContain("read_file: the read_file tool.");
+  });
+
+  it("an adapter's inline <tool> <json> examples are rewritten into the same body", () => {
+    const prose = fakeAdapter({ name: "terminal", tools: ["terminal", "process_manage"] });
+    const withProse = { ...prose, instructions: 'terminal runs a command. toolCall.name "terminal"; toolCall.action is "<tool> <json>": terminal {"command":"ls -la src","timeout":120} or process_manage {"action":"list"}. Example: terminal {"command":"cat package.json"}.' };
+    const text = renderToolDisclosure([withProse]);
+    expect(text).toContain('{"name": "terminal", "arguments": {"command":"ls -la src","timeout":120}}');
+    expect(text).toContain('{"name": "process_manage", "arguments": {"action":"list"}}');
+    expect(text).toContain('Example: {"name": "terminal", "arguments": {"command":"cat package.json"}}.');
+    expect(text).not.toContain("toolCall.");
+  });
+
+  it("the repair after a malformed reply shows the same body", async () => {
+    const { gateway, runner } = runnerWith({ replies: ['<tool_call>{"name": "nosuch", "arguments": {}}</tool_call>', "Fine."] });
+    await collect(runner.run({ objective: "Hello" }));
+    const repair = gateway.requests[1]?.messages.at(-1)?.content ?? "";
+    expect(repair).toContain('{"name": "<tool>", "arguments": {"key": "value"}}');
+    expect(repair).not.toContain('<tool> {"key": "value"}');
+  });
+});
+
+describe("[S1.1] C1: the constrained-output envelope the runner can pass through", () => {
+  // Written after `soloResponseFormat` (recorded in the S1.1 session log): it was never seen red.
+  it("names every tool as an enum, and a reply in its shape parses back to the same call", () => {
+    const files = fakeAdapter({ name: "file_ops", tools: ["read_file"] });
+    const format = soloResponseFormat([files]);
+    expect(format.type).toBe("json_schema");
+    const schema = format.type === "json_schema" ? format.json_schema.schema : {};
+    expect(JSON.stringify(schema)).toContain('"enum":["file_ops","read_file"]');
+    expect(schema).toMatchObject({ oneOf: [{ required: ["tool_calls"] }, { required: ["answer"] }] });
+    const parsed = parseReply('{"tool_calls": [{"name": "read_file", "arguments": {"path": "a.md"}}]}', [files], { envelope: true });
+    expect(parsed.kind === "actions" ? parsed.actions.map((a) => a.action) : []).toEqual(['read_file {"path":"a.md"}']);
   });
 });

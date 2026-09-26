@@ -18,6 +18,7 @@ import { record } from "../tools/action.js";
 import type { ToolCallRecord, TrentToolAdapter } from "../tools/types.js";
 import { toolNameOf } from "./idempotent-dispatch.js";
 import { classifyCall, DEFAULT_POLICY_RULES, mergeRules, PolicyEvaluator, type ClassifiableCall, type PolicyCall, type PolicyClass, type PolicyDecision, type PolicyRule } from "./policy-rules.js";
+import { currentSessionTaint } from "./provenance.js"; // [S1.1]
 import { currentToolCallContext } from "./tool-call-context.js";
 
 const PROCESS_RING = "process";
@@ -49,7 +50,8 @@ export class PolicyDispatcher {
 
   /** The recorded calls of the current run (or the process ring), oldest first. */
   history(): readonly PolicyCall[] {
-    return this.rings.get(this.ringKey()) ?? [];
+    // [S1.1] A run bound to a session reads its conversation's ring (`provenance.ts` SessionTaint).
+    return currentSessionTaint()?.calls ?? this.rings.get(this.ringKey()) ?? [];
   }
 
   /** Appends a call to the current ring, keeping only what the longest rule window needs. */
@@ -60,7 +62,8 @@ export class PolicyDispatcher {
   private rememberEntry(call: ClassifiableCall): { tool: string; classes: PolicyClass[]; at: number } {
     const entry = { tool: call.tool || call.adapter, classes: classifyCall(call), at: Date.now() };
     const key = this.ringKey();
-    let ring = this.rings.get(key);
+    // [S1.1] A session-bound run appends to its conversation's ring, which outlives the run.
+    let ring: PolicyCall[] | undefined = currentSessionTaint()?.calls ?? this.rings.get(key);
     if (ring === undefined) {
       if (this.rings.size >= MAX_RINGS) this.rings.delete(this.rings.keys().next().value as string);
       ring = [];

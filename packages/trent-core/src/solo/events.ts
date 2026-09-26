@@ -10,7 +10,10 @@
  *                                 `questionFromEvent` and `TurnOutcome` read
  *   step_output + output          the answer, printed by the REPL and folded as progress text
  *   step_awaiting_approval,       a held call, as the bus reports a seat's gate: both frames, the
- *   run_awaiting_approval         held record on `toolCalls`, the record's summary as `detail`
+ *   run_awaiting_approval         held record on `toolCalls`, the record's summary as `detail`, and
+ *                                 [S1.1] the held call itself as `seatLoopState.pendingToolCall`
+ *                                 (`{ name: <adapter>, action }`, the app's own shape), which
+ *                                 `questionFromEvent` reads first: an old question is never the card
  *   step_approved                 the held call was approved and runs now
  *   step_end                      status, model, tokens and the step's integer cents (the REPL
  *                                 ticker, the TUI and `trent run` add these up); no `output`, so
@@ -29,8 +32,18 @@ import type { OrcEvent, OrcEventKind, OrchestrationStepSnapshot } from "../orche
 import type { ToolCallRecord } from "../tools/types.js";
 import { SOLO_SEAT } from "./types.js";
 
+/** [S1.1] The held call a gate frame names: the app's `SeatLoopPendingToolCall` (`seat-agent-loop.ts`). */
+export interface SoloPendingToolCall {
+  /** The adapter's name, as the app's seat loop sets it (`record.adapter`). */
+  readonly name: string;
+  readonly action: string;
+}
+
 /** A step frame with the seat loop's record list on it, as the app's frames carry it. */
-export type SoloStepFrame = Partial<OrchestrationStepSnapshot> & { readonly toolCalls?: readonly ToolCallRecord[] };
+export type SoloStepFrame = Partial<OrchestrationStepSnapshot> & {
+  readonly toolCalls?: readonly ToolCallRecord[];
+  readonly seatLoopState?: { readonly pendingToolCall: SoloPendingToolCall };
+};
 export type SoloEvent = Omit<OrcEvent, "step"> & { readonly step?: SoloStepFrame };
 
 /** The one step of a run, as every frame names it. */
@@ -97,8 +110,14 @@ export class SoloEvents {
   }
 
   /** One gate frame. The title is the held call, which is what an approval card shows (`RunApprovalLink`). */
-  gate(kind: "step_awaiting_approval" | "run_awaiting_approval", step: SoloStep, call: string, held: ToolCallRecord, toolCalls: readonly ToolCallRecord[]): SoloEvent {
-    const frame = this.#step(step, { title: clip(call), status: "awaiting_approval", needsApproval: true, toolCalls: [...toolCalls] });
+  gate(kind: "step_awaiting_approval" | "run_awaiting_approval", step: SoloStep, pending: SoloPendingToolCall, held: ToolCallRecord, toolCalls: readonly ToolCallRecord[]): SoloEvent {
+    const frame = this.#step(step, {
+      title: clip(`${pending.name} ${pending.action}`),
+      status: "awaiting_approval",
+      needsApproval: true,
+      toolCalls: [...toolCalls],
+      seatLoopState: { pendingToolCall: { name: pending.name, action: pending.action } },
+    });
     return this.#frame(kind, {
       step: frame,
       detail: held.summary,

@@ -3,12 +3,20 @@
  * a fixed memory, a recording meter. Nothing here calls a model or touches the network; every
  * reply a test sees is one its own script wrote.
  */
+import os from "node:os";
+import { autonomyAdapters } from "../governance/autonomy-dispatch.js";
+import { createBoundApprovalStore, type BoundApprovalStore } from "../governance/bound-approvals.js";
+import { IdempotencyManager } from "../governance/IdempotencyManager.js";
+import { idempotentAdapters } from "../governance/idempotent-dispatch.js";
+import { PolicyDispatcher } from "../governance/policy-dispatch.js";
+import { createProvenanceLedger, provenanceAdapters } from "../governance/provenance.js";
 import { currentToolCallContext, type ToolCallContext } from "../governance/tool-call-context.js";
+import { MemoryGatewayStore } from "../gateway/store/GatewayStore.js";
 import type { ContextBlock } from "../fleet-memory/tiers.js";
 import type { GatewayCompletion, GatewayStreamRequest } from "../model-gateway/types.js";
 import type { OrcEvent } from "../orchestrator/types.js";
 import type { ToolCallRecord, ToolCallStatus, TrentToolAdapter } from "../tools/types.js";
-import type { SoloGateway, SoloMemory, SoloMemoryRequest, SoloMessage, SoloMeter, SoloModelCall, SoloSession } from "./types.js";
+import type { SoloGateway, SoloMemory, SoloMemoryRequest, SoloMessage, SoloMeter, SoloModelCall, SoloSession, SoloSessionState, SoloStateStore } from "./types.js";
 
 export const FIXED_NOW = (): Date => new Date("2026-09-26T09:00:00.000Z");
 
@@ -189,3 +197,41 @@ export const toolCallsOf = (event: OrcEvent | undefined): ToolCallRecord[] => ((
 /** Every message of a request after the system prompt, as `role: content`, for asserting what the model was told. */
 export const transcriptOf = (request: GatewayStreamRequest | undefined): string[] =>
   (request?.messages ?? []).filter((m) => m.role !== "system").map((m) => `${m.role}: ${m.content}`);
+
+/** [S1.1] The state store a restart reads back: what `save` wrote, round-tripped through JSON as a file would. */
+export interface MemoryState extends SoloStateStore {
+  readonly saved: SoloSessionState | undefined;
+}
+
+export function memoryState(): MemoryState {
+  let saved: SoloSessionState | undefined;
+  return {
+    get saved() {
+      return saved;
+    },
+    load: () => (saved === undefined ? undefined : (JSON.parse(JSON.stringify(saved)) as unknown)),
+    save: (state) => void (saved = JSON.parse(JSON.stringify(state)) as SoloSessionState),
+  };
+}
+
+export interface GateChain {
+  readonly adapters: TrentToolAdapter[];
+  readonly bindings: BoundApprovalStore;
+  readonly rows: MemoryGatewayStore;
+  readonly idempotency: IdempotencyManager;
+}
+
+/**
+ * [S1.1] The real gate chain `buildTrentTools` wraps every adapter in, in its order (provenance over
+ * autonomy over policy over idempotency), over in-memory rows and keys: the class floor, the bound
+ * approval rows and the idempotency store are the shipped ones. Pass `rows`/`idempotency` to model a
+ * restart over the same durable state.
+ */
+export function gateChain(raw: readonly TrentToolAdapter[], shared: { rows?: MemoryGatewayStore; idempotency?: IdempotencyManager } = {}): GateChain {
+  const rows = shared.rows ?? new MemoryGatewayStore();
+  const idempotency = shared.idempotency ?? new IdempotencyManager();
+  const bindings = createBoundApprovalStore({ store: rows });
+  const home = os.tmpdir();
+  const guarded = autonomyAdapters(new PolicyDispatcher().wrap(idempotentAdapters(raw, idempotency)), { level: "ask_dangerous", deny: [], hardline: { home, profileDir: home }, bindings });
+  return { adapters: provenanceAdapters(guarded, { ledger: createProvenanceLedger() }), bindings, rows, idempotency };
+}

@@ -206,6 +206,45 @@ export class SessionStore {
     const sessionPath = this.getSessionPath(sessionId);
     if (!this.io.existsSync(sessionPath)) return false;
     this.io.unlinkSync(sessionPath);
+    this.clearSoloState(sessionId); // [S1.1] a session's solo state goes with it
+    return true;
+  }
+
+  // [S1.1] Beside each transcript, the solo runner's own state for that conversation: the taint its
+  // turns carry forward and the runs parked on a held call (`solo/park.ts`). A sidecar, not a key of
+  // the session record, because `migrateSessionRecord` rebuilds the record field by field and would
+  // drop it. It lives in `solo/` so `list()` (files ending `.json` in this directory) never reads it
+  // as a session, and it is written like a transcript: atomically, owner-only.
+  public getSoloStateDir(): string {
+    return path.join(this.sessionsDir, "solo");
+  }
+
+  public soloStatePath(sessionId: string): string {
+    return path.join(this.getSoloStateDir(), path.basename(this.pathFor(sessionId)));
+  }
+
+  /** The saved state, parsed; undefined when there is none. Unparseable bytes are quarantined, never deleted. */
+  public readSoloState(sessionId: string): unknown {
+    const file = this.soloStatePath(sessionId);
+    if (!this.io.existsSync(file)) return undefined;
+    try {
+      return JSON.parse(this.io.readFileSync(file, "utf8")) as unknown;
+    } catch (err) {
+      this.quarantine(file, `unparseable solo state: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  public writeSoloState(sessionId: string, state: unknown): void {
+    this.ensureDir(this.sessionsDir);
+    this.ensureDir(this.getSoloStateDir());
+    atomicWriteFileSync(this.io, this.soloStatePath(sessionId), JSON.stringify(state, null, 2), SESSION_FILE_MODE);
+  }
+
+  public clearSoloState(sessionId: string): boolean {
+    const file = this.soloStatePath(sessionId);
+    if (!this.io.existsSync(file)) return false;
+    this.io.unlinkSync(file);
     return true;
   }
 

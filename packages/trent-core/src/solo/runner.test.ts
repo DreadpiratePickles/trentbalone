@@ -127,3 +127,32 @@ describe("[S1] a turn with tools: model -> tool -> model until an answer", () =>
     expect(session.messages.map((m) => m.role)).toEqual(["user", "assistant", "tool", "tool", "assistant", "tool", "assistant"]);
   });
 });
+
+describe("[S1.1] C1: the runner speaks the model's own format", () => {
+  it("a Hermes body runs the adapter with the normalised action, and <think> reaches neither the next request nor the session", async () => {
+    const files = fakeAdapter({ name: "file_ops", tools: ["read_file"] });
+    const call = '<think>I should read it first.</think>\n<tool_call>\n{"name": "read_file", "arguments": {"path": "SHIPPING.md"}}\n</tool_call>';
+    const { runner, gateway, session } = setup([call, "<think>easy</think>Five working days."], [files]);
+    const events = await collect(runner.run({ objective: "How long does shipping take?" }));
+
+    expect(files.calls.map((c) => c.action)).toEqual(['read_file {"path":"SHIPPING.md"}']);
+    expect(events.at(-1)?.run).toMatchObject({ status: "completed", summary: "Five working days." });
+    const told = transcriptOf(gateway.requests[1]);
+    expect(told.at(-2)).toBe('assistant: <tool_call>\n{"name": "read_file", "arguments": {"path": "SHIPPING.md"}}\n</tool_call>');
+    expect(session.messages.map((m) => m.content).join("\n")).not.toContain("think");
+  });
+
+  it("passes a configured responseFormat on every request, reads the envelope it asks for, and sends none by default", async () => {
+    const files = fakeAdapter({ name: "file_ops", tools: ["read_file"] });
+    const responseFormat = { type: "json_schema" as const, json_schema: { name: "solo_turn", schema: { type: "object" } } };
+    const { runner, gateway } = setup(['{"tool_calls": [{"name": "read_file", "arguments": {"path": "a.md"}}]}', '{"answer": "Done."}'], [files], { responseFormat });
+    const events = await collect(runner.run({ objective: "Read a.md" }));
+    expect(gateway.requests.map((r) => (r as { responseFormat?: unknown }).responseFormat)).toEqual([responseFormat, responseFormat]);
+    expect(files.calls.map((c) => c.action)).toEqual(['read_file {"path":"a.md"}']);
+    expect(events.at(-1)?.run).toMatchObject({ summary: "Done." });
+
+    const plain = setup(["Hi."]);
+    await collect(plain.runner.run({ objective: "Hello" }));
+    expect("responseFormat" in (plain.gateway.requests[0] ?? {})).toBe(false);
+  });
+});
