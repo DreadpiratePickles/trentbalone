@@ -48,7 +48,7 @@
  * [L0-2] `openai` and the four aliases resolved to it stream through the same Trent-side client
  * (`openai-route.ts`), not the app's, whose 60 s timeout killed a local 27B planner in prefill (audit
  * G2). A local alias gets prefill-sized budgets and a per-endpoint in-flight cap (`local-runtime.ts`).
- * `anthropic`, `mistral` and `openrouter` keep the app's streamers.
+ * `mistral` and `openrouter` keep the app's streamers. // [C14] `anthropic` streams through `anthropic-client.ts`.
  */
 
 import type {
@@ -71,6 +71,7 @@ import { modelCallPolicyFromEnv, planAttempts, type ReasoningEffort } from "./ca
 import { collectCompletion } from "./complete.js";
 import { googleCompatRoute, streamGoogleCompatChat } from "./openai-compat.js";
 import { streamOpenAiRoute } from "./openai-route.js"; // [L0-2]
+import { collectWithNativeFields, streamAnthropicRoute, textOnlyMessages } from "./anthropic-client.js"; // [C14]
 import { createResponseFormatPolicy } from "./response-format.js"; // [L1]
 import { applyLocalModelEnv, localRoleEffort } from "./local-runtime.js"; // [L1]
 import { modelOverridesFromEnv, priceCall } from "./pricing.js";
@@ -232,7 +233,8 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
   };
 
   const formatFor = createResponseFormatPolicy((event, fields) => retryLog(event, fields)); // [L1] constrained output, per route
-  const defaultStreamProvider: ProviderStreamFn = async function* (provider, model, input) {
+  const defaultStreamProvider: ProviderStreamFn = async function* (provider, model, native) {
+    const input = provider === "anthropic" ? native : { ...native, messages: textOnlyMessages(native.messages) }; // [C14] only anthropic reads native fields
     const responseFormat = provider === "openai" ? undefined : formatFor(provider, input.responseFormat); // [L1] openai-route decides per alias
     if (provider === "google") {
       // [P1-C] The app's streamer asks Google for no usage and cannot carry reasoning_effort.
@@ -249,17 +251,12 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
       yield* streamOpenAiRoute(model, input, { tuning: clientModule.modelChatTuning, onEffortDropped: effortNotSent, responseFormatFor: formatFor /* [L1] */, ...(config.fetchImpl ? { fetchImpl: config.fetchImpl } : {}) });
       return;
     }
-    // The app's streamer for these providers has no field to carry reasoning_effort in.
-    if (input.reasoningEffort !== undefined) effortNotSent({ provider, model, reason: "the app's streamer for this provider cannot carry reasoning_effort" });
     if (provider === "anthropic") {
-      yield* clientModule.streamAnthropicMessages({
-        model,
-        messages: input.messages,
-        temperature: input.temperature,
-        maxTokens: input.maxTokens,
-      });
+      yield* streamAnthropicRoute(model, input, { onEffortDropped: effortNotSent, ...(config.fetchImpl ? { fetchImpl: config.fetchImpl } : {}), ...(config.anthropicTimeoutMs === undefined ? {} : { timeoutMs: config.anthropicTimeoutMs }) }); // [C14] the wrapper's client, not the app's
       return;
     }
+    // The app's streamer for these providers has no field to carry reasoning_effort in.
+    if (input.reasoningEffort !== undefined) effortNotSent({ provider, model, reason: "the app's streamer for this provider cannot carry reasoning_effort" });
     yield* clientModule.streamOpenAiCompatibleChat(provider, {
       model,
       messages: input.messages,
@@ -401,6 +398,7 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
         maxTokens,
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
         ...(req.responseFormat === undefined ? {} : { responseFormat: req.responseFormat }), // [L1]
+        ...(req.tools === undefined ? {} : { tools: req.tools }), // [C14]
         retryPolicy,
         log: retryLog,
         logFields: aliasField,
@@ -422,8 +420,9 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
           const outputTokens = outcome.sawUsage ? outcome.outputTokens : estimateTokens(outcome.text);
           // [P1-C] An estimated call has no cache figure; a reported one is priced with it.
           const cachedInputTokens = outcome.sawUsage ? outcome.cachedInputTokens : 0;
+          const cacheWriteInputTokens = outcome.sawUsage ? outcome.cacheWriteInputTokens : 0; // [C14]
           const priced = priceCall(
-            { model, modelTier: route.modelTier, inputTokens, outputTokens, cachedInputTokens, provider, overrides, ...(alias ? { alias } : {}) },
+            { model, modelTier: route.modelTier, inputTokens, outputTokens, cachedInputTokens, cacheWriteInputTokens, provider, overrides, ...(alias ? { alias } : {}) }, // [C14] writes
             tierCostCents,
           );
           yield {
@@ -434,6 +433,7 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
             inputTokens,
             outputTokens,
             cachedInputTokens,
+            ...(cacheWriteInputTokens > 0 ? { cacheWriteInputTokens } : {}), // [C14]
             ...(outcome.sawUsage && outcome.reasoningTokens > 0 ? { reasoningTokens: outcome.reasoningTokens } : {}),
             costCents: priced.costCents,
             estimated: !outcome.sawUsage,
@@ -446,6 +446,7 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
             reason: outcome.aborted ? "aborted" : (outcome.finishReason ?? "stop"),
             provider,
             model,
+            ...(outcome.toolCalls === undefined ? {} : { toolCalls: outcome.toolCalls, ...(outcome.providerContent ? { providerContent: outcome.providerContent } : {}) }), // [C14]
           };
           return;
         }
@@ -475,7 +476,7 @@ export async function createModelGateway(config: ModelGatewayConfig = {}): Promi
   }
 
   function complete(req: GatewayStreamRequest): Promise<GatewayCompletion> {
-    return collectCompletion(stream(req));
+    return collectWithNativeFields(stream(req), collectCompletion); // [C14] plus the calls and cache writes collectCompletion does not read
   }
 
   return { stream, complete, resolveRoute, configuredProviders, estimateCostCents };

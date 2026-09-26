@@ -27,6 +27,13 @@
  * 3.6-flash $0.75 -> $0.075, 2.5-pro $1.25 -> $0.125, 2.5-flash $0.30 -> $0.03). The 0.25 default is
  * deliberately the higher figure: a row nobody checked overstates a cache hit's cost, never hides it.
  *
+ * // [C14] Anthropic, `anthropic-list-2026-09` = https://platform.claude.com/docs/en/about-claude/pricing, read
+ * 2026-09-26: "5-minute cache write 1.25x base input price", "Cache read (hit) 0.1x base input price (0.025x on
+ * Claude Fable 5.1 and Claude Mythos 5.1; 0.05x on Claude Opus 5.5)". Anthropic reports the write separately
+ * (`cache_creation_input_tokens`), so a call may carry `cacheWriteInputTokens`, billed at `cacheWriteInputRatio`
+ * (default {@link DEFAULT_CACHE_WRITE_RATIO}, the 5-minute figure: the only TTL the client sends). The same page
+ * lists Opus 4.5 through Opus 5 at $5 / $25, which the old `claude-opus-4` prefix billed at $15 / $75.
+ *
  * [L0-1] An Ollama CLOUD tag (`nemotron-3-ultra:cloud`, `gpt-oss:120b-cloud`) is served from
  * ollama.com: the request goes to the local runtime and the prompt leaves the machine. It is not
  * the local row. Ollama's cloud is billed by plan, not per token, and no page we hold lists a per-token
@@ -41,6 +48,7 @@ import type { ModelOverride, ModelOverrides, ModelProvider, ModelTier } from "./
 export type PriceSource =
   | "google-list-2026-09"
   | "anthropic-list-2026-05"
+  | "anthropic-list-2026-09" // [C14]
   | "openai-list-2026-05"
   | "mistral-list-2026-05"
   | "deepseek-list-2026-05"
@@ -57,6 +65,7 @@ export interface ModelPriceRow {
   readonly note?: string;
   /** [P1-C] Cached input tokens bill at this fraction of the input rate. Absent: the default. */
   readonly cachedInputRatio?: number;
+  readonly cacheWriteInputRatio?: number; // [C14] prompt-cache WRITES bill at this multiple of the input rate. Absent: the default.
 }
 
 /** [P1-C] The cached-token ratio for a row that states none, and for the app's tier fallback. */
@@ -65,6 +74,12 @@ export const DEFAULT_CACHED_INPUT_RATIO = 0.25;
 /** Google's published cached-input fraction (pricing page, see the header). */
 const GOOGLE_CACHED = 0.1;
 
+/** [C14] Anthropic's 5-minute cache write multiple, and the default for a row that states none (never under the bill). */
+export const DEFAULT_CACHE_WRITE_RATIO = 1.25; // [C14]
+/** [C14] One Anthropic row: its read ratio, and the 5-minute write ratio every Anthropic model shares. */
+const claude = (input: number, output: number, cachedInputRatio: number): ModelPriceRow => // [C14]
+  row(input, output, "anthropic-list-2026-09", { contextWindow: 200_000, cachedInputRatio, cacheWriteInputRatio: DEFAULT_CACHE_WRITE_RATIO });
+
 const USD_PER_MILLION = 100_000_000; // micro-cents in one dollar
 const usd = (dollars: number): number => Math.round(dollars * USD_PER_MILLION);
 
@@ -72,7 +87,7 @@ const row = (
   input: number,
   output: number,
   source: PriceSource,
-  extra: { contextWindow?: number; note?: string; cachedInputRatio?: number } = {},
+  extra: { contextWindow?: number; note?: string; cachedInputRatio?: number; cacheWriteInputRatio?: number } = {}, // [C14] write ratio
 ): ModelPriceRow => ({
   inputMicroCentsPerMillion: usd(input),
   outputMicroCentsPerMillion: usd(output),
@@ -118,12 +133,24 @@ export interface PricePrefixRule {
  * (`claude-haiku-4-5-20251001`), so an exact-id-only table goes stale the day a model is pinned.
  */
 export const MODEL_PRICE_PREFIXES: readonly PricePrefixRule[] = [
-  // Anthropic — https://www.anthropic.com/pricing, 2026-05 snapshot.
-  { prefix: "claude-haiku-4", row: row(1.0, 5.0, "anthropic-list-2026-05", { contextWindow: 200_000 }) },
-  { prefix: "claude-3-5-haiku", row: row(0.8, 4.0, "anthropic-list-2026-05", { contextWindow: 200_000 }) },
-  { prefix: "claude-sonnet-4", row: row(3.0, 15.0, "anthropic-list-2026-05", { contextWindow: 200_000 }) },
+  // Anthropic — [C14] https://platform.claude.com/docs/en/about-claude/pricing, read 2026-09-26 (see the header).
+  // Context windows are the 200K floor the table always carried; 4.6 and later list 1M, which only widens budgets.
+  { prefix: "claude-haiku-4", row: claude(1.0, 5.0, 0.1) }, // [C14]
+  { prefix: "claude-3-5-haiku", row: claude(0.8, 4.0, 0.1) }, // [C14]
+  { prefix: "claude-sonnet-4", row: claude(3.0, 15.0, 0.1) }, // [C14]
+  { prefix: "claude-sonnet-5", row: claude(2.0, 10.0, 0.1) }, // [C14]
   { prefix: "claude-3-7-sonnet", row: row(3.0, 15.0, "anthropic-list-2026-05", { contextWindow: 200_000 }) },
-  { prefix: "claude-opus-4", row: row(15.0, 75.0, "anthropic-list-2026-05", { contextWindow: 200_000 }) },
+  { prefix: "claude-opus-4", row: claude(15.0, 75.0, 0.1) }, // [C14] Opus 4 and 4.1
+  { prefix: "claude-opus-4-5", row: claude(5.0, 25.0, 0.1) }, // [C14] Opus 4.5 to Opus 5: $5 / $25
+  { prefix: "claude-opus-4-6", row: claude(5.0, 25.0, 0.1) }, // [C14]
+  { prefix: "claude-opus-4-7", row: claude(5.0, 25.0, 0.1) }, // [C14]
+  { prefix: "claude-opus-4-8", row: claude(5.0, 25.0, 0.1) }, // [C14]
+  { prefix: "claude-opus-5", row: claude(5.0, 25.0, 0.1) }, // [C14]
+  { prefix: "claude-opus-5-5", row: claude(4.0, 20.0, 0.05) }, // [C14]
+  { prefix: "claude-fable-5", row: claude(10.0, 50.0, 0.1) }, // [C14]
+  { prefix: "claude-fable-5-1", row: claude(10.0, 50.0, 0.025) }, // [C14]
+  { prefix: "claude-mythos-5", row: claude(10.0, 50.0, 0.1) }, // [C14]
+  { prefix: "claude-mythos-5-1", row: claude(10.0, 50.0, 0.025) }, // [C14]
   // OpenAI — https://openai.com/api/pricing, 2026-05 snapshot.
   { prefix: "gpt-4.1-nano", row: row(0.1, 0.4, "openai-list-2026-05", { contextWindow: 1_047_576 }) },
   { prefix: "gpt-4.1-mini", row: row(0.4, 1.6, "openai-list-2026-05", { contextWindow: 1_047_576 }) },
@@ -157,6 +184,7 @@ export interface PriceCallInput {
   readonly outputTokens: number;
   /** [P1-C] The part of `inputTokens` served from the provider's prompt cache. Clamped to `inputTokens`. */
   readonly cachedInputTokens?: number;
+  readonly cacheWriteInputTokens?: number; // [C14] the part of `inputTokens` WRITTEN to the cache; clamped to what the reads leave
   /** The identity the call was routed as. */
   readonly provider?: ModelProvider;
   /** The user-facing alias, when one was used. A local alias prices at zero. */
@@ -221,17 +249,23 @@ export function contextWindowFor(
   return priceRowFor(model, alias)?.contextWindow;
 }
 
-/** [P1-C] The cached share of the prompt, whole and never more than the prompt. */
-function cachedShare(inputTokens: number, cachedInputTokens: number | undefined): { uncached: number; cached: number } {
+/** [P1-C] The cached share of the prompt, whole and never more than the prompt. [C14] And the written share of the rest. */
+function cachedShare(inputTokens: number, cachedInputTokens: number | undefined, cacheWriteInputTokens?: number): { uncached: number; cached: number; written: number } { // [C14]
   const input = Math.max(0, inputTokens);
   const cached = Math.min(input, Math.max(0, Math.trunc(cachedInputTokens ?? 0)));
-  return { uncached: input - cached, cached };
+  const written = Math.min(input - cached, Math.max(0, Math.trunc(cacheWriteInputTokens ?? 0))); // [C14]
+  return { uncached: input - cached - written, cached, written }; // [C14]
 }
 
-function centsFrom(row: ModelPriceRow, inputTokens: number, outputTokens: number, cachedInputTokens?: number): number {
-  const { uncached, cached } = cachedShare(inputTokens, cachedInputTokens);
+/** [C14] The prompt's price in micro-cents-per-million x tokens: plain, read and written shares, each at its own rate. */
+function inputMicroOf(row: ModelPriceRow, share: { uncached: number; cached: number; written: number }): number { // [C14]
   const cachedRate = Math.round(row.inputMicroCentsPerMillion * (row.cachedInputRatio ?? DEFAULT_CACHED_INPUT_RATIO));
-  const inputMicro = uncached * row.inputMicroCentsPerMillion + cached * cachedRate;
+  const writeRate = Math.round(row.inputMicroCentsPerMillion * (row.cacheWriteInputRatio ?? DEFAULT_CACHE_WRITE_RATIO));
+  return share.uncached * row.inputMicroCentsPerMillion + share.cached * cachedRate + share.written * writeRate;
+}
+
+function centsFrom(row: ModelPriceRow, inputTokens: number, outputTokens: number, cachedInputTokens?: number, cacheWriteInputTokens?: number): number { // [C14] writes
+  const inputMicro = inputMicroOf(row, cachedShare(inputTokens, cachedInputTokens, cacheWriteInputTokens)); // [C14]
   const outputMicro = Math.max(0, outputTokens) * row.outputMicroCentsPerMillion;
   // micro-cents per million x tokens -> divide by 1e6 (tokens per million) and 1e6 (micro-cents per cent).
   return Math.ceil((inputMicro + outputMicro) / 1_000_000 / 1_000_000);
@@ -249,15 +283,9 @@ function priceCallBody(input: PriceCallInput, tierDefault: TierPricer): PricedCa
   if (override && hasOverridePrice) {
     // An override prices the tokens; the model's cached ratio still applies (it is a property of the
     // provider's cache, not of the rate someone negotiated).
-    const ratio = priceRowFor(input.model, input.alias)?.cachedInputRatio;
-    const overrideRow: ModelPriceRow = {
-      inputMicroCentsPerMillion: Math.round((override.input_cents_per_million ?? 0) * 1_000_000),
-      outputMicroCentsPerMillion: Math.round((override.output_cents_per_million ?? 0) * 1_000_000),
-      source: "override",
-      ...(ratio === undefined ? {} : { cachedInputRatio: ratio }),
-    };
+    const overrideRow = overrideRowFor(override, input); // [C14] the read AND write ratios carry over
     return {
-      costCents: centsFrom(overrideRow, input.inputTokens, input.outputTokens, input.cachedInputTokens),
+      costCents: centsFrom(overrideRow, input.inputTokens, input.outputTokens, input.cachedInputTokens, input.cacheWriteInputTokens), // [C14]
       pricedAsDefault: false,
       unpriced: false,
       source: "override",
@@ -268,16 +296,16 @@ function priceCallBody(input: PriceCallInput, tierDefault: TierPricer): PricedCa
   if (!priceRow) {
     // The tier pricer takes whole tokens, so the cached share is converted to its full-rate
     // equivalent at the default ratio and rounded UP: never cheaper than the bill.
-    const { uncached, cached } = cachedShare(input.inputTokens, input.cachedInputTokens);
+    const { uncached, cached, written } = cachedShare(input.inputTokens, input.cachedInputTokens, input.cacheWriteInputTokens); // [C14]
     const costCents = tierDefault({
       modelTier: input.modelTier,
-      inputTokens: uncached + Math.ceil(cached * DEFAULT_CACHED_INPUT_RATIO),
+      inputTokens: uncached + Math.ceil(cached * DEFAULT_CACHED_INPUT_RATIO) + Math.ceil(written * DEFAULT_CACHE_WRITE_RATIO), // [C14]
       outputTokens: input.outputTokens,
     });
     return { costCents: Math.max(0, Math.ceil(costCents)), pricedAsDefault: true, unpriced: true, source: "default" };
   }
   return {
-    costCents: centsFrom(priceRow, input.inputTokens, input.outputTokens, input.cachedInputTokens),
+    costCents: centsFrom(priceRow, input.inputTokens, input.outputTokens, input.cachedInputTokens, input.cacheWriteInputTokens), // [C14]
     pricedAsDefault: false,
     unpriced: false,
     source: priceRow.source,
@@ -301,25 +329,29 @@ export interface PricedMicroCents {
 export function priceCallMicroCents(input: Omit<PriceCallInput, "modelTier">): PricedMicroCents | undefined {
   const override = overrideFor(input.model, input.overrides);
   if (override && (typeof override.input_cents_per_million === "number" || typeof override.output_cents_per_million === "number")) {
-    const ratio = priceRowFor(input.model, input.alias)?.cachedInputRatio;
-    const overrideRow: ModelPriceRow = {
-      inputMicroCentsPerMillion: Math.round((override.input_cents_per_million ?? 0) * 1_000_000),
-      outputMicroCentsPerMillion: Math.round((override.output_cents_per_million ?? 0) * 1_000_000),
-      source: "override",
-      ...(ratio === undefined ? {} : { cachedInputRatio: ratio }),
-    };
-    return { microCents: microCentsFrom(overrideRow, input.inputTokens, input.outputTokens, input.cachedInputTokens), source: "override" };
+    const overrideRow = overrideRowFor(override, input); // [C14]
+    return { microCents: microCentsFrom(overrideRow, input.inputTokens, input.outputTokens, input.cachedInputTokens, input.cacheWriteInputTokens), source: "override" }; // [C14]
   }
   const priceRow = priceRowFor(input.model, input.alias);
   if (!priceRow) return undefined;
-  return { microCents: microCentsFrom(priceRow, input.inputTokens, input.outputTokens, input.cachedInputTokens), source: priceRow.source };
+  return { microCents: microCentsFrom(priceRow, input.inputTokens, input.outputTokens, input.cachedInputTokens, input.cacheWriteInputTokens), source: priceRow.source }; // [C14]
+}
+
+/** [C14] An override's rates, with the model's read and write ratios (properties of the provider's cache). */
+function overrideRowFor(override: ModelOverride, input: { readonly model: string; readonly alias?: ProviderAlias }): ModelPriceRow { // [C14]
+  const table = priceRowFor(input.model, input.alias);
+  return {
+    inputMicroCentsPerMillion: Math.round((override.input_cents_per_million ?? 0) * 1_000_000),
+    outputMicroCentsPerMillion: Math.round((override.output_cents_per_million ?? 0) * 1_000_000),
+    source: "override",
+    ...(table?.cachedInputRatio === undefined ? {} : { cachedInputRatio: table.cachedInputRatio }),
+    ...(table?.cacheWriteInputRatio === undefined ? {} : { cacheWriteInputRatio: table.cacheWriteInputRatio }),
+  };
 }
 
 /** `centsFrom` without the last division and round-up: whole micro-cents, rounded up. */
-function microCentsFrom(row: ModelPriceRow, inputTokens: number, outputTokens: number, cachedInputTokens?: number): number {
-  const { uncached, cached } = cachedShare(inputTokens, cachedInputTokens);
-  const cachedRate = Math.round(row.inputMicroCentsPerMillion * (row.cachedInputRatio ?? DEFAULT_CACHED_INPUT_RATIO));
-  const inputMicro = uncached * row.inputMicroCentsPerMillion + cached * cachedRate;
+function microCentsFrom(row: ModelPriceRow, inputTokens: number, outputTokens: number, cachedInputTokens?: number, cacheWriteInputTokens?: number): number { // [C14] writes
+  const inputMicro = inputMicroOf(row, cachedShare(inputTokens, cachedInputTokens, cacheWriteInputTokens)); // [C14]
   const outputMicro = Math.max(0, outputTokens) * row.outputMicroCentsPerMillion;
   return Math.ceil((inputMicro + outputMicro) / 1_000_000);
 }

@@ -12,7 +12,7 @@
 
 import type { ReasoningEffort } from "./call-policy.js";
 import { abortableSleep, classifyProviderError, retryDelayMs, type RetryPolicy } from "./retry.js";
-import type { GatewayMessage, GatewayResponseFormat, ModelProvider, ProviderStreamFn, ProviderStreamFrame } from "./types.js"; // [L1] GatewayResponseFormat
+import type { GatewayMessage, GatewayResponseFormat, GatewayToolCall, GatewayToolDefinition, ModelProvider, ProviderContentBlock, ProviderStreamFn, ProviderStreamFrame } from "./types.js"; // [L1] GatewayResponseFormat; // [C14] the tool and content types
 
 export interface AttemptContext {
   readonly streamFn: ProviderStreamFn;
@@ -25,6 +25,8 @@ export interface AttemptContext {
   readonly reasoningEffort?: ReasoningEffort;
   /** [L1] Handed to the stream function only when set, like the effort. */
   readonly responseFormat?: GatewayResponseFormat;
+  /** [C14] Handed to the stream function only when set: a route with native tools sends them. */
+  readonly tools?: readonly GatewayToolDefinition[]; // [C14]
   readonly signal?: AbortSignal;
   readonly retryPolicy: RetryPolicy;
   readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -43,10 +45,13 @@ export type AttemptOutcome =
       readonly outputTokens: number;
       /** [P1-C] 0 when the provider reported no cache hits. */
       readonly cachedInputTokens: number;
+      readonly cacheWriteInputTokens: number; // [C14] 0 when the provider reported no cache writes
       readonly reasoningTokens: number;
       readonly finishReason?: string;
       readonly text: string;
       readonly aborted: boolean;
+      readonly toolCalls?: readonly GatewayToolCall[]; // [C14] from the finish frame
+      readonly providerContent?: readonly ProviderContentBlock[]; // [C14]
     }
   | { readonly kind: "aborted" }
   | { readonly kind: "failed"; readonly error: unknown; readonly emittedToken: boolean };
@@ -97,8 +102,10 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
     let inputTokens = 0;
     let outputTokens = 0;
     let cachedInputTokens = 0;
+    let cacheWriteInputTokens = 0; // [C14]
     let reasoningTokens = 0;
     let finishReason: string | undefined;
+    let native: Pick<ProviderStreamFrame & { type: "finish" }, "toolCalls" | "providerContent"> = {}; // [C14]
     let text = "";
     let upstreamDone = false; // [L0-2]
 
@@ -109,6 +116,7 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
       ...(ctx.signal ? { signal: ctx.signal } : {}),
       ...(ctx.reasoningEffort === undefined ? {} : { reasoningEffort: ctx.reasoningEffort }),
       ...(ctx.responseFormat === undefined ? {} : { responseFormat: ctx.responseFormat }), // [L1]
+      ...(ctx.tools === undefined ? {} : { tools: ctx.tools }), // [C14]
     });
 
     try {
@@ -136,9 +144,11 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
           inputTokens = frame.inputTokens;
           outputTokens = frame.outputTokens;
           cachedInputTokens = frame.cachedInputTokens ?? 0;
+          cacheWriteInputTokens = frame.cacheWriteInputTokens ?? 0; // [C14]
           reasoningTokens = frame.reasoningTokens ?? 0;
         } else if (frame.type === "finish") {
           finishReason = frame.reason;
+          if (frame.toolCalls !== undefined) native = { toolCalls: frame.toolCalls, ...(frame.providerContent === undefined ? {} : { providerContent: frame.providerContent }) }; // [C14]
         }
       }
     } catch (error) {
@@ -163,10 +173,12 @@ export async function* runProviderAttempts(ctx: AttemptContext): AsyncGenerator<
         inputTokens,
         outputTokens,
         cachedInputTokens,
+        cacheWriteInputTokens, // [C14]
         reasoningTokens,
         text,
         aborted,
         ...(finishReason === undefined ? {} : { finishReason }),
+        ...native, // [C14]
       };
       return;
     }

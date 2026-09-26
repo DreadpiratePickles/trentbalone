@@ -903,7 +903,10 @@ Nine names are accepted. Five are routed by the wrapped application itself; the 
 OpenAI-compatible endpoints that the gateway resolves at the boundary into `openai` plus a base URL.
 `google`, `openai` and those four stream through the gateway's own OpenAI-compatible client
 (`packages/trent-core/src/model-gateway/openai-compat.ts`), which asks for the usage frame, reads
-cached prompt tokens and can send `reasoning_effort`; `anthropic`, `mistral` and `openrouter` use the
+cached prompt tokens and can send `reasoning_effort`; `anthropic` streams through the gateway's own Messages API client
+(`model-gateway/anthropic-client.ts`): the request's `tools` as native schemas, prompt-cache breakpoints on the
+tools block, the system block and the newest two user turns, cache read and write counts, cancellation that closes
+the socket, and a 60 s response-headers timeout (`TRENT_ANTHROPIC_TIMEOUT_MS`). `mistral` and `openrouter` use the
 app's streamers.
 
 | `provider` | Key | Endpoint (override with) | Default model |
@@ -1090,7 +1093,9 @@ base, 8 s cap. Only transient failures are retried — HTTP 429, 5xx, 408 and tr
 included, is retried once: the same wait twice is the budget, not a blip. A 400, 401, 403, 404 or 422 is never retried, because
 the next attempt is the same request. A `Retry-After` header (seconds or an HTTP date) is obeyed
 instead of the curve, capped at 8 s. Every retry writes one line naming the provider, model,
-attempt, delay, error class and status — never a credential.
+attempt, delay, error class and status — never a credential. An `error` event inside an Anthropic stream is classified by the HTTP
+status its type stands for (`overloaded_error` 529, `api_error` 500, `rate_limit_error` 429), so it is retried or
+not exactly like the response it replaced.
 
 When the attempts are spent the next provider in the fallback chain is tried. Once a token has
 reached you the answer is half-delivered, so there is no retry and no fallback: you get the error

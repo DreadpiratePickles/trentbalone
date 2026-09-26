@@ -18,7 +18,13 @@
  * A reply with no block is the answer. Anything else that cannot be attributed to one tool (an
  * unknown tool, JSON that does not parse, a block that is not closed, a body with no name, an empty
  * reply) is `malformed`, with the error the loop hands back for one repair.
+ *
+ * // [C14] A model with native tools (Claude through `model-gateway/anthropic-client.ts`) answers with
+ * `tool_use` blocks, which arrive as `GatewayCompletion.toolCalls`. Each becomes the SAME `<tool> <json>` action
+ * a `<tool_call>` body produces (`fromCallObject`), carrying its `callId`. A text block in the same reply still
+ * runs; a call written both ways runs once. A local model keeps the text protocol and constrained output.
  */
+import type { GatewayToolCall } from "../model-gateway/types.js"; // [C14]
 import { parseAction, type ToolSpec } from "../tools/action.js";
 import type { TrentToolAdapter } from "../tools/types.js";
 
@@ -42,6 +48,7 @@ export interface SoloAction {
   readonly tool: string;
   /** The call as the adapter receives it: `<tool> <json>`. */
   readonly action: string;
+  readonly callId?: string; // [C14] a native call's provider id (Anthropic `tool_use.id`), which its result answers
 }
 
 export type ParsedReply =
@@ -53,6 +60,7 @@ export type ParsedReply =
 export interface ParseOptions {
   /** The request carried a `responseFormat`: the reply may be the `{"tool_calls"}` / `{"answer"}` envelope. */
   readonly envelope?: boolean;
+  readonly toolCalls?: readonly GatewayToolCall[]; // [C14] the completion's native calls; absent or empty reads the text protocol
 }
 
 /** The tool names an adapter answers to: its name, and its scopes that are not `area:verb` capability tags. */
@@ -198,14 +206,8 @@ function fromEnvelope(text: string, adapters: readonly TrentToolAdapter[]): Pars
   return malformed('the reply must be {"tool_calls": [' + TOOL_CALL_BODY_SHAPE + ']} or {"answer": "..."}', text);
 }
 
-export function parseReply(reply: string, adapters: readonly TrentToolAdapter[], options: ParseOptions = {}): ParsedReply {
-  const text = stripThinking(reply);
-  if (text === "") return malformed("the reply was empty; answer in plain text, or call a tool", text);
-  if (options.envelope === true) {
-    const envelope = fromEnvelope(text, adapters);
-    if (envelope !== undefined) return envelope;
-  }
-
+/** [C14] The `<tool_call>` bodies of a reply and the text around them (moved out of `parseReply` unchanged). */
+function scanBlocks(text: string): { readonly bodies: string[]; readonly narration: string } { // [C14]
   const bodies: string[] = [];
   let narration = "";
   let last = 0;
@@ -214,8 +216,40 @@ export function parseReply(reply: string, adapters: readonly TrentToolAdapter[],
     bodies.push(match[1] ?? "");
     last = (match.index ?? 0) + match[0].length;
   }
-  narration = `${narration}${text.slice(last)}`;
-  if (STRAY_TAG.test(narration)) return malformed(`a ${TOOL_CALL_OPEN} block is not closed with ${TOOL_CALL_CLOSE}`, text);
+  return { bodies, narration: `${narration}${text.slice(last)}` };
+}
+
+const STRAY = `a ${TOOL_CALL_OPEN} block is not closed with ${TOOL_CALL_CLOSE}`; // [C14] shared by both paths
+
+/**
+ * [C14] Native calls first, each normalised exactly as a text body is, then any text blocks not already among them.
+ * The history keeps the text plus each native call rendered in the one format the prompt teaches.
+ */
+function withNativeCalls(text: string, calls: readonly GatewayToolCall[], adapters: readonly TrentToolAdapter[]): ParsedReply { // [C14]
+  const scan = scanBlocks(text);
+  if (STRAY_TAG.test(scan.narration)) return malformed(STRAY, text);
+  const native: (SoloAction | string)[] = calls.map((call) => {
+    const action = fromCallObject({ name: call.name, arguments: call.arguments }, adapters);
+    return typeof action === "string" ? action : { ...action, callId: call.id };
+  });
+  const keyOf = (call: SoloAction): string => `${call.adapter.name}\u0000${call.action}`;
+  const seen = new Set(native.filter((call): call is SoloAction => typeof call !== "string").map(keyOf));
+  const written = scan.bodies.map((body) => fromBody(body, adapters)).filter((call) => typeof call === "string" || !seen.has(keyOf(call)));
+  const rendered = calls.map((call) => `${TOOL_CALL_OPEN}${JSON.stringify({ name: call.name, arguments: call.arguments })}${TOOL_CALL_CLOSE}`);
+  return actionsOrError([...native, ...written], scan.narration.trim(), [text, ...rendered].filter((part) => part !== "").join("\n"));
+}
+
+export function parseReply(reply: string, adapters: readonly TrentToolAdapter[], options: ParseOptions = {}): ParsedReply {
+  const text = stripThinking(reply);
+  if (options.toolCalls !== undefined && options.toolCalls.length > 0) return withNativeCalls(text, options.toolCalls, adapters); // [C14]
+  if (text === "") return malformed("the reply was empty; answer in plain text, or call a tool", text);
+  if (options.envelope === true) {
+    const envelope = fromEnvelope(text, adapters);
+    if (envelope !== undefined) return envelope;
+  }
+
+  const { bodies, narration } = scanBlocks(text); // [C14] moved into scanBlocks, unchanged
+  if (STRAY_TAG.test(narration)) return malformed(STRAY, text);
   if (bodies.length === 0) return { kind: "answer", text };
   return actionsOrError(bodies.map((body) => fromBody(body, adapters)), narration.trim(), text);
 }

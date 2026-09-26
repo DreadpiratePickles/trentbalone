@@ -24,7 +24,49 @@ export type StreamRole = "executor" | "planner";
 export type GatewayMessage = {
   role: "system" | "user" | "assistant";
   content: string;
+  /** [C14] On an assistant turn: the calls it made natively. A text route reads `content` only. */
+  toolCalls?: readonly GatewayToolCall[]; // [C14]
+  /** [C14] On a user turn: this message is the result of that call (see {@link GatewayToolResultMessage}). */
+  toolCallId?: string; // [C14]
+  /** [C14] With `toolCallId`: the call failed or was refused. */
+  isError?: boolean; // [C14]
+  /**
+   * [C14] On an assistant turn: the turn exactly as the provider returned it (`GatewayCompletion.providerContent`).
+   * Anthropic requires a tool-use turn's thinking blocks back "complete and unmodified"
+   * (https://platform.claude.com/docs/en/build-with-claude/thinking), so a native route sends these verbatim.
+   */
+  providerContent?: readonly ProviderContentBlock[]; // [C14]
 };
+
+// [C14] native tools
+/**
+ * A tool the model may call natively. The shape every toolset already exports as `*_TOOL_SCHEMAS`
+ * (`tools/web/schemas.ts` `ToolSchema`): `parameters` is the JSON schema of the arguments object.
+ */
+export type GatewayToolDefinition = {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: Readonly<Record<string, unknown>>;
+};
+
+/** A call the model made natively (an Anthropic `tool_use` block); `arguments` is the parsed JSON object. */
+export type GatewayToolCall = {
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: Readonly<Record<string, unknown>>;
+};
+
+/** One provider content block, opaque to the gateway (thinking with its signature, text, tool_use). */
+export type ProviderContentBlock = Readonly<Record<string, unknown>>;
+
+/**
+ * The tool-result message: a USER turn that answers one call, which is how the Messages API itself carries a
+ * `tool_result`. Not a fourth role on purpose: every consumer of {@link GatewayMessage} (the app's streamers,
+ * the redactor, the OpenAI-compatible body) is typed on the app's three roles, and `content` stays the result
+ * text, so redaction and a text route see it unchanged.
+ */
+export type GatewayToolResultMessage = GatewayMessage & { role: "user"; toolCallId: string };
+// [/C14]
 
 // [L1] constrained output
 /**
@@ -54,6 +96,8 @@ export type GatewayStreamRequest = {
   temperature?: number;
   /** [L1] Constrained decoding: sent where the provider documents it, JSON mode or nothing elsewhere (`response-format.ts`). */
   responseFormat?: GatewayResponseFormat;
+  /** [C14] Native tools: sent where the route has them (`anthropic-client.ts`); a text route ignores them. */
+  tools?: readonly GatewayToolDefinition[]; // [C14]
   /**
    * Cancellation. There is no AbortSignal support upstream, so the wrapper
    * implements it by breaking the `for await` loop, which calls the upstream
@@ -78,6 +122,8 @@ export type GatewayStreamEvent =
        * row's cached ratio (`pricing.ts`). 0 when the provider reported none; the gateway always sets it.
        */
       cachedInputTokens?: number;
+      /** [C14] The part of `inputTokens` WRITTEN to the prompt cache (Anthropic `cache_creation_input_tokens`), priced at the write rate. */
+      cacheWriteInputTokens?: number; // [C14]
       /** [P1-C] Thinking tokens inside `outputTokens`, when the provider reports them. */
       reasoningTokens?: number;
       /** Always INTEGER CENTS. Never a float. */
@@ -103,7 +149,18 @@ export type GatewayStreamEvent =
       /** The user-facing provider name when the call was routed through an alias (`ollama`, …). */
       providerAlias?: string;
     }
-  | { type: "finish"; reason: GatewayFinishReason; provider: ModelProvider; model: string };
+  | {
+      type: "finish";
+      reason: GatewayFinishReason;
+      provider: ModelProvider;
+      model: string;
+      /**
+       * [C14] The reply's native calls, when it made any. Carried on `finish`, not a new event, so every existing
+       * consumer reads the stream unchanged; only a request that sent `tools` can get them. `complete()` copies them.
+       */
+      toolCalls?: readonly GatewayToolCall[]; // [C14]
+      providerContent?: readonly ProviderContentBlock[]; // [C14]
+    };
 
 export type GatewayCompletion = {
   text: string;
@@ -114,6 +171,8 @@ export type GatewayCompletion = {
   outputTokens: number;
   /** [P1-C] See the usage event. Optional here only so existing fakes keep compiling. */
   cachedInputTokens?: number;
+  /** [C14] See the usage event. */
+  cacheWriteInputTokens?: number; // [C14]
   reasoningTokens?: number;
   costCents: number;
   estimated: boolean;
@@ -122,6 +181,10 @@ export type GatewayCompletion = {
   unpriced?: boolean;
   providerAlias?: string;
   finishReason: GatewayFinishReason;
+  /** [C14] The native calls the reply made; absent when it made none. */
+  toolCalls?: readonly GatewayToolCall[]; // [C14]
+  /** [C14] With `toolCalls`: the assistant turn as the provider returned it, to hand back on the next request. */
+  providerContent?: readonly ProviderContentBlock[]; // [C14]
 };
 
 export type GatewayRoute = {
@@ -135,7 +198,8 @@ export type GatewayRoute = {
 /** Mirrors `ProviderStreamToken` in apps/web/lib/ai-client.ts:390-393. */
 export type ProviderStreamFrame =
   | { type: "token"; content: string }
-  | { type: "finish"; reason: string }
+  /** [C14] `toolCalls` / `providerContent`: the reply's native calls, known once the reply is complete. */
+  | { type: "finish"; reason: string; toolCalls?: readonly GatewayToolCall[]; providerContent?: readonly ProviderContentBlock[] } // [C14]
   | {
       type: "usage";
       inputTokens: number;
@@ -143,6 +207,8 @@ export type ProviderStreamFrame =
       outputTokens: number;
       /** [P1-C] Prompt-cache hits inside `inputTokens`; absent means none were reported. */
       cachedInputTokens?: number;
+      /** [C14] Prompt-cache writes inside `inputTokens`; absent means none were reported. */
+      cacheWriteInputTokens?: number; // [C14]
       /** [P1-C] Thinking tokens inside `outputTokens`. */
       reasoningTokens?: number;
     };
@@ -158,7 +224,7 @@ export type ProviderStreamFrame =
 export type ProviderStreamFn = (
   provider: ModelProvider,
   model: string,
-  input: { messages: GatewayMessage[]; temperature: number; maxTokens: number; signal?: AbortSignal; reasoningEffort?: ReasoningEffort; responseFormat?: GatewayResponseFormat /* [L1] */ },
+  input: { messages: GatewayMessage[]; temperature: number; maxTokens: number; signal?: AbortSignal; reasoningEffort?: ReasoningEffort; responseFormat?: GatewayResponseFormat /* [L1] */; tools?: readonly GatewayToolDefinition[] }, // [C14] tools
 ) => AsyncGenerator<ProviderStreamFrame>;
 
 export type ModelGatewayConfig = {
@@ -212,6 +278,11 @@ export type ModelGatewayConfig = {
    * written to the same env bridge the headless runtime writes (`local-runtime.ts` `applyLocalModelEnv`).
    */
   local?: LocalModelConfig;
+  /**
+   * [C14] How long the `anthropic` route waits for response headers, in milliseconds. Omitted means
+   * `TRENT_ANTHROPIC_TIMEOUT_MS`, else 60,000 (`anthropic-client.ts` `ANTHROPIC_HEADERS_TIMEOUT_MS`).
+   */
+  anthropicTimeoutMs?: number; // [C14]
 };
 
 /** One `model_overrides` entry. Rates are CENTS per million tokens; the cost itself is integer cents. */

@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeRunScope, openRunScope, recordRunModelCall } from "../orchestrator/run-hooks.js"; // [C14] the ledger's own pricing path
 import { createModelGateway } from "./index.js";
 import {
   DEFAULT_CACHED_INPUT_RATIO,
@@ -70,7 +71,7 @@ describe("[P1-C] cached prompt tokens are priced at the row's cached ratio", () 
     for (const id of ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-2.5-pro", "gemini-2.5-flash"]) {
       expect(MODEL_PRICE_TABLE[id]?.cachedInputRatio, id).toBe(0.1);
     }
-    expect(priceRowFor("claude-sonnet-4-6")?.cachedInputRatio).toBeUndefined();
+    expect(priceRowFor("mistral-large-latest")?.cachedInputRatio).toBeUndefined(); // [C14] Anthropic rows now carry their own ratio
   });
 
   it("prices 800k cached of 1M input on flash-lite at 9 cents, not the 30 a full-rate bill says", () => {
@@ -82,8 +83,8 @@ describe("[P1-C] cached prompt tokens are priced at the row's cached ratio", () 
   });
 
   it("a row with no ratio of its own prices cached tokens at the default, and so does the tier fallback", () => {
-    const sonnet = priceCall({ model: "claude-sonnet-4-6", modelTier: "sonnet", inputTokens: MILLION, cachedInputTokens: MILLION, outputTokens: 0 }, tierDefault);
-    expect(sonnet.costCents).toBe(75); // $3.00/1M x 0.25
+    const mistral = priceCall({ model: "mistral-large-latest", modelTier: "sonnet", inputTokens: MILLION, cachedInputTokens: MILLION, outputTokens: 0 }, tierDefault);
+    expect(mistral.costCents).toBe(50); // $2.00/1M x 0.25 // [C14] was claude-sonnet-4-6, which now has Anthropic's own ratio
     const seen: number[] = [];
     const unpriced = priceCall(
       { model: "some-model-nobody-listed", modelTier: "sonnet", inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 0 },
@@ -368,5 +369,52 @@ describe("[L0-1] an Ollama cloud tag is hosted, not local", () => {
     for (const model of ["qwen3:4b", "hf.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF:latest", "wordcloud:latest", "cloud-coder:7b"]) {
       expect(priceRowFor(model, "ollama")?.source, model).toBe("local");
     }
+  });
+});
+
+// [C14] https://platform.claude.com/docs/en/about-claude/pricing, read 2026-09-26: a 5-minute cache write is 1.25x base
+// input, a cache read 0.1x (0.05x Opus 5.5, 0.025x Fable 5.1 and Mythos 5.1); Opus 4.5 to Opus 5 list at $5 / $25.
+describe("[C14] Anthropic's cache write and read rates, and its current list prices", () => {
+  const SONNET_CALL = { model: "claude-sonnet-4-6", inputTokens: 1_600_000, cachedInputTokens: 1_000_000, cacheWriteInputTokens: 400_000, outputTokens: 100_000 };
+
+  it("prices 1.6M prompt tokens on claude-sonnet-4-6 (1M read, 400k written) plus 100k out at 390 cents", () => {
+    // 200k uncached x $3 = 60; 1M read x $0.30 = 30; 400k written x $3.75 = 150; 100k out x $15 = 150.
+    expect(priceCall({ ...SONNET_CALL, modelTier: "sonnet" }, tierDefault)).toMatchObject({ costCents: 390, unpriced: false, source: "anthropic-list-2026-09" });
+    expect(priceCallMicroCents(SONNET_CALL)).toEqual({ microCents: 390_000_000, source: "anthropic-list-2026-09" });
+  });
+
+  it("every Anthropic row carries its read ratio and the 5-minute write ratio", () => {
+    expect(priceRowFor("claude-sonnet-4-6")).toMatchObject({ cachedInputRatio: 0.1, cacheWriteInputRatio: 1.25 });
+    expect(priceRowFor("claude-haiku-4-5-20251001")).toMatchObject({ cachedInputRatio: 0.1, cacheWriteInputRatio: 1.25 });
+    expect(priceRowFor("claude-opus-5-5")).toMatchObject({ cachedInputRatio: 0.05, cacheWriteInputRatio: 1.25 });
+    expect(priceRowFor("claude-fable-5-1")).toMatchObject({ cachedInputRatio: 0.025, cacheWriteInputRatio: 1.25 });
+  });
+
+  it("prices Opus 4.5 to Opus 5 at $5 / $25 (the claude-opus-4 prefix billed $15 / $75), and the rest of the lineup at list", () => {
+    const perMillionEach = (model: string) => priceCall({ model, modelTier: "opus", inputTokens: MILLION, outputTokens: MILLION }, tierDefault).costCents;
+    for (const model of ["claude-opus-4-5-20251101", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5"]) expect(perMillionEach(model), model).toBe(3_000);
+    expect(perMillionEach("claude-opus-4-1")).toBe(9_000);
+    expect(perMillionEach("claude-opus-5-5")).toBe(2_400);
+    expect(perMillionEach("claude-sonnet-5")).toBe(1_200);
+    expect(perMillionEach("claude-fable-5-1")).toBe(6_000);
+    expect(perMillionEach("claude-haiku-4-5-20251001")).toBe(600);
+  });
+
+  it("the tier fallback bills a cache write as 1.25 full-rate tokens, rounded up; reads and writes never exceed the prompt", () => {
+    const seen: number[] = [];
+    priceCall({ model: "some-model-nobody-listed", modelTier: "sonnet", inputTokens: 1_000, cachedInputTokens: 100, cacheWriteInputTokens: 801, outputTokens: 0 }, (input) => {
+      seen.push(input.inputTokens);
+      return 1;
+    });
+    expect(seen).toEqual([99 + 25 + 1_002]); // 99 plain + ceil(100 x 0.25) + ceil(801 x 1.25)
+    const clamped = priceCall({ model: "claude-sonnet-4-6", modelTier: "sonnet", inputTokens: MILLION, cachedInputTokens: MILLION, cacheWriteInputTokens: MILLION, outputTokens: 0 }, tierDefault);
+    expect(clamped.costCents).toBe(30); // the prompt is all reads; no token is billed twice
+  });
+
+  it("the run ledger prices a Claude call's cache reads at the cached rate", () => {
+    openRunScope([], "run_c14", { companyId: "co", objective: "cache", surface: "run" });
+    const cents = recordRunModelCall("run_c14", { seat: "trent", stepId: "s1", model: "claude-sonnet-4-6", provider: "anthropic", inputTokens: MILLION, cachedInputTokens: MILLION, outputTokens: 0, estimated: false, costCents: 0 });
+    closeRunScope([], "run_c14");
+    expect(cents).toBe(30); // 1M read x $0.30, not 1M x $0.75 at the 0.25 default
   });
 });

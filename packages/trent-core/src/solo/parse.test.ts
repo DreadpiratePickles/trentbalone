@@ -78,3 +78,41 @@ describe("[S1.1] C1: the constrained-JSON envelope, only when the runner asked f
     expect(parseReply('{"answer": "x"}', ADAPTERS)).toEqual({ kind: "answer", text: '{"answer": "x"}' });
   });
 });
+
+// [C14] Claude answers with native `tool_use` blocks (`GatewayCompletion.toolCalls`); a local model keeps the text protocol.
+describe("[C14] a native tool call is the same internal call the text protocol produces", () => {
+  const READ = { id: "toolu_01", name: "read_file", arguments: { path: "a.md" } };
+  const TEXT_READ = '<tool_call>{"name": "read_file", "arguments": {"path": "a.md"}}</tool_call>';
+  const callsOf = (parsed: ReturnType<typeof parseReply>) => {
+    if (parsed.kind !== "actions") throw new Error(`expected actions, got ${JSON.stringify(parsed)}`);
+    return parsed;
+  };
+
+  it("becomes the <tool> <json> action the text body produces, carries its call id, and the history keeps it in the taught format", () => {
+    const native = callsOf(parseReply("", ADAPTERS, { toolCalls: [READ] }));
+    expect(native.actions.map((a) => [a.adapter.name, a.tool, a.action])).toEqual(actionsOf(TEXT_READ));
+    expect(native.actions[0]?.callId).toBe("toolu_01");
+    expect(native.reply).toBe('<tool_call>{"name":"read_file","arguments":{"path":"a.md"}}</tool_call>');
+  });
+
+  it("keeps the text as narration without its thinking, runs a text block alongside, and runs a call written both ways once", () => {
+    const write = { id: "toolu_02", name: "write_file", arguments: { path: "b.md", content: "hi" } };
+    const reply = `<think>plan</think>Reading, then writing.\n${TEXT_READ}`;
+    const parsed = callsOf(parseReply(reply, ADAPTERS, { toolCalls: [write, READ] }));
+    expect(parsed.narration).toBe("Reading, then writing.");
+    expect(parsed.actions.map((a) => [a.tool, a.callId])).toEqual([["write_file", "toolu_02"], ["read_file", "toolu_01"]]);
+    expect(parsed.reply).not.toContain("<think>");
+  });
+
+  it("an unknown native tool is malformed, in the words the text protocol uses", () => {
+    const parsed = parseReply("", ADAPTERS, { toolCalls: [{ id: "toolu_x", name: "email_send", arguments: {} }] });
+    expect(parsed.kind).toBe("malformed");
+    expect(parsed.kind === "malformed" ? parsed.error : "").toContain('Unknown tool "email_send"');
+  });
+
+  it("local keeps the text protocol with constrained output: no native calls (absent or empty) reads the envelope exactly as before", () => {
+    const envelope = '{"tool_calls": [{"name": "read_file", "arguments": {"path": "a.md"}}]}';
+    expect(parseReply(envelope, ADAPTERS, { envelope: true, toolCalls: [] })).toEqual(parseReply(envelope, ADAPTERS, { envelope: true }));
+    expect(parseReply("", ADAPTERS, { toolCalls: [] })).toMatchObject({ kind: "malformed" });
+  });
+});
