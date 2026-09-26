@@ -390,6 +390,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TRENT_REQUIRE_LIVE_TESTS: "1"
           # The switch vitest.config.ts reads. Until 2026-09-26 this job set a differently spelled
           # variable, ran zero live tests and reported success; ci-workflow-truth.test.ts pins the name.

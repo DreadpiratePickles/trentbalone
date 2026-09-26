@@ -41,6 +41,12 @@ describe("the CI live job and vitest agree on the live-test switch", () => {
     expect(job).not.toContain("TRENT_LIVE_TESTS");
   });
 
+  it("the live job declares the Gemini key under the name most live suites read", () => {
+    // 232 readers of GEMINI_API_KEY against 52 of GOOGLE_API_KEY in core + cli (grep, 2026-09-26).
+    const job = jobBlock("live-provider-tests");
+    expect(job).toMatch(/^\s+GEMINI_API_KEY: \$\{\{ secrets\.GEMINI_API_KEY \}\}$/m);
+  });
+
   it("no source file reads a second name for the switch", () => {
     const readers = [
       ...sourceFiles(join(ROOT, "packages/trent-core/src")),
