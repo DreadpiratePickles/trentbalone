@@ -24,6 +24,9 @@
  *
  * [P3] While `governance.auto_review.enabled`, a fourth component runs the auto reviewer's pass
  * every `AUTO_REVIEW_TICK_MS` (`autoReviewPass`, also handed to the heartbeat `gateway start` carries).
+ *
+ * [C10] A runtime that opened no durable store (Node has no `bun:sqlite`) is said once at start, as a
+ * `service.ephemeral_store` line naming why (`@trent/core/store/durability.ts`), before any component.
  */
 import os from "node:os";
 import path from "node:path";
@@ -40,7 +43,8 @@ import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { FileGatewayStore, GatewayManager, linkRunApprovals, type RunApprovalLink } from "@trent/core/gateway/index.js"; // [P3] FileGatewayStore
 import { heartbeatLockPath, heartbeatRunnerActive, type HeartbeatLoop } from "@trent/core/heartbeat/index.js";
 import { acquireProfileWriter, gatewayRunningError, liveGatewayHolder, profileLockPath } from "@trent/core/profile/locks.js";
-import { ServiceLog, ServiceSupervisor, serviceLogPaths, type ServiceComponentReport, type ServiceEntry } from "@trent/core/service/index.js";
+import { ServiceLog, ServiceSupervisor, ephemeralStoreLine, serviceLogPaths, type ServiceComponentReport, type ServiceEntry } from "@trent/core/service/index.js"; // [C10] ephemeralStoreLine
+import { diagnoseStoreFailure } from "@trent/core/store/durability.js"; // [C10]
 import type { CommandOutcome } from "../registry.js";
 import type { CommandContext } from "../context.js";
 import { createAgentHandler, createRunResumer, createRunThreads } from "../../gateway/agent-handler.js"; // [S2] resumer, threads
@@ -202,6 +206,8 @@ export async function runServiceDaemon(ctx: CommandContext): Promise<CommandOutc
     throw error;
   }
   const built = runtime;
+  // [C10] Nothing this daemon records outlives it: say so once, at start, in the log `service status` shows.
+  if (built.durable === false) log.line(ephemeralStoreLine(await diagnoseStoreFailure()));
   /** The gateway's manager once started, else one built on the first delivery. */
   const sharedManager = (): GatewayManager => manager ?? (deliveryManager ??= buildManager(configManager, {}));
 

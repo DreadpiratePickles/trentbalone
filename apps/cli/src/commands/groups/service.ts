@@ -21,13 +21,17 @@ import path from "node:path";
 import process from "node:process";
 import { EXIT } from "@trent/core/errors/index.js";
 import {
+  EPHEMERAL_SERVICE_REFUSAL, // [C10]
   assertServiceProfileName,
   installService,
   readServiceStatus,
   resolveServiceProgram,
+  serviceDurability, // [C10]
+  serviceDurabilityLine, // [C10]
   serviceTarget,
   uninstallService,
   unsupportedService,
+  type ServiceDurability, // [C10]
   type ServiceHost,
   type ServiceInstallResult,
   type ServiceProcessView,
@@ -138,11 +142,17 @@ export const serviceSpec: CommandSpec = {
         { flags: "--force", description: "Replace a different unit file already installed for this profile" },
         { flags: "--now", description: "Also load it now (launchctl bootstrap / systemctl --user enable --now) instead of only printing the command" },
         { flags: "--workdir <dir>", description: "The service's working directory; defaults to the current one" },
+        { flags: "--allow-ephemeral", description: "Install even when the daemon would have no durable store (under Node), so its runs, approvals and audit are lost at every restart" }, // [C10]
       ],
       run(ctx, opts) {
         const host = serviceHost();
         const refused = unsupported(ctx, host, "service install");
         if (refused !== undefined) return refused;
+        // [C10] The unit runs this process's runtime; under Node the daemon would keep nothing across a restart.
+        // A dry run writes nothing, so it refuses nothing: it reports that the real install would.
+        const durability = serviceDurability(host.processView);
+        const wouldRefuse = !durability.durable && opts.allowEphemeral !== true;
+        if (wouldRefuse && !ctx.dryRun) return { data: { command: "service install", ...durability, message: EPHEMERAL_SERVICE_REFUSAL }, exitCode: EXIT.CONFIG };
         const manager = ctx.config();
         const result = installService({
           host,
@@ -158,17 +168,21 @@ export const serviceSpec: CommandSpec = {
         });
         // The file is on disk and `status` shows it; the text is echoed only when nothing was written.
         const { content, ...written } = result;
-        const data = ctx.dryRun ? { dryRun: true, ...written, content } : written;
+        const data = { ...(ctx.dryRun ? { dryRun: true, ...written, content } : written), ...durability, ...(wouldRefuse ? { wouldRefuse: true, message: EPHEMERAL_SERVICE_REFUSAL } : {}) }; // [C10] durable, and why not
         return result.ok ? { data } : { data, exitCode: EXIT.RUN_FAILED };
       },
       render(data, ctx) {
         const d = data as Record<string, unknown> & Partial<ServiceInstallResult>;
         if (d.supported === false) return renderUnsupported(d, ctx);
+        if (d.state === undefined && d.durable === false) return [`  ${ctx.theme.error(String(d.message))}`]; // [C10] the refusal
+        const store = serviceDurabilityLine(d as unknown as ServiceDurability); // [C10]
         const lines = [
           `  ${ctx.theme.success(String(d.state).padEnd(9, " "))} ${ctx.theme.value(String(d.unitPath))}`,
           `  ${ctx.theme.meta("runs     ")} ${ctx.theme.value((d.programArguments ?? []).join(" "))}`,
           `  ${ctx.theme.meta("in       ")} ${ctx.theme.value(String(d.workingDirectory))}`,
           `  ${ctx.theme.meta("logs     ")} ${ctx.theme.value(String(d.logs?.service))} ${ctx.theme.meta(d.manager === "launchd" ? `(stdout and stderr beside it)` : "(stdout and stderr in the journal)")}`,
+          `  ${ctx.theme.meta("store    ")} ${d.durable === true ? ctx.theme.success(store) : ctx.theme.needsApproval(store)}`, // [C10]
+          ...(d.wouldRefuse === true ? [`  ${ctx.theme.error(String(d.message))}`] : []), // [C10] a dry run of what the real install refuses
           ...ranLines(d.ran ?? [], ctx),
         ];
         if ((d.ran ?? []).length === 0) lines.push(...nextLines(d.next ?? [], ctx));

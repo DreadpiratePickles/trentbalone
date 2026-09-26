@@ -369,6 +369,7 @@ describe("trent service install|status|uninstall", () => {
         calls.push({ command, args });
         return { code: 0, stdout: "", stderr: "" };
       },
+      // [C10] A Node process: the daemon would be ephemeral, so every real install here passes --allow-ephemeral (the refusal is service-durability.test.ts).
       processView: { execPath: "/usr/local/bin/node", argv: ["/usr/local/bin/node", "/opt/trent/dist/index.js", "service", "install"], execArgv: [] },
       realpath: (p) => p,
       cwd: path.join(scratch, "work"),
@@ -379,7 +380,7 @@ describe("trent service install|status|uninstall", () => {
   it("macOS: install writes the plist in the scratch home and prints the bootstrap line; status sees it; uninstall removes it", async () => {
     useHost("darwin");
     const unitPath = path.join(scratch, "Library", "LaunchAgents", "uk.let-trent.default.plist");
-    const installed = await runCli(["service", "install", "--json"]);
+    const installed = await runCli(["service", "install", "--allow-ephemeral", "--json"]); // [C10]
     expect(installed.exitCode).toBe(EXIT.OK);
     expect(JSON.parse(installed.stdout)).toMatchObject({
       manager: "launchd",
@@ -395,7 +396,7 @@ describe("trent service install|status|uninstall", () => {
     expect(plist).toContain(`<string>${trentHome}</string>`);
     expect(plist).toContain(`<string>${path.join(trentHome, "logs", "service.stderr.log")}</string>`);
 
-    const human = await runCli(["service", "install", "--no-color"]);
+    const human = await runCli(["service", "install", "--allow-ephemeral", "--no-color"]); // [C10]
     expect(human.stdout).toContain("unchanged");
     expect(human.stdout).toContain(`launchctl bootstrap gui/501 ${unitPath}`);
 
@@ -412,24 +413,24 @@ describe("trent service install|status|uninstall", () => {
 
   it("install refuses to overwrite a different file without --force, and --workdir sets the working directory", async () => {
     useHost("darwin");
-    expect((await runCli(["service", "install", "--json"])).exitCode).toBe(EXIT.OK);
-    const refused = await runCli(["service", "install", "--workdir", path.join(scratch, "elsewhere"), "--json"]);
+    expect((await runCli(["service", "install", "--allow-ephemeral", "--json"])).exitCode).toBe(EXIT.OK); // [C10]
+    const refused = await runCli(["service", "install", "--allow-ephemeral", "--workdir", path.join(scratch, "elsewhere"), "--json"]); // [C10]
     expect(refused.exitCode).toBe(EXIT.CONFIG);
     expect(refused.stdout).toContain("--force");
-    const forced = await runCli(["service", "install", "--workdir", path.join(scratch, "elsewhere"), "--force", "--json"]);
+    const forced = await runCli(["service", "install", "--allow-ephemeral", "--workdir", path.join(scratch, "elsewhere"), "--force", "--json"]); // [C10]
     expect(JSON.parse(forced.stdout)).toMatchObject({ state: "replaced", workingDirectory: path.join(scratch, "elsewhere") });
   });
 
   it("Linux: prints daemon-reload and enable --now, and runs them only with --now", async () => {
     useHost("linux");
-    const printed = await runCli(["service", "install", "--profile", "work", "--json"]);
+    const printed = await runCli(["service", "install", "--allow-ephemeral", "--profile", "work", "--json"]); // [C10]
     expect(printed.exitCode).toBe(EXIT.OK);
     expect(JSON.parse(printed.stdout)).toMatchObject({
       unitPath: path.join(scratch, ".config", "systemd", "user", "trent-work.service"),
       next: ["systemctl --user daemon-reload", "systemctl --user enable --now trent-work.service"],
     });
     expect(calls).toEqual([]);
-    const now = await runCli(["service", "install", "--profile", "work", "--now", "--json"]);
+    const now = await runCli(["service", "install", "--allow-ephemeral", "--profile", "work", "--now", "--json"]); // [C10]
     expect(now.exitCode).toBe(EXIT.OK);
     expect(calls.map((c) => [c.command, ...c.args].join(" "))).toEqual(["systemctl --user daemon-reload", "systemctl --user enable --now trent-work.service"]);
   });

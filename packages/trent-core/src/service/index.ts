@@ -8,3 +8,4 @@ export * from "./service-log.js";
 export * from "./units.js";
 export * from "./program.js";
 export * from "./install.js";
+export * from "./durability.js"; // [C10] whether the daemon keeps its store

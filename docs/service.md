@@ -3,6 +3,7 @@
 ```
 npm run cli -- service install            # write the launchd agent / systemd unit; print the command that loads it
 npm run cli -- service install --now      # write it and load it
+npm run cli -- service install --allow-ephemeral   # under Node: install anyway, knowing the daemon forgets at every restart
 npm run cli -- service status             # installed? which pid is the daemon? who holds the gateway lock? last log lines
 npm run cli -- service uninstall --now    # unload it and remove the file
 npm run cli -- service daemon             # what the unit runs; also fine in a terminal
@@ -53,6 +54,30 @@ SIGTERM, SIGINT (Ctrl+C) and SIGHUP stop the heartbeat, then the cron runner, th
 then release the runtime and the writer registration, and the process exits 130. Under systemd the
 unit declares `SuccessExitStatus=130`, so that is a clean stop, not a failure.
 
+## A daemon that would forget
+
+The daemon keeps its runs, improve drafts, held approvals and audit chain in the profile's SQLite
+store, which opens only under Bun (`bun:sqlite`). Under Node the store is in process memory and is
+gone at every restart, and a supervised daemon restarts on every exit. The unit runs the runtime you
+installed from, so `trent service install` knows before it writes anything, by the rule the runtime
+uses (`packages/trent-core/src/store/durability.ts`, applied in `packages/trent-core/src/service/durability.ts`):
+
+| Installed from | `durable` | install |
+|---|---|---|
+| the compiled binary, or Bun (`npm run cli:bun`) | `true` | as below |
+| Node (`npm i -g`, `npm run cli`) | `false` | exit 3 with the line below, unless `--allow-ephemeral` (`--dry-run`: exit 0 with `wouldRefuse: true`) |
+
+    This service would forget its runs, approvals and audit on every restart (Node has no durable store); run it from the binary or Bun, or pass --allow-ephemeral
+
+`--json` carries `durable` on every install, and `reason` (the store's own line) when it is false.
+The text output has one `store` line. `--dry-run` writes nothing, so it refuses nothing: under Node
+it exits 0 with `wouldRefuse: true` and the same line in `message` (and in the text), saying what the
+real install would do. The daemon checks again when it starts:
+a runtime that opened no durable store (Node, or Bun on a clone whose Prisma client was never
+generated) writes one line to `service.log` before any component starts:
+
+    service.ephemeral_store: not durable: <reason>; runs, approvals and audit are lost when this process exits
+
 ## macOS: a launchd user agent
 
 `trent service install` writes `~/Library/LaunchAgents/uk.let-trent.<profile>.plist` (mode 0644)
@@ -72,10 +97,10 @@ a file, so no colour escapes are written into it):
 | Installed from | ProgramArguments begins with |
 |---|---|
 | the compiled binary | the binary's resolved path |
-| `npm i -g` (Node) | `node` and the resolved `dist/index.js` |
+| `npm i -g` (Node) | `node` and the resolved `dist/index.js` (refused without `--allow-ephemeral`: see "A daemon that would forget") |
 | a source checkout under tsx | `node`, tsx's `--require` / `--import` loader flags, `apps/cli/src/index.ts` |
 
-A generated agent, with the paths shortened:
+A generated agent (a Node install with `--allow-ephemeral`), with the paths shortened:
 
 ```
 <?xml version="1.0" encoding="UTF-8"?>
@@ -182,7 +207,7 @@ profile's `.env` itself, as every surface does.
 
 | File | What |
 |---|---|
-| `<profile>/logs/service.log` | the daemon's own lines: `service starting`, each part `started` / `skipped` / `failed to start` / `stopped`, `service stopped`; each line timestamped with the daemon's pid |
+| `<profile>/logs/service.log` | the daemon's own lines: `service starting`, `service.ephemeral_store` (once, at start, when the store is not durable), each part `started` / `skipped` / `failed to start` / `stopped`, `service stopped`; each line timestamped with the daemon's pid |
 | `<profile>/logs/service.log.1` | the previous `service.log`: it rotates at 1 MiB, one old file kept |
 | `<profile>/logs/service.stdout.log`, `service.stderr.log` | macOS only: everything the daemon prints, including the cron and heartbeat event lines. launchd does not rotate these and neither does Trent; delete them while the service is stopped |
 | the journal | Linux: everything the daemon prints (`journalctl --user -u trent-<profile>`) |

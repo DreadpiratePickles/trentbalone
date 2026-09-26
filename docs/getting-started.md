@@ -16,7 +16,8 @@ through the workspace.
 
 Docker is optional. Without it, set the terminal backend to `local` and everything else works. bun is
 optional too: without it everything runs, but approvals, budget and the audit chain live in process
-memory and do not survive a restart (see "Durable state needs Bun" below).
+memory and do not survive a restart, and `trent service install` refuses (exit 3) unless you pass
+`--allow-ephemeral` (see "Durable state needs Bun" below).
 
 ## 2. Clone and install
 
@@ -41,7 +42,9 @@ npm run cli:bun -- improve status --json    # "store": {"durable": true}
 ```
 
 Under Node (`npm run cli --`) everything works, but the store is in process memory: the REPL prints
-`This session is not durable`, and approvals, budget and the audit chain do not survive a restart.
+`This session is not durable`, `trent service install` exits 3 unless you pass `--allow-ephemeral`, a
+daemon started anyway logs `service.ephemeral_store` at start, and approvals, budget and the audit
+chain do not survive a restart.
 `npm run cli:bun` runs `bun --no-env-file apps/cli/src/index.ts`, so a `.env` file in the directory
 you launch from is never read.
 
