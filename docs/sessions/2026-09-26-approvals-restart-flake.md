@@ -111,3 +111,16 @@ of 68894ea) is false, and its derive-sqlite-schema rationale is now stale. Eithe
 `poolOptions: { forks: { singleFork: true } }` on that project (the per-project knob the pool
 reads, coverage.DfSpMS-b.js:2674; those files then run one at a time in one fork after the
 parallel pool drains) if desktop.test.ts's hdiutil really needs exclusivity, or drop the project.
+
+## Follow-up (lead, 06:20Z): the EXCLUSIVE project made truthful
+Decision: `EXCLUSIVE` keeps only `apps/cli/src/commands/__tests__/desktop.test.ts` (hdiutil is serial on macOS);
+the project uses `poolOptions: { forks: { singleFork: true } }`, which vitest 3.2.7 honours per project
+(`reporters.d.BuRON0I0.d.ts:2352-2355`; the runner splits singleFork files at `coverage.DfSpMS-b.js:2674-2675`
+and runs them in one worker after the parallel files, :2697-2708), instead of `fileParallelism: false`, which is
+not a project option (:2347-2348) and was silently ignored. The derive-sqlite-schema test and the four Bun-child
+tests return to `parallel` (the writer is fixed above; the Bun-cache theory is disproven). Pinned by
+`apps/cli/src/commands/__tests__/vitest-config-truth.test.ts`: red on the old config (exit 1: 3 failed / 1 passed:
+six files in the include, `singleFork` undefined, five files still excluded from parallel), green after (exit 0,
+4 passed). Each moved file alone: desktop 16 passed (DMG mount ran, hdiutil present), derive-sqlite-schema 14,
+approvals.restart 3, store.durability 10, all exit 0. `npx vitest list --project exclusive --filesOnly` prints the
+one file. `npx tsc --noEmit -p apps/cli/tsconfig.json` exit 0.

@@ -33,28 +33,13 @@ const includeLiveTests = process.env.TRENT_TEST_LIVE === "1";
  * failures and nothing else.
  */
 /**
- * Two suites hold genuinely EXCLUSIVE operating-system resources and cannot share a machine
- * with other workers, so they get their own project with file parallelism OFF. This is the one
- * legitimate use of sequencing here; everything else still fans out across cores.
- *   - store/derive-sqlite-schema.test.ts runs `prisma generate`, which rewrites the shared
- *     generated client on disk while other workers import it; its beforeAll exceeded 60 s under
- *     a saturated fork pool.
- *   - commands/__tests__/desktop.test.ts drives `hdiutil`, which mounts and detaches disk images
- *     serially on macOS; a concurrent mount contends, and a failed run leaves a stale volume
- *     attached that blocks every later one.
- * Measured: both pass alone every time and flake only under parallel load.
+ * desktop.test.ts drives `hdiutil`, which mounts disk images serially on macOS; a concurrent mount
+ * contends and a failed run leaves a stale volume that blocks later ones, so it runs alone. Vitest
+ * 3.2.7 drops a per-project `fileParallelism` (a NonProjectOptions key); the per-project knob the
+ * shared forks pool reads is `poolOptions.forks.singleFork`: these files run in one fork, one at a
+ * time, after the parallel files finish (vitest/dist/chunks/coverage.DfSpMS-b.js:2674-2708).
  */
-const EXCLUSIVE = [
-  "packages/trent-core/src/store/derive-sqlite-schema.test.ts",
-  "apps/cli/src/commands/__tests__/desktop.test.ts",
-  // Each of these spawns a Bun child that transpiles the generated Prisma client. Run in parallel,
-  // two such children race on Bun's transpile cache and one dies with "Cannot find module
-  // './internal/class'" (CI, 2026-09-25, twice, green on rerun). Serial, they never overlap.
-  "apps/cli/src/repl/__tests__/approvals.restart.test.ts",
-  "apps/cli/src/commands/__tests__/audit.test.ts",
-  "packages/trent-core/src/store/store.durability.test.ts",
-  "packages/trent-core/src/fleet-memory/app-memory.bun.test.ts",
-];
+const EXCLUSIVE = ["apps/cli/src/commands/__tests__/desktop.test.ts"];
 
 const ROOT_EXCLUDE = [
   "**/node_modules/**",
@@ -121,12 +106,12 @@ export default defineConfig({
       {
         // Deliberately NOT `extends: true`. Inheriting the root config merges its include glob
         // into this project, so a CLI path filter collects every matched file here too and each
-        // test runs twice. This project is self-contained and owns exactly its two files.
+        // test runs twice. This project is self-contained and owns exactly its one file.
         test: {
           name: "exclusive",
           environment: "node",
           include: EXCLUSIVE,
-          fileParallelism: false,
+          poolOptions: { forks: { singleFork: true } },
           testTimeout: 60_000,
           hookTimeout: 60_000,
         },
