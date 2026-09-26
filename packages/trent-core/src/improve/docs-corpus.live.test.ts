@@ -17,6 +17,12 @@
  * into `embeddings-task-types.json`. `TRENT_DOCS_CORPUS_TASK_TYPES=0` measures the symmetric space
  * instead (`createEmbedder(..., { taskTypes: false })`) and records into `embeddings.json`.
  *
+ * [L0-5] `TRENT_DOCS_CORPUS_EMBEDDER=ollama|lmstudio|llamacpp` measures the corpus with a LOCAL embedder
+ * instead (`TRENT_DOCS_CORPUS_EMBEDDER_MODEL`, default the runtime's): no key, no pacing, no spend. It records
+ * into `embeddings-local-<model>.json` (the Gemini recordings stay as they are), in the space
+ * `TRENT_DOCS_CORPUS_TASK_TYPES` selects (default: the query prefixed, which is how brain recall ships a
+ * local model), and also measures the other space on the same run for the report.
+ *
  * Cost: the shipped embedder has no price table (`model-gateway/pricing.ts` prices chat models), so
  * the spend is the provider's reported token count — or, when a response carries none, the input
  * characters over 4 — at Google's published paid-tier list price for gemini-embedding-001, $0.15 per
@@ -30,12 +36,20 @@ import { describe, expect, it } from "vitest";
 
 import { createBrain, type BrainExec } from "../fleet-memory/brain.js";
 import { EMBEDDER_ROUTES, createEmbedder, type FetchLike } from "../fleet-memory/embedder.js";
+import { isLocalEmbedderProvider } from "../fleet-memory/embedder-local.js";
+import type { CalibratedEmbedFn } from "../fleet-memory/lexical.js";
 import { chunkScorableText, importDocsCorpus, loadDocsCorpus, resolveDocsCorpusGoldens } from "./docs-corpus.js";
 import { RECORDED_COSINES_FILE, RECORDED_TASK_TYPE_COSINES_FILE, readRecordedCosines, recordCosines, recordedEmbedFn, writeRecordedCosines } from "./recorded-embedder.js";
 import type { EmbedFn, EmbedRole } from "../fleet-memory/lexical.js";
 import { RETRIEVAL_MODES, formatModeTables, measureMode, rankerFor, type ModeReport } from "./retrieval-metrics.js";
 
-const LIVE = process.env.TRENT_TEST_LIVE === "1" && (process.env.GEMINI_API_KEY ?? "").trim() !== "";
+/** [L0-5] A local embedder under measurement, when one is named; then no key is read. */
+const LOCAL_RAW = process.env.TRENT_DOCS_CORPUS_EMBEDDER?.trim().toLowerCase();
+const LOCAL = isLocalEmbedderProvider(LOCAL_RAW) ? LOCAL_RAW : undefined;
+const LOCAL_MODEL = process.env.TRENT_DOCS_CORPUS_EMBEDDER_MODEL?.trim() || undefined;
+/** [L0-5] The recording a local model writes: `embeddings-local-qwen3-embedding-0.6b.json`. */
+const localRecordingFile = (model: string): string => `embeddings-local-${model.toLowerCase().replace(/:latest$/, "").replace(/[^a-z0-9.]+/g, "-")}.json`;
+const LIVE = process.env.TRENT_TEST_LIVE === "1" && (LOCAL !== undefined || (process.env.GEMINI_API_KEY ?? "").trim() !== "");
 const RECORD = process.env.TRENT_RECORD_DOCS_CORPUS === "1";
 const TASK_TYPES = process.env.TRENT_DOCS_CORPUS_TASK_TYPES !== "0";
 const FIXTURE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "docs-corpus");
@@ -96,8 +110,9 @@ function spend(meter: Meter): { tokens: number; source: string; cents: number; b
 // [P2-13] The native batch endpoint (task types) answered 429 on 16- and 32-text batches at 30k and
 // 60k chars a minute while a one-text probe a minute later answered 200, so the pace is 15k chars and
 // 8 texts a batch by default; `TRENT_DOCS_CORPUS_CHARS_PER_MINUTE` / `_BATCH_TEXTS` override both.
-const CHARS_PER_MINUTE = Number(process.env.TRENT_DOCS_CORPUS_CHARS_PER_MINUTE ?? "") || 15_000;
-const BATCH_TEXTS = Number(process.env.TRENT_DOCS_CORPUS_BATCH_TEXTS ?? "") || 8;
+// [L0-5] A local runtime has no quota: no pacing, 32 texts a batch (the embedder's own default).
+const CHARS_PER_MINUTE = LOCAL !== undefined ? Number.POSITIVE_INFINITY : Number(process.env.TRENT_DOCS_CORPUS_CHARS_PER_MINUTE ?? "") || 15_000;
+const BATCH_TEXTS = Number(process.env.TRENT_DOCS_CORPUS_BATCH_TEXTS ?? "") || (LOCAL !== undefined ? 32 : 8);
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function warmCache(embed: EmbedFn, texts: readonly string[], role: EmbedRole, meter: Meter): Promise<void> {
@@ -146,7 +161,7 @@ async function warmCache(embed: EmbedFn, texts: readonly string[], role: EmbedRo
 
 const ranksOf = (report: ModeReport): Array<[string, number | null, string[]]> => report.perQuery.map((q) => [q.id, q.rank, [...q.ranked]]);
 
-describe.skipIf(!LIVE)("[P2-6] the docs corpus against gemini-embedding-001, live", () => {
+describe.skipIf(!LIVE)("[P2-6] the docs corpus against gemini-embedding-001 (or [L0-5] a local embedder), live", () => {
   it("measures lexical, embedding-only and hybrid, records the cosines when asked, and the replay equals the live ranking", async () => {
     const work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "trent-docs-corpus-live-")));
     const cacheDir = process.env.TRENT_DOCS_CORPUS_CACHE_DIR ?? path.join(work, "cache-profile");
@@ -161,8 +176,12 @@ describe.skipIf(!LIVE)("[P2-6] the docs corpus against gemini-embedding-001, liv
       const meter: Meter = { requests: 0, inputs: 0, chars: 0, reportedTokens: 0, responsesWithUsage: 0 };
       // One attempt per request: the warm-up owns the retry (a 65-second pause), so a 429 is not followed
       // by the embedder's own quick retries spending the same minute's quota again.
-      const embedder = createEmbedder({ provider: "google" }, {}, { profileDir: cacheDir, env: process.env, fetchImpl: meteredFetch(meter), taskTypes: TASK_TYPES, retry: { attempts: 1 } });
-      expect(embedder.provider).toBe("gemini");
+      // [L0-5] A local embedder is named by the environment; the hosted one is the Gemini it always was.
+      const make = (taskTypes: boolean) => LOCAL === undefined
+        ? createEmbedder({ provider: "google" }, {}, { profileDir: cacheDir, env: process.env, fetchImpl: meteredFetch(meter), taskTypes, retry: { attempts: 1 } })
+        : createEmbedder({ memory: { embedder: { provider: LOCAL, ...(LOCAL_MODEL === undefined ? {} : { model: LOCAL_MODEL }) } } }, {}, { profileDir: cacheDir, env: process.env, fetchImpl: meteredFetch(meter), taskTypes });
+      const embedder = make(TASK_TYPES);
+      expect(embedder.provider).toBe(LOCAL ?? "gemini");
       expect(embedder.taskTypes).toBe(TASK_TYPES);
 
       await warmCache(embedder.embed, resolved.entries.map(chunkScorableText), "document", meter);
@@ -172,7 +191,20 @@ describe.skipIf(!LIVE)("[P2-6] the docs corpus against gemini-embedding-001, liv
         live.push(await measureMode({ mode, brain, rank: rankerFor(mode, brain, embedder.embed), answerable: resolved.answerable, noAnswer: resolved.noAnswer }));
       }
 
-      const recordingFile = path.join(FIXTURE_DIR, TASK_TYPES ? RECORDED_TASK_TYPE_COSINES_FILE : RECORDED_COSINES_FILE);
+      // [L0-5] The other space, on the same run and mostly from the cache, for the report only.
+      const otherSpace: ModeReport[] = [];
+      if (LOCAL !== undefined) {
+        const other = make(!TASK_TYPES);
+        if (other.taskTypes !== TASK_TYPES) {
+          await warmCache(other.embed, corpus.questions.map((q) => q.query), "query", meter);
+          for (const mode of ["embedding", "hybrid"] as const) {
+            otherSpace.push({ ...(await measureMode({ mode, brain, rank: rankerFor(mode, brain, other.embed), answerable: resolved.answerable, noAnswer: resolved.noAnswer })), mode: `${mode} (${TASK_TYPES ? "symmetric" : "query prefixed"})` });
+          }
+        }
+      }
+
+      const floors = embedder.embed as CalibratedEmbedFn;
+      const recordingFile = path.join(FIXTURE_DIR, LOCAL !== undefined ? localRecordingFile(embedder.model) : TASK_TYPES ? RECORDED_TASK_TYPE_COSINES_FILE : RECORDED_COSINES_FILE);
       if (RECORD) {
         const table = await recordCosines({
           embed: embedder.embed,
@@ -180,10 +212,10 @@ describe.skipIf(!LIVE)("[P2-6] the docs corpus against gemini-embedding-001, liv
           queries: corpus.questions.map((q) => q.query),
           provider: embedder.provider,
           model: embedder.model,
-          vectorFloor: TASK_TYPES ? EMBEDDER_ROUTES.gemini.queryFloor! : EMBEDDER_ROUTES.gemini.vectorFloor,
+          vectorFloor: LOCAL !== undefined ? (TASK_TYPES ? floors.queryFloor! : floors.vectorFloor!) : TASK_TYPES ? EMBEDDER_ROUTES.gemini.queryFloor! : EMBEDDER_ROUTES.gemini.vectorFloor,
           taskTypes: TASK_TYPES,
           capturedAt: new Date().toISOString(),
-          note: `cosine of each question (row, keyed by sha256 of the query) against each chunk (column, keyed by sha256 of the text the ranker embeds), float32 base64; ${TASK_TYPES ? "chunks as RETRIEVAL_DOCUMENT, questions as RETRIEVAL_QUERY" : "no task type"}; written by docs-corpus.live.test.ts`,
+          note: `cosine of each question (row, keyed by sha256 of the query) against each chunk (column, keyed by sha256 of the text the ranker embeds), float32 base64; ${TASK_TYPES ? (LOCAL !== undefined ? "chunks as documents, questions with the model's query prefix" : "chunks as RETRIEVAL_DOCUMENT, questions as RETRIEVAL_QUERY") : "no task type"}; written by docs-corpus.live.test.ts`,
         });
         writeRecordedCosines(recordingFile, table);
       }
@@ -200,9 +232,10 @@ describe.skipIf(!LIVE)("[P2-6] the docs corpus against gemini-embedding-001, liv
         expect(replay.stats().modeMismatches).toBe(0);
       }
 
-      const report = { chunks: resolved.entries.length, answerable: resolved.answerable.length, noAnswer: resolved.noAnswer.length, meter, cost, live, replayed };
+      const report = { embedder: { provider: embedder.provider, model: embedder.model, taskTypes: embedder.taskTypes, vectorFloor: floors.vectorFloor, queryFloor: floors.queryFloor ?? null }, chunks: resolved.entries.length, answerable: resolved.answerable.length, noAnswer: resolved.noAnswer.length, meter, cost, live, otherSpace, replayed };
       if (process.env.TRENT_DOCS_CORPUS_REPORT) fs.writeFileSync(process.env.TRENT_DOCS_CORPUS_REPORT, JSON.stringify(report, null, 1), "utf8");
-      console.log(`${formatModeTables(live)}\n\nembedding requests ${String(meter.requests)}, inputs ${String(meter.inputs)}, chars ${String(meter.chars)}, tokens ${String(cost.tokens)} (${cost.source}), ${cost.cents.toFixed(3)} cents (bound ${cost.boundCents.toFixed(3)}) at $${String(USD_PER_MILLION_TOKENS)}/M`);
+      const spendLine = LOCAL !== undefined ? "local runtime, 0 cents" : `tokens ${String(cost.tokens)} (${cost.source}), ${cost.cents.toFixed(3)} cents (bound ${cost.boundCents.toFixed(3)}) at $${String(USD_PER_MILLION_TOKENS)}/M`;
+      console.log(`${embedder.provider} ${embedder.model}\n${formatModeTables([...live, ...otherSpace])}\n\nembedding requests ${String(meter.requests)}, inputs ${String(meter.inputs)}, chars ${String(meter.chars)}, ${spendLine}`);
 
       for (const replay of replayed) {
         const same = live.find((r) => r.mode === replay.mode)!;

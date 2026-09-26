@@ -27,6 +27,7 @@ import { seatCapability } from "../fleet/seat-capabilities.js";
 import { applyModelCallEnv } from "../model-gateway/call-policy.js";
 import { applyModelOverridesEnv } from "../model-gateway/pricing.js";
 import { aliasEnvKeys, applyProviderAliasEnv, resolveProviderAlias } from "../model-gateway/providers.js";
+import { applyAppEmbeddingEnv } from "../fleet-memory/embedder-local.js"; // [L0-5]
 // [L0-1] The app-free half moved to `./model-env-early.ts` so the CLI entry can apply the model names
 // before any app module loads (G1); this module keeps what needs the seat manifest and re-exports the rest.
 import {
@@ -123,6 +124,7 @@ export function applyModelEnv(config: ModelEnvConfig | undefined): ModelEnvRepor
     const tierKept: string[] = [];
     if (config.models !== undefined) applyTierEnv(alias.provider, config, tierWritten, tierKept);
     const report = applyProviderAliasEnv(alias.alias, model);
+    applyAppEmbeddingEnv(config); // [L0-5] G10: the app's own embeddings follow memory.embedder (fleet-memory/embedder-local.ts)
     // [L0-1] G4: a local runtime's chain is its own endpoint. The app's seat loop otherwise asks the
     // seat port for every provider's tier model (claude-..., gemini-...), and the gateway falls back to
     // any keyed hosted provider. Forced like the pin's narrowing: no request leaves the machine.

@@ -40,6 +40,7 @@ import { createFrozenSurface } from "./frozen-surface.js";
 import { RECORDED_RERANK_FILE, readRecordedRerank, replayReranker, type ReplayReranker } from "./docs-corpus-rerank.js";
 import { BRAIN_RERANK_DEFAULTS } from "../fleet-memory/rerank.js";
 import type { BrainRerankReport } from "../fleet-memory/brain-index.js";
+import { RECORDED_LOCAL_FLOORS } from "../fleet-memory/embedder-calibration.js";
 
 const FIXTURE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "docs-corpus");
 /**
@@ -256,3 +257,45 @@ describe("[P2-13] the LLM reranker on real documents, replayed from its recorded
     expect(spend.maxCentsPerQuery).toBeLessThan(BRAIN_RERANK_DEFAULTS.max_cents_per_query);
   });
 });
+
+/**
+ * [L0-5] The same exam with a LOCAL embedder, replayed: `qwen3-embedding:0.6b` on Ollama 0.32.9 (Q8_0, 1024
+ * dimensions), recorded live on 2026-09-26 by `docs-corpus.live.test.ts` with `TRENT_DOCS_CORPUS_EMBEDDER=ollama`,
+ * in the space brain recall ships a local model in: chunks as documents, each question with the model's query
+ * instruction, ranked against the recorded query floor (0.32). That run checked this replay equal to the live
+ * ranking question for question. Measured: hybrid recall@8 21/35 (0.600) against Gemini's 22/35 (0.629),
+ * paraphrased 5/12 as Gemini, multi-hop 4/11 against 5/11, no-answer 0/5 abstained against 2/5; the dense half
+ * alone 21/35, as Gemini's. Without the query instruction it fell to 16/35 dense and 18/35 hybrid, paraphrased
+ * 1/12 (same run). Floors, as the Gemini block's are; docs/sessions/2026-09-26-l0-5-embeddings.md has the tables.
+ */
+describe("[L0-5] recall on real documents with a local embedder (qwen3-embedding:0.6b), replayed", () => {
+  const LOCAL_RECORDING = "embeddings-local-qwen3-embedding-0.6b.json";
+  let table: ReturnType<typeof readRecordedCosines>;
+  let replay: RecordedEmbedFn;
+  let embedding: ModeReport;
+  let hybrid: ModeReport;
+
+  beforeAll(async () => {
+    table = readRecordedCosines(path.join(FIXTURE_DIR, LOCAL_RECORDING));
+    replay = recordedEmbedFn(table);
+    const measure = (mode: "embedding" | "hybrid"): Promise<ModeReport> =>
+      measureMode({ mode, brain, rank: rankerFor(mode, brain, replay), answerable: resolved.answerable, noAnswer: resolved.noAnswer });
+    embedding = await measure("embedding");
+    hybrid = await measure("hybrid");
+  }, 300_000);
+
+  it("is a recording of the shipped local space: that model, its query instruction, its recorded query floor, every chunk and question", () => {
+    expect(table).toMatchObject({ provider: "ollama", model: "qwen3-embedding:0.6b", task_types: true, vector_floor: RECORDED_LOCAL_FLOORS["qwen3-embedding:0.6b"]!.queryFloor });
+    expect(replay.stats()).toMatchObject({ missingQueries: [], missingChunks: 0, modeMismatches: 0 });
+  });
+
+  it("holds its measured floors: hybrid 21/35 (every exact term, 5/12 paraphrased, 4/11 multi-hop), the dense half 21/35", () => {
+    expect(hybrid.overall.hitsAt8).toBeGreaterThanOrEqual(21);
+    expect(hybrid.byCategory.exact_term.hitsAt8).toBe(12);
+    expect(hybrid.byCategory.paraphrased.hitsAt8).toBeGreaterThanOrEqual(5);
+    expect(hybrid.byCategory.multi_hop.hitsAt8).toBeGreaterThanOrEqual(4);
+    expect(embedding.overall.hitsAt8).toBeGreaterThanOrEqual(21);
+    expect(embedding.byCategory.paraphrased.hitsAt8).toBeGreaterThanOrEqual(5);
+  });
+});
+

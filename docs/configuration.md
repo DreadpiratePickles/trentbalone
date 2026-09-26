@@ -295,6 +295,18 @@ memory:
 | `base_url` | Moves the route's endpoint and wins over its variable. Local defaults: `http://127.0.0.1:11434` (Ollama; a trailing `"/v1"` is dropped, since its native `/api/embed` sits at the server root), `http://127.0.0.1:1234/v1` (LM Studio), `http://127.0.0.1:8080/v1` (llama.cpp). |
 | `batch_size` | Inputs per request. One recall corpus is split into batches of this size. |
 
+A local embedder's cosine floor is per model: recorded for `qwen3-embedding:0.6b` (0.46, and 0.32 with the
+query instruction the model card prescribes, which is the space brain recall uses), and calibrated on first
+use for any other model on three fixed paraphrase / unrelated triples. When the runtime is down or the model
+is not pulled, the first recall prints one `embedder.local_unavailable` WARN line with the fix
+(`ollama pull <model>`, `ollama serve`), recall is lexical, and no further request is made for a minute.
+`OLLAMA_BASE_URL`, `LMSTUDIO_BASE_URL` and `LLAMACPP_BASE_URL` move the local endpoints when `base_url` is unset.
+The wrapped app's own wiki and routing embeddings read `EMBEDDING_MODEL` (default `text-embedding-3-small`,
+a 404 on a local runtime). The orchestrator's model bridge sets it to the local embedder's model when it is
+handed the profile's `memory.embedder`; `trent run` does not hand it over yet, so export `EMBEDDING_MODEL`
+yourself meanwhile (an exported value always wins). With `none` those app calls still reach the local
+runtime: the only variable that silences them, `OPENAI_API_KEY`, is the one the app's chat client needs.
+
 Keys are read from the profile `.env` first, then the process environment: `GEMINI_API_KEY`,
 `GOOGLE_API_KEY` or `GOOGLE_GENERATIVE_AI_API_KEY` for Gemini, `OPENAI_API_KEY` for OpenAI.
 `GEMINI_BASE_URL` and `OPENAI_BASE_URL` move the endpoint. Vectors are cached on disk under

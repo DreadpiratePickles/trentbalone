@@ -6,12 +6,20 @@
  * Needs TRENT_TEST_LIVE=1 and a key (env, or GEMINI_API_KEY / OPENAI_API_KEY in <repo>/gem.env).
  * A skip is NOT a pass. Two short sentences plus one objective: three inputs, one request.
  * The key is read but never printed, and no vector or response body is logged.
+ *
+ * [L0-5] `TRENT_EMBEDDER_LIVE_LOCAL=ollama|lmstudio|llamacpp` (with TRENT_TEST_LIVE=1) runs the LOCAL
+ * calibration instead, and nothing else: no key is read, `gem.env` is not opened, no hosted suite runs.
+ * `TRENT_EMBEDDER_LIVE_MODEL` names the model (default: the runtime's). It prints each triple's cosines
+ * in both spaces and the rule's floors, which is how `RECORDED_LOCAL_FLOORS` is set, and asserts the
+ * recorded floors get all three triples right.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { EMBEDDER_ROUTES, createEmbedder } from "./embedder.js";
+import { RECORDED_LOCAL_FLOORS, calibrationSanity, floorFromPairs, measureCalibration } from "./embedder-calibration.js";
+import { isLocalEmbedderProvider, normaliseLocalModel } from "./embedder-local.js";
 import { vectorCredit } from "./hybrid.js";
 import { cosineSimilarity } from "./lexical.js";
 
@@ -34,15 +42,19 @@ function keysFromRepoEnv(): Record<string, string> {
   return out;
 }
 
-const secrets: Record<string, string> = { ...keysFromRepoEnv() };
-for (const name of KEY_NAMES) {
+/** [L0-5] The local runtime under calibration, when one is named; then no key is read at all. */
+const LOCAL_RAW = process.env.TRENT_EMBEDDER_LIVE_LOCAL?.trim().toLowerCase();
+const LOCAL = isLocalEmbedderProvider(LOCAL_RAW) ? LOCAL_RAW : undefined;
+
+const secrets: Record<string, string> = LOCAL === undefined ? { ...keysFromRepoEnv() } : {};
+for (const name of LOCAL === undefined ? KEY_NAMES : []) {
   const fromEnv = process.env[name]?.trim();
   if (fromEnv) secrets[name] = fromEnv;
 }
 
 const HAS_KEY = KEY_NAMES.some((name) => secrets[name] !== undefined);
-const LIVE = process.env.TRENT_TEST_LIVE === "1" && HAS_KEY;
-if (!LIVE) {
+const LIVE = process.env.TRENT_TEST_LIVE === "1" && HAS_KEY && LOCAL === undefined;
+if (!LIVE && LOCAL === undefined) {
   console.error("[embedder.live] SKIPPED: needs TRENT_TEST_LIVE=1 and an embedding key (env or <repo>/gem.env).");
 }
 
@@ -96,4 +108,38 @@ describe.skipIf(!LIVE)("live embedder", () => {
     expect(vectorCredit(far, floor)).toBe(0);
     expect(vectorCredit(near, floor)).toBeGreaterThan(0);
   }, 60_000);
+});
+
+describe.skipIf(process.env.TRENT_TEST_LIVE !== "1" || LOCAL === undefined)("[L0-5] live local embedder calibration", () => {
+  it("separates each paraphrase from its unrelated line in both spaces, and the recorded floors get all three triples right", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-embed-live-local-"));
+    try {
+      const model = process.env.TRENT_EMBEDDER_LIVE_MODEL?.trim();
+      const config = { memory: { embedder: { provider: LOCAL!, ...(model ? { model } : {}) } } };
+      const symmetric = createEmbedder(config, {}, { profileDir: dir, useCache: false, taskTypes: false });
+      const typed = createEmbedder(config, {}, { profileDir: dir, useCache: false });
+      const spaces = [
+        { name: "symmetric", pairs: await measureCalibration(symmetric.embed, false) },
+        ...(typed.taskTypes ? [{ name: "query-prefixed", pairs: await measureCalibration(typed.embed, true) }] : []),
+      ];
+      const [probe] = await symmetric.embed(["."]);
+      console.error(`[embedder.live] provider=${symmetric.provider} model=${symmetric.model} dims=${String(probe!.length)}`);
+      for (const space of spaces) {
+        const floor = floorFromPairs(space.pairs);
+        const cosines = space.pairs.map((p, i) => `#${String(i + 1)} paraphrase=${p.near.toFixed(4)} unrelated=${p.far.toFixed(4)}`).join("; ");
+        console.error(`[embedder.live] ${space.name}: ${cosines}; rule floor=${floor === undefined ? "none (not separable)" : floor.toFixed(2)}`);
+        for (const pair of space.pairs) expect(pair.near).toBeGreaterThan(pair.far);
+      }
+      const recorded = RECORDED_LOCAL_FLOORS[normaliseLocalModel(symmetric.model)];
+      if (recorded === undefined) {
+        console.error("[embedder.live] no recorded floor for this model: it is calibrated on first use");
+        return;
+      }
+      expect(calibrationSanity(spaces[0]!.pairs, recorded.vectorFloor)).toBe(3);
+      if (spaces[1] !== undefined) expect(calibrationSanity(spaces[1].pairs, recorded.queryFloor)).toBe(3);
+      expect(probe!.length).toBe(symmetric.dims);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

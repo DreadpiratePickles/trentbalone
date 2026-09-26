@@ -20,29 +20,48 @@
  * asymmetric task types through the native endpoint (`embedder-google.ts`), cached per task type
  * (`embedder-cache.ts`), and ranked against the route's own task-typed floor (`queryFloor`). A call
  * that names none is byte-identical to the one before, on every route.
+ *
+ * [L0-5] A local runtime — `ollama`, `lmstudio`, `llamacpp`, named outright or implied by a local chat
+ * alias under `auto` / `openai` — is served by `embedder-local.ts` with the runtime's own embedding model,
+ * never `text-embedding-3-small`. `google` is accepted as gemini's other name; `base_url` moves any route.
  */
 
-import {
-  DEFAULT_RETRY_POLICY,
-  ProviderHttpError,
-  classifyProviderError,
-  resolveRetryPolicy,
-  retryDelayMs,
-  type RetryPolicy,
-} from "../model-gateway/retry.js";
+import { DEFAULT_RETRY_POLICY, resolveRetryPolicy, type RetryPolicy } from "../model-gateway/retry.js";
 import { LOCAL_PLACEHOLDER_KEY, aliasBaseUrl, resolveProviderAlias } from "../model-gateway/providers.js";
+import { HYBRID_VECTOR_FLOOR } from "./hybrid.js";
 import { lexicalEmbedFn, type CalibratedEmbedFn, type EmbedCallOptions, type EmbedFn } from "./lexical.js";
 import { CACHE_SEPARATOR, EmbeddingCache } from "./embedder-cache.js";
 import { GEMINI_TASK_TYPES, batchEmbedBody, batchEmbedUrl, nativeGeminiBase, parseBatchEmbedResponse } from "./embedder-google.js";
+import { RECORDED_LOCAL_FLOORS } from "./embedder-calibration.js";
+import {
+  LOCAL_EMBEDDER_ROUTES,
+  LOCAL_EMBED_TIMEOUT_MS,
+  createLocalEmbedder,
+  isLocalEmbedderProvider,
+  localBaseUrl,
+  localModelDims,
+  localRouteFor,
+  normaliseLocalModel,
+  parseOpenAiEmbeddings,
+  postJsonWithRetry,
+  type EmbedderWarn,
+  type FetchLike,
+  type LocalEmbedderProvider,
+} from "./embedder-local.js";
+
+export type { FetchLike } from "./embedder-local.js";
 
 /** What ranks the recall. `none` is lexical TF-IDF alone. `auto` is the first provider with a key. */
-export type EmbedderProvider = "gemini" | "openai" | "none";
-export type EmbedderProviderSetting = "auto" | EmbedderProvider;
+export type EmbedderProvider = "gemini" | "openai" | LocalEmbedderProvider | "none";
+/** [L0-5] `google` is gemini's other name. */
+export type EmbedderProviderSetting = "auto" | "google" | EmbedderProvider;
 
 /** The `memory.embedder` config block, as a plain shape so this module needs no zod import. */
 export interface EmbedderSettings {
   readonly provider?: EmbedderProviderSetting;
   readonly model?: string;
+  /** [L0-5] Moves the route's endpoint; wins over its environment variable. */
+  readonly base_url?: string;
   readonly batch_size?: number;
 }
 
@@ -53,7 +72,6 @@ export interface EmbedderConfigSource {
 }
 
 export type SecretLookup = Readonly<Record<string, string | undefined>>;
-export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 export interface EmbedderRoute {
   readonly provider: "gemini" | "openai";
@@ -156,6 +174,10 @@ export interface CreateEmbedderOptions {
   readonly retry?: Partial<RetryPolicy>;
   /** Injected so a backoff is asserted, never waited for. */
   readonly sleep?: (ms: number) => Promise<void>;
+  /** [L0-5] A local runtime's one line per outage (default: a structured WARN on stderr), its clock and cooldown. */
+  readonly warn?: EmbedderWarn;
+  readonly now?: () => number;
+  readonly cooldownMs?: number;
   /** The doctor turns the cache off: a cached probe proves nothing about the key today. */
   readonly useCache?: boolean;
   /**
@@ -163,6 +185,9 @@ export interface CreateEmbedderOptions {
    * default until the docs corpus measures them: the re-embed stopped at 317 of 665 texts on the free
    * tier's 1,000-requests-a-day embedding quota (HTTP 429), so the shipped space is still the symmetric
    * one the P2-6 numbers were measured in (01_discovery/output/retrieval-measurement-2026-09-25.md).
+   *
+   * [L0-5] A local route reads it the other way round: roles are its model's query / document prefixes,
+   * on unless this is `false`, because they are the model's documented use and cost no quota.
    */
   readonly taskTypes?: boolean;
 }
@@ -209,14 +234,14 @@ function endpointFor(
       ...base,
       provider: "openai",
       label: alias.label,
-      baseUrl: trimTrailingSlash(aliasBaseUrl(alias.alias, env as NodeJS.ProcessEnv)),
+      baseUrl: trimTrailingSlash(config.memory?.embedder?.base_url?.trim() || aliasBaseUrl(alias.alias, env as NodeJS.ProcessEnv)),
       apiKeyEnvs: [alias.apiKeyEnv],
       local: alias.local,
     };
   }
   return {
     ...base,
-    baseUrl: trimTrailingSlash(envValue(env, baseUrlEnv) ?? defaultBaseUrl),
+    baseUrl: trimTrailingSlash(config.memory?.embedder?.base_url?.trim() || (envValue(env, baseUrlEnv) ?? defaultBaseUrl)),
     local: false,
   };
 }
@@ -249,8 +274,28 @@ export function selectEmbedderProvider(
 ): EmbedderSelection {
   const settings = config.memory?.embedder ?? {};
   const batchSize = boundedBatchSize(settings.batch_size);
-  const setting = settings.provider ?? "auto";
+  const named = settings.provider ?? "auto";
+  const setting = named === "google" ? "gemini" : named; // [L0-5]
   if (setting === "none") return { ...LEXICAL_ONLY, batchSize, reason: "disabled" };
+
+  // [L0-5] A local runtime needs no key, and a local chat alias never falls through to a hosted embedder.
+  const local = localRouteFor(setting, config.provider);
+  if (local !== undefined) {
+    const model = settings.model?.trim() || LOCAL_EMBEDDER_ROUTES[local].defaultModel;
+    const recorded = RECORDED_LOCAL_FLOORS[normaliseLocalModel(model)];
+    return {
+      provider: local,
+      label: LOCAL_EMBEDDER_ROUTES[local].label,
+      model,
+      dims: localModelDims(model),
+      batchSize,
+      baseUrl: localBaseUrl(local, settings.base_url, env),
+      // An unrecorded model's floor is calibrated on its first call (`embedder-local.ts`).
+      vectorFloor: recorded?.vectorFloor ?? HYBRID_VECTOR_FLOOR,
+      reason: "configured",
+    };
+  }
+  if (isLocalEmbedderProvider(setting)) return { ...LEXICAL_ONLY, batchSize, reason: "no_key" }; // unreachable: narrows the type
 
   const preferred = preferredRoute(config.provider);
   const order: ReadonlyArray<"gemini" | "openai"> =
@@ -278,39 +323,6 @@ export function selectEmbedderProvider(
   return { ...LEXICAL_ONLY, batchSize, reason: "no_key" };
 }
 
-function parseEmbeddings(payload: unknown, expected: number): number[][] {
-  const data = (payload as { data?: unknown })?.data;
-  if (!Array.isArray(data) || data.length !== expected) {
-    throw new Error(`embedding response carried ${Array.isArray(data) ? data.length : 0} vectors, expected ${expected}`);
-  }
-  const out: number[][] = new Array<number[]>(expected);
-  for (let i = 0; i < data.length; i += 1) {
-    const row = data[i] as { index?: unknown; embedding?: unknown };
-    const at = typeof row?.index === "number" && row.index >= 0 && row.index < expected ? row.index : i;
-    if (!Array.isArray(row?.embedding) || row.embedding.length === 0) {
-      throw new Error("embedding response carried a row with no vector");
-    }
-    out[at] = (row.embedding as unknown[]).map((v) => (typeof v === "number" && Number.isFinite(v) ? v : 0));
-  }
-  return out;
-}
-
-async function fetchWithDeadline(url: string, init: RequestInit, timeoutMs: number, fetchImpl: FetchLike): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetchImpl(url, { ...init, signal: controller.signal });
-  } catch (error) {
-    if (!controller.signal.aborted) throw error;
-    // A bare AbortError classifies as `internal` and is never retried; name it so it classifies.
-    const timeout = new Error(`embedding request exceeded ${timeoutMs}ms`);
-    timeout.name = "TimeoutError";
-    throw timeout;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /**
  * The live embedder. Every failure is retried under the gateway's policy or thrown; the decision
  * to degrade to lexical belongs to `scoreAgainst`, so a doctor probe still sees the real error.
@@ -331,42 +343,14 @@ function providerEmbed(
   const url = `${selection.baseUrl}/embeddings`;
   const nativeUrl = nativeBase === undefined ? undefined : batchEmbedUrl(nativeBase, selection.model);
 
-  async function send(target: string, headers: Record<string, string>, body: unknown, parse: (payload: unknown) => number[][]): Promise<number[][]> {
-    for (let attempt = 1; ; attempt += 1) {
-      try {
-        const response = await fetchWithDeadline(
-          target,
-          { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(body) },
-          timeoutMs,
-          fetchImpl,
-        );
-        if (!response.ok) {
-          throw new ProviderHttpError({
-            provider: selection.label,
-            status: response.status,
-            statusText: response.statusText,
-            headers: response.headers,
-            body: await response.text().catch(() => ""),
-          });
-        }
-        return parse(await response.json());
-      } catch (error) {
-        const classified = classifyProviderError(error);
-        if (!classified.retryable || attempt >= policy.attempts) throw error;
-        await sleep(retryDelayMs({
-          attempt,
-          policy,
-          ...(classified.retryAfterMs === undefined ? {} : { retryAfterMs: classified.retryAfterMs }),
-        }));
-      }
-    }
-  }
+  const send = (target: string, headers: Record<string, string>, body: unknown, parse: (payload: unknown) => number[][]): Promise<number[][]> =>
+    postJsonWithRetry({ url: target, headers, body, parse, label: selection.label, timeoutMs, fetchImpl, policy, sleep });
 
   /** Symmetric texts go to the compatible surface; task-typed ones to the native batch, each with its own type. */
   const requestBatch = (inputs: readonly string[], taskTypes: readonly (string | undefined)[]): Promise<number[][]> => {
     const typed = taskTypes.every((t): t is string => t !== undefined);
     return !typed || nativeUrl === undefined
-      ? send(url, { authorization: `Bearer ${apiKey}` }, { model: selection.model, input: [...inputs] }, (p) => parseEmbeddings(p, inputs.length))
+      ? send(url, { authorization: `Bearer ${apiKey}` }, { model: selection.model, input: [...inputs] }, (p) => parseOpenAiEmbeddings(p, inputs.length))
       : send(nativeUrl, { "x-goog-api-key": apiKey }, batchEmbedBody(selection.model, inputs, taskTypes as readonly string[]), (p) => parseBatchEmbedResponse(p, inputs.length));
   };
 
@@ -424,15 +408,30 @@ export function createEmbedder(
   if (selection.provider === "none") {
     return { embed: lexicalEmbedFn, provider: "none", model: "", dims: 0, taskTypes: false };
   }
+  const cache = options.useCache === false || options.profileDir === undefined
+    ? undefined
+    : new EmbeddingCache(options.profileDir, `${selection.provider}${CACHE_SEPARATOR}${selection.baseUrl}`);
+  if (isLocalEmbedderProvider(selection.provider)) {
+    // [L0-5] The runtime's own endpoint and model; roles are prefixes unless `taskTypes: false`.
+    const local = createLocalEmbedder({ ...selection, provider: selection.provider }, {
+      timeoutMs: options.timeoutMs ?? LOCAL_EMBED_TIMEOUT_MS,
+      ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+      ...(options.retry === undefined ? {} : { retry: options.retry }),
+      ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+      ...(cache === undefined ? {} : { cache }),
+      ...(options.taskTypes === undefined ? {} : { taskTypes: options.taskTypes }),
+      ...(options.warn === undefined ? {} : { warn: options.warn }),
+      ...(options.now === undefined ? {} : { now: options.now }),
+      ...(options.cooldownMs === undefined ? {} : { cooldownMs: options.cooldownMs }),
+    });
+    return { embed: local.embed, provider: selection.provider, model: selection.model, dims: local.dims, taskTypes: local.taskTypes };
+  }
   const endpoint = endpointFor(selection.provider, config, env);
   const key = findKey(endpoint.apiKeyEnvs, secrets, env)?.value
     ?? (endpoint.local ? LOCAL_PLACEHOLDER_KEY : undefined);
   if (key === undefined) {
     return { embed: lexicalEmbedFn, provider: "none", model: "", dims: 0, taskTypes: false };
   }
-  const cache = options.useCache === false || options.profileDir === undefined
-    ? undefined
-    : new EmbeddingCache(options.profileDir, `${selection.provider}${CACHE_SEPARATOR}${selection.baseUrl}`);
   // [P2-13] Task types need the caller to ask for them, the route to have them, and a native
   // endpoint behind the base URL.
   const queryFloor = EMBEDDER_ROUTES[selection.provider].queryFloor;

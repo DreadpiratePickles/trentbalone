@@ -305,3 +305,59 @@ the CLI do not pass one, so `mode: llm` does not change a seat run today.
 
 The live harnesses behind it are `docs-corpus.live.test.ts` and `docs-corpus-rerank.live.test.ts`.
 See `01_discovery/output/retrieval-measurement-2026-09-25.md` for every table.
+
+## 10. Local embeddings
+
+With a local chat provider (`ollama`, `lmstudio`) and `memory.embedder.provider: auto`, recall is embedded
+on the same machine by that runtime's own embedding model. Nothing asks for `text-embedding-3-small`, and
+nothing is sent to a hosted embedder. `ollama`, `lmstudio` and `llamacpp` can also be named outright
+(docs/configuration.md, "Embedder").
+
+**Setup.** One pull, 639 MB:
+
+```bash
+ollama pull qwen3-embedding:0.6b
+```
+
+`trent doctor` then reports, on the Recall Embedder line:
+
+- whether the runtime is reachable;
+- whether the model is pulled, with the pull line when it is not;
+- its dimensions (1024);
+- the floor it is ranked against;
+- how many of three fixed paraphrase / unrelated triples that floor gets right (3/3).
+
+**How it embeds.**
+
+- Ollama is called through `/api/embed` with `truncate: false`. An over-long chunk is split and its halves
+  averaged, never silently cut.
+- Brain recall gives each question the model's query instruction (Qwen3-Embedding's `Instruct: ...
+  Query:`); chunks are embedded as they are.
+- Vectors are cached per model and per prefix under `<profile>/cache/embeddings/`.
+
+**The floor is per model.** For `qwen3-embedding:0.6b` it is recorded: 0.46 without the instruction, 0.32
+with it (Gemini: 0.60 and 0.63). Any other model is calibrated on its first call on the same three triples.
+A model that cannot tell a paraphrase from an unrelated sentence gets no vector credit, and says so once.
+
+**When the runtime is down.** The first recall prints one `embedder.local_unavailable` WARN line with the
+fix (`ollama serve`, `ollama pull <model>`). Recall is lexical, and no further embedding request is made for
+a minute.
+
+**Measured on the docs corpus** (2026-09-26, one recorded run; the offline suite replays it):
+
+| | recall@8 | paraphrased | multi-hop | no-answer abstained |
+|---|---:|---:|---:|---:|
+| `qwen3-embedding:0.6b`, hybrid | 0.600 (21/35) | 5/12 | 4/11 | 0/5 |
+| `gemini-embedding-001`, hybrid | 0.629 (22/35) | 5/12 | 5/11 | 2/5 |
+| `qwen3-embedding:0.6b`, no query instruction | 0.514 (18/35) | 1/12 | 5/11 | 0/5 |
+
+- The local model is one question short of Gemini and free.
+- The query instruction is what makes paraphrases findable (5/12 against 1/12).
+- It abstains on no unanswerable question: its 0.32 floor, set on short sentences, sits under many
+  question-to-chunk cosines.
+
+**The wrapped app's own embeddings.** The app's wiki search and seat router read `EMBEDDING_MODEL`. They are
+pointed at the local model only when the orchestrator is handed the profile's `memory.embedder`, and
+`trent run` does not hand it over yet. Until it does, export `EMBEDDING_MODEL=qwen3-embedding:0.6b` to stop
+their per-step 404. With `memory.embedder.provider: none` they still call the local runtime; no environment
+variable can switch them off without also switching off the app's chat client.

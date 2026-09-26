@@ -30,8 +30,13 @@ export type MemoryBlockConfig = z.infer<typeof MemoryBlockSchema>;
  * choice. See docs/configuration.md, "Embedder".
  */
 export const EmbedderConfigSchema = z.object({
-  provider: z.enum(["auto", "gemini", "openai", "none"]).default("auto"),
+  // [L0-5] local embedder: `ollama`, `lmstudio` and `llamacpp` run on this machine with the runtime's own
+  // embedding model (`fleet-memory/embedder-local.ts`); `google` is gemini's other name; `base_url` moves
+  // the route's endpoint (a remote Ollama, a proxy) and wins over its environment variable.
+  provider: z.enum(["auto", "gemini", "google", "openai", "ollama", "lmstudio", "llamacpp", "none"]).default("auto"),
   model: z.string().min(1).optional(),
+  base_url: z.string().url().optional(),
+  // [/L0-5]
   batch_size: z.number().int().positive().max(256).default(32),
 });
 export type EmbedderConfig = z.infer<typeof EmbedderConfigSchema>;
