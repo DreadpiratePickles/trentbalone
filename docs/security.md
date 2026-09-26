@@ -598,6 +598,12 @@ Every call the gate above holds used to wait for a person. `governance.auto_revi
 model decide some of them, the way Claude's auto mode has a classifier review each action and Codex's
 auto-review has a reviewer agent decide approvals at the sandbox edge: it changes who reviews, not
 what is allowed. It is off by default and it only ever narrows (`governance/auto-review*.ts`).
+It never decides a send or a payment: `max_class` stops at `write`, and a config naming `external_send`
+or `money` fails to load with "auto_review.max_class: money is not allowed: Trent asks you first for every
+send and every payment" (`governance/auto-review-policy.test.ts`, "[C3] refuses a profile config whose
+max_class is above write, naming the key and the promise"). The shipped class floor parks only sends,
+money and customer-facing calls, so the reviewer decides a row only when you add `write` to
+`gate.ask_classes`.
 
 **What it reviews.** Only a held call bound to its arguments (`details.kind: "bound_call"`, the rows
 the class floor parks). A run approval is released the instant it is decided and carries no
@@ -613,9 +619,13 @@ an ineligible row is escalated with the rule named without any model being built
 | `untrusted_provenance` | the preview, the action or the arguments carry `[provenance: untrusted` or `[untrusted]` |
 | `hardline`, `approval_floor`, `deny_glob` | the hardline blocklist, the approval floor or an `approvals.deny` glob names the call, re-checked on the stored row |
 | `never_class` | the call executes, destroys, deploys or touches a secret: no policy makes that approvable |
-| `class_above_max` | its tier is above `max_class`; the ladder is `read` < `write` < `external_send` (sends, customer-facing calls, network) < `money` |
+| `class_above_max` | its tier is above `max_class`, which may be `read` or `write`; a call is placed on the ladder `read` < `write` < `external_send` (sends, customer-facing calls, network) < `money` |
 | `money_amount_unknown`, `money_currency`, `money_over_cap` | a money call whose integer-cent total cannot be read from its lines, is in another currency than `currency`, or exceeds `max_amount_cents` |
 | `recipient_unknown`, `recipient_not_allowed` | a send that names no recipient (a public post, an invoice send naming only the invoice), or any recipient not on `recipients` |
+| `send_or_money` | a send or a payment that passed every rule above, which only a config that skipped validation can produce: Trent asks you first for every send and every payment, whatever `max_class` says; no model is asked (`governance/auto-review.test.ts`, "[C3] never puts a send or a payment to the model") |
+
+The money and recipient rules bound a send or a payment for the day the ceiling is raised. That waits for
+structural taint on bound rows; until then only a config that skipped validation reaches them.
 
 **The reviewer.** An eligible row is put to the model (`governance.auto_review.model` pins it; a
 local model is fine when the profile's `provider` is that local runtime, because the pin is sent

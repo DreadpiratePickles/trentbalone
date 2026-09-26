@@ -208,7 +208,7 @@ governance:
   auto_review:                # a reviewer model decides held calls inside this written policy (security.md, "Auto review")
     enabled: false            # off: every held call waits for a person
     # model: qwen3.5:9b       # a pin for the reviewer (a local model is fine); absent = the profile's model
-    max_class: read           # read | write | external_send | money: the highest class it may approve
+    max_class: read           # read | write: the highest class it may approve; a send or a payment always asks you
     max_amount_cents: 0       # INTEGER CENTS per money call, in currency; 0 = no money call is in policy
     currency: usd
     recipients: []            # who a send may reach: exact address, number or host, or "*@example.com"; empty = no send
@@ -621,10 +621,11 @@ those asked about at `never` too. See [security.md](security.md), "Side-effectin
 ### Auto review
 
 `governance.auto_review` lets a second model decide a held call instead of you, inside a policy you
-write down: the highest class it may approve (`max_class`), a cap in integer cents for money
-(`max_amount_cents`, in `currency`), and the recipients a send may reach (`recipients`). Off by
-default, and `max_class: read` is below every class a held call carries, so turning it on approves
-nothing until the ceiling, the cap or the list says otherwise. It never approves what the hardline
+write down: the highest class it may approve (`max_class`, `read` or `write`; a config naming
+`external_send` or `money` fails to load, because a send or a payment always asks you). The money cap
+(`max_amount_cents`, in `currency`) and the recipient list (`recipients`) stay in the schema for the day
+that ceiling is raised and do nothing while it is `write`. Off by default, and `max_class: read` is
+below every class a held call carries, so turning it on approves nothing until the ceiling says otherwise. It never approves what the hardline
 blocklist, the approval floor or an `approvals.deny` glob refuses, never a call carrying an
 untrusted-provenance marker, and never a call that executes, destroys, deploys or touches a secret.
 `trent approvals list --review` runs it; `trent approvals list --policy` prints the policy. See

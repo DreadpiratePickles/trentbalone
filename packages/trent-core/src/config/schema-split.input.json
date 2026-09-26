@@ -3,373 +3,106 @@
   "profile": "split-fixture",
   "provider": "anthropic",
   "model": "claude-fixture-1",
-  "toolsets": [
-    "file_ops",
-    "terminal",
-    "web",
-    "browser",
-    "code",
-    "vision",
-    "memory",
-    "delegation",
-    "cron",
-    "skills",
-    "plugins",
-    "mcp",
-    "human"
-  ],
-  "disabled_toolsets": [
-    "browser",
-    "vision"
-  ],
-  "budget": {
-    "daily_cap": 2500,
-    "currency": "EUR",
-    "per_run_cap": 250,
-    "alert_thresholds": [
-      25,
-      60,
-      90
-    ]
-  },
+  "toolsets": ["file_ops", "terminal", "web", "browser", "code", "vision", "memory", "delegation", "cron", "skills", "plugins", "mcp", "human"],
+  "disabled_toolsets": ["browser", "vision"],
+  "budget": { "daily_cap": 2500, "currency": "EUR", "per_run_cap": 250, "alert_thresholds": [25, 60, 90] },
   "terminal": {
     "backend": "local",
-    "docker": {
-      "image": "fixture/sandbox:1",
-      "network": "host"
-    },
-    "ssh": {
-      "host": "fixture.internal",
-      "port": 2222,
-      "user": "trent",
-      "key_path": "/keys/id_ed25519"
-    }
+    "docker": { "image": "fixture/sandbox:1", "network": "host" },
+    "ssh": { "host": "fixture.internal", "port": 2222, "user": "trent", "key_path": "/keys/id_ed25519" }
   },
-  "egress": {
-    "enabled": false,
-    "proxy_port": 9090,
-    "auto_token": false,
-    "intercept_domains": [
-      "api.fixture.test"
-    ]
-  },
+  "egress": { "enabled": false, "proxy_port": 9090, "auto_token": false, "intercept_domains": ["api.fixture.test"] },
   "gateway": {
     "enabled": true,
-    "platforms": [
-      "slack",
-      "telegram"
-    ],
-    "routes": {
-      "slack": "ceo",
-      "telegram": "support-responder"
-    },
+    "platforms": ["slack", "telegram"],
+    "routes": { "slack": "ceo", "telegram": "support-responder" },
     "double_text_policy": "interrupt",
-    "owner": {
-      "platform": "slack",
-      "channelId": "C0FIXTURE"
-    },
-    "alerts": {
-      "approval_wait_minutes": 15
-    },
-    "email": {
-      "require_authenticated_from": false,
-      "authserv_id": "mx.fixture.test"
-    },
-    "voice_notes": {
-      "enabled": false,
-      "max_seconds": 120,
-      "max_bytes": 5242880
-    },
+    "owner": { "platform": "slack", "channelId": "C0FIXTURE" },
+    "alerts": { "approval_wait_minutes": 15 },
+    "email": { "require_authenticated_from": false, "authserv_id": "mx.fixture.test" },
+    "voice_notes": { "enabled": false, "max_seconds": 120, "max_bytes": 5242880 },
     "webhooks": {
       "host": "127.0.0.1",
       "port": 9644,
       "routes": [
-        {
-          "name": "stripe-paid",
-          "path": "/hooks/stripe",
-          "secret_env": "STRIPE_WEBHOOK_SECRET",
-          "signature": "stripe",
-          "tolerance_seconds": 120,
-          "objective_template": "Invoice {{payload.data.object.id}} was paid",
-          "mode": "solo",
-          "seat": "finance-ops",
-          "max_cost_cents": 50,
-          "dedupe_key": "{{payload.id}}",
-          "events": [
-            "invoice.paid"
-          ],
-          "rate_per_minute": 10
-        },
-        {
-          "name": "local-cron",
-          "path": "/hooks/local",
-          "signature": "none-localhost-only",
-          "objective_template": "Run job {{payload.job}}"
-        }
+        { "name": "stripe-paid", "path": "/hooks/stripe", "secret_env": "STRIPE_WEBHOOK_SECRET", "signature": "stripe", "tolerance_seconds": 120, "objective_template": "Invoice {{payload.data.object.id}} was paid", "mode": "solo", "seat": "finance-ops", "max_cost_cents": 50, "dedupe_key": "{{payload.id}}", "events": ["invoice.paid"], "rate_per_minute": 10 },
+        { "name": "local-cron", "path": "/hooks/local", "signature": "none-localhost-only", "objective_template": "Run job {{payload.job}}" }
       ]
     }
   },
-  "repl": {
-    "double_text_policy": "reject",
-    "history_turns": 12,
-    "history_chars": 9000
-  },
-  "context": {
-    "ceiling_chars": 90000,
-    "compact_after_chars": 18000
-  },
-  "runtime": {
-    "max_concurrent_runs": 4
-  },
+  "repl": { "double_text_policy": "reject", "history_turns": 12, "history_chars": 9000 },
+  "context": { "ceiling_chars": 90000, "compact_after_chars": 18000 },
+  "runtime": { "max_concurrent_runs": 4 },
   "heartbeat": {
     "enabled": true,
     "interval_minutes": 30,
-    "active_hours": {
-      "start": "09:00",
-      "end": "17:00",
-      "tz": "Europe/Berlin"
-    },
+    "active_hours": { "start": "09:00", "end": "17:00", "tz": "Europe/Berlin" },
     "consolidate_memory": false,
-    "sweep": {
-      "enabled": true
-    },
+    "sweep": { "enabled": true },
     "sweep_interval_hours": 12
   },
   "fleet": {
-    "installed_agents": [
-      "ceo",
-      "eng-ai-engineer",
-      "support-responder"
-    ],
-    "active_agents": [
-      "ceo",
-      "eng-ai-engineer"
-    ],
+    "installed_agents": ["ceo", "eng-ai-engineer", "support-responder"],
+    "active_agents": ["ceo", "eng-ai-engineer"],
     "default_agent": "eng-ai-engineer"
   },
   "mcp_servers": {
     "local-tools": {
       "command": "node",
-      "args": [
-        "server.js",
-        "--stdio"
-      ],
-      "env": {
-        "FIXTURE_TOKEN": "${FIXTURE_TOKEN}"
-      },
-      "auto_approve": [
-        "ping"
-      ],
+      "args": ["server.js", "--stdio"],
+      "env": { "FIXTURE_TOKEN": "${FIXTURE_TOKEN}" },
+      "auto_approve": ["ping"],
       "enabled": true,
       "scanRan": true
     },
     "remote-tools": {
       "url": "https://mcp.fixture.test/rpc",
-      "headers": {
-        "X-Fixture-Key": "${FIXTURE_KEY}"
-      },
+      "headers": { "X-Fixture-Key": "${FIXTURE_KEY}" },
       "enabled": false,
       "scanRan": false,
       "flagged": []
     }
   },
-  "telemetry": {
-    "otlp_endpoint": "https://otlp.fixture.test/v1/traces",
-    "service_name": "trent-fixture"
-  },
+  "telemetry": { "otlp_endpoint": "https://otlp.fixture.test/v1/traces", "service_name": "trent-fixture" },
   "model_overrides": {
-    "claude-fixture-1": {
-      "context_window": 200000,
-      "input_cents_per_million": 300,
-      "output_cents_per_million": 1500
-    }
+    "claude-fixture-1": { "context_window": 200000, "input_cents_per_million": 300, "output_cents_per_million": 1500 }
   },
-  "privacy": {
-    "redact_prompts": true,
-    "patterns": [
-      "sk-[A-Za-z0-9]{8,}"
-    ]
-  },
+  "privacy": { "redact_prompts": true, "patterns": ["sk-[A-Za-z0-9]{8,}"] },
   "policy": {
     "rules": [
-      {
-        "id": "fixture-deny",
-        "effect": "deny",
-        "when": "external_send",
-        "after": "secret_access",
-        "within": 7,
-        "reason": "fixture rule"
-      },
-      {
-        "id": "fixture-approve",
-        "effect": "require_approval",
-        "when": "write",
-        "also": "secret_access",
-        "reason": "fixture approval rule"
-      }
+      { "id": "fixture-deny", "effect": "deny", "when": "external_send", "after": "secret_access", "within": 7, "reason": "fixture rule" },
+      { "id": "fixture-approve", "effect": "require_approval", "when": "write", "also": "secret_access", "reason": "fixture approval rule" }
     ]
   },
-  "workspace": {
-    "max_file_chars": 5000,
-    "max_total_chars": 9000
-  },
+  "workspace": { "max_file_chars": 5000, "max_total_chars": 9000 },
   "autonomy": "ask_always",
-  "approvals": {
-    "deny": [
-      "rm -rf *",
-      "**/.env"
-    ]
-  },
+  "approvals": { "deny": ["rm -rf *", "**/.env"] },
   "hooks": {
-    "pre_tool_call": [
-      {
-        "command": [
-          "/usr/bin/true",
-          "--pre"
-        ],
-        "timeout_ms": 1000,
-        "match": {
-          "tool": "file_write"
-        }
-      }
-    ],
-    "post_tool_call": [
-      {
-        "command": [
-          "/usr/bin/true",
-          "--post"
-        ]
-      }
-    ],
+    "pre_tool_call": [{ "command": ["/usr/bin/true", "--pre"], "timeout_ms": 1000, "match": { "tool": "file_write" } }],
+    "post_tool_call": [{ "command": ["/usr/bin/true", "--post"] }],
     "session_start": [],
-    "session_stop": [
-      {
-        "command": [
-          "/usr/bin/true",
-          "--stop"
-        ],
-        "timeout_ms": 500
-      }
-    ]
+    "session_stop": [{ "command": ["/usr/bin/true", "--stop"], "timeout_ms": 500 }]
   },
   "memory": {
     "blocks": [
-      {
-        "label": "memory",
-        "file": "memory.md",
-        "description": "fixture agent memory",
-        "limit": 4000,
-        "read_only": false
-      },
-      {
-        "label": "company",
-        "file": "company.md",
-        "description": "fixture company facts",
-        "limit": 2000,
-        "read_only": true
-      }
+      { "label": "memory", "file": "memory.md", "description": "fixture agent memory", "limit": 4000, "read_only": false },
+      { "label": "company", "file": "company.md", "description": "fixture company facts", "limit": 2000, "read_only": true }
     ],
-    "embedder": {
-      "provider": "openai",
-      "model": "text-embedding-3-small",
-      "base_url": "http://127.0.0.1:11434/v1",
-      "batch_size": 64
-    },
-    "consolidation_may_edit": [
-      "company"
-    ],
+    "embedder": { "provider": "openai", "model": "text-embedding-3-small", "base_url": "http://127.0.0.1:11434/v1", "batch_size": 64 },
+    "consolidation_may_edit": ["company"],
     "consolidation_max_removal_ratio": 0.5
   },
-  "models": {
-    "fast": "fixture-fast",
-    "executor": "fixture-executor",
-    "planner": "fixture-planner",
-    "judge": "fixture-judge",
-    "fallback_on_pin": true,
-    "reasoning_effort": "low",
-    "local": {
-      "ttft_seconds": 600,
-      "idle_seconds": 90,
-      "context_tokens": 65536,
-      "max_in_flight": 2,
-      "reasoning_effort": "none",
-      "constrained_output": "all",
-      "job_timeout_seconds": 3600
-    },
-    "escalate": {
-      "provider": "google",
-      "model": "fixture-escalate",
-      "on": [
-        "planner",
-        "step_failed"
-      ]
-    }
-  },
-  "tools": {
-    "disclosure_threshold": 40,
-    "browser": {
-      "attach": {
-        "enabled": true,
-        "cdp_url": "http://127.0.0.1:9333",
-        "profile_hint": "fixture"
-      }
-    }
-  },
-  "brain": {
-    "enabled": false,
-    "versioning": "off",
-    "rerank": {
-      "mode": "llm",
-      "model": "gemini-3.5-flash-lite",
-      "max_cents_per_query": 0.5,
-      "min_score": 0.6
-    }
-  },
-  "checkpoints": {
-    "enabled": false,
-    "max_bytes_per_run": 123456
-  },
-  "media": {
-    "backend": "host",
-    "hosted_transcription": true,
-    "whisper_model": "/models/ggml-base.en.bin",
-    "image_provider": "openai",
-    "image_model": "fixture-image-model",
-    "image_price_cents": 5,
-    "image_auto_approve_under_cents": 10
-  },
-  "gate": {
-    "ask_classes": [
-      "deploy"
-    ]
-  },
-  "retrieval": {
-    "min_recall": 0.75
-  },
-  "cron": {
-    "failure_alert_after": 5,
-    "quota_hold_minutes": 45
-  },
-  "agent": {
-    "auto_recovery_cycles": 2,
-    "mode": "solo"
-  },
-  "connect": {
-    "inherit_default": false
-  },
-  "a2a": {
-    "peers": [
-      {
-        "name": "hermes",
-        "url": "https://hermes.fixture.test/",
-        "token_env": "HERMES_A2A_TOKEN"
-      },
-      {
-        "name": "local-trent",
-        "url": "http://127.0.0.1:7899"
-      }
-    ]
-  },
+  "models": { "fast": "fixture-fast", "executor": "fixture-executor", "planner": "fixture-planner", "judge": "fixture-judge", "fallback_on_pin": true, "reasoning_effort": "low", "local": { "ttft_seconds": 600, "idle_seconds": 90, "context_tokens": 65536, "max_in_flight": 2, "reasoning_effort": "none", "constrained_output": "all", "job_timeout_seconds": 3600 }, "escalate": { "provider": "google", "model": "fixture-escalate", "on": ["planner", "step_failed"] } },
+  "tools": { "disclosure_threshold": 40, "browser": { "attach": { "enabled": true, "cdp_url": "http://127.0.0.1:9333", "profile_hint": "fixture" } } },
+  "brain": { "enabled": false, "versioning": "off", "rerank": { "mode": "llm", "model": "gemini-3.5-flash-lite", "max_cents_per_query": 0.5, "min_score": 0.6 } },
+  "checkpoints": { "enabled": false, "max_bytes_per_run": 123456 },
+  "media": { "backend": "host", "hosted_transcription": true, "whisper_model": "/models/ggml-base.en.bin", "image_provider": "openai", "image_model": "fixture-image-model", "image_price_cents": 5, "image_auto_approve_under_cents": 10 },
+  "retrieval": { "min_recall": 0.75 },
+  "cron": { "failure_alert_after": 5, "quota_hold_minutes": 45 },
+  "agent": { "auto_recovery_cycles": 2, "mode": "solo" },
+  "connect": { "inherit_default": false },
+  "a2a": { "peers": [{ "name": "hermes", "url": "https://hermes.fixture.test/", "token_env": "HERMES_A2A_TOKEN" }, { "name": "local-trent", "url": "http://127.0.0.1:7899" }] },
+  "governance": { "auto_review": { "enabled": true, "model": "qwen3.5:9b", "max_class": "write", "max_amount_cents": 5000, "currency": "CAD", "recipients": ["+15550100", "*@fixture.test"] } },
   "personality": "fixture-personality",
   "theme": "light",
   "improve": {
@@ -378,27 +111,10 @@
     "judge_min_tpr": 0.9,
     "judge_min_tnr": 0.7,
     "sweep_cap_cents": 500,
-    "frozen_paths": [
-      "docs/frozen.md"
-    ],
+    "frozen_paths": ["docs/frozen.md"],
     "judge_model": "fixture-judge-model",
     "min_goldens": 7
   },
-  "an_unknown_future_key": {
-    "kept": true,
-    "by": "passthrough"
-  },
-  "governance": {
-    "auto_review": {
-      "enabled": true,
-      "model": "qwen3.5:9b",
-      "max_class": "money",
-      "max_amount_cents": 5000,
-      "currency": "CAD",
-      "recipients": [
-        "+15550100",
-        "*@fixture.test"
-      ]
-    }
-  }
+  "an_unknown_future_key": { "kept": true, "by": "passthrough" },
+  "gate": { "ask_classes": ["deploy"] }
 }

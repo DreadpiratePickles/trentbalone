@@ -655,7 +655,7 @@
       "auto_review": {
         "enabled": true,
         "model": "qwen3.5:9b",
-        "max_class": "money",
+        "max_class": "write",
         "max_amount_cents": 5000,
         "currency": "cad",
         "recipients": [

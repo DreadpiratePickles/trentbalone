@@ -16,7 +16,7 @@ import { FileGatewayStore, type ApprovalRow } from "../gateway/store/GatewayStor
 import type { GatewayCompletion, GatewayStreamRequest } from "../model-gateway/types.js";
 import type { SpendCharge } from "./spend-ledger.js";
 import { approvalAuditPath, readApprovalAudit, verifyApprovalAudit } from "./auto-review-audit.js";
-import { AutoReviewConfigSchema, autoReviewGrantUsedAt } from "./auto-review-config.js";
+import { AutoReviewConfigSchema, autoReviewGrantUsedAt, type AutoReviewConfig } from "./auto-review-config.js"; // [C3] AutoReviewConfig
 import { autoReviewOf, overrideAutoReview, parseReviewVerdict, reviewHeldApprovals, type AutoReviewDeps, type ReviewGateway } from "./auto-review.js";
 import { createBoundApprovalStore, type BoundApprovalStore, type BoundCall } from "./bound-approvals.js";
 
@@ -39,17 +39,16 @@ afterEach(() => {
 
 const MODEL = "qwen3.5:9b";
 const ACTOR = `auto-review:${MODEL}`;
-const ARGS = { to: "+15550100", from: "+15550000", body: "Your table is booked for 7pm tonight." };
-const SMS: BoundCall = {
-  adapter: "business",
-  action: `sms_send ${JSON.stringify(ARGS)}`,
-  tool: "sms_send",
-  args: ARGS,
-  seat: "support",
-  classes: ["external_send", "customer_facing"],
-};
-const PREVIEW = "SMS from +15550000 to +15550100: Your table is booked for 7pm tonight.";
-const POLICY = AutoReviewConfigSchema.parse({ enabled: true, model: MODEL, max_class: "external_send", recipients: ["+15550100"] });
+// [C3] A reviewer decides only read and write calls (README.md:11-13), so the call these tests park is a
+// write an owner put on the class floor (`gate.ask_classes: [write]`). The SMS is what it must never be asked about.
+const ARGS = { path: "notes/opening-hours.md", content: "Open until 10pm on Fridays." };
+const CALL: BoundCall = { adapter: "file_ops", action: `write_file ${JSON.stringify(ARGS)}`, tool: "write_file", args: ARGS, seat: "support", classes: ["write"] };
+const PREVIEW = "Write notes/opening-hours.md: Open until 10pm on Fridays.";
+const SMS_ARGS = { to: "+15550100", from: "+15550000", body: "Your table is booked for 7pm tonight." };
+const SMS: BoundCall = { adapter: "business", action: `sms_send ${JSON.stringify(SMS_ARGS)}`, tool: "sms_send", args: SMS_ARGS, seat: "support", classes: ["external_send", "customer_facing"] };
+const SMS_PREVIEW = "SMS from +15550000 to +15550100: Your table is booked for 7pm tonight.";
+const POLICY = AutoReviewConfigSchema.parse({ enabled: true, model: MODEL, max_class: "write" });
+// [/C3]
 
 const APPROVE = JSON.stringify({ decision: "approve", reason: "a booking confirmation to an allowlisted number" });
 const DENY = JSON.stringify({ decision: "deny", reason: "the text promises a time the preview does not show" });
@@ -90,8 +89,8 @@ function deps(fake: FakeGateway, overrides: Partial<AutoReviewDeps> = {}): AutoR
 }
 
 /** Parks the call out of a seat turn, exactly as the class floor does, and returns the row id. */
-function park(call: BoundCall = SMS): string {
-  const decision = bindings.require(call, PREVIEW);
+function park(call: BoundCall = CALL, preview = PREVIEW): string { // [C3] CALL, and the SMS's own preview
+  const decision = bindings.require(call, preview);
   expect(decision.granted).toBe(false);
   return decision.row!.id;
 }
@@ -147,7 +146,7 @@ describe("reviewHeldApprovals", () => {
     const prompt = fake.requests[0]!.messages.map((m) => m.content).join("\n");
     expect(prompt).toContain(PREVIEW);
     expect(prompt).toContain(JSON.stringify(ARGS));
-    expect(prompt).toContain('"max_class":"external_send"');
+    expect(prompt).toContain('"max_class":"write"'); // [C3]
 
     const audit = readApprovalAudit(profileDir);
     expect(audit).toEqual([expect.objectContaining({ actor: ACTOR, action: "approval.approved", objectType: "approval", objectId: id })]);
@@ -155,7 +154,7 @@ describe("reviewHeldApprovals", () => {
 
     // The identical call now runs, and only now is the grant marked as used.
     expect(autoReviewGrantUsedAt(rowOf(id))).toBeUndefined();
-    expect(bindings.require(SMS, PREVIEW).granted).toBe(true);
+    expect(bindings.require(CALL, PREVIEW).granted).toBe(true); // [C3] CALL
     expect(autoReviewGrantUsedAt(rowOf(id))).toBeTruthy();
   });
 
@@ -166,7 +165,7 @@ describe("reviewHeldApprovals", () => {
 
     expect(result.outcomes).toEqual([expect.objectContaining({ id, decision: "deny", status: "denied", actor: ACTOR })]);
     expect(rowOf(id)).toMatchObject({ status: "denied", decidedBy: ACTOR });
-    const blocked = bindings.require(SMS, PREVIEW);
+    const blocked = bindings.require(CALL, PREVIEW); // [C3] CALL
     expect(blocked.granted).toBe(false);
     if (!blocked.granted) {
       expect(blocked.record.status).toBe("blocked");
@@ -186,7 +185,7 @@ describe("reviewHeldApprovals", () => {
     expect(rowOf(id).status).toBe("pending");
     expect(rowOf(id).decidedBy).toBeUndefined();
     expect(autoReviewOf(rowOf(id))).toMatchObject({ decision: "escalate", actor: ACTOR });
-    expect(bindings.require(SMS, PREVIEW).granted).toBe(false);
+    expect(bindings.require(CALL, PREVIEW).granted).toBe(false); // [C3] CALL
     expect(readApprovalAudit(profileDir)).toEqual([expect.objectContaining({ action: "approval.escalated", objectId: id })]);
   });
 
@@ -201,7 +200,7 @@ describe("reviewHeldApprovals", () => {
 
     expect(result.outcomes).toEqual([expect.objectContaining({ id, decision: "escalate", status: "pending", modelCalled: true })]);
     expect(rowOf(id).status).toBe("pending");
-    expect(bindings.require(SMS, PREVIEW).granted).toBe(false);
+    expect(bindings.require(CALL, PREVIEW).granted).toBe(false); // [C3] CALL
     const [entry] = readApprovalAudit(profileDir);
     expect(entry).toMatchObject({ action: "approval.escalated", objectId: id });
     expect(entry!.summary).toContain("no verdict");
@@ -222,16 +221,36 @@ describe("reviewHeldApprovals", () => {
   });
 
   it("escalates a call outside the policy with the rule named, and never builds or calls a model for it", async () => {
-    const id = park();
+    const id = park(SMS, SMS_PREVIEW); // [C3] an SMS is above every ceiling a config may hold
     const fake = fakeGateway(APPROVE);
 
-    const result = await reviewHeldApprovals(deps(fake, { policy: { ...POLICY, recipients: ["+15550199"] } }));
+    const result = await reviewHeldApprovals(deps(fake));
 
     expect(fake.built()).toBe(0);
-    expect(result.outcomes).toEqual([expect.objectContaining({ id, decision: "escalate", actor: "auto-review:policy", rule: "recipient_not_allowed", modelCalled: false })]);
+    expect(result.outcomes).toEqual([expect.objectContaining({ id, decision: "escalate", actor: "auto-review:policy", rule: "class_above_max", modelCalled: false })]);
     expect(rowOf(id).status).toBe("pending");
-    expect(autoReviewOf(rowOf(id))).toMatchObject({ decision: "escalate", rule: "recipient_not_allowed" });
+    expect(autoReviewOf(rowOf(id))).toMatchObject({ decision: "escalate", rule: "class_above_max" });
     expect(readApprovalAudit(profileDir)).toEqual([expect.objectContaining({ actor: "auto-review:policy", action: "approval.escalated" })]);
+  });
+
+  // [C3] README.md:11-13: a send or a payment asks you first at every autonomy level, so no model decides one.
+  it("[C3] never puts a send or a payment to the model, even under a stale config whose max_class reaches it", async () => {
+    const sms = park(SMS, SMS_PREVIEW);
+    const linkArgs = { currency: "usd", items: [{ description: "deposit", amount_cents: 2500 }] };
+    const link: BoundCall = { adapter: "business", action: `stripe_payment_link_create ${JSON.stringify(linkArgs)}`, tool: "stripe_payment_link_create", args: linkArgs, seat: "support", classes: ["money_moving"] };
+    const payment = bindings.require(link, "Payment link: deposit, 25.00 USD").row!.id;
+    const stale: AutoReviewConfig = { ...AutoReviewConfigSchema.parse({ enabled: true, model: MODEL, max_amount_cents: 5000, recipients: ["+15550100"] }), max_class: "money" };
+    const fake = fakeGateway(APPROVE);
+
+    const result = await reviewHeldApprovals(deps(fake, { policy: stale }));
+
+    expect(fake.built()).toBe(0);
+    expect(fake.requests).toEqual([]);
+    for (const id of [sms, payment]) {
+      expect(result.outcomes).toContainEqual(expect.objectContaining({ id, decision: "escalate", actor: "auto-review:policy", rule: "send_or_money", modelCalled: false, status: "pending" }));
+      expect(rowOf(id).status).toBe("pending");
+    }
+    expect(bindings.require(SMS, SMS_PREVIEW).granted).toBe(false);
   });
 
   it("reviews a row once: a second pass asks no model about it", async () => {
@@ -281,7 +300,7 @@ describe("with governance.auto_review disabled nothing changes", () => {
   it("leaves a human approval and its replay exactly as before: no review record, no grant stamp", async () => {
     const id = park();
     new ApprovalBridge({ store }).decide(id, "approved", "human");
-    expect(bindings.require(SMS, PREVIEW).granted).toBe(true);
+    expect(bindings.require(CALL, PREVIEW).granted).toBe(true); // [C3] CALL
     const row = rowOf(id);
     expect(Object.keys(row.details).sort()).toEqual(["adapter", "args", "classes", "key", "kind", "preview", "tool"]);
     expect(fs.existsSync(approvalAuditPath(profileDir))).toBe(false);
@@ -297,7 +316,7 @@ describe("a human over the reviewer", () => {
 
     expect(reversed).toMatchObject({ ok: true, row: { status: "denied", decidedBy: "human" } });
     expect(autoReviewOf(rowOf(id))).toMatchObject({ decision: "approve", overriddenBy: "human" });
-    expect(bindings.require(SMS, PREVIEW).granted).toBe(false);
+    expect(bindings.require(CALL, PREVIEW).granted).toBe(false); // [C3] CALL
     expect(readApprovalAudit(profileDir).map((row) => [row.action, row.actor])).toEqual([
       ["approval.approved", ACTOR],
       ["approval.reversed", "human"],
@@ -308,7 +327,7 @@ describe("a human over the reviewer", () => {
   it("refuses to reverse a call that already ran", async () => {
     const id = park();
     await reviewHeldApprovals(deps(fakeGateway(APPROVE)));
-    expect(bindings.require(SMS, PREVIEW).granted).toBe(true);
+    expect(bindings.require(CALL, PREVIEW).granted).toBe(true); // [C3] CALL
 
     const refused = overrideAutoReview({ store, profileDir, id, decision: "denied", by: "human" });
 
@@ -321,7 +340,7 @@ describe("a human over the reviewer", () => {
     await reviewHeldApprovals(deps(fakeGateway(DENY)));
 
     expect(overrideAutoReview({ store, profileDir, id, decision: "approved", by: "human" })).toMatchObject({ ok: true, row: { status: "approved", decidedBy: "human" } });
-    expect(bindings.require(SMS, PREVIEW).granted).toBe(true);
+    expect(bindings.require(CALL, PREVIEW).granted).toBe(true); // [C3] CALL
   });
 
   it("does not treat a human's own decision as the reviewer's", () => {

@@ -17,14 +17,37 @@ import { z } from "zod";
 export const AUTO_REVIEW_TIERS = ["read", "write", "external_send", "money"] as const;
 export type AutoReviewTier = (typeof AUTO_REVIEW_TIERS)[number];
 
+// [C3] README.md:11-13: anything that sends a message or moves money asks the owner first at every
+// autonomy level, so a reviewer model never approves one. `external_send` and `money` stay on the
+// ladder to PLACE a call (`tierOfClasses`); no config may name them as a ceiling. The type keeps the
+// whole ladder on purpose: a config object can reach the policy without this schema, and the policy
+// refuses above the ceiling on its own. Raising it waits for structural taint on bound rows.
+/** The highest tier a reviewer may ever be given. */
+export const AUTO_REVIEW_CEILING: AutoReviewTier = "write";
+/** The promise a higher ceiling would break, named in the config error and in the policy's refusal. */
+export const ASKS_YOU_FIRST = "Trent asks you first for every send and every payment";
+
+/** `read` and `write`: the only tiers a reviewer may approve. */
+export function isApprovableTier(tier: AutoReviewTier): boolean {
+  return AUTO_REVIEW_TIERS.indexOf(tier) <= AUTO_REVIEW_TIERS.indexOf(AUTO_REVIEW_CEILING);
+}
+
+const ceilingMessage = (value: unknown): string => `auto_review.max_class: ${String(value)} is not allowed: ${ASKS_YOU_FIRST}; the highest a reviewer may approve is ${AUTO_REVIEW_CEILING}`;
+// [/C3]
+
 export const AutoReviewConfigSchema = z
   .object({
     /** Off by default. Off means the reviewer never runs and no row, file or ledger is touched. */
     enabled: z.boolean().default(false),
     /** A model pin for the reviewer (a local model is allowed). Absent: the profile's own `model`. */
     model: z.string().trim().min(1).optional(),
-    /** The highest tier the reviewer may approve. `execute`, `destructive`, `deploy` and `secret_access` are never approvable. */
-    max_class: z.enum(AUTO_REVIEW_TIERS).default("read"),
+    /** The highest tier the reviewer may approve: `read` or `write` [C3]. `execute`, `destructive`, `deploy` and `secret_access` are never approvable. */
+    max_class: z
+      .enum(AUTO_REVIEW_TIERS, { errorMap: (_issue, ctx) => ({ message: ceilingMessage(ctx.data) }) }) // [C3] every refusal names the key and the promise
+      .refine(isApprovableTier, (tier) => ({ message: ceilingMessage(tier) })) // [C3] external_send and money are a person's
+      .default("read"),
+    // [C3] The three keys below bound a send or a payment for the day the ceiling is raised; while it is
+    // `write`, no send and no money call is approvable whatever they say.
     /** A money call is in policy only at or under this total, in integer cents of `currency`. 0: no money call is. */
     max_amount_cents: z.number().int().nonnegative().default(0),
     /** The one currency the cap is in (ISO 4217, stored lower-case); a call in any other is escalated. */

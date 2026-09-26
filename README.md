@@ -9,7 +9,8 @@ Trent is an agent team that runs in your terminal, on your machine, with your ow
 planner splits an objective into steps and gives each one to one of nine role seats (CEO, engineer,
 growth, sales, content, support, analyst, finance and escalation), each with its own toolsets,
 approvals, per-run budget in integer cents and eval suite. Anything that sends a message, moves
-money or touches a customer asks you first at every autonomy level, and your yes covers that exact
+money or touches a customer asks you first at every autonomy level, whether or not the optional
+reviewer model is on (`governance.auto_review` stops at `write`), and your yes covers that exact
 call only.
 <!-- proof: `trent fleet list --json` exit 0, 173 agents including the nine seats; `trent fleet show finance` exit 0 (toolsets, denied, gates, "budget 125 cents per run", "eval suite finance"); docs/security.md "Side-effecting tools: the gate" (from line 494); packages/trent-core/src/governance/bound-approvals.ts -->
 

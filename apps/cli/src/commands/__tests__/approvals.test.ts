@@ -141,10 +141,19 @@ function smsCall(body: string): BoundCall {
   return { adapter: "business", action: `sms_send ${JSON.stringify(args)}`, tool: "sms_send", args, seat: "support", classes: ["external_send", "customer_facing"] };
 }
 const SMS = smsCall("Your table is booked for 7pm tonight.");
-const previewOf = (call: BoundCall): string => `SMS to +15550100: ${(call.args as { body: string }).body}`;
+// [C3] A reviewer decides only read and write calls (the ceiling is write), so the call it decides here is a
+// write the owner put on the class floor; the SMS is what it must leave for a person.
+function noteCall(content: string): BoundCall {
+  const args = { path: "notes/opening-hours.md", content };
+  return { adapter: "file_ops", action: `write_file ${JSON.stringify(args)}`, tool: "write_file", args, seat: "support", classes: ["write"] };
+}
+const NOTE = noteCall("Open until 10pm on Fridays.");
+const previewOf = (call: BoundCall): string =>
+  call.tool === "write_file" ? `Write notes/opening-hours.md: ${(call.args as { content: string }).content}` : `SMS to +15550100: ${(call.args as { body: string }).body}`;
+// [/C3]
 
 /** Parks a floored call out of a seat turn, as the class floor does, and returns its row id. */
-function park(call: BoundCall = SMS): string {
+function park(call: BoundCall = NOTE): string { // [C3] NOTE
   const decision = createBoundApprovalStore({ profileDir: home }).require(call, previewOf(call));
   expect(decision.granted).toBe(false);
   return decision.row!.id;
@@ -160,7 +169,7 @@ async function review(reply: Record<string, string>): Promise<void> {
   await reviewHeldApprovals({
     store: new FileGatewayStore(path.join(home, "gateway.json")),
     profileDir: home,
-    policy: AutoReviewConfigSchema.parse({ enabled: true, model: REVIEW_MODEL, max_class: "external_send", recipients: ["+15550100"] }),
+    policy: AutoReviewConfigSchema.parse({ enabled: true, model: REVIEW_MODEL, max_class: "write", recipients: ["+15550100"] }), // [C3] the ceiling
     hardline: { home, profileDir: home },
     gateway: async () => gateway,
   });
@@ -223,7 +232,7 @@ describe("trent approvals and the auto reviewer [H1]", () => {
 
   it("list --review escalates a call above the policy's ceiling without asking any model", async () => {
     writeConfig(["enabled: true", "max_class: write", "recipients: ['+15550100']"]);
-    const id = park();
+    const id = park(SMS); // [C3] an SMS is above every ceiling a config may hold
 
     const listed = await json<ReviewListJson>(["approvals", "list", "--review"]);
 
@@ -232,18 +241,19 @@ describe("trent approvals and the auto reviewer [H1]", () => {
   });
 
   it("list --policy prints the written policy", async () => {
-    writeConfig(["enabled: true", `model: ${REVIEW_MODEL}`, "max_class: money", "max_amount_cents: 5000", "currency: USD", "recipients: ['*@example.com']"]);
+    writeConfig(["enabled: true", `model: ${REVIEW_MODEL}`, "max_class: write", "max_amount_cents: 5000", "currency: USD", "recipients: ['*@example.com']"]); // [C3] write is the ceiling
 
     const listed = await json<ReviewListJson>(["approvals", "list", "--policy"]);
 
-    expect(listed.policy).toEqual({ enabled: true, model: REVIEW_MODEL, max_class: "money", max_amount_cents: 5000, currency: "usd", recipients: ["*@example.com"] });
+    expect(listed.policy).toEqual({ enabled: true, model: REVIEW_MODEL, max_class: "write", max_amount_cents: 5000, currency: "usd", recipients: ["*@example.com"] });
   });
 
   it("reject reverses an auto-approved call that has not run, and refuses one that already ran", async () => {
     const waiting = park();
-    const ran = park(smsCall("Reminder: your table is at 7pm."));
+    const later = noteCall("Open until 11pm on Saturdays."); // [C3] a second write, another key
+    const ran = park(later);
     await review({ decision: "approve", reason: "allowlisted number, booking text" });
-    expect(createBoundApprovalStore({ profileDir: home }).require(smsCall("Reminder: your table is at 7pm."), previewOf(smsCall("Reminder: your table is at 7pm."))).granted).toBe(true);
+    expect(createBoundApprovalStore({ profileDir: home }).require(later, previewOf(later)).granted).toBe(true);
 
     const reversed = await json<{ id: string; status: string; reversed: boolean }>(["approvals", "reject", waiting]);
     expect(reversed).toMatchObject({ id: waiting, status: "denied", reversed: true });

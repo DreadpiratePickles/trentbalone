@@ -21,12 +21,15 @@
  *   money_over_cap         a money call over `max_amount_cents`
  *   recipient_unknown      a send that names no recipient (a public post, an invoice id alone)
  *   recipient_not_allowed  a send to anyone not on `recipients`
+ *   send_or_money          [C3] a send or a payment that passed every rule above: always a person's
+ *                          (README.md:11-13). The schema caps `max_class` at `write`, so only a config
+ *                          that skipped it gets here; the policy refuses on its own all the same.
  */
 import { floorBlock } from "../tools/approval-floors.js";
 import { provenanceMarker } from "../tools/memory/holds.js";
 import type { ApprovalRow } from "../gateway/store/GatewayStore.js";
 import type { AutoReviewConfig, AutoReviewTier } from "./auto-review-config.js";
-import { AUTO_REVIEW_TIERS } from "./auto-review-config.js";
+import { ASKS_YOU_FIRST, AUTO_REVIEW_TIERS, isApprovableTier } from "./auto-review-config.js"; // [C3] ASKS_YOU_FIRST, isApprovableTier
 import { subjectsOfAction } from "./autonomy-dispatch.js";
 import { BOUND_CALL_KIND } from "./bound-approvals.js";
 import { denyMatch } from "./deny-globs.js";
@@ -48,7 +51,8 @@ export type AutoReviewRule =
   | "money_currency"
   | "money_over_cap"
   | "recipient_unknown"
-  | "recipient_not_allowed";
+  | "recipient_not_allowed"
+  | "send_or_money"; // [C3]
 
 export interface AutoReviewPolicyContext {
   readonly hardline: HardlineContext;
@@ -276,6 +280,9 @@ export function evaluateAutoReviewPolicy(row: ApprovalRow, policy: AutoReviewCon
     const outside = recipients.filter((recipient) => !recipientAllowed(recipient, policy.recipients));
     if (outside.length > 0) return refuse("recipient_not_allowed", `${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} not on governance.auto_review.recipients`);
   }
+
+  // [C3] A send or a payment is a person's, whatever max_class says.
+  if (!isApprovableTier(tier)) return refuse("send_or_money", `the call is ${tier} (${classes.join(", ")}): ${ASKS_YOU_FIRST}, whatever max_class says`);
 
   return { eligible: true, tier, classes, recipients, ...(amountCents === undefined ? {} : { amountCents }) };
 }

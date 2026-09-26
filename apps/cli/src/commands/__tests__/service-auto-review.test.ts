@@ -51,7 +51,7 @@ function configure(autoReview: boolean): void {
     ...config,
     gateway: { ...config.gateway, enabled: false },
     heartbeat: { ...config.heartbeat, enabled: false },
-    governance: { ...config.governance, auto_review: { enabled: autoReview, model: MODEL, max_class: "external_send", max_amount_cents: 0, currency: "usd", recipients: ["+15550100"] } },
+    governance: { ...config.governance, auto_review: { enabled: autoReview, model: MODEL, max_class: "write", max_amount_cents: 0, currency: "usd", recipients: ["+15550100"] } }, // [C3] the ceiling
   } as typeof config);
 }
 
@@ -63,6 +63,13 @@ const sms = (to: string, body = "Your table is booked for 7pm tonight."): BoundC
 function park(to: string, body?: string): string {
   const call = sms(to, body);
   return createBoundApprovalStore({ profileDir: trentHome }).require(call, `SMS to ${to}: ${(call.args as { body: string }).body}`).row!.id;
+}
+
+// [C3] A reviewer decides only read and write calls, so the call inside the policy is a write the owner put on the class floor.
+function parkNote(content = "Open until 10pm on Fridays."): string {
+  const args = { path: "notes/opening-hours.md", content };
+  const call: BoundCall = { adapter: "file_ops", action: `write_file ${JSON.stringify(args)}`, tool: "write_file", args, seat: "support", classes: ["write"] };
+  return createBoundApprovalStore({ profileDir: trentHome }).require(call, `Write notes/opening-hours.md: ${content}`).row!.id;
 }
 
 function fakeReviewer(): GatewayStreamRequest[] {
@@ -114,7 +121,7 @@ const rows = () => new FileGatewayStore(path.join(trentHome, "gateway.json")).sn
 describe("[P3] trent service daemon runs the auto reviewer on its tick", () => {
   it("a pending call inside the policy is decided on the next tick, one outside it is left, and the pass stops with the daemon", async () => {
     configure(true);
-    const inside = park("+15550100");
+    const inside = parkNote(); // [C3] a write; an SMS is outside every policy a config may hold
     const outside = park("+15559999");
     const requests = fakeReviewer();
     const f = fakes();
@@ -127,13 +134,13 @@ describe("[P3] trent service daemon runs the auto reviewer on its tick", () => {
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_TICK_MS);
     expect(rows()[inside]).toMatchObject({ status: "approved", decidedBy: `auto-review:${MODEL}` });
     expect(rows()[outside]?.status).toBe("pending");
-    expect(autoReviewOf(rows()[outside]!)).toMatchObject({ decision: "escalate", rule: "recipient_not_allowed" });
+    expect(autoReviewOf(rows()[outside]!)).toMatchObject({ decision: "escalate", rule: "class_above_max" }); // [C3]
     expect(requests).toHaveLength(1);
 
     await f.raise("SIGTERM");
     expect(f.order.at(-1)).toBe(`exit:${String(EXIT.INTERRUPT)}`);
     // A new call (another body is another key) parked after the daemon stopped is never reviewed.
-    const late = park("+15550100", "Reminder: your table is at 7pm.");
+    const late = parkNote("Open until 11pm on Saturdays."); // [C3]
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_TICK_MS * 2);
     expect(rows()[late]?.status).toBe("pending");
     expect(autoReviewOf(rows()[late]!)).toBeUndefined();

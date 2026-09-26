@@ -89,8 +89,11 @@ describe("[P3] the auto reviewer never decides a stamped row", () => {
     const policy = new PolicyDispatcher();
     await seedInboundTaint(policy, "run_seeded", "webhook:gh-issues");
     const bindings = createBoundApprovalStore({ store, ring: () => policy.history() });
-    const stamped = (await inside("run_seeded", () => bindings.require(inRun("run_seeded"), PREVIEW))).row!.id;
-    const clean = (await inside("run_clean", () => bindings.require(inRun("run_clean"), PREVIEW))).row!.id;
+    // [C3] A reviewer decides only read and write calls, so the call is a write an owner put on the class floor.
+    const note = { path: "notes/opening-hours.md", content: "Open until 10pm on Fridays." };
+    const write = (runId: string): BoundCall => ({ adapter: "file_ops", action: `write_file ${JSON.stringify(note)}`, tool: "write_file", args: note, seat: "support", classes: ["write"], runId, stepId: "s1" });
+    const stamped = (await inside("run_seeded", () => bindings.require(write("run_seeded"), "Write notes/opening-hours.md"))).row!.id;
+    const clean = (await inside("run_clean", () => bindings.require(write("run_clean"), "Write notes/opening-hours.md"))).row!.id;
     let asked = 0;
     const reviewer: ReviewGateway = {
       async complete() {
@@ -101,7 +104,7 @@ describe("[P3] the auto reviewer never decides a stamped row", () => {
     const pass = await reviewHeldApprovals({
       store,
       profileDir,
-      policy: AutoReviewConfigSchema.parse({ enabled: true, model: "fake-reviewer", max_class: "external_send", recipients: ["+15550100"] }),
+      policy: AutoReviewConfigSchema.parse({ enabled: true, model: "fake-reviewer", max_class: "write" }), // [C3] the ceiling
       hardline: { home, profileDir },
       gateway: async () => reviewer,
     });

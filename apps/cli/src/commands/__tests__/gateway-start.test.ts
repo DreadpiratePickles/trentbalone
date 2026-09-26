@@ -259,11 +259,12 @@ describe("trent gateway start", () => {
       configManager.saveConfig({
         ...config,
         heartbeat: { ...config.heartbeat, enabled: true, interval_minutes: 15 },
-        governance: { ...config.governance, auto_review: { enabled: true, model: "fake-reviewer", max_class: "external_send", max_amount_cents: 0, currency: "usd", recipients: ["+15550100"] } },
+        governance: { ...config.governance, auto_review: { enabled: true, model: "fake-reviewer", max_class: "write", max_amount_cents: 0, currency: "usd", recipients: ["+15550100"] } },
       } as typeof config);
-      const args = { to: "+15550100", from: "+15550000", body: "Your table is booked for 7pm tonight." };
-      const call: BoundCall = { adapter: "business", action: `sms_send ${JSON.stringify(args)}`, tool: "sms_send", args, classes: ["external_send", "customer_facing"] };
-      const id = createBoundApprovalStore({ profileDir: configManager.getProfileDir() }).require(call, "SMS to +15550100: Your table is booked for 7pm tonight.").row!.id;
+      // [C3] A reviewer decides only read and write calls (the ceiling is write), so the held call is a write the owner put on the class floor.
+      const args = { path: "notes/opening-hours.md", content: "Open until 10pm on Fridays." };
+      const call: BoundCall = { adapter: "file_ops", action: `write_file ${JSON.stringify(args)}`, tool: "write_file", args, classes: ["write"] };
+      const id = createBoundApprovalStore({ profileDir: configManager.getProfileDir() }).require(call, "Write notes/opening-hours.md: Open until 10pm on Fridays.").row!.id;
       const reviewer: ReviewGateway = {
         complete: async () => ({ text: JSON.stringify({ decision: "approve", reason: "allowlisted number, booking text" }), provider: "openai", model: "fake-reviewer", modelTier: "haiku", inputTokens: 1, outputTokens: 1, costCents: 0, estimated: false, priced_as_default: false, finishReason: "stop" }),
       };

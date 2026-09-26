@@ -32,7 +32,10 @@ afterEach(() => {
 });
 
 const MODEL = "fake-reviewer";
-const POLICY = AutoReviewConfigSchema.parse({ enabled: true, model: MODEL, max_class: "external_send", recipients: ["+15550100"] });
+const POLICY = AutoReviewConfigSchema.parse({ enabled: true, model: MODEL, max_class: "write", recipients: ["+15550100"] }); // [C3] the ceiling
+// [C3] A reviewer decides only read and write calls, so the call inside the policy is a write the owner put on the class floor.
+const NOTE = { path: "notes/opening-hours.md", content: "Open until 10pm on Fridays." };
+const note: BoundCall = { adapter: "file_ops", action: `write_file ${JSON.stringify(NOTE)}`, tool: "write_file", args: NOTE, seat: "support", classes: ["write"] };
 const sms = (to: string): BoundCall => {
   const args = { to, from: "+15550000", body: "Your table is booked for 7pm tonight." };
   return { adapter: "business", action: `sms_send ${JSON.stringify(args)}`, tool: "sms_send", args, seat: "support", classes: ["external_send", "customer_facing"] };
@@ -81,7 +84,7 @@ describe("[P3] the heartbeat runs the auto reviewer's pass on every tick", () =>
   it("a pending call inside the policy is decided by the reviewer on the next tick; one outside it is left, with the rule named", async () => {
     const store = new FileGatewayStore(path.join(profileDir, "gateway.json"));
     const bindings = createBoundApprovalStore({ store });
-    const inside = bindings.require(sms("+15550100"), "SMS to +15550100: Your table is booked for 7pm tonight.").row!.id;
+    const inside = bindings.require(note, "Write notes/opening-hours.md: Open until 10pm on Fridays.").row!.id; // [C3] a write
     const outside = bindings.require(sms("+15559999"), "SMS to +15559999: Your table is booked for 7pm tonight.").row!.id;
     const reviewer = fakeReviewer();
     const { loop } = loopAt("2026-09-26T03:00:00.000Z");
@@ -92,7 +95,7 @@ describe("[P3] the heartbeat runs the auto reviewer's pass on every tick", () =>
     const after = store.snapshot().approvals;
     expect(after[inside]).toMatchObject({ status: "approved", decidedBy: `auto-review:${MODEL}` });
     expect(after[outside]?.status).toBe("pending");
-    expect(autoReviewOf(after[outside]!)).toMatchObject({ decision: "escalate", actor: "auto-review:policy", rule: "recipient_not_allowed" });
+    expect(autoReviewOf(after[outside]!)).toMatchObject({ decision: "escalate", actor: "auto-review:policy", rule: "class_above_max" }); // [C3]
     // Only the row inside the policy reached the model.
     expect(reviewer.requests).toHaveLength(1);
   });

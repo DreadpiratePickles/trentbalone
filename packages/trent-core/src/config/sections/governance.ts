@@ -25,11 +25,14 @@ export const PolicyConfigSchema = z.object({
 });
 
 // [H1] auto review
+// [C3] `max_class` is capped at `write`: a send or a payment is always the owner's to decide.
 /**
  * `governance`: the written policy an auto reviewer works inside (docs/security.md, "Auto review").
  * `auto_review` is defined beside the code that enforces it (`governance/auto-review-config.ts`,
  * evaluated by `governance/auto-review-policy.ts`); off by default, and with `max_class: read` even
- * turning it on approves nothing until a ceiling, a cap or a recipient list is written down.
+ * turning it on approves nothing until `max_class: write` is written down. `write` is the
+ * ceiling: a config naming `external_send` or `money` fails to load, because Trent asks you first
+ * for every send and every payment (README.md:11-13).
  */
 export const GovernanceConfigSchema = z
   .object({
