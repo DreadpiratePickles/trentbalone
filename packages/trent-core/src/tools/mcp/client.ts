@@ -9,7 +9,9 @@
  * http: every request goes through the egress fetch from `tools/web` (HTTP CONNECT through the
  * proxy, SSRF floors on every hop) after `checkUrlSafety` has refused private, loopback and
  * metadata targets up front. Without an egress transport an http server is unavailable; there
- * is no "direct" mode.
+ * is no "direct" mode. [P2-14] Every request carries the broker's own-credential marker
+ * (`egress/CredentialBroker.ts`), so the server receives the headers its entry configures and
+ * never the credential the broker token stands for (in the REPL, the model provider key).
  *
  * A failure anywhere in here becomes an `unavailable` reason. Reasons name env vars and hosts,
  * never values or headers.
@@ -21,6 +23,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { McpServerConfig } from "../../config/schema.js";
+import { OWN_CREDENTIAL_HEADER } from "../../egress/CredentialBroker.js";
 import { scrubChildEnv } from "../../terminal/env-scrub.js";
 import { StructuredLogger } from "../../telemetry/logger.js";
 import { createEgressFetch, type EgressClientOptions, type FetchLike } from "../web/proxied-fetch.js";
@@ -158,9 +161,11 @@ async function connectHttp(name: string, config: Extract<McpServerConfig, { tran
   if (!verdict.ok) throw new Error(`refused by the SSRF floor: ${verdict.reason}`);
   const headers = resolveTemplateRecord(config.headers, deps.env);
   if (headers.missing.length) throw new Error(`headers reference unset variable(s): ${headers.missing.join(", ")}`);
+  // [P2-14] Through the proxy: the configured headers pass as written and the broker adds none.
+  const viaProxy = deps.fetchImpl === undefined;
   const transport = new StreamableHTTPClientTransport(new URL(config.url), {
     fetch: fetchImpl,
-    requestInit: { headers: headers.values },
+    requestInit: { headers: viaProxy ? { ...headers.values, [OWN_CREDENTIAL_HEADER]: "1" } : headers.values },
   });
   const client = new Client(CLIENT_INFO);
   try {

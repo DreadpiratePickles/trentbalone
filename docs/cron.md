@@ -138,3 +138,5 @@ The runner logs through the structured logger (`packages/trent-core/src/telemetr
 stderr: job id, trigger, status, duration, cost, whether delivery happened, and the hold a 429 set.
 An incident that opens is an `error` line; the hold is one `warn` line. A prompt body never
 reaches the log; the logger refuses payload fields by name rather than redacting them.
+
+Editing a queued social post (`trent cron queue edit`) keeps the post's files unless the edit names a media URL, which replaces them; a file that changed or vanished since the owner's approval refuses the edit (`social_media_changed`, `social_media_missing`) and leaves the job and its approval alone. `trent cron queue list` shows each file with its size.

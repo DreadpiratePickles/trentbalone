@@ -108,6 +108,11 @@ Implemented in `packages/trent-core/src/tools/mcp/`.
 - **http goes through egress.** Requests use the egress fetch from `tools/web` (CONNECT through
   the proxy, SSRF floors re-checked on every hop) after `checkUrlSafety` refuses private,
   loopback and cloud-metadata targets. Without the egress proxy an http server is unavailable.
+  The server's own credential never passes through the broker: every request carries the
+  proxy's own-credential marker (`x-trent-own-credential`), so the `headers` the entry configures
+  (an `Authorization` bearer, an `X-Api-Key`) arrive as written, a server configured with none
+  receives none, and the credential the proxy's token stands for (the model provider key in the
+  REPL) is never written in their place (`tools/mcp/egress.test.ts`).
 - **Results follow the spillover rule.** Output over `SUMMARY_LIMIT` is written to
   `<profile>/cache/spillover/` and the summary keeps a head/tail window plus the path.
 

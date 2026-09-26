@@ -17,6 +17,7 @@ import { boundCallKey, createBoundApprovalStore, type BoundCall } from "@trent/c
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { readCronJobs, writeCronJobs } from "@trent/core/tools/cron/index.js";
 import { SOCIAL_WRITE_CLASSES } from "@trent/core/tools/social/index.js";
+import type { SocialMediaFile } from "@trent/core/tools/social/media-files.js";
 import { queueSocialPost, type SocialQueueEntry } from "@trent/core/tools/social/queue.js";
 import type { CliOverrides } from "../context.js";
 import type { HeadlessRuntime } from "../../runtime/headless.js";
@@ -181,6 +182,22 @@ describe("trent cron queue", () => {
     expect(data.posts[0]).toMatchObject({ id, platform: "facebook", text: "Sunday brunch is back", approval: "approved" });
     const human = await runCli(["cron", "queue", "list", "--no-color"]);
     expect(human.stdout).toContain("Sunday brunch is back");
+  });
+
+  it("list names each file of a queued post with its size, in the text and in --json", async () => {
+    const file = (name: string, bytes: number): SocialMediaFile => ({ path: `media-out/${name}`, file: path.join(home, "work", "media-out", name), alt: `alt for ${name}`, kind: "image", mime: "image/png", bytes, sha256: "a".repeat(64) });
+    const media = [file("brunch.png", 123_456), file("terrace.png", 2_048)];
+    const at = "2026-09-21T15:00:00Z";
+    const args = { platform: "bluesky", text: "Sunday brunch is back", media: media.map((m) => ({ path: m.path, alt: m.alt })), at };
+    const call: BoundCall = { adapter: "social", action: `social_schedule ${JSON.stringify(args)}`, tool: "social_schedule", args, classes: SOCIAL_WRITE_CLASSES, runId: "run_q", stepId: "step_1" };
+    queueSocialPost(home, { call, preview: "post to bluesky with 2 images", request: { platform: "bluesky", text: "Sunday brunch is back", media }, at }, clock);
+    const json = await runCli(["cron", "queue", "list", "--json"]);
+    expect(json.exitCode).toBe(EXIT.OK);
+    expect((JSON.parse(json.stdout) as { posts: Array<Record<string, unknown>> }).posts[0]).toMatchObject({ media: [{ path: "media-out/brunch.png", bytes: 123_456 }, { path: "media-out/terrace.png", bytes: 2_048 }] });
+    const human = await runCli(["cron", "queue", "list", "--no-color"]);
+    expect(human.exitCode).toBe(EXIT.OK);
+    expect(human.stdout).toContain("media-out/brunch.png (123,456 bytes)");
+    expect(human.stdout).toContain("media-out/terrace.png (2,048 bytes)");
   });
 
   it("edit with a changed text re-asks: a fresh pending row, the old one expired; move keeps it; rm cleans up", async () => {

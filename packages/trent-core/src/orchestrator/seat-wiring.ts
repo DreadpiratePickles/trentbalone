@@ -29,6 +29,8 @@ export const TOOLSET_APPROVAL_GATES: Readonly<Record<string, string>> = {
   social: "social.publish",
   // [B3] every business write leaves the machine (an invoice, a booking, an SMS) and is bound per call.
   business: "business.write",
+  // [P2-9] a2a_send leaves the machine for a configured peer and is bound per call (docs/a2a.md).
+  a2a: "a2a.send",
 };
 
 function unique(values: readonly string[]): string[] {

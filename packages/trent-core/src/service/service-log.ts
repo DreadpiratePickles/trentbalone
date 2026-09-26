@@ -55,6 +55,8 @@ export class ServiceLog {
   private readonly maxBytes: number;
 
   constructor(options: ServiceLogOptions) {
+    // An empty path resolves against the cwd, and its rotation would be a file named `.1` there.
+    if (options.file.trim() === "") throw new Error("ServiceLog needs a file path; an empty one would write into the working directory");
     this.file = options.file;
     this.echo = options.echo;
     this.now = options.now ?? (() => new Date());

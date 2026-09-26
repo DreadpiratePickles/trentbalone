@@ -15,7 +15,7 @@ import { IdempotencyManager } from "../../../governance/IdempotencyManager.js";
 import { createBoundApprovalStore, installBoundApprovals, type BoundApprovalStore } from "../../../governance/bound-approvals.js";
 import { installSpendLedger, openSpendLedger, type SpendLedger } from "../../../governance/spend-ledger.js";
 import { runWithToolCallContext } from "../../../governance/tool-call-context.js";
-import { buildTrentTools } from "../../index.js";
+import { buildTrentTools, type ToolBuildDeps } from "../../index.js";
 import type { TrentToolAdapter } from "../../types.js";
 import type { BusinessProviderId } from "../http.js";
 
@@ -32,6 +32,8 @@ export interface HarnessOptions {
   /** Providers the stub reports as connected, with the token it hands out. */
   readonly connected: Partial<Record<ConnectProviderId, { accessToken: string; username?: string }>>;
   readonly autonomy?: "never" | "ask_always";
+  /** Through this egress proxy instead of the direct test transport (`egress.test.ts`). */
+  readonly egress?: ToolBuildDeps["egress"];
 }
 
 /** The exact error `tokenResolver` throws for a provider nothing connected. */
@@ -73,7 +75,8 @@ export function buildHarness(options: HarnessOptions): Harness {
       home,
       idempotency: new IdempotencyManager(),
       bindings,
-      business: { fetchImpl: globalThis.fetch, endpoints: options.endpoints, tokens: stubTokens(options.connected) },
+      business: { ...(options.egress === undefined ? { fetchImpl: globalThis.fetch } : {}), endpoints: options.endpoints, tokens: stubTokens(options.connected) },
+      ...(options.egress === undefined ? {} : { egress: options.egress }),
     },
   );
   const adapter = built.adapters.find((candidate) => candidate.name === "business");

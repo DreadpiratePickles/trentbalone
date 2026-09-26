@@ -26,7 +26,7 @@ import { MEDIA_TOOL_SCHEMAS } from "../tools/media/schemas.js";
 import { SOCIAL_TOOL_SCHEMAS } from "../tools/social/schemas.js";
 import { BUILTIN_TOOLS_BY_TOOLSET } from "../tools/tool-names.js";
 import type { ToolSchema } from "../tools/web/schemas.js";
-import { FLEET_PACKS } from "./FleetPacks.js";
+import { FLEET_PACKS, packPersona } from "./FleetPacks.js";
 import { SEAT_CAPABILITIES, isSeatRole } from "./seat-capabilities.js";
 import { listSourceSkills } from "./SkillProvisioner.js";
 
@@ -69,6 +69,9 @@ const MEDIA_ORDER = ["media_probe", "media_transcribe", "media_scenes", "media_c
 /** docs/social.md, the matrix: live today with no application, no review and no app store. */
 const LIVE_REPLY_PLATFORMS = new Set(["bluesky"]);
 const LIVE_POST_PLATFORMS = new Set(["bluesky", "x", "linkedin", "threads", "facebook"]);
+/** docs/social.md "Media on posts": why an example never passes media_url. */
+const MEDIA_URL_PROBLEM = (slug: string, tool: string): string =>
+  `${slug}: ${tool} passes media_url: Bluesky refuses it (it uploads files from the workspace) and Buffer sends it only from a URL the owner hosts, which an example cannot know`;
 
 const EXPECTED_TOOLSETS: Readonly<Record<string, readonly Toolset[]>> = {
   "small-business": ["business", "social"],
@@ -201,7 +204,7 @@ function callProblems(skill: ReadSkill): string[] {
     if (call.tool.startsWith("social_") && typeof record.platform === "string") {
       const live = SOCIAL_WRITES.has(call.tool) && call.tool !== "social_reply" ? LIVE_POST_PLATFORMS : LIVE_REPLY_PLATFORMS;
       if (!live.has(record.platform)) problems.push(`${skill.slug}: ${call.tool} example on ${record.platform}, which waits for an application; use a live platform and say "when connected" for the rest`);
-      if ("media_url" in record) problems.push(`${skill.slug}: ${call.tool} passes media_url, which Bluesky drops and Buffer refuses`);
+      if ("media_url" in record) problems.push(MEDIA_URL_PROBLEM(skill.slug, call.tool));
     }
   }
   return problems;
@@ -350,6 +353,21 @@ describe("the pack skill parser", () => {
       "fixture: stripe_payment_link_create.currency \"USD\" is not a lowercase ISO 4217 code",
       "fixture: stripe_payment_link_create.items[0].amount_cents is 12.5, not integer cents or an integer",
     ]);
+    // 3dd461c: Bluesky refuses a media URL (it uploads files) and Buffer sends one the owner hosted.
+    const hosted = { ...skill, invocations: [{ tool: "social_post", json: '{"platform": "bluesky", "text": "hi", "media_url": "https://cdn.example.test/a.png"}' }] };
+    expect(callProblems(hosted)).toEqual([MEDIA_URL_PROBLEM("fixture", "social_post")]);
+    expect(MEDIA_URL_PROBLEM("fixture", "social_post")).toMatch(/Bluesky refuses it .*Buffer sends it only from a URL the owner hosts/);
+  });
+});
+
+describe("the market packs' own words say what the social toolset does with media (3dd461c)", () => {
+  it("no state line or persona calls Buffer text only, and the creator crew names the Bluesky path for a clip", () => {
+    for (const pack of MARKET_PACKS) for (const words of [pack.state, packPersona(pack) ?? ""]) expect(words, pack.id).not.toMatch(/text only/i);
+    const creator = FLEET_PACKS.creator!;
+    for (const words of [creator.state, packPersona(creator)!]) {
+      expect(words).toContain("Bluesky");
+      expect(words).toContain("its own approved post");
+    }
   });
 });
 

@@ -6,12 +6,16 @@
  * `ProviderRequestError` carrying the provider's own message; no request header is ever copied
  * into an error, a record or a log.
  *
+ * [P2-14] Through the egress proxy the transport is wrapped in {@link withOwnCredential}, so the
+ * proxy forwards the provider token this file sets and adds none of its own.
+ *
  * Encodings, from the references cited in `docs/business.md`: Stripe and Twilio take
  * `application/x-www-form-urlencoded` (Stripe with bracketed nesting, `line_items[0][price]`);
  * Google Calendar and Square take JSON; Square wants a `Square-Version` date header.
  */
 import type { ConnectProviderId } from "../../connect/providers.js";
 import type { ResolvedToken } from "../../connect/resolver.js";
+import { OWN_CREDENTIAL_HEADER } from "../../egress/CredentialBroker.js";
 import { EXIT, TrentError } from "../../errors/index.js";
 import type { FetchLike } from "../web/proxied-fetch.js";
 
@@ -67,6 +71,22 @@ export interface ProviderHttpOptions {
   readonly endpoints?: Partial<Record<BusinessProviderId, string>>;
   readonly tokens: TokenLookup;
   readonly timeoutMs?: number;
+}
+
+/**
+ * [P2-14] The egress transport as the business toolset uses it: every request, the provider call
+ * and the token resolver's OAuth refresh alike, carries the broker's own-credential marker
+ * (`egress/CredentialBroker.ts`). The proxy then keeps its allowlist and token gates but swaps
+ * nothing in: without the marker it deletes the provider's Authorization and writes the credential
+ * its token stands for (in the REPL, the model provider key) for Stripe, Square and Twilio, and an
+ * `x-goog-api-key` for Google.
+ */
+export function withOwnCredential(fetchImpl: FetchLike): FetchLike {
+  return ((input: Parameters<FetchLike>[0], init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    headers.set(OWN_CREDENTIAL_HEADER, "1");
+    return fetchImpl(input, { ...init, headers });
+  }) as FetchLike;
 }
 
 /** Stripe's bracketed form encoding: `{line_items: [{price: "p"}]}` -> `line_items[0][price]=p`. */

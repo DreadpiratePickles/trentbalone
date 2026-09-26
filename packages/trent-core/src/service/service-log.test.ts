@@ -2,6 +2,10 @@
  * `<profile>/logs/service.log`: one timestamped line per component start and stop, the same line
  * on stderr, capped by size with one rotation so a service that restarts for months cannot fill
  * the disk. `trent service status` reads the last lines back, across the rotation.
+ *
+ * Every case works in its own temp dir. A fixture once wrote `${file}.1` with `file` empty, which
+ * put a rotated log named `.1` into the repo root (the cwd under vitest): fixture writes go through
+ * `inTemp`, `ServiceLog` refuses an empty path, and each case checks the cwd holds no log file.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
@@ -17,7 +21,14 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(profileDir, { recursive: true, force: true });
+  for (const name of [".1", "service.log", "service.log.1"]) expect(fs.existsSync(path.join(process.cwd(), name)), `${name} written into the cwd`).toBe(false);
 });
+
+/** A fixture path, refused unless it is absolute and inside this case's temp dir. */
+function inTemp(file: string): string {
+  if (!path.isAbsolute(file) || !file.startsWith(`${profileDir}${path.sep}`)) throw new Error(`fixture path ${JSON.stringify(file)} is outside the case's temp dir`);
+  return file;
+}
 
 const at = (): Date => new Date("2026-09-25T09:00:00.000Z");
 
@@ -59,11 +70,15 @@ describe("ServiceLog", () => {
     expect(fs.readFileSync(file, "utf8").trimEnd().split("\n").at(-1)).toContain("line 11");
   });
 
+  it("refuses an empty path, which would resolve against the working directory", () => {
+    for (const file of ["", "   "]) expect(() => new ServiceLog({ file, now: at }), JSON.stringify(file)).toThrow(/empty/);
+  });
+
   it("a write that fails does not throw: the echo still carries the line", () => {
     const echoed: string[] = [];
     // A directory where the file should be: every append fails.
     const file = path.join(profileDir, "logs", "service.log");
-    fs.mkdirSync(file, { recursive: true });
+    fs.mkdirSync(inTemp(file), { recursive: true });
     const log = new ServiceLog({ file, echo: (line) => echoed.push(line), now: at, pid: 1 });
     expect(() => log.line("cron started")).not.toThrow();
     expect(echoed).toHaveLength(1);
@@ -73,9 +88,9 @@ describe("ServiceLog", () => {
 describe("tailServiceLog", () => {
   it("returns the last N lines, reaching into the rotated file when the current one is short", () => {
     const file = serviceLogPaths(profileDir).service;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(`${file}.1`, "a\nb\nc\nd\n");
-    fs.writeFileSync(file, "e\nf\n");
+    fs.mkdirSync(inTemp(path.dirname(file)), { recursive: true });
+    fs.writeFileSync(inTemp(`${file}.1`), "a\nb\nc\nd\n");
+    fs.writeFileSync(inTemp(file), "e\nf\n");
     expect(tailServiceLog(file, 5)).toEqual(["b", "c", "d", "e", "f"]);
     expect(tailServiceLog(file, 1)).toEqual(["f"]);
   });

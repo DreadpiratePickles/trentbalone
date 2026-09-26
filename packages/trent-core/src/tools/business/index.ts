@@ -18,7 +18,8 @@
  * a replay is answered from the idempotency store, and every write also carries provider-side
  * idempotency from the same key (`types.ts`) for a replay that reaches the provider anyway.
  * Every HTTP call goes out through the egress client with the provider's token from
- * `tokenResolver`, never from the environment. SMS spend lands on the ledger in integer cents.
+ * `tokenResolver`, never from the environment, marked as carrying its own credential so the
+ * proxy's broker neither supplies nor replaces it. SMS spend lands on the ledger in integer cents.
  * The two reads that return customer-authored text tag their record untrusted, which the policy
  * ring reads as an inbound call for `send-after-untrusted`.
  */
@@ -34,7 +35,7 @@ import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
 import { createEgressFetch, type EgressClientOptions, type FetchLike } from "../web/proxied-fetch.js";
 import { renderToolInstructions } from "../web/schemas.js";
 import { CALENDAR_HANDLERS } from "./calendar.js";
-import { createProviderHttp, ProviderRequestError, type BusinessProviderId, type TokenLookup } from "./http.js";
+import { createProviderHttp, ProviderRequestError, withOwnCredential, type BusinessProviderId, type TokenLookup } from "./http.js";
 import { BusinessArgError } from "./money.js";
 import { BUSINESS_ADAPTER_NAME, BUSINESS_ROUTING_TEXT, BUSINESS_SPECS, BUSINESS_TOOL_NAMES, BUSINESS_TOOL_SCHEMAS, TOOL_CLASSES, WRITE_TOOLS } from "./schemas.js";
 import { SMS_HANDLERS } from "./sms.js";
@@ -83,7 +84,8 @@ function boundArgsOf(action: string): unknown {
 }
 
 export function createBusinessAdapter(options: BusinessAdapterOptions = {}): TrentToolAdapter {
-  const transport: FetchLike | undefined = options.fetchImpl ?? (options.egress ? createEgressFetch(options.egress) : undefined);
+  // [P2-14] Through the proxy, the provider's own token and the resolver's refresh keep their own credential.
+  const transport: FetchLike | undefined = options.fetchImpl ?? (options.egress ? withOwnCredential(createEgressFetch(options.egress)) : undefined);
   if (transport === undefined) throw new Error("the business toolset needs the egress proxy (or a test transport): every call leaves the machine");
   const tokens = options.tokens ?? createTokenResolver({ fetchImpl: transport });
   const http = createProviderHttp({ fetchImpl: transport, tokens, ...(options.endpoints === undefined ? {} : { endpoints: options.endpoints }) });

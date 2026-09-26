@@ -25,7 +25,7 @@ import { BLANK_SLATE_CONFIG, DEFAULT_CONFIG } from "../../config/defaults.js";
 import { TrentConfigSchema } from "../../config/schema.js";
 import { ToolsetSchema } from "../../config/sections/tools.js";
 import { HERMES_TOOLSET_NAMES } from "../../fleet/export-hermes.js";
-import { SEAT_ROLES } from "../../orchestrator/seat-wiring.js";
+import { SEAT_ROLES, TOOLSET_APPROVAL_GATES } from "../../orchestrator/seat-wiring.js";
 import { SHARED_SEAT_TOOLSETS, seatCapability } from "../../fleet/seat-capabilities.js";
 import { classFloorOf } from "../../governance/autonomy.js";
 import { CLASS_FLOOR } from "../../governance/gate-config-schema.js";
@@ -62,6 +62,8 @@ describe("the a2a toolset is registered everywhere a toolset must be", () => {
     expect("a2a" in HERMES_TOOLSET_NAMES).toBe(true);
     expect(SHARED_SEAT_TOOLSETS).toContain("a2a");
     for (const seat of SEAT_ROLES) expect(seatCapability(seat).toolsets, seat).toContain("a2a");
+    // [P2-14] dec2a54 follow-up 2: the seat contract names the gate, as it does for business and social.
+    expect(TOOLSET_APPROVAL_GATES.a2a).toBe("a2a.send");
     expect(BLANK_SLATE_CONFIG.toolsets).not.toContain("a2a");
     expect(BLANK_SLATE_CONFIG.disabled_toolsets).toContain("a2a");
     expect(DEFAULT_CONFIG.toolsets).not.toContain("a2a");

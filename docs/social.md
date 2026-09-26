@@ -117,6 +117,14 @@ name: the same arguments are the same approval). A queued post carries each file
 location, size and digest in its job payload, and the publish handler reads every file before it logs
 in, so a file that is gone (`social_media_missing`) or changed stops the post before the first upload.
 
+Editing a queued post (`trent cron queue edit`, `tools/cron/queue-edit.ts`) keeps its files unless the
+edit names a media URL (`--media`), which replaces them, since a post carries files or one URL. The
+kept files go through the same dry run as the rest of the edit, in the workspace they were approved
+under (recovered from each file's resolved location and the path the call named), so the fresh
+approval card lists every file again; when a file is gone or no longer the one approved, the edit is
+refused (`social_media_missing`, `social_media_changed`) and the job and its approval are left alone.
+`trent cron queue list` names each file a queued post attaches with its size.
+
 The refusals, all before any approval is asked and before anything leaves: `social_media_alt_required`,
 `social_media_invalid`, `social_media_missing`, `social_media_outside_workspace`,
 `social_media_type_unsupported`, `bluesky_media_too_many`, `bluesky_media_mixed` (images and a video,

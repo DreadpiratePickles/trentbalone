@@ -49,7 +49,9 @@ function incidentLine(incident: OpenIncident, ctx: CommandContext): string {
 
 function postLine(post: QueuedPostRow, ctx: CommandContext): string {
   const state = post.published !== undefined ? ctx.theme.success("published") : post.enabled ? ctx.theme.success("queued   ") : ctx.theme.meta("disabled ");
-  return `  ${state} ${ctx.theme.value(post.id)} ${ctx.theme.meta(post.at)} ${ctx.theme.meta(post.platform.padEnd(9, " "))} ${ctx.theme.meta(`approval ${post.approval}`)}\n    ${ctx.theme.body(post.text)}`;
+  // [P2-14] Each file the post attaches, by the path the call named and its size.
+  const files = post.media === undefined || post.media.length === 0 ? "" : `\n    ${ctx.theme.meta(`files: ${post.media.map((file) => `${file.path} (${file.bytes.toLocaleString("en-US")} bytes)`).join(", ")}`)}`;
+  return `  ${state} ${ctx.theme.value(post.id)} ${ctx.theme.meta(post.at)} ${ctx.theme.meta(post.platform.padEnd(9, " "))} ${ctx.theme.meta(`approval ${post.approval}`)}\n    ${ctx.theme.body(post.text)}${files}`;
 }
 
 function listIncidents(ctx: CommandContext) {
@@ -107,7 +109,7 @@ export const cronQueueSpec: CommandSpec = {
   subcommands: [
     {
       name: "list",
-      description: "List queued posts with their approval state",
+      description: "List queued posts with their approval state and each attached file's size",
       run: (ctx) => ({ data: { posts: listQueuedPosts(queueDeps(ctx)) } }),
       render(data, ctx) {
         const d = data as { posts: QueuedPostRow[] };

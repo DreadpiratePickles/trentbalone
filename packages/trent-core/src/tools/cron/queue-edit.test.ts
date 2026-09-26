@@ -2,7 +2,9 @@
  * [X4] Editing the post queue on the job file. A queued post's approval is bound to its exact
  * call (`governance/bound-approvals.ts`), so an edit that changes what would leave the machine
  * invalidates that approval and parks a fresh row for the new content; a move that keeps the
- * content keeps the approval; removing the job removes its pending row too.
+ * content keeps the approval; removing the job removes its pending row too. [P2-14] An edit keeps
+ * the post's files (re-read where they were approved, refused when changed) unless it names a
+ * media URL, and the list names each file with its size.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
@@ -11,7 +13,9 @@ import path from "node:path";
 import { MemoryGatewayStore } from "../../gateway/store/GatewayStore.js";
 import { boundCallKey, createBoundApprovalStore, type BoundApprovalStore, type BoundCall } from "../../governance/bound-approvals.js";
 import { SOCIAL_WRITE_CLASSES, type SocialAdapterOptions } from "../social/index.js";
+import { describeMediaFile, renderMediaPreview, resolveMediaFiles, type SocialMediaFile } from "../social/media-files.js";
 import { queueSocialPost, type SocialQueueEntry } from "../social/queue.js";
+import { png } from "../social/testing/media-fixtures.js";
 import { readCronJobs, writeCronJobs } from "./index.js";
 import { editQueuedPost, listQueuedPosts, moveQueuedPost, removeQueuedPost } from "./queue-edit.js";
 
@@ -160,5 +164,90 @@ describe("queue rm", () => {
     expect(rowsFor(call).map((row) => row.status)).toEqual(["expired"]);
     expect(readCronJobs(profileDir)).toEqual([]);
     expect(() => removeQueuedPost(deps(), id)).toThrow(/no queued post/);
+  });
+});
+
+describe("queue edit keeps a post's files", () => {
+  let workspace: string;
+  const FILES = [
+    { path: "media-out/brunch.png", alt: "Pancakes on the terrace" },
+    { path: "media-out/terrace.png", alt: "The terrace at ten" },
+  ];
+  const filesDeps = () => ({ profileDir, store, now, social: { connected: () => new Set(["bluesky", "buffer"] as const), now, providerToken: async () => undefined } satisfies SocialAdapterOptions });
+
+  beforeEach(() => {
+    // The seat's workspace, apart from the profile: where the files were resolved when approved.
+    workspace = fs.mkdtempSync(path.join(os.tmpdir(), "trent-cron-queue-edit-work-"));
+    fs.mkdirSync(path.join(workspace, "media-out"));
+    fs.writeFileSync(path.join(workspace, "media-out", "brunch.png"), png(1200, 800, 2048));
+    fs.writeFileSync(path.join(workspace, "media-out", "terrace.png"), png(800, 800, 1024));
+  });
+  afterEach(() => {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  /** A Bluesky post with two files, queued exactly as `social_schedule` queues it after the yes. */
+  function queuedWithFiles(): { id: string; call: BoundCall; media: SocialMediaFile[] } {
+    const media = resolveMediaFiles(workspace, FILES);
+    const at = "2026-09-21T15:00:00Z";
+    const args = { platform: "bluesky", text: "Sunday brunch is back", media: FILES, at };
+    const call: BoundCall = { adapter: "social", action: `social_schedule ${JSON.stringify(args)}`, tool: "social_schedule", args, classes: SOCIAL_WRITE_CLASSES, runId: "run_q", stepId: "step_1" };
+    const preview = `post to bluesky at ${at}: "Sunday brunch is back" (${renderMediaPreview(media)})`;
+    bindings.decide(bindings.require(call, preview).row!.id, "approved", "bobby");
+    const entry: SocialQueueEntry = { call, preview, request: { platform: "bluesky", text: "Sunday brunch is back", media }, at };
+    return { id: queueSocialPost(profileDir, entry, clock).id, call, media };
+  }
+
+  const entryOf = () => readCronJobs(profileDir)[0]!.payload as SocialQueueEntry;
+
+  it("an edit of the text carries every approved file into the new call, its preview and the job", async () => {
+    const { id, call, media } = queuedWithFiles();
+    const result = await editQueuedPost(filesDeps(), id, { text: "Sunday brunch is back, 10am" });
+    expect(result.changed).toBe(true);
+    const preview = result.approval!.details.preview;
+    for (const file of media) expect(preview).toContain(describeMediaFile(file));
+    const entry = entryOf();
+    expect(entry.request).toEqual({ platform: "bluesky", text: "Sunday brunch is back, 10am", media });
+    expect(entry.call.args).toMatchObject({ media: FILES });
+    expect(entry.preview).toBe(preview);
+    expect(rowsFor(call).map((row) => row.status)).toEqual(["expired"]);
+    expect(rowsFor(entry.call).map((row) => row.status)).toEqual(["pending"]);
+  });
+
+  it("an edit that changes nothing keeps the files and the approval", async () => {
+    const { id, call, media } = queuedWithFiles();
+    const result = await editQueuedPost(filesDeps(), id, { text: "Sunday brunch is back" });
+    expect(result.changed).toBe(false);
+    expect(entryOf().request.media).toEqual(media);
+    expect(rowsFor(call).map((row) => row.status)).toEqual(["approved"]);
+  });
+
+  it("an edit that names a media URL replaces the files: a post carries files or one URL, not both", async () => {
+    const { id } = queuedWithFiles();
+    await editQueuedPost(filesDeps(), id, { platform: "facebook", mediaUrl: "https://cdn.example.test/brunch.png" });
+    const entry = entryOf();
+    expect(entry.request.media).toBeUndefined();
+    expect(entry.request.mediaUrl).toBe("https://cdn.example.test/brunch.png");
+    expect(entry.call.args).not.toHaveProperty("media");
+  });
+
+  it("refuses the edit when a file changed since it was approved, leaving the job and its approval alone", async () => {
+    const { id, call, media } = queuedWithFiles();
+    fs.writeFileSync(path.join(workspace, "media-out", "brunch.png"), png(1200, 800, 4096));
+    await expect(editQueuedPost(filesDeps(), id, { text: "Sunday brunch is back, 10am" })).rejects.toThrow(/social_media_changed/);
+    expect(entryOf().request).toEqual({ platform: "bluesky", text: "Sunday brunch is back", media });
+    expect(rowsFor(call).map((row) => row.status)).toEqual(["approved"]);
+  });
+
+  it("refuses the edit when a file is gone since it was approved", async () => {
+    const { id, call } = queuedWithFiles();
+    fs.rmSync(path.join(workspace, "media-out", "terrace.png"));
+    await expect(editQueuedPost(filesDeps(), id, { text: "Sunday brunch is back, 10am" })).rejects.toThrow(/social_media_missing/);
+    expect(rowsFor(call).map((row) => row.status)).toEqual(["approved"]);
+  });
+
+  it("the list names each file with its size", () => {
+    const { id, media } = queuedWithFiles();
+    expect(listQueuedPosts(filesDeps())[0]).toMatchObject({ id, media: media.map((file) => ({ path: file.path, bytes: file.bytes })) });
   });
 });

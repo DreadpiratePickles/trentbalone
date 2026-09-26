@@ -25,7 +25,14 @@ per provider, by `stripe.test.ts`, `calendar.test.ts`, `square.test.ts`, `sms.te
 3. The egress proxy must be running and must intercept `api.stripe.com`,
    `www.googleapis.com`, `connect.squareup.com` and `api.twilio.com`, plus
    `oauth2.googleapis.com` for a Google token refresh (`egress.intercept_domains`). Without the proxy the toolset is skipped with a reason, exactly
-   as `web` is: every one of its calls leaves the machine.
+   as `web` is: every one of its calls leaves the machine. Provider tokens never pass through the
+   broker: every request, the OAuth refresh included, carries the proxy's own-credential marker
+   (`x-trent-own-credential`, `egress/CredentialBroker.ts`), so the proxy still enforces its
+   allowlist and its token gate but forwards the provider's own `Authorization` (Bearer, or Basic
+   for Twilio) as the toolset set it and writes nothing of its own. Without the marker it would
+   replace that header with the credential its broker token stands for, which in the REPL is the
+   model provider key (`tools/business/egress.test.ts` proves each provider receives its connect
+   token exactly once and never that key).
 4. `trent doctor` has a Business Providers line: one line per provider, connected or not, with
    the connect command for each that is not. It never prints a token.
 

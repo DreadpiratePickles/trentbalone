@@ -11,6 +11,10 @@
  *     through the social adapter's own dry run (the same refusals `social_schedule` gives) and
  *     parked as a FRESH pending row: `trent approvals approve <id>` grants exactly the new content.
  *     A row is never reused, even for content that was approved once before.
+ *   - [P2-14] An edit keeps the post's files unless it names a media URL (a post carries files or
+ *     one URL, not both). The files are re-read through that same dry run in the workspace they
+ *     were approved under, and the edit is refused, leaving the job alone, unless each one is
+ *     still the file that was approved (its line, digest prefix included, on the new card).
  *   - A move changes only when the post leaves. The call is unchanged, so the approval stands;
  *     the one-shot schedule and `next_run_at` are re-anchored the way queueing anchors them.
  *   - Removing a queued post removes its pending row, and expires an approved one so that the
@@ -24,6 +28,7 @@ import { EXIT, TrentError } from "../../errors/index.js";
 import { FileGatewayStore, type ApprovalRow, type GatewayStore } from "../../gateway/store/GatewayStore.js";
 import { boundCallKey, createBoundApprovalStore, type BoundApprovalRow, type BoundCall } from "../../governance/bound-approvals.js";
 import { SOCIAL_ADAPTER_NAME, SOCIAL_WRITE_CLASSES, createSocialAdapter, type SocialAdapterOptions } from "../social/index.js";
+import { describeMediaFile, type SocialMediaFile } from "../social/media-files.js";
 import { SOCIAL_PUBLISH_HANDLER, oneShotCron, parseQueueTime, queueSlot, type SocialQueueEntry } from "../social/queue.js";
 import { SocialToolError, type SocialPostRequest } from "../social/types.js";
 import { readCronJobs, writeCronJobs, type CronJob } from "./index.js";
@@ -41,6 +46,12 @@ export interface QueueEditDeps {
 
 export type QueueApprovalState = ApprovalRow["status"] | "none";
 
+/** One file a queued post attaches, as the list names it: the path the call gave and its size. */
+export interface QueuedFileRow {
+  readonly path: string;
+  readonly bytes: number;
+}
+
 /** One queued post as `trent cron queue list` shows it. */
 export interface QueuedPostRow {
   readonly id: string;
@@ -48,6 +59,7 @@ export interface QueuedPostRow {
   readonly platform: string;
   readonly text: string;
   readonly mediaUrl?: string;
+  readonly media?: readonly QueuedFileRow[];
   readonly accountId?: string;
   readonly at: string;
   readonly enabled: boolean;
@@ -112,8 +124,39 @@ function expireRows(store: GatewayStore, call: BoundCall): void {
   });
 }
 
+function sameFiles(a: readonly SocialMediaFile[] | undefined, b: readonly SocialMediaFile[] | undefined): boolean {
+  return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
 function sameRequest(a: SocialPostRequest, b: SocialPostRequest): boolean {
-  return a.platform === b.platform && a.text === b.text && a.mediaUrl === b.mediaUrl && a.accountId === b.accountId;
+  return a.platform === b.platform && a.text === b.text && a.mediaUrl === b.mediaUrl && sameFiles(a.media, b.media) && a.accountId === b.accountId;
+}
+
+/** The deepest directory holding every path, or undefined when only the filesystem root does. */
+function commonDir(paths: readonly string[]): string | undefined {
+  let dir = path.dirname(paths[0] ?? "/");
+  while (!paths.every((p) => p.startsWith(`${dir}${path.sep}`))) {
+    if (path.dirname(dir) === dir) return undefined;
+    dir = path.dirname(dir);
+  }
+  return path.dirname(dir) === dir ? undefined : dir;
+}
+
+/**
+ * The workspace a queued post's files were resolved under, recovered from what the approval
+ * recorded: each file's real path is that workspace joined with the path the call named. The
+ * queue keeps no workspace of its own, and the CLI's is the profile, where the files are not.
+ */
+function approvedWorkspace(files: readonly SocialMediaFile[]): string | undefined {
+  const roots = new Set<string>();
+  for (const file of files) {
+    if (path.isAbsolute(file.path)) continue;
+    const named = path.normalize(file.path);
+    if (!file.file.endsWith(`${path.sep}${named}`)) return undefined;
+    roots.add(file.file.slice(0, file.file.length - named.length - 1));
+  }
+  if (roots.size > 1) return undefined;
+  return roots.size === 1 ? [...roots][0] : commonDir(files.map((file) => file.file));
 }
 
 function jobName(platform: string, slot: Date): string {
@@ -138,6 +181,7 @@ export function listQueuedPosts(deps: QueueEditDeps): QueuedPostRow[] {
       platform: payload.request.platform,
       text: payload.request.text,
       ...(payload.request.mediaUrl === undefined ? {} : { mediaUrl: payload.request.mediaUrl }),
+      ...(payload.request.media === undefined || payload.request.media.length === 0 ? {} : { media: payload.request.media.map((file) => ({ path: file.path, bytes: file.bytes })) }),
       ...(payload.request.accountId === undefined ? {} : { accountId: payload.request.accountId }),
       at: new Date(payload.at).toISOString(),
       enabled: job.enabled,
@@ -149,9 +193,12 @@ export function listQueuedPosts(deps: QueueEditDeps): QueuedPostRow[] {
   return rows.sort((a, b) => a.at.localeCompare(b.at));
 }
 
-/** The edited post through the social adapter's own dry run: its preview, or its refusal as a config error. */
-async function previewEdited(deps: QueueEditDeps, action: string, id: string): Promise<string> {
-  const adapter = createSocialAdapter({ workspace: deps.profileDir, profileDir: deps.profileDir, backend: "local" }, { ...(deps.social ?? {}), now: deps.social?.now ?? (() => now(deps)) });
+/**
+ * The edited post through the social adapter's own dry run: its preview, or its refusal as a config
+ * error. `workspace` is where the post's files resolve; a post without files needs none.
+ */
+async function previewEdited(deps: QueueEditDeps, action: string, id: string, workspace = deps.profileDir): Promise<string> {
+  const adapter = createSocialAdapter({ workspace, profileDir: deps.profileDir, backend: "local" }, { ...(deps.social ?? {}), now: deps.social?.now ?? (() => now(deps)) });
   const dry = await adapter.dryRun!(action, {});
   if (dry.status !== "needs_approval") fail("cron.queue.edit", `the social toolset refused the edited post: ${dry.summary}`, id);
   const preview = adapter.preview?.(action);
@@ -163,10 +210,13 @@ export async function editQueuedPost(deps: QueueEditDeps, id: string, patch: Que
   const { jobs, job, entry } = findQueued(deps, "cron.queue.edit", id);
   if (entry.published !== undefined) fail("cron.queue.edit", `that post already published as ${entry.published.externalId}; queue a new one`, id);
   const store = storeOf(deps);
+  // The files stay unless the edit names a media URL, which replaces them.
+  const media = patch.mediaUrl === undefined && entry.request.media !== undefined && entry.request.media.length > 0 ? entry.request.media : undefined;
   const request: SocialPostRequest = {
     platform: (patch.platform ?? entry.request.platform) as SocialPostRequest["platform"],
     text: patch.text ?? entry.request.text,
     ...((patch.mediaUrl ?? entry.request.mediaUrl) === undefined ? {} : { mediaUrl: patch.mediaUrl ?? entry.request.mediaUrl }),
+    ...(media === undefined ? {} : { media }),
     ...((patch.accountId ?? entry.request.accountId) === undefined ? {} : { accountId: patch.accountId ?? entry.request.accountId }),
   };
   if (sameRequest(request, entry.request)) return { id, changed: false, approval: rowFor(store, entry.call) };
@@ -175,12 +225,22 @@ export async function editQueuedPost(deps: QueueEditDeps, id: string, patch: Que
   const args = {
     platform: request.platform,
     text: request.text,
+    ...(media === undefined ? {} : { media: media.map((file) => ({ path: file.path, alt: file.alt })) }),
     ...(request.mediaUrl === undefined ? {} : { media_url: request.mediaUrl }),
     ...(request.accountId === undefined ? {} : { account_id: request.accountId }),
     at,
   };
   const action = `${SCHEDULE_TOOL} ${JSON.stringify(args)}`;
-  const preview = await previewEdited(deps, action, id);
+  const workspace = media === undefined ? undefined : approvedWorkspace(media);
+  if (media !== undefined && workspace === undefined) {
+    fail("cron.queue.edit", "the post's files cannot be traced back to the workspace they were approved in; remove the post and queue it again", id);
+  }
+  const preview = await previewEdited(deps, action, id, workspace);
+  for (const file of media ?? []) {
+    if (!preview.includes(describeMediaFile(file))) {
+      fail("cron.queue.edit", `social_media_changed: ${file.path} is not the file that was approved (${describeMediaFile(file)}); nothing was edited. Save the new file under a new name and queue the post again`, id);
+    }
+  }
   // Outside a seat turn: no run, no step, so nothing is implicit and only a human's decision grants it.
   const call: BoundCall = { adapter: SOCIAL_ADAPTER_NAME, action, tool: SCHEDULE_TOOL, args, classes: SOCIAL_WRITE_CLASSES, ...(entry.call.seat === undefined ? {} : { seat: entry.call.seat }) };
 
