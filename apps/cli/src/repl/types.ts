@@ -248,6 +248,12 @@ export interface ReplContext {
   sessions?: ReplSessionsPort;
   /** E1: the agent-write ledger this session records into (`/checkpoints`, `/rollback`). */
   checkpoints?: ReplCheckpointsPort;
+  /** [S3] `/compact`: compacts this session now and says what happened (`solo-commands.ts`). */
+  compactSession?: () => Promise<string>;
+  /** [S3] Solo: the approvals this session's parked runs wait on; absent in the fleet. */
+  parkedRuns?: () => readonly string[];
+  /** [S3] Solo, after a `/rollback`: tells the conversation what was undone (A10). */
+  onRollback?: (result: ReplRollbackResult, turn: number) => Promise<void>;
   /** Ends this session the way Ctrl+D does (`/exit`). Absent where there is no session to end. */
   session?: ReplSessionControl;
 }

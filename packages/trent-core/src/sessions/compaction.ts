@@ -75,6 +75,13 @@ export interface CompactionInput {
   readonly flush?: (dropped: readonly SessionMessage[]) => Promise<void>;
   readonly now?: string;
   readonly newId?: () => string;
+  /**
+   * [S3] The earliest index that must stay verbatim: the cut never goes past it. Solo passes the opening
+   * message of a run parked on a held call, which `resume` after a restart rebuilds the run from.
+   */
+  readonly keepFrom?: number;
+  /** [S3] Compact even under the threshold: the user asked (`/compact`). */
+  readonly force?: boolean;
 }
 
 /** Total content characters of a transcript; the one measure every threshold here uses. */
@@ -131,7 +138,7 @@ export interface CompactionPlan {
  * The newest messages that fit `historyChars`, cut only at a legal boundary, with at least
  * `MIN_KEPT_MESSAGES` kept whatever the budget says.
  */
-export function planCompaction(messages: readonly SessionMessage[], limits: CompactionLimits): CompactionPlan {
+export function planCompaction(messages: readonly SessionMessage[], limits: CompactionLimits, keepFrom?: number): CompactionPlan {
   const budget = Math.max(1, Math.trunc(limits.historyChars));
   const legal = boundaries(messages).filter((index) => index < messages.length);
   // Newest-first: the latest boundary whose tail still fits, else the latest boundary that keeps
@@ -142,6 +149,8 @@ export function planCompaction(messages: readonly SessionMessage[], limits: Comp
     if (transcriptChars(tail) > budget && tail.length >= MIN_KEPT_MESSAGES) break;
     chosen = index;
   }
+  // [S3] Never past a message the caller must keep verbatim; its index is a legal boundary by the caller's word.
+  if (keepFrom !== undefined && Number.isInteger(keepFrom) && keepFrom >= 0) chosen = Math.min(chosen, keepFrom);
   return { drop: messages.slice(0, chosen), keep: messages.slice(chosen) };
 }
 
@@ -164,8 +173,8 @@ function defaultId(): string {
  * the threshold, or one whose summariser is unavailable, comes back unchanged and says why.
  */
 export async function compactSession(input: CompactionInput): Promise<CompactionOutcome> {
-  if (!shouldCompact(input.messages, input.limits)) return { status: "not_needed" };
-  const { drop, keep } = planCompaction(input.messages, input.limits);
+  if (input.force !== true && !shouldCompact(input.messages, input.limits)) return { status: "not_needed" }; // [S3] force
+  const { drop, keep } = planCompaction(input.messages, input.limits, input.keepFrom); // [S3] keepFrom
   if (drop.length === 0) return { status: "skipped", reason: "nothing may be dropped without splitting a tool exchange" };
 
   // 1. The memory flush is offered the turns that are about to go. A failure here is not a reason
@@ -231,6 +240,8 @@ export interface MemoryFlushReport {
   readonly entries: readonly string[];
   readonly refused: readonly string[];
   readonly costCents: number;
+  /** [S3] Entries whose write came back held (`needs_approval`, a provenance hold): waiting for a human, not written. */
+  readonly held?: readonly string[];
 }
 
 const FLUSH_SYSTEM_PROMPT =
@@ -289,13 +300,17 @@ export function createMemoryFlush(options: MemoryFlushOptions): (dropped: readon
 
     const written: string[] = [];
     const refused: string[] = [];
+    const held: string[] = []; // [S3]
     for (const content of entries) {
       const action = `memory ${JSON.stringify({ target: block, action: "add", content })}`;
       const record = await options.memory.execute(action, { companyId: options.companyId });
       if (record.status === "completed") written.push(content);
-      else refused.push(record.summary);
+      else {
+        refused.push(record.summary);
+        if (record.status === "needs_approval") held.push(content); // [S3]
+      }
     }
-    if (written.length > 0) return { status: "written", entries: written, refused, costCents };
-    return { status: "refused", entries: [], refused, costCents };
+    if (written.length > 0) return { status: "written", entries: written, refused, costCents, held };
+    return { status: "refused", entries: [], refused, costCents, held };
   };
 }

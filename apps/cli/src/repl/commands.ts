@@ -9,6 +9,7 @@
 
 import { CHECKPOINT_COMMANDS } from "./checkpoint-commands.js";
 import { GOAL_COMMANDS } from "./goal-commands.js";
+import { SOLO_COMMANDS } from "./solo-commands.js"; // [S3]
 import { decideHeldWrite, heldWriteLines, heldWrites } from "./held-writes.js";
 import { GLYPHS, fadingRule, type Theme } from "../ui/index.js";
 import { formatCents } from "./budget.js";
@@ -391,6 +392,8 @@ export const REPL_COMMANDS: Record<string, ReplCommand> = {
   },
   // [D4] `/goal` and `/goals` (./goal-commands.ts, docs/goals.md).
   ...GOAL_COMMANDS,
+  // [S3] `/compact` and `/resume` (./solo-commands.ts, docs/solo.md).
+  ...SOLO_COMMANDS,
 
   exit: {
     name: "exit",

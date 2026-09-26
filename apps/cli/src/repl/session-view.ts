@@ -36,6 +36,10 @@ export interface ReplSessionPorts {
   sessions?: ReplSessionsPort;
   /** `/exit`: ends this session, or says a run is in flight. */
   session?: ReplSessionControl;
+  /** [S3] `/compact`, `/resume` and the rollback note (`solo-commands.ts`). */
+  compactSession?: ReplContext["compactSession"];
+  parkedRuns?: ReplContext["parkedRuns"];
+  onRollback?: ReplContext["onRollback"];
 }
 
 /** The half of the context that is configuration and ports, as the engine was constructed with. */

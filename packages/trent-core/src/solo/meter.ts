@@ -65,5 +65,7 @@ export function createRunLedgerMeter(options: RunLedgerMeterOptions = {}): SoloM
       closeRunScope([], runId);
       charged.set(runId, { total: of(runId).total, unwritten: 0 });
     },
+    // [S3] A delegated child's cents slice: what this run may still spend under its per-run cap.
+    remaining: (runId) => (perRun === undefined ? undefined : Math.max(0, perRun - of(runId).total)),
   };
 }

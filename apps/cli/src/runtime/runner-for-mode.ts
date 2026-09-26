@@ -46,6 +46,8 @@ import type { TrentToolAdapter } from "@trent/core/tools/index.js";
 import { currentToolCallContext } from "@trent/core/governance/tool-call-context.js";
 import { INBOUND_SEED_CALL, seedInboundTaint } from "@trent/core/webhooks/taint.js";
 import { contextLimits } from "../repl/compact.js";
+import type { SoloCompactionOutcome } from "@trent/core/solo/compaction.js"; // [S3]
+import { conversationRunners, soloAgentSettings, soloDelegationFor, soloMemoryAdapters, soloSkillsOf } from "./solo-continuity.js"; // [S3]
 import type { ToolWiringDeps } from "../repl/tools.js";
 import type { ReplConfig } from "../repl/types.js";
 
@@ -97,6 +99,10 @@ export interface ModeRunner {
   readonly parked?: () => readonly SoloParkedCall[];
   /** Solo: announce the parked runs whose row was decided elsewhere (`trent approvals approve`); returns their ids. */
   readonly sweep?: () => string[];
+  /** [S3] Solo: compacts a profile session's conversation now (`/compact`); `force` under the threshold too. */
+  readonly compact?: (session: string, options?: { readonly force?: boolean }) => Promise<SoloCompactionOutcome>;
+  /** [S3] Solo: one note into a profile session's conversation (what a `/rollback` undid, A10). */
+  readonly note?: (session: string, text: string) => Promise<void>;
 }
 
 /** Test seams for solo: a scripted model and a recording audit writer. Absent, the real ones. */
@@ -203,7 +209,7 @@ export interface RunnerParts {
   readonly fleetRun: (objective: string, options: Omit<ModeRunInput, "objective">) => AsyncIterable<OrcEvent>;
   readonly tools: { readonly adapters: readonly TrentToolAdapter[] };
   readonly fleetMemory: FleetMemoryHook;
-  readonly checkpoints?: { beginTurn(): unknown };
+  readonly checkpoints?: { beginTurn(seat?: string): unknown }; // [S3] A10: the seat a turn is opened as
   readonly ledger?: { dailyTotalCents(date: Date | string): number };
   readonly sinks?: readonly SoloFrameSink[];
   readonly holds?: SoloHoldPolicy;
@@ -267,6 +273,52 @@ function soloRunner(parts: RunnerParts, windowTokens: number | undefined, seeds?
   const seeding = (adapters: TrentToolAdapter[]): TrentToolAdapter[] => (parts.policy === undefined || seeds === undefined ? adapters : seededOnFirstCall(adapters, parts.policy, seeds));
   const perRunCapCents = positive(config.budget?.per_run_cap);
   const dailyCapCents = positive(config.budget?.daily_cap);
+  // [S3] Continuity: agent.solo.* validated; memory gated (item 2); skills (3); delegation (4); compaction (1).
+  const settings = soloAgentSettings(config);
+  const soloTools = [...parts.tools.adapters, ...soloMemoryAdapters(parts.fleetMemory, profileDir, config)];
+  const skills = soloSkillsOf(profileDir);
+  const childConfig = { ...(parts.pin === undefined ? {} : { model: parts.pin }), ceilingChars: contextLimits(config).ceilingChars, ...(maxToolResultChars === undefined ? {} : { maxToolResultChars }), ...(windowTokens === undefined ? {} : { contextWindowTokens: windowTokens }) };
+  const delegation = soloDelegationFor({
+    settings,
+    base: { gateway, memory, skills, profileDir, workspace: parts.workspace, companyId, config: childConfig, compaction: settings.compaction },
+    adapters: soloTools,
+    sessions,
+    model: { provider: config.provider, model: parts.pin ?? config.model },
+    fleetRun: (objective, signal) => parts.fleetRun(objective, { trigger: "manual", ...(signal === undefined ? {} : { signal }) }),
+    sinks: [...(parts.sinks ?? []), audit],
+  });
+  const runners = conversationRunners((conversation) => { // [S3] the router's `create`, kept per conversation
+    // The chain's own approval rows travel with the adapters (the tool build `buildTrentTools` installed).
+    const bindings = currentBoundApprovals();
+    const sessionId = conversation.sessionId;
+    return createSoloRunner({
+      gateway,
+      tools: { adapters: seeding(applyHoldPolicy(soloTools, conversation.holds, conversation.surface ?? parts.surface)), ...(bindings === undefined ? {} : { bindings }) }, // [S3] memory gated
+      session: sessionId === undefined ? memorySoloSession() : profileSoloSession(sessions, sessionId),
+      // A profile session keeps the runner's taint and parks beside its transcript, so a restart continues them.
+      ...(sessionId === undefined ? {} : { sessionId, state: sessionStoreState(sessions.getStore(), sessionId) }),
+      memory,
+      meter: createRunLedgerMeter({
+        surface: conversation.surface ?? parts.surface ?? "unknown",
+        companyId,
+        ...(perRunCapCents === undefined ? {} : { perRunCapCents }),
+        ...(dailyCapCents === undefined || parts.ledger === undefined ? {} : { dailyCapCents, ledger: parts.ledger }),
+      }),
+      ...(parts.checkpoints === undefined ? {} : { checkpoints: { beginTurn: (seat?: string) => void parts.checkpoints?.beginTurn(seat) } }), // [S3] A10
+      config: {
+        ...(parts.pin === undefined ? {} : { model: parts.pin }),
+        ceilingChars: contextLimits(config).ceilingChars,
+        ...(maxToolResultChars === undefined ? {} : { maxToolResultChars }),
+        ...(windowTokens === undefined ? {} : { contextWindowTokens: windowTokens }),
+      },
+      profileDir,
+      workspace: parts.workspace,
+      companyId,
+      skills, // [S3] item 3
+      delegation, // [S3] item 4
+      compaction: settings.compaction, // [S3] item 1
+    });
+  }, parts.holds ?? "deny");
   const router = createSoloRouter({
     ...(parts.holds === undefined ? {} : { holds: parts.holds }),
     sinks: [...(parts.sinks ?? []), audit],
@@ -277,35 +329,7 @@ function soloRunner(parts: RunnerParts, windowTokens: number | undefined, seeds?
       const bindings = currentBoundApprovals();
       return bindings === undefined ? undefined : new Set(bindings.list().map((row) => row.id));
     },
-    create: (conversation) => {
-      // The chain's own approval rows travel with the adapters (the tool build `buildTrentTools` installed).
-      const bindings = currentBoundApprovals();
-      const sessionId = conversation.sessionId;
-      return createSoloRunner({
-        gateway,
-        tools: { adapters: seeding(applyHoldPolicy([...parts.tools.adapters, ...parts.fleetMemory.adapters], conversation.holds, conversation.surface ?? parts.surface)), ...(bindings === undefined ? {} : { bindings }) },
-        session: sessionId === undefined ? memorySoloSession() : profileSoloSession(sessions, sessionId),
-        // A profile session keeps the runner's taint and parks beside its transcript, so a restart continues them.
-        ...(sessionId === undefined ? {} : { sessionId, state: sessionStoreState(sessions.getStore(), sessionId) }),
-        memory,
-        meter: createRunLedgerMeter({
-          surface: conversation.surface ?? parts.surface ?? "unknown",
-          companyId,
-          ...(perRunCapCents === undefined ? {} : { perRunCapCents }),
-          ...(dailyCapCents === undefined || parts.ledger === undefined ? {} : { dailyCapCents, ledger: parts.ledger }),
-        }),
-        ...(parts.checkpoints === undefined ? {} : { checkpoints: { beginTurn: () => void parts.checkpoints?.beginTurn() } }),
-        config: {
-          ...(parts.pin === undefined ? {} : { model: parts.pin }),
-          ceilingChars: contextLimits(config).ceilingChars,
-          ...(maxToolResultChars === undefined ? {} : { maxToolResultChars }),
-          ...(windowTokens === undefined ? {} : { contextWindowTokens: windowTokens }),
-        },
-        profileDir,
-        workspace: parts.workspace,
-        companyId,
-      });
-    },
+    create: runners.create, // [S3]
   });
   return {
     mode: "solo",
@@ -327,6 +351,9 @@ function soloRunner(parts: RunnerParts, windowTokens: number | undefined, seeds?
     conversationOf: (runId) => router.conversationOf(runId),
     parked: () => router.parked(),
     sweep: () => router.sweep(),
+    // [S3] `/compact` and the rollback note reach the runner the router drives for that session.
+    compact: async (session, options) => (await runners.forSession(session).compact?.(options)) ?? { status: "skipped", reason: "this runner cannot compact", pruned: 0 },
+    note: async (session, text) => runners.forSession(session).note?.(text),
   };
 }
 

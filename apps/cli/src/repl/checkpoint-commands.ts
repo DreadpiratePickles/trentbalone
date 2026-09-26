@@ -115,6 +115,7 @@ export const CHECKPOINT_COMMANDS = {
         );
       }
       if (result.restored.length === 0) lines.push(empty(ctx.theme, "That turn wrote no file, so nothing was restored."));
+      await ctx.onRollback?.(result, wanted); // [S3] A10: in solo, the conversation is told what was undone
       return lines.join("\n");
     },
   },

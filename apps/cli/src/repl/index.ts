@@ -26,6 +26,7 @@ import { fleetMemoryToolListing } from "./fleet-memory.js";
 import { workspaceNotices } from "./workspace.js";
 import { createHeadlessRuntime } from "../runtime/headless.js";
 import { resolveAgentMode, type AgentMode, type SoloSeams } from "../runtime/runner-for-mode.js"; // [S2]
+import { replContinuity } from "./solo-commands.js"; // [S3]
 import type { ReplConfig } from "./types.js";
 
 /**
@@ -273,6 +274,11 @@ export class ClassicRepl {
       }, () => undefined);
     };
 
+    // [S3] /compact (the fleet's compactor or the solo runner), and in solo: a park this session left behind is
+    // offered now, `/resume` runs it as a turn, and a `/rollback` is told to the conversation (./solo-commands.ts).
+    const continuity = replContinuity(runtime.runner, () => turns.sessionId?.(), compactor);
+    for (const line of continuity.offers()) writeLine(theme.needsApproval(line));
+
     let exiting: Promise<void> | undefined;
     const exit = (code: number): void => {
       // Ctrl+C is a key here (raw mode), so the proxy and the sandboxes are stopped BEFORE the
@@ -309,6 +315,7 @@ export class ClassicRepl {
         sandbox: tools.sandbox,
         egress: tools.egress,
         onApprovalAnswer: bindApprovalAnswers(runtime.runner), // [S2] the runner by mode is the approval target
+        ...(continuity.resume === undefined ? {} : { resume: continuity.resume }), // [S3]
         // `/context` measures the assembly the hook performed; it estimates nothing of its own.
         contextInspector: fleetMemory,
         compactions: () => compactions,
@@ -321,6 +328,7 @@ export class ClassicRepl {
           sessions: this.#sessions,
           // `/exit` is Ctrl+D as a command: the same `exit(0)`, and refused mid-run as Ctrl+D is.
           session: { end: () => (engine.busy ? "busy" : (exit(0), "ended")) },
+          ...continuity.ports, // [S3]
         },
       });
 

@@ -11,9 +11,11 @@ import { parseAction, record as toRecord, type ToolSpec } from "../action.js";
 import { fitSummary } from "../spillover.js";
 import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
 import { renderToolInstructions, type ToolSchema } from "../web/schemas.js";
+import { currentDelegateRoute } from "./solo-route.js"; // [S3]
 import type { DelegatePort, DelegateRequest, DelegateResult } from "./types.js";
 
 export type { DelegatePort, DelegateRequest, DelegateResult } from "./types.js";
+export { bindDelegateRoute, currentDelegateRoute, unbindDelegateRoute, type DelegateRoute } from "./solo-route.js"; // [S3]
 
 export const DELEGATE_ADAPTER_NAME = "delegation";
 export const DELEGATE_SCOPES = ["delegation", "delegate_task"];
@@ -149,7 +151,7 @@ export function createDelegateAdapter(options: DelegateAdapterOptions): TrentToo
       if (error) return record(action, "failed", error);
       const requests = toRequests(args);
       if (typeof requests === "string") return record(action, "failed", requests);
-      const port = options.port;
+      const port = currentDelegateRoute() ?? options.port; // [S3] a solo run's own route first (`solo-route.ts`)
       if (!port) {
         return record(action, "failed", "delegate_task not_available: no delegation port is bound to this seat, so nothing was delegated. Do the work yourself or report that delegation is off.");
       }

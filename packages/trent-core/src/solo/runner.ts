@@ -23,6 +23,11 @@
  *       row decided by `trent approvals`. A park that cannot be rebuilt, or that a new run on the
  *       session supersedes, is abandoned out loud: its approval row is marked abandoned and the
  *       conversation gets one line saying the call did not run. Never a silent loss.
+ *
+ * [S3] Continuity: compaction before a run over its threshold (C5) and on `compact()`, prefix untouched
+ * (`compaction.ts`); the skills index in the stable tier, invoked bodies in the context tier (`skills.ts`);
+ * `delegate_task` through the driving run's route (`delegate-route.ts`); turns opened as seat `trent` and
+ * `note()` for a `/rollback` (A10); a decision taken while the reader holds a re-raised gate continues it.
  */
 import crypto from "node:crypto";
 import type { AgentRunInput } from "../agent-runner/index.js";
@@ -38,6 +43,9 @@ import { loadSoloState, parkRecordOf } from "./park.js";
 import { assembleTurnContext, buildSystemPrompt, historyMessages, mergeRoles, readSoloPersona, renderToolResult, renderTurnOpening } from "./prompt.js";
 import { boundRowOf } from "./holds.js";
 import { driveTurn, gateFrames, type TurnDeps, type TurnState } from "./turn.js";
+import { createSoloCompactor } from "./compaction.js"; // [S3]
+import { bindRunDelegation } from "./delegate-route.js"; // [S3]
+import { invokedSkillOf, invokedSkillsBlock, skillsIndexBlock } from "./skills.js"; // [S3]
 import {
   DEFAULT_SOLO_MAX_TOOL_CALLS,
   DEFAULT_SOLO_MAX_TOOL_RESULT_CHARS,
@@ -86,6 +94,8 @@ export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
   /** [S1.1] Every parked run of the conversation, this process's and those saved by an earlier one. */
   const parks = new Map<string, SoloParkRecord>();
   let taint: SessionTaint | undefined;
+  /** [S3] The skills `skill_view` loaded in this conversation, saved with the taint. */
+  let invoked: string[] = [];
 
   /** [S1.1] The saved state, read once, on first use. */
   function sessionTaint(): SessionTaint {
@@ -93,13 +103,14 @@ export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
       const saved = loadSoloState(deps.state);
       taint = createSessionTaint(saved.taint);
       for (const park of saved.parked) parks.set(park.runId, park);
+      invoked = [...(saved.invokedSkills ?? [])]; // [S3]
     }
     return taint;
   }
 
   function persist(): void {
     if (deps.state === undefined) return;
-    deps.state.save({ version: 1, taint: snapshotSessionTaint(sessionTaint()), parked: [...parks.values()] });
+    deps.state.save({ version: 1, taint: snapshotSessionTaint(sessionTaint()), parked: [...parks.values()], ...(invoked.length === 0 ? {} : { invokedSkills: [...invoked] }) }); // [S3] invoked
   }
 
   const turnDeps: TurnDeps = {
@@ -119,7 +130,12 @@ export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
     maxToolResultChars: resultCap,
     ...(window === undefined ? {} : { budget: { windowTokens: window, reserveTokens: positiveInt(config.maxTokens) ?? DEFAULT_SOLO_OUTPUT_RESERVE_TOKENS } }),
     ...(deps.tools.bindings === undefined ? {} : { bindings: deps.tools.bindings }),
-    afterCall: () => persist(),
+    afterCall: (state) => {
+      // [S3] A `skill_view` of a skill joins the conversation's invoked set, before the state is saved.
+      const skill = invokedSkillOf(state.toolCalls.at(-1));
+      if (skill !== undefined && !invoked.includes(skill)) invoked.push(skill);
+      persist();
+    },
     onPark: (state) => {
       const objective = runs.get(state.runId)?.objective ?? state.step.title;
       parks.set(state.runId, parkRecordOf(state, { objective, parkedAt: clock().toISOString(), ...(deps.sessionId === undefined ? {} : { sessionId: deps.sessionId }) }));
@@ -127,10 +143,14 @@ export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
     },
   };
 
+  // [S3] Compaction: the automatic path before a run, and `compact()`; its model calls on the meter as their own run.
+  const compactor = createSoloCompactor({ deps, ...(window === undefined ? {} : { windowTokens: window }), now: clock, newId, taint: () => sessionTaint(), parked: () => new Set(parks.keys()), busy: () => streaming.size > 0 });
+
   async function prefixFor(objective: string, runId: string, history: readonly SoloMessage[]): Promise<{ session: SessionPrefix; context: readonly ContextBlock[] }> {
     const tiers = await deps.memory({ runId, objective, history });
     if (prefix === undefined) {
-      const blocks = tiers.stable.map((block) => ({ ...block, tier: "stable" as const }));
+      const index = skillsIndexBlock(deps.skills); // [S3] names and one line each, frozen with the prefix
+      const blocks = [...tiers.stable, ...(index === undefined ? [] : [index])].map((block) => ({ ...block, tier: "stable" as const }));
       const text = assembleContext(blocks, { ceilingChars: config.ceilingChars ?? Number.NaN }).text;
       prefix = { system: buildSystemPrompt({ persona: readSoloPersona(deps.profileDir), stable: text, adapters: deps.tools.adapters }), stable: blocks };
     }
@@ -164,6 +184,8 @@ export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
     streaming.add(runId);
     deps.meter.open?.(runId, run.objective);
     bindSessionTaint(runId, sessionTaint());
+    // [S3] item 4: this run's `delegate_task` delegates through its own route while it drives.
+    const unbindDelegation = bindRunDelegation({ deps, runId, state, maxToolCalls: turnDeps.maxToolCalls, taint: () => sessionTaint(), signal });
     try {
       for (;;) {
         // A decision is being acted on: the park it answered is spent.
@@ -181,6 +203,7 @@ export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
     } finally {
       streaming.delete(runId);
       unbindSessionTaint(runId);
+      unbindDelegation?.(); // [S3]
       // A parked run's spend reaches the ledger now; `resume` opens the scope again.
       deps.meter.close?.(runId);
     }
@@ -193,16 +216,19 @@ export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
     // A run no reader is driving was dropped mid-stream; a parked one is superseded, out loud.
     for (const runId of [...runs.keys()]) if (!streaming.has(runId) && !parks.has(runId)) runs.delete(runId);
     for (const park of [...parks.values()]) if (!streaming.has(park.runId)) await abandon(park, SUPERSEDED);
-    deps.checkpoints?.beginTurn();
+    deps.checkpoints?.beginTurn(SOLO_SEAT); // [S3] A10: every row this turn ledgers is seat `trent`
+    // [S3] C5: over its threshold, the conversation is compacted before this turn's first model call.
+    const compacted = compactor.auto ? await compactor.compact(false) : undefined;
 
     const runId = newId("solo");
     const startedAt = clock().toISOString();
     const step: SoloStep = { id: `${runId}-${SOLO_SEAT}`, title: clip(objective), startedAt };
     const history = await deps.session.history();
     const { session, context: blocks } = await prefixFor(objective, runId, history);
+    const skills = invokedSkillsBlock(deps.skills, invoked); // [S3] the loaded bodies, after recall: the last trimmed
     const context = assembleTurnContext({
       now: clock(),
-      blocks,
+      blocks: skills === undefined ? blocks : [...blocks, skills],
       stable: session.stable,
       ...(deps.workspace === undefined ? {} : { workspace: deps.workspace }),
       ...(config.ceilingChars === undefined ? {} : { ceilingChars: config.ceilingChars }),
@@ -235,6 +261,8 @@ export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
     runs.set(runId, { state, objective });
     yield state.events.runStart(startedAt);
     yield state.events.stepStart(step);
+    const compactionNote = compactor.noteFor(compacted); // [S3]
+    if (compactionNote !== undefined) yield state.events.note(step, compactionNote);
     yield* drive(runId, input.signal);
   }
 
@@ -308,7 +336,8 @@ export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
     }
     if (state.decision === undefined) {
       yield* gateFrames(state);
-      return;
+      // [S3] A decision taken while the reader held the re-raised gate (the REPL's `/resume` card) continues this stream.
+      if (state.decision === undefined) return;
     }
     if (state.decision === "approved") yield state.events.approved(state.step);
     yield* drive(runId, signal);
@@ -354,6 +383,12 @@ export function createSoloRunner(deps: SoloRunnerDeps): SoloRunner {
         if (call === undefined) return [];
         return [{ runId: park.runId, stepId: park.stepId, adapter: call.adapter, action: call.action, summary: park.held.summary, ...(park.approvalId === undefined ? {} : { approvalId: park.approvalId }) }];
       });
+    },
+    compact: (options = {}) => compactor.compact(options.force === true), // [S3] `/compact`
+    // [S3] A10: what a `/rollback` undid, told to the conversation by its only writer.
+    async note(text) {
+      sessionTaint();
+      if (text.trim() !== "") await deps.session.append([{ role: "system", content: text.trim() }]);
     },
   };
 }

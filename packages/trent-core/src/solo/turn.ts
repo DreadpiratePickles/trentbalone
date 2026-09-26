@@ -313,7 +313,8 @@ async function* loop(state: TurnState, deps: TurnDeps, signal: AbortSignal | und
     }
     state.malformedStreak = 0;
     if (reply.kind === "answer") {
-      await deps.session.append([{ role: "assistant", content: reply.text, runId: state.runId }]);
+      // [S3] item 6: the answer carries the run's cost (`cost_cents` on the stored message, the session's total).
+      await deps.session.append([{ role: "assistant", content: reply.text, runId: state.runId, costCents: state.costCents, tokens: state.tokens, ...(state.model === undefined ? {} : { model: state.model }) }]);
       yield state.events.answer(state.step, reply.text, state.toolCalls);
       yield state.events.stepEnd(state.step, "completed", usage(state));
       yield state.events.runDone(reply.text);

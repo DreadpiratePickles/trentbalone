@@ -56,12 +56,15 @@ interface Ports {
   skills: { slug: string; category: string; description: string; slashCommand: string }[];
   personality: string;
   sessions: { id: string; title: string; messages: unknown[]; total_cost_cents: number }[];
+  /** [S3] What `/compact` reports, and the approvals this session's parked solo runs wait on (`/resume`). */
+  compaction: string;
+  parked: string[];
 }
 
 function makeContext(): { ctx: ReplContext; store: MemoryStore; config: TrentConfig; ports: Ports } {
   const store = new MemoryStore();
   const config: TrentConfig = structuredClone(DEFAULT_CONFIG);
-  const ports: Ports = { agents: [], turns: [], spentCents: 0, skills: [], personality: "default", sessions: [] };
+  const ports: Ports = { agents: [], turns: [], spentCents: 0, skills: [], personality: "default", sessions: [], compaction: "Nothing to compact: the conversation is within its budget.", parked: [] };
   const ctx: ReplContext = {
     theme: createTheme("none"),
     config,
@@ -133,6 +136,10 @@ function makeContext(): { ctx: ReplContext; store: MemoryStore; config: TrentCon
         };
       },
     },
+    // [S3] `/compact` and `/resume`: the solo runner satisfies these live (`solo-commands.ts`), asserted in
+    // `solo-continuity.repl.test.ts`; here they only have to be state that can change.
+    compactSession: async () => ports.compaction,
+    parkedRuns: () => ports.parked,
   };
   return { ctx, store, config, ports };
 }
@@ -260,6 +267,8 @@ describe("every command, without exception", () => {
     ports.personality = "pirate";
     ports.sessions.push({ id: "ses_1", title: "rewrite onboarding", messages: [1, 2], total_cost_cents: 37 });
     ports.turns.push({ turn: 1, at: "2026-09-18T09:30:00.000Z", files: ["src/a.ts"] });
+    ports.compaction = "Compacted this conversation: 4 message(s) summarised."; // [S3]
+    ports.parked.push("appr_1_000001"); // [S3]
 
     const unchanged: string[] = [];
     for (const name of commandNames()) {

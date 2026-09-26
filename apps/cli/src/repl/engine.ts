@@ -82,6 +82,7 @@ export interface ReplEngineDeps {
    * gate belongs to — taken from the event itself, never from a side list (live proof, F5).
    */
   onApprovalAnswer?(runId: string, stepId: string | undefined, answer: GateAnswer): Promise<void> | void;
+  resume?: () => ReplRunner | undefined; // [S3] `/resume`: a parked solo run of this session, run as a turn (`solo-commands.ts`)
 }
 
 export { bindApprovalAnswers } from "./approvals.js";
@@ -336,6 +337,8 @@ export class ReplEngine {
       else this.#emit(this.#renderer.push(this.#deps.theme.meta("Nothing is running.")));
       return;
     }
+    const resumed = /^\/resume(\s|$)/.test(text) && !this.#busy ? this.#deps.resume?.() : undefined; // [S3]
+    if (resumed !== undefined) return this.#runTurn(text, resumed);
     if (text.startsWith("/")) {
       const [name, ...args] = text.slice(1).split(/\s+/);
       this.#emit(await runCommand(name ?? "", args, this.context));
@@ -374,7 +377,7 @@ export class ReplEngine {
     void Promise.resolve().then(() => this.#runTurn(next.text)).then(next.settle, next.fail);
   }
 
-  async #runTurn(objective: string): Promise<void> {
+  async #runTurn(objective: string, source: ReplRunner = this.#deps.runner): Promise<void> {
     // The cap refuses the turn before a single token is bought. Thresholds still only warn.
     const stop = this.budget.exceeded();
     if (stop !== null) {
@@ -393,7 +396,7 @@ export class ReplEngine {
     const outcome = new TurnOutcome();
     let interrupted = false;
     try {
-      for await (const event of this.#deps.runner({ objective, signal: abort.signal, history })) {
+      for await (const event of source({ objective, signal: abort.signal, history })) { // [S3] the turn's runner, or a /resume
         outcome.observe(event);
         this.#render(this.#renderer.handle(event));
         await this.#afterEvent(event, abort.signal);

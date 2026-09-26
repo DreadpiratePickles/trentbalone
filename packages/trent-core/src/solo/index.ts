@@ -39,3 +39,9 @@ export {
   type SoloSession,
   type SoloTools,
 } from "./types.js";
+// [S3] continuity: compaction, memory writes behind the provenance gate, skills on demand, delegation.
+export { DEFAULT_SOLO_COMPACT_AFTER_CHARS, SOLO_SUMMARY_HEADINGS, SOLO_SUMMARY_PROMPT, compactConversation, createSoloCompactor, describeCompaction, pruneToolResults, soloCompactionLimits, type SoloCompactionOutcome, type SoloCompactionSettings } from "./compaction.js";
+export { gatedMemoryAdapters, type MemoryGateOptions } from "./memory-gate.js";
+export { INVOKED_SKILLS_BLOCK, SKILLS_INDEX_BLOCK, invokedSkillOf, invokedSkillsBlock, profileSoloSkills, skillsIndexBlock, type SoloSkills } from "./skills.js";
+export { DEFAULT_SOLO_MAX_DELEGATION_DEPTH, SOLO_DELEGATE_MODES, childAdapters, childObjective, createSoloDelegation, seededState, soloChildFactory, type SoloChild, type SoloChildConversation, type SoloChildSpec, type SoloDelegateMode, type SoloDelegation } from "./delegate.js";
+export { bindSoloDelegation, isTainted, mergeSessionTaint, sliceMeter } from "./delegate-route.js";

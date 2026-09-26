@@ -14,6 +14,10 @@ import type { SessionTaintSnapshot } from "../governance/provenance.js";
 import type { GatewayCompletion, GatewayMessage, GatewayStreamRequest } from "../model-gateway/types.js";
 import type { RunModelCall } from "../orchestrator/run-hooks.js";
 import type { OrcEvent } from "../orchestrator/types.js";
+import type { SessionMessage } from "../sessions/schema.js"; // [S3] compaction plans over the stored transcript
+import type { SoloCompactionOutcome, SoloCompactionSettings } from "./compaction.js"; // [S3]
+import type { SoloDelegation } from "./delegate.js"; // [S3]
+import type { SoloSkills } from "./skills.js"; // [S3]
 import type { HumanAnswers } from "../tools/human/index.js";
 import type { ToolCallRecord, TrentToolAdapter } from "../tools/types.js";
 
@@ -61,7 +65,8 @@ export type SoloMessageRole = "user" | "assistant" | "system" | "tool";
 
 /**
  * One message of the session's conversation, as the loop reads and writes it. `system` is carried
- * for exactly one thing, a compaction summary (`sessions/compaction.ts`); the loop never writes one.
+ * for a compaction summary (`sessions/compaction.ts`) and [S3] a note the runner is handed (a
+ * `/rollback`); the loop itself never writes one.
  */
 export interface SoloMessage {
   readonly role: SoloMessageRole;
@@ -70,6 +75,11 @@ export interface SoloMessage {
   readonly runId?: string;
   /** On a `tool` message: the record exactly as the gated adapter returned it. */
   readonly record?: ToolCallRecord;
+  /** [S3] On a run's answer: the run's integer cents as its meter charged them, stored as `cost_cents`. */
+  readonly costCents?: number;
+  /** [S3] On a run's answer: the run's total tokens and the model that answered. */
+  readonly tokens?: number;
+  readonly model?: string;
 }
 
 /**
@@ -79,6 +89,10 @@ export interface SoloMessage {
 export interface SoloSession {
   history(): Promise<readonly SoloMessage[]>;
   append(messages: readonly SoloMessage[]): Promise<void>;
+  /** [S3] The stored transcript, ids and metadata included: what compaction plans over. Absent: never compacted. */
+  transcript?(): Promise<readonly SessionMessage[]>;
+  /** [S3] Replaces the stored transcript with a compacted one. */
+  replace?(messages: readonly SessionMessage[]): Promise<void>;
 }
 
 export interface SoloMemoryRequest {
@@ -108,11 +122,14 @@ export interface SoloMeter {
   record(runId: string, call: SoloModelCall): number;
   stopReason?(runId: string): string | undefined;
   close?(runId: string): void;
+  /** [S3] The cents this run may still spend under its per-run cap; undefined when it has none. A delegated child's slice. */
+  remaining?(runId: string): number | undefined;
 }
 
 /** The agent-write ledger: one run is one turn (`checkpoints/`, E1). */
 export interface SoloCheckpoints {
-  beginTurn(): void;
+  /** [S3] A10: the runner names its seat, so every row it ledgers is seat `trent`. */
+  beginTurn(seat?: string): void;
 }
 
 export interface SoloConfig {
@@ -169,6 +186,8 @@ export interface SoloSessionState {
   readonly version: 1;
   readonly taint: SessionTaintSnapshot;
   readonly parked: readonly SoloParkRecord[];
+  /** [S3] Skills `skill_view` loaded in this conversation: their bodies ride every later turn's context tier. */
+  readonly invokedSkills?: readonly string[];
 }
 
 /** [S1.1] Where the state lives: `sessionStoreState` (`park.ts`) over the session store's sidecar. */
@@ -209,6 +228,14 @@ export interface SoloRunnerDeps {
   readonly state?: SoloStateStore;
   /** [S1.1] Absent, an abandoned park's bound row is decided `denied` by "abandoned: <reason>" through `tools.bindings`. */
   readonly approvals?: SoloApprovals;
+  /** [S3] The profile's skills: an index in the stable tier, a body `skill_view` loaded in the context tier. */
+  readonly skills?: SoloSkills;
+  /** [S3] What `delegate_task` does in this conversation: a child solo run (or fleet run), or a refusal. */
+  readonly delegation?: SoloDelegation;
+  /** [S3] 0 for a conversation, 1 for a delegated child, 2 for its child. */
+  readonly depth?: number;
+  /** [S3] When the conversation is compacted before a turn; absent, the defaults (`compaction.ts`). */
+  readonly compaction?: SoloCompactionSettings;
 }
 
 /** A run parked on a held call, as a surface lists it. */
@@ -236,4 +263,8 @@ export interface SoloRunner extends AgentRunner {
   answer(runId: string, stepId: string, text: string): Promise<boolean>;
   resume(runId: string, input?: { readonly signal?: AbortSignal }): AsyncIterable<OrcEvent>;
   parked(): readonly SoloParkedCall[];
+  /** [S3] Compacts the conversation now (`/compact`); `force` compacts under the threshold too. */
+  compact?(options?: { readonly force?: boolean }): Promise<SoloCompactionOutcome>;
+  /** [S3] One note into the conversation, which the next turn reads (a `/rollback` in solo, A10). */
+  note?(text: string): Promise<void>;
 }

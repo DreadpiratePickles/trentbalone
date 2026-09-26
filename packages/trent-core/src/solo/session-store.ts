@@ -13,7 +13,7 @@
  * context.
  */
 import fs from "node:fs";
-import type { SessionMessage, SessionMessageMetadata } from "../sessions/schema.js";
+import type { SessionData, SessionMessage, SessionMessageMetadata } from "../sessions/schema.js";
 import type { ToolCallRecord } from "../tools/types.js";
 import { loadSoloState } from "./park.js";
 import { SOLO_SEAT, type SoloMessage, type SoloSession } from "./types.js";
@@ -22,15 +22,26 @@ import { SOLO_SEAT, type SoloMessage, type SoloSession } from "./types.js";
 export interface SoloSessionStore {
   getSession(id: string): { readonly messages: readonly SessionMessage[] } | null;
   appendMessage(id: string, message: Omit<SessionMessage, "id" | "timestamp">): unknown;
+  /** [S3] Where a compacted transcript is saved (`SessionManager.getStore()`); absent, the session is never compacted. */
+  getStore?(): { save(session: SessionData): unknown };
 }
 
 /** Where a tool message keeps its record: an additive metadata key, so every other reader is unaffected. */
 type SoloMetadata = SessionMessageMetadata & { tool_record?: ToolCallRecord };
 
-function toStored(message: SoloMessage): Omit<SessionMessage, "id" | "timestamp"> {
+const wholeCents = (n: number | undefined): number | undefined => (typeof n === "number" && Number.isInteger(n) && n > 0 ? n : undefined);
+
+/** [S3] Exported for compaction: the one mapping between the loop's message and the stored one. */
+export function toStored(message: SoloMessage): Omit<SessionMessage, "id" | "timestamp"> {
+  const cents = wholeCents(message.costCents);
+  const tokens = wholeCents(message.tokens);
   const metadata: SoloMetadata = {
     ...(message.runId === undefined ? {} : { run_id: message.runId }),
     ...(message.record === undefined ? {} : { tool_record: message.record }),
+    // [S3] item 6: the answer carries its run's cost, so `total_cost_cents` (trent sessions, the -c ticker) is the meter's.
+    ...(cents === undefined ? {} : { cost_cents: cents }),
+    ...(tokens === undefined ? {} : { tokens_total: tokens }),
+    ...(message.model === undefined || message.model === "" ? {} : { model: message.model }),
   };
   return {
     role: message.role,
@@ -40,7 +51,8 @@ function toStored(message: SoloMessage): Omit<SessionMessage, "id" | "timestamp"
   };
 }
 
-function fromStored(message: SessionMessage): SoloMessage {
+/** [S3] Exported for compaction. */
+export function fromStored(message: SessionMessage): SoloMessage {
   const metadata = message.metadata as SoloMetadata | undefined;
   return {
     role: message.role,
@@ -60,14 +72,32 @@ export function profileSoloSession(store: SoloSessionStore, sessionId: string): 
       // `appendMessage` throws for an id the profile does not hold: a turn is never written nowhere.
       for (const message of messages) store.appendMessage(sessionId, toStored(message));
     },
+    // [S3] Compaction reads the transcript with its ids and saves the compacted one whole, cost total kept.
+    ...(store.getStore === undefined
+      ? {}
+      : {
+          transcript: async () => [...(store.getSession(sessionId)?.messages ?? [])],
+          async replace(messages: readonly SessionMessage[]) {
+            const session = store.getSession(sessionId) as SessionData | null;
+            if (session === null) throw new Error(`Session ${sessionId} not found`);
+            store.getStore?.().save({ ...session, messages: [...messages] });
+          },
+        }),
   };
 }
 
 export function memorySoloSession(seed: readonly SoloMessage[] = []): SoloSession {
-  const messages: SoloMessage[] = [...seed];
+  // [S3] Kept as stored messages, ids and metadata included, so a compaction can name what it forgot and its
+  // event keeps its record; the loop reads them back through the same mapping a profile session uses.
+  let stored: SessionMessage[] = [];
+  let next = 0;
+  const add = (message: SoloMessage): void => void stored.push({ ...toStored(message), id: `mem_${String((next += 1))}`, timestamp: "" });
+  seed.forEach(add);
   return {
-    history: async () => [...messages],
-    append: async (added) => void messages.push(...added),
+    history: async () => stored.map(fromStored),
+    append: async (added) => void added.forEach(add),
+    transcript: async () => stored.map((message) => ({ ...message })),
+    replace: async (messages) => void (stored = [...messages]),
   };
 }
 

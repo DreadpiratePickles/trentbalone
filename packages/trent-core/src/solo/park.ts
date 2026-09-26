@@ -67,7 +67,8 @@ function each<T>(raw: unknown, schema: z.ZodType<T>): T[] {
 /** The saved state, entry by entry: what validates is kept, the rest is dropped alone. */
 export function parseSoloState(raw: unknown): SoloSessionState {
   if (raw === null || typeof raw !== "object") return EMPTY_SOLO_STATE;
-  const value = raw as { taint?: { calls?: unknown; sources?: unknown }; parked?: unknown };
+  const value = raw as { taint?: { calls?: unknown; sources?: unknown }; parked?: unknown; invokedSkills?: unknown };
+  const invoked = [...new Set(each(value.invokedSkills, z.string().min(1)))]; // [S3] skills on demand
   return {
     version: 1,
     taint: {
@@ -75,6 +76,8 @@ export function parseSoloState(raw: unknown): SoloSessionState {
       sources: each(value.taint?.sources, z.string()),
     },
     parked: each(value.parked, ParkSchema) as SoloParkRecord[],
+    // [S3] Only when there is one, so a state without it reads back exactly as before.
+    ...(invoked.length === 0 ? {} : { invokedSkills: invoked }),
   };
 }
 
