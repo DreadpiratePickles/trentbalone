@@ -377,7 +377,14 @@ a key someone pasted into a prompt does not travel with it. `--out` writes the f
 
 ## 11. Local models
 
-Trent can run on a model served from your own machine by Ollama or LM Studio. Neither needs a key.
+Trent can run on a model served from your own machine by Ollama, LM Studio or a llama.cpp server.
+None needs a key. [local-models.md](local-models.md) is the full page: the hardware tiers, the
+commands from a clean machine to a first solo turn, the numbers measured on the development machine,
+the settings and the known limits. `--mode local` sets up the whole local stack in one pass: it lists
+what each runtime has with sizes, picks the chat model by this machine's memory and the embedding
+model by role, and writes the provider, the model, `memory.embedder`, `agent.mode: solo`, and
+`terminal.backend: local` when Docker does not answer. Quick setup on a local provider, below, checks
+only the runtime and the chat model.
 
 ```bash
 ollama serve                                                  # if Ollama is not already running

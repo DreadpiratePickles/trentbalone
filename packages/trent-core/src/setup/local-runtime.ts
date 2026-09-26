@@ -78,7 +78,8 @@ export function hasLocalModel(models: readonly string[], model: string): boolean
 
 const DEFAULT_TIMEOUT_MS = 3_000;
 
-function describeFailure(error: unknown, timeoutMs: number): string {
+/** Why a probe got no answer, in a few words. [L2] exported for `local-detect.ts`. */
+export function describeProbeFailure(error: unknown, timeoutMs: number): string {
   if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) return `timed out after ${timeoutMs}ms`;
   const cause = (error as { cause?: { code?: unknown } } | undefined)?.cause;
   if (cause !== undefined && cause.code === "ECONNREFUSED") return "connection refused";
@@ -120,7 +121,7 @@ export function createLocalRuntime(deps: LocalRuntimeDeps = {}): LocalRuntimePor
       try {
         return provider === "ollama" ? await probeOllama(url) : await probeLmStudio(url);
       } catch (error) {
-        return { reachable: false, provider, url, error: describeFailure(error, timeoutMs) };
+        return { reachable: false, provider, url, error: describeProbeFailure(error, timeoutMs) };
       }
     },
 

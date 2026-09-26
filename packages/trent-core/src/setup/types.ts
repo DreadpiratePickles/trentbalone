@@ -2,8 +2,11 @@ import type { ConfigManager } from "../config/index.js";
 import type { Provider, Toolset, TrentConfig } from "../config/schema.js";
 import type { OutputPort, PromptPort } from "./ports.js";
 import type { LocalRuntimePort } from "./local-runtime.js";
+import type { LocalDiscoveryPort } from "./local-detect.js"; // [L2]
+import type { LocalSetupPlan } from "./local-plan.js"; // [L2]
 
-export type SetupMode = "quick" | "full" | "blank-slate";
+/** [L2] `local`: the product path onto a model on this machine (`LocalModeSetup.ts`). */
+export type SetupMode = "quick" | "full" | "blank-slate" | "local";
 
 /**
  * Why a run did not complete. `no-key`: quick setup found no provider key, so there was nothing to
@@ -33,6 +36,14 @@ export interface SetupOptions {
   perRunCapCents?: number;
   /** [L0-3] Quick, Ollama only: pull a model that is not there yet, after a confirmation. */
   pull?: boolean;
+  // [L2] local mode
+  /** Local: probe a runtime at this URL too (a llama.cpp `llama-server`, or Ollama/LM Studio elsewhere); it wins. */
+  baseUrl?: string;
+  /** Local: keep the fleet (planner, critic, seats) instead of writing `agent.mode: solo`. */
+  fleet?: boolean;
+  /** Local: probe and print the plan; ask nothing, pull nothing, write nothing. */
+  dryRun?: boolean;
+  // [/L2]
 }
 
 export interface DoctorSummary {
@@ -85,6 +96,12 @@ export interface SetupContext {
   localRuntime?: LocalRuntimePort;
   /** [L0-3] The machine's memory, which picks the recommended local model. Defaults to `os.totalmem()`. */
   totalMemoryBytes?: number;
+  // [L2] local mode
+  /** Which runtimes answer and what each has (sizes, roles, capabilities). Defaults to the real endpoints. */
+  localDiscovery?: LocalDiscoveryPort;
+  /** Whether the Docker daemon answers (`docker info`); false writes `terminal.backend: local`. */
+  dockerPresent?: () => Promise<boolean>;
+  // [/L2]
 }
 
 export interface SetupResult {
@@ -99,4 +116,6 @@ export interface SetupResult {
   secretsConfigured: string[];
   /** Every line shown to the user during the run. */
   output: string[];
+  /** [L2] Local mode: what was found, chosen, pulled and written (or would be, on a dry run). */
+  local?: LocalSetupPlan;
 }

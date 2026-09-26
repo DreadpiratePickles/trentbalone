@@ -10,6 +10,8 @@ then [configuration.md](configuration.md) and [security.md](security.md).
 - [configuration.md](configuration.md): `config.yaml`, the profile `.env` for secrets, profiles, and
   every setting the schema accepts.
 - [doctor.md](doctor.md): `trent doctor`, the health checks it runs against real state, and its exit codes.
+- [local-models.md](local-models.md): running on a model on this machine (Ollama, LM Studio, a llama.cpp
+  server): the hardware tiers, `trent setup --mode local`, what to expect, the settings and the limits.
 - [troubleshooting.md](troubleshooting.md): failure modes that have actually happened, each with the
   command that identifies it.
 

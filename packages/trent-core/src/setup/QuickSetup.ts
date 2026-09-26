@@ -12,8 +12,8 @@ import { BUSINESS_PROVIDERS } from "../tools/business/http.js";
 import { SetupRun } from "./SetupRun.js";
 import { createLocalRuntime, isLocalProvider } from "./local-runtime.js";
 import { resolveLocalModel } from "./local-setup.js";
-import type { SetupOptions, SetupResult } from "./types.js";
-import type { Provider } from "../config/schema.js";
+import type { SetupContext, SetupOptions, SetupResult } from "./types.js";
+import type { Provider, Toolset } from "../config/schema.js";
 import type { ConfigManager } from "../config/ConfigManager.js";
 
 /**
@@ -81,29 +81,13 @@ export class QuickSetup extends SetupRun {
 
   /** The part every quick path shares: toolsets, the summary, one confirmation, the write. */
   private async finish(provider: Provider, model: string, notes: readonly string[] = []): Promise<SetupResult> {
-    const { configManager, prompts, env } = this.ctx;
-    // [B2] `media` needs ffmpeg and ffprobe on PATH or the media image; without one it is written
-    // off explicitly, so a later `trent update` cannot switch it on unasked (docs/media.md).
-    const media = await (this.ctx.mediaBackendPresent ?? (() => mediaBackendPresent(env)))();
-    // [B1] `social` executes nothing without a connected provider, so it is on only when
-    // `trent connect meta|bluesky|buffer` has been run; the check reads names, never a value.
-    const social = (this.ctx.socialProviderConnected ?? (() => socialProviderConnected(configManager)))();
-    // [B3] `business` likewise: on only when `trent connect stripe|google|square|twilio` holds one.
-    const business = (this.ctx.businessProviderConnected ?? (() => businessProviderConnected(configManager)))();
-    // [P2-9] `a2a` reaches only the peers `a2a.peers` names, so with none it has nothing to talk to.
-    const a2a = (configManager.loadConfig().a2a?.peers ?? []).length > 0;
-    const toolsets = ALL_TOOLSETS.filter((t) => (t !== "media" || media) && (t !== "social" || social) && (t !== "business" || business) && (t !== "a2a" || a2a));
-    const off = [
-      ...(media ? [] : ["media is off because no ffmpeg/ffprobe or media image was found (docs/media.md)"]),
-      ...(social ? [] : ["social is off because no social provider is connected; run trent connect meta, bluesky or buffer, then enable it (docs/social.md)"]),
-      ...(business ? [] : ["business is off because no business provider is connected; run trent connect stripe, google, square or twilio, then enable it (docs/business.md)"]),
-      ...(a2a ? [] : ["a2a is off because no A2A peer is configured; add one under a2a.peers, then enable it (docs/a2a.md)"]), // [P2-9]
-    ];
+    const { configManager, prompts } = this.ctx;
+    const { toolsets, line } = await quickToolsets(this.ctx); // [L2] shared with local mode
 
     this.blank();
     this.say(`Provider: ${provider}`);
     this.say(`Model: ${model}`);
-    this.say(off.length === 0 ? `Toolsets: all ${ALL_TOOLSETS.length} enabled` : `Toolsets: ${toolsets.length} of ${ALL_TOOLSETS.length} enabled; ${off.join("; ")}`);
+    this.say(line);
     this.say(`Starter agents: ${STARTER_AGENTS.join(", ")}`);
     for (const note of notes) this.say(note);
 
@@ -129,6 +113,36 @@ export class QuickSetup extends SetupRun {
       configManager.loadConfig(),
     );
   }
+}
+
+/**
+ * The toolsets a quick run turns on: every one, less those with nothing behind them on this machine,
+ * each named with why. [L2] Moved out of `finish` unchanged so local mode writes the same toolsets.
+ */
+export async function quickToolsets(ctx: SetupContext): Promise<{ toolsets: Toolset[]; line: string }> {
+  const { configManager, env } = ctx;
+  // [B2] `media` needs ffmpeg and ffprobe on PATH or the media image; without one it is written
+  // off explicitly, so a later `trent update` cannot switch it on unasked (docs/media.md).
+  const media = await (ctx.mediaBackendPresent ?? (() => mediaBackendPresent(env)))();
+  // [B1] `social` executes nothing without a connected provider, so it is on only when
+  // `trent connect meta|bluesky|buffer` has been run; the check reads names, never a value.
+  const social = (ctx.socialProviderConnected ?? (() => socialProviderConnected(configManager)))();
+  // [B3] `business` likewise: on only when `trent connect stripe|google|square|twilio` holds one.
+  const business = (ctx.businessProviderConnected ?? (() => businessProviderConnected(configManager)))();
+  // [P2-9] `a2a` reaches only the peers `a2a.peers` names, so with none it has nothing to talk to.
+  const a2a = (configManager.loadConfig().a2a?.peers ?? []).length > 0;
+  const toolsets = ALL_TOOLSETS.filter((t) => (t !== "media" || media) && (t !== "social" || social) && (t !== "business" || business) && (t !== "a2a" || a2a));
+  const off = [
+    ...(media ? [] : ["media is off because no ffmpeg/ffprobe or media image was found (docs/media.md)"]),
+    ...(social ? [] : ["social is off because no social provider is connected; run trent connect meta, bluesky or buffer, then enable it (docs/social.md)"]),
+    ...(business ? [] : ["business is off because no business provider is connected; run trent connect stripe, google, square or twilio, then enable it (docs/business.md)"]),
+    ...(a2a ? [] : ["a2a is off because no A2A peer is configured; add one under a2a.peers, then enable it (docs/a2a.md)"]), // [P2-9]
+  ];
+
+  return {
+    toolsets,
+    line: off.length === 0 ? `Toolsets: all ${ALL_TOOLSETS.length} enabled` : `Toolsets: ${toolsets.length} of ${ALL_TOOLSETS.length} enabled; ${off.join("; ")}`,
+  };
 }
 
 /** True when any provider the social toolset publishes through is connected. Names only; no value is read. */

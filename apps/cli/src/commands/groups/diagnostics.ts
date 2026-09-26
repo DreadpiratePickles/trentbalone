@@ -17,6 +17,7 @@ import {
   type DoctorMode,
 } from "@trent/core/doctor/index.js";
 import { InquirerPrompts, SetupWizard, type SetupMode } from "@trent/core/setup/index.js";
+import type { LocalSetupPlan } from "@trent/core/setup/local-plan.js"; // [L2]
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { refuseUnderLiveWriters } from "@trent/core/profile/locks.js";
 import type { CommandContext, SetupSummary } from "../context.js";
@@ -150,26 +151,31 @@ export const doctorSpec: CommandSpec = {
 
 export const setupSpec: CommandSpec = {
   name: "setup",
-  description: "Run the Trent setup wizard (quick, full or blank-slate)",
+  description: "Run the Trent setup wizard (quick, full, blank-slate or local)", // [L2]
   options: [
-    { flags: "--mode <mode>", description: "quick, full or blank-slate", defaultValue: "quick" },
+    { flags: "--mode <mode>", description: "quick, full, blank-slate or local (a model on this machine)", defaultValue: "quick" }, // [L2]
     { flags: "--portal", description: "Quick cloud login setup" },
     { flags: "--provider <provider>", description: "Default model provider" },
     { flags: "--model <model>", description: "Default model" },
     { flags: "--pull", description: "Quick, Ollama: pull the model if it is missing, after a confirmation" },
+    // [L2] local mode
+    { flags: "--base-url <url>", description: "Local: also probe a runtime at this URL (a llama.cpp llama-server, or Ollama/LM Studio elsewhere); it wins" },
+    { flags: "--fleet", description: "Local: keep the fleet (planner, critic, seats) instead of agent.mode solo" },
+    // [/L2]
   ],
   async run(ctx, opts) {
     const mode = (opts.portal === true ? "quick" : String(opts.mode ?? "quick")) as SetupMode;
-    if (!["quick", "full", "blank-slate"].includes(mode)) {
+    if (!["quick", "full", "blank-slate", "local"].includes(mode)) { // [L2]
       throw new TrentError({
         code: EXIT.USAGE,
         operation: "setup.options",
-        message: "--mode must be quick, full or blank-slate",
+        message: "--mode must be quick, full, blank-slate or local", // [L2]
         target: mode,
       });
     }
 
-    if (ctx.dryRun) {
+    // [L2] A local dry run reads the runtimes (GET only) and prints the plan; it writes nothing.
+    if (ctx.dryRun && mode !== "local") {
       return {
         data: {
           dryRun: true,
@@ -186,6 +192,8 @@ export const setupSpec: CommandSpec = {
     return { data: { ...summary }, ...(summary.success ? {} : { exitCode: EXIT.CONFIG }) };
   },
   render(data, ctx) {
+    const plan = (data as { local?: LocalSetupPlan }).local; // [L2]
+    if (plan?.dryRun === true) return [ctx.theme.emphasis("TRENT SETUP (dry run, local)"), `  ${ctx.theme.body((data as { message: string }).message)}`]; // [L2]
     if ((data as { dryRun?: boolean }).dryRun === true) {
       const d = data as { mode: string; wouldWrite: string[] };
       return [
@@ -215,7 +223,7 @@ export async function runSetup(
   ctx: CommandContext,
   mode: SetupMode,
   opts: Record<string, unknown>,
-): Promise<SetupSummary> {
+): Promise<SetupSummary & { local?: LocalSetupPlan }> { // [L2] local mode adds its plan
   if (ctx.overrides.runSetup) return await ctx.overrides.runSetup(mode, opts);
 
   const wizard = new SetupWizard({
@@ -229,6 +237,11 @@ export async function runSetup(
   }
   if (typeof opts.model === "string") setupOptions.model = opts.model;
   if (opts.pull === true) setupOptions.pull = true; // [L0-3]
+  // [L2] local mode
+  if (typeof opts.baseUrl === "string") setupOptions.baseUrl = opts.baseUrl;
+  if (opts.fleet === true) setupOptions.fleet = true;
+  if (mode === "local" && ctx.dryRun) setupOptions.dryRun = true;
+  // [/L2]
 
   const result = await wizard.run(setupOptions);
   return {
@@ -238,6 +251,7 @@ export async function runSetup(
     ...(result.reason === undefined ? {} : { reason: result.reason }),
     // Names only. A value never leaves the secrets file.
     secretsConfigured: result.secretsConfigured,
+    ...(result.local === undefined ? {} : { local: result.local }), // [L2]
   };
 }
 

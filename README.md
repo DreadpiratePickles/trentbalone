@@ -282,6 +282,7 @@ Every page is indexed in [docs/README.md](docs/README.md). The ones to start wit
 | Page | Covers |
 |---|---|
 | [getting-started.md](docs/getting-started.md) | From a clone to a first conversation, including a first run with no key |
+| [local-models.md](docs/local-models.md) | A model on this machine: the hardware tiers, `setup --mode local`, what to expect, the limits |
 | [configuration.md](docs/configuration.md) | `config.yaml`, the profile `.env` for secrets, profiles, every setting |
 | [doctor.md](docs/doctor.md) | The health checks, their exit codes, `--json`, `--fix` |
 | [troubleshooting.md](docs/troubleshooting.md) | Failure modes that have happened, each with the command that identifies it |

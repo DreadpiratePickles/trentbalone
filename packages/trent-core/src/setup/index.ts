@@ -11,3 +11,5 @@ export * from "./SetupWizard.js";
 export * from "./QuickSetup.js";
 export * from "./FullSetup.js";
 export * from "./BlankSlate.js";
+export * from "./LocalModeSetup.js"; // [L2]
+export type { LocalSetupPlan } from "./local-plan.js"; // [L2]

@@ -4,6 +4,7 @@ import { TrentError, EXIT } from "../errors/TrentError.js";
 import { BlankSlate } from "./BlankSlate.js";
 import { FullSetup } from "./FullSetup.js";
 import { QuickSetup } from "./QuickSetup.js";
+import { LocalModeSetup } from "./LocalModeSetup.js"; // [L2]
 import { InquirerPrompts } from "./InquirerPrompts.js";
 import { NoTerminalPrompts, noTerminalForMode } from "./no-terminal.js";
 import { ConsoleOutput } from "./ports.js";
@@ -36,6 +37,8 @@ export class SetupWizard {
       ...(context.businessProviderConnected ? { businessProviderConnected: context.businessProviderConnected } : {}),
       localRuntime: context.localRuntime ?? createLocalRuntime(),
       totalMemoryBytes: context.totalMemoryBytes ?? os.totalmem(),
+      ...(context.localDiscovery ? { localDiscovery: context.localDiscovery } : {}), // [L2]
+      ...(context.dockerPresent ? { dockerPresent: context.dockerPresent } : {}), // [L2]
     };
   }
 
@@ -48,9 +51,12 @@ export class SetupWizard {
     }
     const ctx: SetupContext = interactive ? this.ctx : { ...this.ctx, prompts: new NoTerminalPrompts(options.mode) };
 
-    ctx.configManager.ensureDirs();
-    // The heartbeat checklist is the founder's file: written once, never rewritten by setup.
-    writeDefaultHeartbeatChecklist(ctx.configManager.getProfileDir());
+    // [L2] A local dry run writes nothing at all, not even the profile's directories.
+    if (!(options.mode === "local" && options.dryRun === true)) {
+      ctx.configManager.ensureDirs();
+      // The heartbeat checklist is the founder's file: written once, never rewritten by setup.
+      writeDefaultHeartbeatChecklist(ctx.configManager.getProfileDir());
+    }
 
     switch (options.mode) {
       case "quick":
@@ -59,6 +65,8 @@ export class SetupWizard {
         return await new FullSetup(ctx).execute(options);
       case "blank-slate":
         return await new BlankSlate(ctx).execute(options);
+      case "local": // [L2]
+        return await new LocalModeSetup(ctx).execute(options);
       default:
         throw new TrentError({
           code: EXIT.USAGE,
