@@ -109,3 +109,45 @@ escalates SIGTERM -> SIGKILL. Hook timeout 60 s; the port wait is 30 s so the na
 - `packages/trent-core/src/tools/browser/browser.attach.chromium.test.ts` (208 -> 325 lines).
 - `docs/sessions/2026-09-26-attach-chromium-ci.md` (this log, new).
 `chromium.ts` untouched: a helper there would be test-only code in a production module.
+
+## Follow-up: cleanup race on CI (coordinator, after run 36226196095)
+- CI run 36226196095: Chromium starts on ubuntu-24.04, the suite RUNS (`5 tests`, 6411 ms, all five
+  green); 511/512 files, 4883 tests passed. One failure, in afterAll line 262:
+  `ENOTEMPTY: directory not empty, rmdir '/tmp/trent-attach-chrome-S6qmN6/Default'` (errno -39).
+  That `rmSync` already had `maxRetries: 5, retryDelay: 200` (~3 s of linear backoff), and `stop()`
+  had resolved on the browser process's `exit`. So something kept writing into `Default/` for more
+  than 3 s after the browser process itself was gone: Chromium's own children (network/storage
+  utility processes, renderers) outlive the browser process briefly and flush into the profile.
+- They inherit the browser's stdout/stderr, which is why Node's `close` event (every holder of the
+  stdio pipes has closed them) fires later than `exit`. That is the signal to wait for.
+- The dir that run left, `/tmp/trent-attach-chrome-S6qmN6`, was on an ephemeral GitHub runner; the
+  harness at that commit recorded nothing, and there is nothing on this Mac to remove for it. Local
+  `trent-attach-*` dirs: only `trent-attach-probe-DuRdAT`, which is not this harness's (left alone).
+- RED attempts (scratch wrapper `chrome-straggler.sh` runs the real Chrome and, on SIGTERM, leaves a
+  python writer creating files in `<user-data-dir>/Default` after the "browser process" exits):
+  with the OLD cleanup (resolve on `exit`, `rmSync` 5 x 200 ms) every one of 7 runs (Node 26 x4,
+  Node 25 x3) left the temp dir behind: `rmSync` ran while the writer was live, and the dir came back
+  (e.g. `trent-attach-chrome-BivbkE/Default` held `straggler-685..` after the rm had taken 1..684).
+  The suite itself stayed green locally; ENOTEMPTY is a narrow race. At the fs level it does
+  reproduce: scratch `rm-race.mjs` (same `rmSync` options, a writer live in `Default/`) failed on
+  Node 25.8.2 with `ENOTEMPTY rm` after 13964 ms and on Node 23.5.0 with `EACCES rm`, and passed on
+  others: exactly the kind of flake CI hit. (One Node 25 run failed differently,
+  `connectOverCDP: Timeout 10000ms exceeded` in the adapter, at load average 816: machine load, not
+  this harness; `launch.ts`'s timeout is off limits.) All leftover dirs from these runs removed.
+- Fix (test file only): `stop()` now also waits for Node's `close` (all stdio holders gone, bounded
+  10 s), after `exit`, after a 500 ms settle when it had to SIGKILL. Temp dirs are removed with
+  `rmSync({ recursive, force, maxRetries: 8, retryDelay: 250 })`; if that still throws, one line
+  `[browser.attach.chromium] left a temp dir behind (<code>); remove it by hand: <path>` and the
+  suite goes on. afterAll timeout 30 s -> 45 s to fit 5 s TERM grace + 10 s children + ~9 s retries.
+- GREEN: same straggler (holds stdio, 6 s, no sleep): exit 0, `5 passed`, and NO
+  `trent-attach-chrome-*` dir left afterwards. Undeletable profile (`STRAGGLER_LOCK=1`: a 0555
+  `Default/locked/f`): exit 0, `5 passed`, one line `left a temp dir behind (ENOTEMPTY); remove it by
+  hand: .../trent-attach-chrome-OsV1A1`; removed by hand afterwards (`chmod -R u+w`, `rm -rf`).
+- Not built: a cross-run "leftover record" sweep. Many agents run tests on this machine at once; a
+  sweep of other runs' dirs risks deleting a live profile. The logged path is the record.
+- Verification after the cleanup fix (load average 450-800):
+  `TRENT_QUEUE_FALLBACK=disabled npx vitest run packages/trent-core/src/tools/browser/browser.attach.chromium.test.ts`
+  run 1 exit 0 `5 passed` 12.02 s; run 2 exit 0 `5 passed` 5.79 s; run 3 exit 0 `5 passed` 7.46 s;
+  no `trent-attach-chrome-*` dir left. `cd packages/trent-core && npm run build`: exit 0.
+  Files: `browser.attach.chromium.test.ts` (325 -> 355 lines; the first fix is already in HEAD, this
+  diff is the cleanup only) and this log.

@@ -74,6 +74,11 @@ const PLAYWRIGHT_SWITCHES = [
 ];
 const PORT_FILE_TIMEOUT_MS = 30_000;
 const OUTPUT_TAIL_LINES = 25;
+// [CI] Shutdown budget, inside afterAll's 45 s: SIGTERM grace, settle after a SIGKILL, and how long to
+// wait for Chromium's children to let go of its stdio before removing the profile anyway.
+const TERM_GRACE_MS = 5_000;
+const KILL_SETTLE_MS = 500;
+const CHILDREN_GONE_MS = 10_000;
 
 const ACCOUNT_PAGE =
   "<html><head><title>Account</title></head><body>" +
@@ -106,6 +111,7 @@ interface ThrowawayChromium {
   ended: () => string | undefined;
   /** Its status and last lines of stdout and stderr, for an error or a skip message. */
   report: () => string;
+  /** Resolves once the browser process AND the children holding its stdio are gone (or time is up). */
   stop: () => Promise<void>;
 }
 
@@ -144,20 +150,44 @@ function startThrowawayChromium(executable: string, userDataDir: string): Throwa
       resolve();
     });
   });
+  // [CI] `exit` is the browser process only. Its children (renderers, the network and storage
+  // services) inherit its stdout/stderr and can still be flushing into <user-data-dir>/Default after
+  // it exits; on the Linux runner that raced the profile's removal (ENOTEMPTY on Default).
+  // `close` fires once every holder of those pipes has closed them, i.e. once the children are gone.
+  const closed = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+    child.once("error", () => resolve());
+  });
   const tail = () => output.split("\n").filter((line) => line.trim()).slice(-OUTPUT_TAIL_LINES).join("\n");
   return {
     ended: () => ended,
     report: () => `Chromium (${executable}) ${ended ? `is gone: ${ended}` : "is still running"}. Its last output:\n${tail() || "(none)"}`,
     stop: async () => {
-      if (ended) return;
-      child.kill("SIGTERM");
-      const soft = await Promise.race([gone.then(() => true), sleep(5_000).then(() => false)]);
-      if (!soft) {
-        child.kill("SIGKILL");
-        await gone;
+      if (!ended) {
+        child.kill("SIGTERM");
+        const soft = await Promise.race([gone.then(() => true), sleep(TERM_GRACE_MS).then(() => false)]);
+        if (!soft) {
+          child.kill("SIGKILL");
+          await gone;
+          await sleep(KILL_SETTLE_MS);
+        }
       }
+      await Promise.race([closed, sleep(CHILDREN_GONE_MS)]);
     },
   };
+}
+
+/**
+ * [CI] Removes a temp directory this file made, only after whoever wrote into it is gone. If it still
+ * cannot be removed, says where it is and carries on: a leftover temp dir is not a test failure.
+ */
+function removeTempDir(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? String(error);
+    console.error(`[browser.attach.chromium] left a temp dir behind (${code}); remove it by hand: ${dir}`);
+  }
 }
 
 /** The DevTools port once Chromium has written it, or undefined if Chromium ended first. Throws on timeout. */
@@ -259,9 +289,9 @@ describe.skipIf(!chromiumPath)("browser attach (real throwaway Chromium over CDP
     await adapter?.cleanup();
     await chrome?.stop();
     await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
-    if (userDataDir) fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    if (profileDir) fs.rmSync(profileDir, { recursive: true, force: true });
-  }, 30_000);
+    if (userDataDir) removeTempDir(userDataDir);
+    if (profileDir) removeTempDir(profileDir);
+  }, 45_000);
 
   it("attaches through the existing empty tab once a human approves the navigation, leaving the owner's tab alone", async () => {
     const action = `browser_navigate {"url":"${origin}/account","attach":true}`;
