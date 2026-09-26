@@ -112,7 +112,8 @@ Three modes exist:
 
 - `--mode quick` detects a key already in your shell or in `~/.trent/.env`, then writes that
   provider, its default model, the starter seats and every toolset whose backend is present (`media`,
-  `social` and `business` stay off until ffmpeg or a `trent connect` provider exists). It asks one
+  `social` and `business` stay off until ffmpeg or a `trent connect` provider exists, and `a2a`
+  until `a2a.peers` names a peer). It asks one
   confirmation before writing. With no key present it names the environment variables and the
   `.env` path, writes nothing, prints `Setup did not complete: No provider key found. ...` and exits
   3. It does not fake an OAuth flow.
@@ -304,6 +305,16 @@ cost cap, or Ctrl+C), and `error` carries the reason when there is one. `model` 
 was asked to run on (the `--model` pin, else the configured model) and `models` the distinct models
 its steps reported, which is what actually ran. Costs are integer cents, never dollars.
 
+A run that lost model calls part-way, or whose drain stopped on an error, ends with one `run_failed`
+event carrying a `verdict`, and the `result` line repeats it: `error` is a one-line summary naming the
+error class and the provider (`1 of 4 steps failed: google HTTP 429 rate_limit (You exceeded your
+current quota) on content; consolidation skipped; retry after 3600s`), `reason` is
+`model_calls_failed` or `run_error`, `failed_steps` lists `{seat, step, error_class, message,
+provider, status, retry_after_seconds}`, and `completed_steps`, `total_steps`, `consolidation`
+(`completed`, `failed` or `skipped`) and `retry_after_seconds` (the longest wait a provider asked
+for) follow. "the run ended without a verdict" is left only for a stream that closed before any
+step reported one.
+
 `--model <id>` runs the whole run on one model of the profile's provider: the planner, the critic,
 the consolidator and every seat, whatever tier the profile gives each of them, and over a model
 variable set in the shell. `trent run` is the run's only process, so the pin is written into the
@@ -318,6 +329,7 @@ job ([jobs.md](jobs.md)) runs through this same flag in a child process.
 | 1 | The run failed; the `result` line carries the reason in `error` |
 | 2 | No objective was given |
 | 3 | Configuration: an unknown `--format`, a `--max-cost-cents` that is not a positive whole number, a `--model` that is not one model id, an empty stdin |
+| 5 | A provider refused the run's model calls part-way (a 429 quota or rate limit, a 5xx, a 401): the `result` line's `reason` is `model_calls_failed` |
 | 6 | The run passed `--max-cost-cents` and was stopped |
 | 7 | The run is parked on an approval; `approval_id` names it |
 | 130 | Interrupted (Ctrl+C); the run was aborted and the runtime released |

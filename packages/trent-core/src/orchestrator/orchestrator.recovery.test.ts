@@ -13,6 +13,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ProviderHttpError } from "../model-gateway/retry.js";
 import type { OrcEvent, Orchestrator, OrchestrationRunSnapshot } from "./types.js";
+import { verdictOf } from "./verdict.js";
 
 const ENV_KEYS = ["NODE_ENV", "DATABASE_URL", "REDIS_URL", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN",
   "TRENT_QUEUE_FALLBACK", "TRENT_EVAL_SYNC_QUEUE", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"] as const;
@@ -221,6 +222,46 @@ describe("[X5] a step that fails on the second cycle too ends the run failed wit
     expect(snapshot.summary ?? "").toContain("HTTP 503");
     expect(snapshot.summary ?? "").toContain("HTTP 502");
     expect(events.filter((e) => e.kind === "run_done")).toHaveLength(0);
+  });
+
+  it("[P2-11] ends with a verdict: the step, both errors in order, and the provider", () => {
+    const verdict = verdictOf(snapshot);
+    expect(verdict).toMatchObject({ reason: "model_calls_failed", completedSteps: 0, totalSteps: 1 });
+    expect(verdict?.failedSteps).toMatchObject([{ seat: "engineer", step: "s1", errorClass: "dependency", provider: "openai", status: 502, attempts: 2 }]);
+    expect(verdict?.summary).toMatch(/^1 of 1 steps failed: openai HTTP 503 dependency .*, then openai HTTP 502 dependency .* on engineer/);
+    expect(verdictOf(events.find((e) => e.kind === "run_failed"))).toEqual(verdict);
+  });
+});
+
+describe("[P2-11] a 429 whose Retry-After outlasts the recovery window is not re-run in a tight loop", () => {
+  const events: OrcEvent[] = [];
+  let calls = 0;
+  let snapshot: OrchestrationRunSnapshot;
+  let cleanup: () => Promise<void> = async () => undefined;
+
+  beforeAll(async () => {
+    const h = await harness("hold", async () => {
+      calls += 1;
+      throw new ProviderHttpError({ provider: "openai", status: 429, statusText: "Too Many Requests", headers: { "retry-after": "3600" } });
+    }, true);
+    cleanup = h.cleanup;
+    const companyId = await h.orchestrator.ensureCompany({ name: "Recovery hold", vision: "a quota is waited out, not hammered" });
+    const handle = h.orchestrator.run({ companyId, objective: "write a note" });
+    for await (const event of handle) events.push(event);
+    snapshot = await handle.result();
+  }, 120_000);
+
+  afterAll(async () => cleanup());
+
+  it("calls the seat once, writes no recovery note, and fails the run with the wait surfaced for the caller", () => {
+    expect(calls).toBe(1);
+    expect(events.filter((e) => e.kind === "step_note" && (e.detail ?? "").includes("auto recovery"))).toEqual([]);
+    expect(snapshot.status).toBe("failed");
+    const verdict = verdictOf(snapshot);
+    expect(verdict).toMatchObject({ reason: "model_calls_failed", retryAfterSeconds: 3600 });
+    expect(verdict?.failedSteps).toMatchObject([{ seat: "engineer", step: "s1", errorClass: "rate_limit", status: 429, retryAfterSeconds: 3600, attempts: 1 }]);
+    expect(snapshot.steps[0]?.output ?? "").toContain("3600s");
+    expect(events.filter((e) => e.kind === "run_failed").map((e) => verdictOf(e)?.retryAfterSeconds)).toEqual([3600]);
   });
 });
 

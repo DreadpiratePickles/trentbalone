@@ -198,6 +198,20 @@ directory (or without a granted skill's `SKILL.md`) now loads zero skills for th
 failing the first step with ENOENT; `trent doctor` (Skills Hub) says so in one line. Copy the skills
 you want the seats to have into the workspace's `.claude/skills` to give them back.
 
+## A run failed part-way with `model_calls_failed` (exit 5)
+
+A provider refused some of the run's model calls: a 429 (a quota or a rate limit), a 5xx, a 401.
+The run ends `failed` rather than `completed`, and the summary says which steps died of what, at
+which provider, and how long it asked you to wait, e.g. `1 of 4 steps failed: google HTTP 429
+rate_limit (You exceeded your current quota) on content; consolidation skipped; retry after 3600s`
+(`trent run --json`: `reason`, `failed_steps`, `retry_after_seconds`; a cron job's history row
+records the same line). A 429 is a quota, not a defect: wait `retry_after_seconds`, or move the run
+to a model with quota left (`trent run --model <id>`); a free-tier Google key has a small daily cap
+per model. A step whose provider asked for a longer wait than one re-run can sit out (16 s) is not
+re-run by auto-recovery, and once a step failed on a rate limit or a 401 the brief is not requested
+from that provider (`consolidation skipped`). `run_error` (exit 1) means the run stopped on
+something that was not the provider's answer; the summary quotes it.
+
 ## `--json` or `--format stream-json` stdout is not one document
 
 While a run happens the wrapped app writes its own `[Worker]` lines and its pino logger's debug

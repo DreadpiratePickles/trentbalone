@@ -392,13 +392,7 @@ describe("trent run keeps a machine-readable stdout to one document", () => {
     expect(process.env.LOG_LEVEL).toBe("warn");
   });
 
-  it("text mode leaves the console alone: the transcript is for a person", async () => {
-    const f = fakes();
-    const { levelAtBuild } = noisy(f);
-    await runCli(["run", OBJECTIVE, "--no-color"], { overrides: f.overrides });
-    expect(levelAtBuild()).toBe(previousLevel);
-    expect(stderr.join("")).not.toContain("[Worker]");
-  });
+  // [P2-B] Text mode no longer leaves the app's console alone: `run-text-log.test.ts`.
 });
 
 describe("trent run gates and limits", () => {

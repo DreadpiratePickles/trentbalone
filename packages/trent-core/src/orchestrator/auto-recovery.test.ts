@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { ProviderHttpError } from "../model-gateway/retry.js";
-import { AutoRecovery, classifyRecoveryError, DEFAULT_AUTO_RECOVERY_CYCLES, TRANSIENT_TOOL_ERROR_MARKER } from "./auto-recovery.js";
+import { AutoRecovery, classifyRecoveryError, DEFAULT_AUTO_RECOVERY_CYCLES, RECOVERY_WINDOW_MS, TRANSIENT_TOOL_ERROR_MARKER } from "./auto-recovery.js";
 import { SeatTally } from "./seat-guard.js";
 import type { OrcEvent } from "./types.js";
 
@@ -170,5 +170,108 @@ describe("[X5] AutoRecovery on a failed step_end", () => {
     recovery.onBusEvent(stepEnd(step), live);
     expect(live.steps[0]?.status).toBe("failed");
     expect(recovery.exhausted()).toEqual([]);
+  });
+});
+
+const googleQuota = (retryAfter?: string) =>
+  new ProviderHttpError({ provider: "google", status: 429, statusText: "Too Many Requests", body: "You exceeded your current quota", ...(retryAfter === undefined ? {} : { headers: { "retry-after": retryAfter } }) });
+
+describe("[P2-11] a rate limit that outlasts the recovery window, and the failures the verdict reads", () => {
+  it("does not re-run a 429 whose Retry-After is longer than a re-run can wait: the step fails at once and names the wait", async () => {
+    const recovery = new AutoRecovery({ cycles: 1, tally: new SeatTally() });
+    const seat = recovery.wrapSeatModel(async () => {
+      throw googleQuota("3600");
+    });
+    await expect(seat({ subtask: { id: "s1", seat: "content" } })).rejects.toThrow("HTTP 429");
+    const step = { id: "s1", title: "t", status: "failed", output: "google request failed with HTTP 429 Too Many Requests" };
+    const live = liveRunWith(step);
+    const observed = recovery.onBusEvent(stepEnd(step), live);
+    expect(RECOVERY_WINDOW_MS).toBeLessThan(3_600_000);
+    expect(live.steps[0]?.status).toBe("failed");
+    expect(observed.events.map((e) => e.kind)).toEqual(["step_end"]);
+    expect(observed.events[0]?.step?.output).toContain("3600s");
+    expect(recovery.exhausted()).toMatchObject([{ stepId: "s1", retryAfterMs: 3_600_000 }]);
+    expect(recovery.modelFailures().get("s1")).toMatchObject([{ errorClass: "rate_limit", provider: "google", status: 429, retryAfterMs: 3_600_000 }]);
+  });
+
+  it("still re-runs a 429 whose Retry-After a re-run can wait out", async () => {
+    const recovery = new AutoRecovery({ cycles: 1, tally: new SeatTally() });
+    const seat = recovery.wrapSeatModel(async () => {
+      throw googleQuota("2");
+    });
+    await expect(seat({ subtask: { id: "s1", seat: "content" } })).rejects.toThrow("HTTP 429");
+    const step = { id: "s1", title: "t", status: "failed", output: "google request failed with HTTP 429 Too Many Requests" };
+    const live = liveRunWith(step);
+    recovery.onBusEvent(stepEnd(step), live);
+    expect(live.steps[0]?.status).toBe("pending");
+  });
+
+  it("keeps the port's real provider error over the refusals the app's provider loop records last", async () => {
+    const tally = new SeatTally();
+    const recovery = new AutoRecovery({ cycles: 1, tally });
+    type Port = (request: { model: string }) => Promise<unknown>;
+    // The app's executeSeatModel: every provider of its chain through the port, the LAST error kept.
+    const app = async (input: { subtask: { id: string; seat: string }; createChatCompletion?: unknown }) => {
+      let last = "";
+      for (const model of ["gemini-3.7-flash", "anthropic/claude-sonnet-4-6"]) {
+        try {
+          await (input.createChatCompletion as Port)({ model });
+        } catch (error) {
+          last = (error as Error).message;
+        }
+      }
+      return { output: { error: last }, model: "gemini-3.7-flash", tokens: 0, costCents: 0, fallback: true, error: last };
+    };
+    const port: Port = async (request) => {
+      if (request.model.startsWith("gemini")) throw googleQuota("3600");
+      throw new Error(`openrouter is not configured for this profile (no API key); ${request.model} was not called`);
+    };
+    const seat = recovery.attributeSeatErrors(app as never);
+    const result = await seat({ subtask: { id: "s1", seat: "content" }, createChatCompletion: port as never });
+    expect(result.error).toContain("google request failed with HTTP 429");
+    expect(result.error).not.toContain("openrouter");
+    // The guard records what the attribution handed back; the step_end reads the port's Retry-After.
+    tally.record("s1", result);
+    const step = { id: "s1", title: "t", status: "completed", output: "Model returned an invalid tool-use turn." };
+    const live = liveRunWith(step);
+    recovery.onBusEvent(stepEnd(step), live);
+    expect(live.steps[0]?.status).toBe("failed");
+    expect(recovery.modelFailures().get("s1")?.[0]).toMatchObject({ provider: "google", status: 429, retryAfterMs: 3_600_000 });
+  });
+
+  it("books a model failure per step, forgets it when a later cycle completes, and never books a skip or a tool failure", async () => {
+    const recovery = new AutoRecovery({ cycles: 1, tally: new SeatTally() });
+    let calls = 0;
+    const seat = recovery.wrapSeatModel(async () => {
+      calls += 1;
+      if (calls === 1) throw new ProviderHttpError({ provider: "openai", status: 503 });
+      return { output: {}, model: "fake", tokens: 1, costCents: 0, fallback: false };
+    });
+    await expect(seat({ subtask: { id: "s1", seat: "engineer" } })).rejects.toThrow("HTTP 503");
+    const flaky = { id: "s1", title: "t", status: "failed", output: "openai request failed with HTTP 503" };
+    const flakyLive = liveRunWith(flaky);
+    recovery.onBusEvent(stepEnd(flaky), flakyLive);
+    expect(recovery.modelFailures().get("s1")).toHaveLength(1);
+    await seat({ subtask: { id: "s1", seat: "engineer" } });
+    const done = { ...flakyLive.steps[0], status: "completed", output: "done" };
+    flakyLive.steps[0] = done as typeof flakyLive.steps[0];
+    recovery.onBusEvent(stepEnd(done), flakyLive);
+    expect(recovery.modelFailures().has("s1")).toBe(false);
+
+    const auth = new AutoRecovery({ cycles: 0, tally: new SeatTally() });
+    const refused = auth.wrapSeatModel(async () => {
+      throw new ProviderHttpError({ provider: "openai", status: 401, statusText: "Unauthorized" });
+    });
+    await expect(refused({ subtask: { id: "s2", seat: "ceo" } })).rejects.toThrow("HTTP 401");
+    const denied = { id: "s2", title: "t", status: "failed", output: "openai request failed with HTTP 401 Unauthorized" };
+    auth.onBusEvent(stepEnd(denied), liveRunWith(denied));
+    // Zero cycles re-runs nothing, and the verdict still learns what the step died of.
+    expect(auth.exhausted()).toEqual([]);
+    expect(auth.modelFailures().get("s2")).toMatchObject([{ errorClass: "auth", status: 401 }]);
+    const skipped = { id: "s3", title: "t", status: "failed", output: 'Skipped — dependency "s2" failed.' };
+    auth.onBusEvent(stepEnd(skipped), liveRunWith(skipped));
+    const tool = { id: "s4", title: "t", status: "failed", output: "hardline: refused: rm -rf / is never run" };
+    auth.onBusEvent(stepEnd(tool), liveRunWith(tool));
+    expect([...auth.modelFailures().keys()]).toEqual(["s2"]);
   });
 });

@@ -75,6 +75,16 @@ stop (the wrapper ended that seat on purpose), a dependency skip, a hardline ref
 result (neither classifies as transient), and any other non-transient error such as a 401 or a
 missing key.
 
+[P2-11] Nor is a 429 whose `Retry-After` is longer than one re-run can wait out: a cycle re-runs at
+once and the gateway waits at most 8 s before each of its two further attempts, so the window is
+16 s (`RECOVERY_WINDOW_MS`). Such a step fails at once, its output names the wait, and the run's
+verdict carries `retryAfterSeconds` so the caller decides; for a scheduled job the quota hold in
+`cron/incidents.ts` does. The error a step is judged on is the first real provider failure the seat
+port saw, not the last provider the app's fallback loop refused. A run that failed this way ends
+`run_failed` with a one-line summary (`1 of 4 steps failed: google HTTP 429 rate_limit (...) on
+content; consolidation skipped; retry after 3600s`), and that line is what a cron history row
+records after `Run failed: `; it names `HTTP 429`, so the quota hold applies.
+
 How a cycle works: the app emits the failed `step_end` before it schedules what follows, and the
 bus delivers it synchronously, so the wrapper resets the step to `pending` inside that event and
 writes the row; the app's own scheduler then re-enqueues the step. The step's earlier tool calls

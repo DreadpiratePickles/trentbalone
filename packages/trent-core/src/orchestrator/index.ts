@@ -36,7 +36,9 @@
  *     the literal fallback summary on `consolidate_end` and writes the real brief through the
  *     gateway, replacing it in the snapshot, the store and the emitted events;
  *   - [X5] auto-recovery cycles (`auto-recovery.ts`): a step that failed on a transient provider
- *     or tool error is reset to pending inside its own `step_end`, so the app re-enqueues it.
+ *     or tool error is reset to pending inside its own `step_end`, so the app re-enqueues it;
+ *   - [P2-11] a verdict (`verdict.ts`): a run that failed at a provider, or whose drain died, ends
+ *     with one `run_failed` frame and a snapshot carrying the failed steps, the spend and the cause.
  */
 
 import { createCompletionPort } from "../model-gateway/completion-port.js";
@@ -51,9 +53,10 @@ import { PortShaper, PortTally } from "./provider-ports.js";
 import { DEFAULT_MAX_CONCURRENT_RUNS, RunSlots, type ReleaseSlot } from "./run-slots.js";
 import { closeRunScope, createContextNoticeBus, openRunScope } from "./run-hooks.js";
 import { applyConsolidation, finishRunVerification, type RunVerificationPort } from "./run-verification.js";
-import { SeatTally, applyStepFailures, shapeEvent, type SeatModelFn } from "./seat-guard.js";
+import { SeatTally, shapeEvent, type SeatModelFn } from "./seat-guard.js";
 import { createRunSpendMeter, createSeatChatPort, type RunSpendMeter } from "./spend-meter.js"; // [P2-8] seats through the gateway, every call metered at list price
 import { AutoRecovery, DEFAULT_AUTO_RECOVERY_CYCLES } from "./auto-recovery.js";
+import { applyPlannerFailure, applySeatFailureOverride, VerdictBook } from "./verdict.js"; // [P2-11]
 import { guardedSeatModel } from "./seat-guard-budget.js";
 import { toolInstructions, wireSeatTools } from "./seat-wiring.js";
 import { drainRun } from "./drain.js";
@@ -199,7 +202,8 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
   const seatInstructions = toolInstructions(allTools);
 
   function installPorts(libs: Libs, gateway: ModelGateway, tally: SeatTally, ports: PortTally, recovery: AutoRecovery, emit: (event: OrcEvent) => void, meter: RunSpendMeter): void {
-    const underlying = meter.seatModel((deps.executeSeatModelFn as SeatModelFn | undefined) ?? libs.gateway.executeSeatModel);
+    // [P2-11] Inside the meter: the app keeps only the last provider's error; the attribution keeps the real one.
+    const underlying = meter.seatModel(recovery.attributeSeatErrors((deps.executeSeatModelFn as SeatModelFn | undefined) ?? libs.gateway.executeSeatModel));
     const chat = deps.createChatCompletion ? (deps.executeSeatModelFn ? undefined : deps.createChatCompletion) : gateway.configuredProviders().length > 0 ? createSeatChatPort(gateway) : undefined;
     // B2: provider guard inside, spend cap outside; [X5] the recovery wrapper outside both, so a thrown transient error is seen and a budget refusal is not retried.
     const seat = recovery.wrapSeatModel(guardedSeatModel({ underlying, chat, tally, instructions: seatInstructions, emit }));
@@ -215,50 +219,6 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
   async function snapshotOf(libs: Libs, runId: string): Promise<OrchestrationRunSnapshot | undefined> {
     const raw = await libs.orchestrator.getOrchestrationRunSnapshot(runId);
     return raw as OrchestrationRunSnapshot | undefined;
-  }
-
-  /**
-   * D1b: the pipeline marks a step `completed` even when its seat never reached a model (the seat
-   * loop turns a provider error into the summary "Model returned an invalid tool-use turn." and the
-   * offline critic auto-passes). When the guard saw every call fail, the run is failed here — in the
-   * live cache the snapshot reads from AND in the store — with the provider's own message.
-   */
-  async function applyFailureOverride(libs: Libs, runId: string, tally: SeatTally): Promise<void> {
-    const runFailure = tally.runFailure();
-    // B2: a step the wrapper ended itself (a seat past its cap) is failed here too, whatever the run did.
-    if (runFailure === undefined && tally.abortedSteps().length === 0) return;
-    const summary = runFailure === undefined ? undefined : `Run failed: every model call failed: ${runFailure}`;
-    const completedAt = new Date().toISOString();
-    const live = libs.orchestrator.getOrchestrationRun(runId);
-    if (live) {
-      if (summary !== undefined) {
-        live.status = "failed";
-        live.summary = summary;
-        live.completedAt = live.completedAt ?? completedAt;
-      }
-      applyStepFailures(live.steps, tally);
-      libs.cache.cacheOrchestrationRun(live);
-    }
-    if (summary !== undefined) await libs.store.updateOrchestratorRun(runId, { status: "failed", summary, completedAt }).catch(() => undefined);
-  }
-
-  /**
-   * With a provider configured, a planner failure is an error, not a canned plan: the pipeline's
-   * `callJsonWithFallback` swallowed it, so the wrapper fails the run — live cache and store — with
-   * the provider's own message. Returns the summary written.
-   */
-  async function applyPlannerFailure(libs: Libs, runId: string, message: string): Promise<{ summary: string; completedAt: string }> {
-    const summary = `Run failed: planner call failed: ${message}`;
-    const completedAt = new Date().toISOString();
-    const live = libs.orchestrator.getOrchestrationRun(runId);
-    if (live) {
-      live.status = "failed";
-      live.summary = summary;
-      live.completedAt = live.completedAt ?? completedAt;
-      libs.cache.cacheOrchestrationRun(live);
-    }
-    await libs.store.updateOrchestratorRun(runId, { status: "failed", summary, completedAt }).catch(() => undefined);
-    return { summary, completedAt };
   }
 
   /** What `run` and `resume` each supply: whose run it is, and how its row and queue come to exist. */
@@ -356,7 +316,8 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
       try {
         const id = await started;
         const { companyId, objective } = scope!;
-        const portShaper = new PortShaper(ports, meter.consolidatorGateway(gateway), {
+        const book = new VerdictBook(recovery!, () => libs.orchestrator.getOrchestrationRun(id)); // [P2-11]
+        const portShaper = new PortShaper(ports, book.consolidatorGateway(meter.consolidatorGateway(gateway)), {
           objective,
           liveRun: () => libs.orchestrator.getOrchestrationRun(id),
           persistSummary: (summary) => applyConsolidation(libs, id, summary),
@@ -372,31 +333,39 @@ export function createOrchestrator(deps: OrchestratorDepsWithImprove = {}): Orch
               const withPorts = await portShaper.shape(event);
               if (!withPorts) return;
               const shaped = shapeEvent(withPorts, tally, portShaper.fallbackPlan);
-              if (shaped) deliver(meter.stamp(shaped));
+              if (shaped) deliver(book.observe(meter.stamp(shaped)));
             });
           }
         });
-        await drainRun(libs, companyId, id, maxJobs, {
-          isInterrupted,
-          waitForResume: () => waitForResume(id, options.signal, isInterrupted),
-          settle: () => chain,
-        });
-        await chain;
+        try {
+          await drainRun(libs, companyId, id, maxJobs, {
+            isInterrupted,
+            waitForResume: () => waitForResume(id, options.signal, isInterrupted),
+            settle: () => chain,
+          });
+          await chain;
+        } catch (error) {
+          // [P2-11] A job or a frame threw: the stream still ends with a verdict, and result() still rejects.
+          await chain.catch(() => undefined);
+          await book.abandon(libs, id, error, deliver);
+          throw error;
+        }
         if (portShaper.plannerFailure !== undefined) {
           const { summary, completedAt } = await applyPlannerFailure(libs, id, portShaper.plannerFailure);
-          deliver(portShaper.plannerFailedEvent(id, summary, completedAt));
+          deliver(book.plannerFailed(portShaper.plannerFailedEvent(id, summary, completedAt), portShaper.plannerFailure));
         } else if (portShaper.consolidated !== undefined) {
           await applyConsolidation(libs, id, portShaper.consolidated);
         }
-        await applyFailureOverride(libs, id, tally);
+        await applySeatFailureOverride(libs, id, tally);
         await recovery!.finish(libs, id); // [X5] a step that exhausted its cycles fails the run, with every error named
+        await book.finish(libs, id, { interrupted: isInterrupted(), deliver }); // [P2-11] written last: the verdict wins
         // [D4] Gates before judgment, then verify_on_stop; a refusal rides the bus as a step_note.
         await finishRunVerification(deps.verification, { runId: id, objective, deliver });
         // The loop's writes are part of the run: a caller that sweeps right after must see them.
         await deps.improve?.flush();
         const snapshot = await snapshotOf(libs, id);
         if (!snapshot) throw new Error(`Orchestration run ${id} vanished before a snapshot could be read`);
-        return snapshot;
+        return book.attach(snapshot);
       } finally {
         unsubscribe?.();
         channel.close();

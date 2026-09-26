@@ -1,3 +1,4 @@
+<!-- SUPERSEDED 2026-09-25 by README.md (P2-B, docs/sessions/2026-09-25-p2-b-readme.md). Kept as the audit's record; do not edit or copy from it. -->
 <!--
   DRAFT for README.md, written 2026-09-25 by the public-readiness audit
   (05_release/output/public-readiness-audit-2026-09-25.md). Every claim is followed by an HTML

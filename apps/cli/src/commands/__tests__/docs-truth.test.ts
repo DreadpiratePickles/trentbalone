@@ -343,10 +343,9 @@ describe("the documents state the doctor's real check count", () => {
 
 /**
  * Pages that state which names `toolsets` accepts and what a config without the key gets. README
- * belongs in this list too; it says "thirteen" where the schema has more, and joins once it is
- * corrected (P2-5a reported the line to the README owner).
+ * joined once its "thirteen" was corrected (P2-5a reported the line; P2-B fixed it).
  */
-const TOOLSET_PAGES: readonly string[] = ["docs/getting-started.md"];
+const TOOLSET_PAGES: readonly string[] = ["README.md", "docs/getting-started.md"];
 
 const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"];
 

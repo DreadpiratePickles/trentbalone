@@ -9,7 +9,8 @@
  * the orchestrator's real events, and releases the runtime on every exit path.
  *
  * Two output shapes over the same event stream:
- *   `--format text`        the REPL's own `TranscriptRenderer`, without the prompt.
+ *   `--format text`        the REPL's own `TranscriptRenderer`, without the prompt; the app's own
+ *                          stdout lines go to `<profile>/logs/run.log` unless `--verbose` [P2-B].
  *   `--format stream-json` one JSON object per line: a `system` header, then every `OrcEvent` the
  *                          run emitted VERBATIM, then a final `result` line whose keys are the
  *                          session store's own (`run_id`, `cost_cents`, `duration_ms`). There is
@@ -35,11 +36,14 @@
  * as a child of this command (`../../runtime/child-run.ts`), which sets `TRENT_RUN_SURFACE=cron` so
  * the child's spend is cron's and its trigger `scheduled`.
  */
+import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
 import { format as formatArgs } from "node:util";
 import { EXIT, TrentError, type ExitCode } from "@trent/core/errors/index.js";
 import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { parseModelPin } from "@trent/core/orchestrator/model-env.js";
+import { verdictOf, verdictResultFields, type RunFailureVerdict, type VerdictResultFields } from "@trent/core/orchestrator/verdict.js"; // [P2-11]
 import { questionFromEvent } from "@trent/core/tools/human/index.js";
 import { ApprovalGate } from "../../repl/approvals.js";
 import { BudgetLedger, formatCents } from "../../repl/budget.js";
@@ -77,7 +81,7 @@ type RunResult = {
   models: string[];
   error?: string;
   approval_id?: string;
-};
+} & Partial<VerdictResultFields>; // [P2-11] a failed run's verdict (`orchestrator/verdict.ts`): reason, failed_steps, ...
 
 function fail(message: string, target?: string): never {
   throw new TrentError({
@@ -186,11 +190,69 @@ function quietStdoutForMachines(): () => void {
   };
 }
 
+/** [P2-B] The cap on `<profile>/logs/run.log`, the service log's: one `.1` generation beyond it. */
+export const RUN_LOG_MAX_BYTES = 1_048_576;
+
+function appendRunLog(file: string, text: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const size = fs.existsSync(file) ? fs.statSync(file).size : 0;
+  if (size > 0 && size + Buffer.byteLength(text) > RUN_LOG_MAX_BYTES) fs.renameSync(file, `${file}.1`);
+  fs.appendFileSync(file, text, { mode: 0o600 });
+}
+
+/**
+ * [P2-B] Text mode is for a person: stdout carries the run's own lines (`own`) and, for the run,
+ * everything else written to stdout goes to `file`: the app's console.log/info/debug (`[Worker]
+ * Starting job ...`) and direct `process.stdout.write` calls. The second catches the app's pino
+ * logger, which writes through `process.stdout` rather than to fd 1 when `process.stdout.write` is
+ * not the stream's own method as it is built (pino `lib/tools.js`), inside `createHeadlessRuntime`.
+ * Its level is untouched, so its lines are kept. A line the file refuses goes to stderr, never lost;
+ * console.warn/error stay on stderr, since an app error is still the person's to see.
+ */
+function routeAppOutputToLog(file: string, write: (line: string) => void): { own: (line: string) => void; restore: () => void } {
+  const stdout = process.stdout;
+  const ownWrite = Object.getOwnPropertyDescriptor(stdout, "write");
+  const realWrite = stdout.write as (...args: unknown[]) => boolean;
+  const original = { log: console.log, info: console.info, debug: console.debug };
+  let passing = false;
+  const toLog = (text: string): void => {
+    const line = text.endsWith("\n") ? text : `${text}\n`;
+    try {
+      appendRunLog(file, line);
+    } catch {
+      process.stderr.write(line);
+    }
+  };
+  stdout.write = function routedWrite(chunk: unknown, ...rest: unknown[]): boolean {
+    if (passing) return realWrite.call(stdout, chunk, ...rest);
+    toLog(typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf8"));
+    rest.find((arg): arg is () => void => typeof arg === "function")?.();
+    return true;
+  } as typeof stdout.write;
+  const toFile = (...args: unknown[]): void => toLog(formatArgs(...args));
+  Object.assign(console, { log: toFile, info: toFile, debug: toFile });
+  toLog(`# ${new Date().toISOString()} trent run, pid ${process.pid}`);
+  const own = (line: string): void => {
+    passing = true;
+    try {
+      write(line);
+    } finally {
+      passing = false;
+    }
+  };
+  const restore = (): void => {
+    if (ownWrite === undefined) delete (stdout as { write?: unknown }).write;
+    else Object.defineProperty(stdout, "write", ownWrite);
+    Object.assign(console, original);
+  };
+  return { own, restore };
+}
+
 function exitFor(result: RunResult, stop: StopReason | undefined): ExitCode {
   if (result.status === "completed") return EXIT.OK;
   if (result.status === "paused") return EXIT.APPROVAL_REQUIRED;
   if (result.status === "cancelled") return stop === "budget" ? EXIT.BUDGET : EXIT.INTERRUPT;
-  return EXIT.RUN_FAILED;
+  return result.reason === "model_calls_failed" ? EXIT.PROVIDER : EXIT.RUN_FAILED; // [P2-11] 5 when a provider refused the run's calls
 }
 
 interface Drive {
@@ -202,7 +264,7 @@ interface Drive {
  * One run, start to verdict. Owns the whole streaming loop: the renderer or the JSONL mapper, the
  * cost ledger, the approval gate and the abort. Nothing here decides an approval or invents a cost.
  */
-async function driveRun(ctx: CommandContext, objective: string, format: Format, cap: number | undefined, resumeId?: string, pin?: string): Promise<{
+async function driveRun(ctx: CommandContext, objective: string, format: Format, cap: number | undefined, resumeId?: string, pin?: string, verbose = false): Promise<{
   drive: Drive;
   release: () => Promise<void>;
   emitFinal: (drive: Drive) => void;
@@ -211,8 +273,12 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
   const config = configManager.loadConfig() as unknown as ReplConfig;
   const now = ctx.overrides.now ?? (() => new Date());
   const startedAt = now().getTime();
-  // Before the runtime is built: the app's logger fixes its level when its module is evaluated.
-  const restoreStdout = ctx.json || format === "stream-json" ? quietStdoutForMachines() : undefined;
+  // Before the runtime is built: the app's logger fixes its level and its stream when its module is
+  // evaluated. [P2-B] Text mode routes the app's own lines to run.log unless --verbose is passed.
+  const machine = ctx.json || format === "stream-json";
+  const routed = machine || verbose ? undefined : routeAppOutputToLog(path.join(configManager.getLogsDir(), "run.log"), (line) => ctx.out(line));
+  const out = routed?.own ?? ((line: string): void => ctx.out(line));
+  const restoreStdout = machine ? quietStdoutForMachines() : routed?.restore;
   // [P2-1] Who spends and why: `trent run`'s own, or a pinned cron job's child run.
   const origin = runOrigin();
   let runtime: HeadlessRuntime;
@@ -247,7 +313,7 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
   let status: RunStatus = "failed";
   let error: string | undefined = "the run ended without a verdict";
   let runId: string | null = null;
-  let approvalId: string | undefined;
+  let approvalId: string | undefined, verdict: RunFailureVerdict | undefined; // [P2-11] verdict: the terminal frame's, when it carries one
   const models: string[] = []; // [P2-1] what the steps reported, first seen first
   let systemEmitted = false;
   let finish!: () => void;
@@ -267,7 +333,7 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
   const emitSystem = (event: OrcEvent): void => {
     if (systemEmitted || !streaming) return;
     systemEmitted = true;
-    ctx.out(
+    out(
       JSON.stringify({
         type: "system",
         at: now().toISOString(),
@@ -292,8 +358,8 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
   };
 
   const write = (event: OrcEvent): void => {
-    if (text) for (const line of renderer.handle(event)) ctx.out(line);
-    if (streaming) ctx.out(eventLine(event));
+    if (text) for (const line of renderer.handle(event)) out(line);
+    if (streaming) out(eventLine(event));
   };
 
   /** Integer cents off the events that carry them; the REPL's ledger does the arithmetic. */
@@ -318,6 +384,7 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
       } else if (event.kind === "run_failed") {
         status = "failed";
         error = event.detail ?? event.run?.summary ?? "the run failed";
+        verdict = verdictOf(event); // [P2-11]
       } else if (event.kind === "run_cancelled") {
         status = "cancelled";
         error = event.detail ?? "the run was cancelled";
@@ -343,7 +410,7 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
         stop = "approval";
         status = "paused";
         error = undefined;
-        if (text) for (const line of approvalLines(ctx, approval.id, approval.action, approval.reason)) ctx.out(line);
+        if (text) for (const line of approvalLines(ctx, approval.id, approval.action, approval.reason)) out(line);
         break;
       }
 
@@ -375,15 +442,15 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
     model: pin ?? config.model,
     models,
     ...(error === undefined ? {} : { error }),
-    ...(approvalId === undefined ? {} : { approval_id: approvalId }),
+    ...(approvalId === undefined ? {} : { approval_id: approvalId }), ...verdictResultFields(verdict), // [P2-11]
   };
 
   const emitFinal = (drive: Drive): void => {
-    if (streaming) ctx.out(JSON.stringify(drive.result));
+    if (streaming) out(JSON.stringify(drive.result));
     if (!text) return;
-    if (drive.stop === "signal") ctx.out(ctx.theme.meta("Interrupted. The run was stopped."));
-    if (drive.stop === "budget" && drive.result.error !== undefined) ctx.out(ctx.theme.needsApproval(drive.result.error));
-    ctx.out(
+    if (drive.stop === "signal") out(ctx.theme.meta("Interrupted. The run was stopped."));
+    if (drive.stop === "budget" && drive.result.error !== undefined) out(ctx.theme.needsApproval(drive.result.error));
+    out(
       ctx.theme.meta(
         `  ${formatCents(drive.result.cost_cents)} · ${drive.result.duration_ms}ms · run ${drive.result.run_id ?? "none"}`,
       ),
@@ -396,12 +463,13 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
 export const runSpec: CommandSpec = {
   name: "run [objective]",
   description:
-    "Run one objective headlessly and stream its events; - reads the objective from stdin; --resume <id> picks an interrupted run back up instead. Exit 0 completed, 1 run failed, 3 configuration, 6 over --max-cost-cents, 7 awaiting an approval, 130 interrupted",
+    "Run one objective headlessly and stream its events; - reads the objective from stdin; --resume <id> picks an interrupted run back up instead. Exit 0 completed, 1 run failed, 3 configuration, 5 provider failure (the run's model calls were refused), 6 over --max-cost-cents, 7 awaiting an approval, 130 interrupted",
   options: [
     { flags: "--format <format>", description: "text (the REPL transcript) or stream-json (one JSON object per line)", defaultValue: "text" },
     { flags: "--max-cost-cents <cents>", description: "Stop the run once it has spent more than this many integer cents" },
     { flags: "--resume <runId>", description: "Resume an existing run that a killed process left running, instead of starting a new one" },
     { flags: "--model <id>", description: "Run the whole run (planner, critic, consolidator and every seat) on this model of the profile's provider" },
+    { flags: "--verbose", description: "Text mode: also print the wrapped app's own worker and log lines, which otherwise go to <profile>/logs/run.log" },
   ],
   async run(ctx, opts, args) {
     const format = parseFormat(opts.format);
@@ -417,7 +485,7 @@ export const runSpec: CommandSpec = {
     if (resumeId !== undefined && args[0] !== undefined) usage("run takes an objective or --resume <runId>, not both");
     if (resumeId === undefined && args[0] === undefined) usage("run needs an objective (or - to read one from stdin), or --resume <runId>");
     const objective = resumeId === undefined ? await readObjective(args[0]) : "";
-    const { drive, release, emitFinal } = await driveRun(ctx, objective, format, cap, resumeId, pin);
+    const { drive, release, emitFinal } = await driveRun(ctx, objective, format, cap, resumeId, pin, opts.verbose === true);
     try {
       emitFinal(drive);
       const exit = exitFor(drive.result, drive.stop);
