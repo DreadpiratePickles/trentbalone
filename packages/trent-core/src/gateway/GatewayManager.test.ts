@@ -70,7 +70,11 @@ describe("GatewayManager end to end over the Telegram wire", () => {
     expect(offer.chat_id).toBe(555);
     const code = /Pairing code: ([A-Z2-9]{8})/.exec(offer.text)?.[1];
     expect(code).toBeDefined();
-    expect(offer.text).toContain(`trent gateway pair telegram ${code}`);
+    // [C7] the stranger is told their code and when it expires, and is shown no command to run
+    expect(offer.text).not.toContain("trent ");
+    expect(offer.text).toContain("Trent does not know you yet");
+    expect(offer.text).toMatch(/owner can approve it/);
+    expect(offer.text).toMatch(/expires in one hour/);
 
     m.getPairing().pair("telegram", code!, "regular");
     await m.handleInbound({ id: "x", platform: "telegram", channelId: "555", senderId: "555", content: "now paired", timestamp: "t", scope: "dm" });
@@ -157,7 +161,7 @@ describe("GatewayManager end to end over the Telegram wire", () => {
     // the pairing-code offer to the stranger and the decision ack to the admin.
     const pending = m.getQueue().pending("email").map((r) => [r.message.channelId, r.message.text.split("\n")[0]]);
     expect(pending).toEqual([
-      ["stranger@example.com", expect.stringContaining("not paired")],
+      ["stranger@example.com", expect.stringContaining("does not know you")], // [C7] the neutral reply
       ["ops@example.com", `Approved: Refund (${req.id})`],
     ]);
   });

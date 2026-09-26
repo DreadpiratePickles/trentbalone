@@ -258,18 +258,80 @@ export class ApprovalBridge extends EventEmitter {
     return request.kind === "question" ? `A question for you: ${request.action}` : `Approval needed: ${request.action}`;
   }
 
+  // [C7] one plain line per action and the Ref; the row keeps its details for `trent approvals`
   public cardText(request: ApprovalRequest): string {
     if (request.kind === "question") return this.questionText(request);
-    const lines = [
-      "APPROVAL REQUIRED",
-      `Agent: ${request.agentId}`,
-      `Action: ${request.action}`,
-      `Details: ${JSON.stringify(request.details)}`,
-    ];
+    const lines = ["APPROVAL REQUIRED", this.actionLine(request)];
     if (request.budgetImpact !== undefined) lines.push(`Budget impact: $${request.budgetImpact.toFixed(2)}`);
     lines.push(`Ref: ${request.id}`);
     return lines.join("\n");
   }
+
+  /** `<agent> wants to run <tool> on <target> for <amount>`, or `<agent> wants to: <action>`; at most 160 characters, never a brace. */
+  private actionLine(request: ApprovalRequest): string {
+    const { tool, args } = this.toolOf(request);
+    const agent = this.plain(request.agentId);
+    const target = this.targetOf(args);
+    const amount = this.amountOf(args);
+    const line =
+      tool === undefined
+        ? `${agent} wants to: ${this.plain(request.action) || "an unnamed action"}`
+        : `${agent} wants to run ${this.plain(tool)}${target === undefined ? "" : ` on ${target}`}${amount === undefined ? "" : ` for ${amount}`}`;
+    return line.length <= 160 ? line : `${line.slice(0, 157)}...`;
+  }
+
+  /**
+   * A held call's `details.tool` and `args`; else an action written `<tool> <json>` (the MCP gate's rows)
+   * or `<adapter> <tool> <json>` (a solo gate's step title, clipped at 120 characters, so its JSON may not
+   * parse: the raw text is kept and the target is read off it).
+   */
+  private toolOf(request: ApprovalRequest): { tool?: string; args?: unknown } {
+    const { tool, args } = request.details ?? {};
+    if (typeof tool === "string" && tool !== "") return { tool, args };
+    const written = /^(?:[\w.:-]+\s+)?([\w.:-]+)\s+(\{[\s\S]*)$/.exec(request.action.trim());
+    if (written === null) return {};
+    try {
+      return { tool: written[1], args: JSON.parse(written[2]) as unknown };
+    } catch {
+      return { tool: written[1], args: written[2] };
+    }
+  }
+
+  /** The first argument that names what the call reaches: a path, URL, recipient, channel, command. */
+  private targetOf(args: unknown): string | undefined {
+    if (typeof args !== "string" && (args === null || typeof args !== "object" || Array.isArray(args))) return undefined;
+    for (const key of ["path", "file_path", "file", "url", "to", "recipient", "recipients", "email", "phone", "phone_number", "customer", "channel", "channel_id", "chat_id", "host", "command", "target", "name"]) {
+      const value = typeof args === "string" ? new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`).exec(args)?.[1] : (args as Record<string, unknown>)[key];
+      const text = typeof value === "string" || typeof value === "number" ? String(value) : Array.isArray(value) ? value.filter((v) => typeof v === "string").slice(0, 3).join(", ") : "";
+      if (this.plain(text) !== "") return this.plain(text);
+    }
+    return undefined;
+  }
+
+  /** A money call's total from integer cents (`items` x `quantity`, `expected_total_cents`, `amount_cents`), in dollars and cents. */
+  private amountOf(args: unknown): string | undefined {
+    if (args === null || typeof args !== "object" || Array.isArray(args)) return undefined;
+    const bag = args as Record<string, unknown>;
+    const isCents = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v > 0;
+    let cents: number | undefined;
+    if (Array.isArray(bag.items)) {
+      const lines = bag.items.map((item) => (item !== null && typeof item === "object" ? (item as Record<string, unknown>) : {}));
+      const valid = lines.length > 0 && lines.every((l) => isCents(l.amount_cents) && (l.quantity === undefined || isCents(l.quantity)));
+      cents = valid ? lines.reduce((sum, l) => sum + (l.amount_cents as number) * ((l.quantity as number | undefined) ?? 1), 0) : undefined;
+    } else {
+      cents = [bag.expected_total_cents, bag.amount_cents].find(isCents);
+    }
+    if (cents === undefined) return undefined;
+    const value = `${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
+    const currency = typeof bag.currency === "string" && bag.currency !== "" ? bag.currency.toUpperCase() : "USD";
+    return currency === "USD" ? `$${value}` : `${value} ${this.plain(currency)}`;
+  }
+
+  /** One line of plain text: braces dropped, whitespace collapsed. */
+  private plain(text: string): string {
+    return text.replace(/[{}]/g, " ").replace(/\s+/g, " ").trim();
+  }
+  // [C7] end
 
   private questionText(request: ApprovalRequest): string {
     const details = request.details as { question?: unknown; context?: unknown; options?: unknown };

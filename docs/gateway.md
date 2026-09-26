@@ -148,6 +148,29 @@ interrupt (`apps/cli/src/signals.ts`), so the binary's own Ctrl+C handler waits 
 instead of exiting on top of it; a second Ctrl+C exits at once.
 To keep it up across reboots, with the cron runner and the heartbeat, install it as one supervised launchd or systemd service: `trent service install` ([service.md](service.md)).
 
+## Pairing a sender
+
+Nobody reaches the agent until you pair them. An unknown sender's first direct message gets one
+reply, which names no command:
+
+    Trent does not know you yet.
+    Pairing code: 7KQ2M9XD
+    The owner can approve it; the code expires in one hour.
+
+`gateway pairings` shows every live code with the sender id that holds it, and every paired sender:
+
+    trent gateway pairings                          # paired senders; live codes and who holds them
+    trent gateway pair telegram 7KQ2M9XD            # regular: their messages reach the agent
+    trent gateway pair telegram 7KQ2M9XD --admin    # admin: their button, reaction or reply also decides approval cards
+    trent gateway revoke telegram 555               # unpair; their next message gets a new code
+
+All three write `<profile>/gateway.json` the way `trent approvals approve` does, so they work while
+`gateway start` or the service daemon holds the profile, and the running gateway sees a pairing on
+the sender's next message. Codes are eight characters from an alphabet without 0/O or 1/I, at most
+three per sender per 24 hours. An unknown or expired code, an unknown platform, or a revoke of a
+sender who is not paired exits 2. A sender in a group is never offered a code: pair them over DM
+(`apps/cli/src/commands/__tests__/gateway-pair.test.ts`).
+
 ## One gateway per profile
 
 Two `gateway start` on one profile used to attach every adapter twice, so each Telegram or Discord
@@ -226,6 +249,10 @@ to the owner through `GatewayManager.sendApproval`. The owner's decision — a b
 step through `orchestrator.approve` / `orchestrator.reject`, once per card. Without `gateway.owner`
 the link is off: `gateway start` says so in its report and writes one structured log line, and a
 gated run stays parked until it is answered from the REPL or the TUI.
+The card is plain text: `APPROVAL REQUIRED`, one line `<seat> wants to run <tool> on <target> for
+<amount>` (the amount from integer cents, `$241.00`), and `Ref: <approval id>`. The call's arguments
+stay on the row, never in the card. Only a sender paired with `--admin` can decide it
+(`packages/trent-core/src/gateway/ApprovalBridge.test.ts`).
 
 ### Reactions decide the card too
 
@@ -249,6 +276,7 @@ and then resolves it through the same path as a button press, so the pending, no
 admin-pairing checks are identical. A second reaction on a decided card, a reaction from a
 sender who is not a paired admin, or a reaction on a message that is not a delivered card
 changes nothing.
+Pair yourself with `trent gateway pair <platform> <code> --admin` before you expect a reaction to count.
 
 ### Questions from a seat (`ask_human`)
 

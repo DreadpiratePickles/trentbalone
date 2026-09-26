@@ -235,7 +235,7 @@ describe("Matrix through the GatewayManager: pairing before routing, approvals b
     await waitFor(() => bodies().length === 1);
     const code = /Pairing code: ([A-Z2-9]{8})/.exec(bodies()[0].body ?? "")?.[1];
     expect(code).toBeDefined();
-    expect(bodies()[0].body).toContain(`trent gateway pair matrix ${code}`);
+    expect(bodies()[0].body).not.toContain("trent "); // [C7] the stranger is shown no command; the owner pairs from `gateway pairings`
     expect(seen).toEqual([]);
 
     m.getPairing().pair("matrix", code!, "regular");

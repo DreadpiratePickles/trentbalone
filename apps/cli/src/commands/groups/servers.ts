@@ -26,6 +26,7 @@ import { createHeadlessRuntime } from "../../runtime/headless.js";
 import { releaseOnSignal } from "../../signals.js";
 import { openHeartbeat } from "./heartbeat.js";
 import { gatewaySetupSpec } from "./gateway-setup.js"; // [P3]
+import { gatewayPairSpecs } from "./gateway-pair.js"; // [C7]
 import { noteInboundRun } from "@trent/core/governance/bound-approvals.js"; // [P3]
 import { autoReviewPass } from "./service-daemon.js"; // [P3] the auto reviewer's pass on each heartbeat tick
 import { ACP_DEFAULT_PORT, listeningRender, parsePort, WEB_DEFAULT_PORT } from "./protocol-runtime.js";
@@ -120,6 +121,7 @@ export const gatewaySpec: CommandSpec = {
       },
     },
     gatewaySetupSpec, // [P3] the names each adapter reads, from the registry (./gateway-setup.ts)
+    ...gatewayPairSpecs, // [C7] pair, pairings, revoke (./gateway-pair.ts)
     {
       name: "start",
       description: "Start listeners for every configured messaging platform",

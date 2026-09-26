@@ -167,3 +167,43 @@ describe("ApprovalBridge questions (ask_human)", () => {
     expect(plain.kind ?? "approval").toBe("approval");
   });
 });
+
+// [C7] the owner reads one plain line per action, never the row's JSON
+describe("ApprovalBridge approval cards in plain words", () => {
+  const bridge = new ApprovalBridge({ store: new MemoryGatewayStore() });
+
+  it("a held tool call is one line naming the tool and its target, then the Ref, with no JSON", () => {
+    const row = bridge.createApprovalRequest("ceo", "write_file: write notes/today.md (13 bytes)", { kind: "bound_call", tool: "write_file", args: { path: "notes/today.md", content: "standup notes" }, preview: "write notes/today.md (13 bytes)" });
+    const text = bridge.cardText(row);
+    expect(text).not.toContain("{");
+    expect(text.split("\n")).toEqual(["APPROVAL REQUIRED", "ceo wants to run write_file on notes/today.md", `Ref: ${row.id}`]);
+    expect(text).not.toContain("standup notes");
+  });
+
+  it("a money call shows its total in dollars and cents, from integer cents", () => {
+    const row = bridge.createApprovalRequest("finance", "invoice_create: 2 x consulting", { tool: "invoice_create", args: { customer: "ada@example.com", items: [{ amount_cents: 12_050, quantity: 2 }] } });
+    expect(bridge.cardText(row).split("\n")[1]).toBe("finance wants to run invoice_create on ada@example.com for $241.00");
+    const single = bridge.createApprovalRequest("finance", "refund", { tool: "refund_issue", args: { amount_cents: 5, currency: "eur" } });
+    expect(bridge.cardText(single).split("\n")[1]).toBe("finance wants to run refund_issue for 0.05 EUR");
+  });
+
+  it("an action written as `<tool> <json>` (the MCP gate's rows) is read for its tool and target; a step title is shown as written", () => {
+    const mcp = bridge.createApprovalRequest("mcp:claude-code", 'write_file {"path":"a.txt","content":"x"}', { surface: "mcp", key: "k", preview: "file_ops: would write a.txt" });
+    expect(bridge.cardText(mcp)).not.toContain("{");
+    expect(bridge.cardText(mcp).split("\n")[1]).toBe("mcp:claude-code wants to run write_file on a.txt");
+    const step = bridge.createApprovalRequest("finance", "Send the invoice", { runId: "run_1", stepId: "step_1", reason: "external send" }, { runId: "run_1", stepId: "step_1" });
+    expect(bridge.cardText(step).split("\n")).toEqual(["APPROVAL REQUIRED", "finance wants to: Send the invoice", `Ref: ${step.id}`]);
+    // A solo gate's row: its action is the step title `<adapter> <tool> <json>`, clipped at 120 characters.
+    const solo = bridge.createApprovalRequest("solo", 'file_ops write_file {"path":"notes/today.md","content":"a long standup that the title clip cut off mid-stri…', { runId: "run_2", stepId: "step_2", reason: "held" }, { runId: "run_2", stepId: "step_2" });
+    expect(bridge.cardText(solo).split("\n")[1]).toBe("solo wants to run write_file on notes/today.md");
+    const braces = bridge.createApprovalRequest("ceo", "{\"raw\":true}", { any: { nested: 1 } });
+    expect(bridge.cardText(braces)).not.toContain("{");
+  });
+
+  it("the email card keeps the reply lines under the same plain text", () => {
+    const row = bridge.createApprovalRequest("ceo", "Deploy to production", { sha: "abc" });
+    const email = bridge.emailCardText(row);
+    expect(email).not.toContain("{");
+    expect(email).toContain(`APPROVE ${row.id} ${row.nonce}`);
+  });
+});

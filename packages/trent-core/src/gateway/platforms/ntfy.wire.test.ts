@@ -229,7 +229,7 @@ describe("ntfy through the GatewayManager: the reply topic is the sender", () =>
     expect(offer.topic).toBe(OUT);
     const code = /Pairing code: ([A-Z2-9]{8})/.exec(offer.message)?.[1];
     expect(code).toBeDefined();
-    expect(offer.message).toContain(`trent gateway pair ntfy ${code}`);
+    expect(offer.message).not.toContain("trent "); // [C7] the stranger is shown no command; the owner pairs from `gateway pairings`
     expect(seen).toEqual([]);
 
     m.getPairing().pair("ntfy", code!, "regular");

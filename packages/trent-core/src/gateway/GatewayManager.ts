@@ -324,7 +324,8 @@ export class GatewayManager {
         await this.send(message.platform, {
           channelId: message.channelId,
           threadId: message.threadId,
-          text: `This sender is not paired with Trent. Pairing code: ${decision.code}\nAn operator can approve it with: trent gateway pair ${message.platform} ${decision.code}\nThe code expires in one hour.`,
+          // [C7] names no command: the owner finds the code in `gateway pairings` and approves it there
+          text: `Trent does not know you yet.\nPairing code: ${decision.code}\nThe owner can approve it; the code expires in one hour.`,
           metadata: { subject: "Trent pairing code" },
         });
       }

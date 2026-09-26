@@ -240,7 +240,7 @@ describe("LINE through the GatewayManager and its WebhookServer", () => {
     expect(replies()[0].replyToken).toBe("rt-h1");
     const code = /Pairing code: ([A-Z2-9]{8})/.exec(replies()[0].messages[0].text)?.[1];
     expect(code).toBeDefined();
-    expect(replies()[0].messages[0].text).toContain(`trent gateway pair line ${code}`);
+    expect(replies()[0].messages[0].text).not.toContain("trent "); // [C7] the stranger is shown no command; the owner pairs from `gateway pairings`
     expect(seen).toEqual([]);
 
     m.getPairing().pair("line", code!, "regular");

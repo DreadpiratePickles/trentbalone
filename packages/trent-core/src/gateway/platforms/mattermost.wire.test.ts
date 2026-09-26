@@ -243,7 +243,7 @@ describe("Mattermost through the GatewayManager: pairing before routing, approva
     const code = /Pairing code: ([A-Z2-9]{8})/.exec(created()[0].message)?.[1];
     expect(code).toBeDefined();
     expect(created()[0]).toEqual(expect.objectContaining({ channel_id: DM }));
-    expect(created()[0].message).toContain(`trent gateway pair mattermost ${code}`);
+    expect(created()[0].message).not.toContain("trent "); // [C7] the stranger is shown no command; the owner pairs from `gateway pairings`
     expect(seen).toEqual([]);
 
     m.getPairing().pair("mattermost", code!, "regular");
