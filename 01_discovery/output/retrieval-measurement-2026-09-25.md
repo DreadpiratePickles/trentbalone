@@ -282,3 +282,107 @@ To re-record after a change to the chunker, the importer or the ranked text (abo
 | none-03 | Kubernetes cluster with Helm | fleet#16 0.184 | fleet#16 0.693 | fleet#16 0.213 | fleet#16 0.213 |
 | none-04 | sync customer records with Salesforce | nothing | nothing | nothing | nothing |
 | none-05 | live voice calls over WebRTC | configuration#79 0.177 | configuration#79 0.675 | configuration#79 0.184 | configuration#79 0.184 |
+
+## P2-13: task-type embeddings and an LLM reranker, measured (2026-09-25, later)
+
+Session log: `docs/sessions/2026-09-25-p2-13-rerank.md`. Same corpus, same 40 questions, same
+grader. HEAD fb90bcb plus uncommitted changes.
+
+### What was built
+
+- **Task types.** The embedder can now embed a query as `RETRIEVAL_QUERY` and a chunk as `RETRIEVAL_DOCUMENT`.
+  - Google's OpenAI-compatible endpoint takes no task type, so role-bearing calls go to the native `batchEmbedContents`. The key travels in the `x-goog-api-key` header.
+  - Vectors are cached per task type, and symmetric cache keys are unchanged.
+  - The task-typed space has its own calibrated floor, `queryFloor` 0.63. It was set by the symmetric floor's own rule on the same three sentences: unrelated 0.571, paraphrase 0.769 (symmetric: 0.529 and 0.754).
+  - Brain recall passes roles. Run recall, search and the doctor probe do not, so they are byte-identical.
+- **Rerank.** Config key `brain.rerank`: `mode: off | llm`, plus `model`, `max_cents_per_query` (default 1) and `min_score` (default 0.5).
+  - **Pool:** cosine top-20 ∪ TF-IDF top-20, in blend order.
+  - **Call:** one call per query to the profile's cheapest model (`gemini-3.5-flash-lite`). The prompt carries labels `c1..cN`, title and heading, and the first 300 chars of each candidate. The reply is a JSON list of labels with 0-1 scores.
+  - **Order:** picks (score ≥ `min_score`) lead, then the rest of the blend's related set.
+  - **No picks** is an empty block ("no answer").
+  - **Cost cap:** a worst case over `max_cents_per_query` is refused without a call, and the blend order is kept. The worst case is priced as prompt chars/3 plus the full 2,048-token output allowance, at list price.
+  - **Metering:** spend goes on the run's meter (`recordRunModelCall`, seat `brain_rerank`), so the ledger row carries the run's surface.
+  - **Frozen:** `lexical.ts`, `rerank.ts` and `rerank-llm.ts` are now in the improve loop's frozen `ranking` surface.
+
+### Results
+
+| Stage | recall@8 | recall@3 | MRR@8 | exact (12) | para (12) | hop (11) | no-answer abstained | cents/query |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **Before**: hybrid, symmetric (P2-6, shipped) | 0.629 (22/35) | 0.571 | 0.529 | 1.000 | 0.417 | 0.455 | 2/5 | 0 |
+| **Task types** (hybrid, task-typed) | not measured | | | | | | | 0 |
+| **Rerank** at `min_score` 0.5 (live) | **0.571 (20/35)** | 0.514 | 0.426 | 0.583 | 0.417 | 0.727 | 4/5 | 0.210 (max 0.271) |
+
+**Task types: blocked by quota.** The re-embed stopped at 317 of 665 texts with HTTP 429.
+
+- The quota is `EmbedContentRequestsPerDayPerUserPerProjectPerModel-FreeTier`, 1,000 per day, and every text in a batch counts as one request.
+- P2-6's 665 texts plus today's 317 used up the day.
+- A full run needs 665 requests. That fits in a fresh day (the quota resets at midnight Pacific), at about 2 cents.
+
+**Rerank: live.** The model was `gemini-3.5-flash-lite` at model-default thinking. It made 40 calls:
+
+- 23 ranked, 16 abstained, 1 failed (a reply with no `ranked` list, which kept the blend order).
+- Metered from provider usage: 3.0k-4.0k input tokens and 237-514 output tokens per call.
+- **8.41 cents in total.**
+- The offline replay of the recorded scores reproduces the live ranking question for question (35 answerable, 5 no-answer).
+
+**Why rerank lost.** 21 of the 35 answer phrases start past character 300 of their chunk, so the model never saw them.
+
+- It scored exact-term answers the hybrid ranked first at 0 or 0.4: exact-04, -09, -10, -11 and -12.
+- It then abstained on those questions.
+- Multi-hop gained (5 to 8 of 11), because the scenario questions are about what a section is *about*, which its first 300 characters show.
+
+**Threshold sensitivity.** These rows replay the same recorded scores, with no spend. They are chosen on the test set, so they are information, not a default.
+
+| `min_score` | recall@8 | exact | para | hop | no-answer abstained |
+|---:|---:|---:|---:|---:|---:|
+| 0 (never abstain) | 0.771 (27/35) | 1.000 | 0.583 | 0.727 | 1/5 |
+| 0.1-0.4 (identical: scores sit on the rubric anchors 0 / 0.4 / 0.7 / 0.9 / 1) | 0.743 (26/35) | 0.833 | 0.667 | 0.727 | 3/5 |
+| 0.5 (shipped, fixed before the run) | 0.571 (20/35) | 0.583 | 0.417 | 0.727 | 4/5 |
+| 0.7 | 0.543 (19/35) | 0.583 | 0.333 | 0.727 | 4/5 |
+
+**Pool ceiling.** Measured offline over the symmetric recording: 31/35 (0.886). By category: exact 12/12, para 10/12, hop 9/11. The four the pool misses are para-04, para-09, hop-05 and hop-07. Pool size is 23-40 (mean 34).
+
+- No reranker over this pool can reach recall@8 0.9.
+- A perfect one reaches 0.833 on paraphrases.
+
+### Spend
+
+| Item | Cents |
+|---|---:|
+| Calibration (6 short texts, native endpoint) | ~0.001 |
+| Task-typed re-embed, 325 texts / 287,258 chars (chars/4; bound chars/3: 1.44) | 1.08 |
+| Rerank probe, 2 questions (metered) | 0.34 |
+| Rerank measurement, 40 questions (metered) | 8.41 |
+| **Total** | **9.83** |
+
+Failed (429) requests are not billed. The key is on the free tier, so the real bill is likely $0.
+
+### Decision
+
+1. **Task types did not reach the bars, because they were not measured.** The embedder supports them, but `createEmbedder` turns them on only when a caller asks (`taskTypes: true`).
+   - Production brain recall is exactly the measured P2-6 hybrid.
+   - They become the default only after the corpus re-measure beats 22/35.
+   - The command:
+     `( set -a; source gem.env; set +a; TRENT_TEST_LIVE=1 TRENT_RECORD_DOCS_CORPUS=1 TRENT_QUEUE_FALLBACK=disabled npx vitest run packages/trent-core/src/improve/docs-corpus.live.test.ts )`.
+     It writes `fixtures/docs-corpus/embeddings-task-types.json`. Before it runs, check the embedding requests other suites have spent that day.
+2. **Rerank does not reach the bars and stays off by default.**
+   - At the shipped threshold it is worse than the hybrid (0.571 against 0.629).
+   - Its ceiling over this pool is 0.886 overall, under 0.9.
+   - Its cost, 0.21 cents a query, is under the 0.5-cent line, but the rule sets the default to `llm` only when the bars are reached.
+   - `brain.rerank.mode: llm` remains an opt-in that this measurement does not recommend.
+3. **The next measurement is the 300-character snippet.** The data points to it more than to the threshold.
+   - Changing one variable, whole chunks (up to 1,200 chars), would cost about 0.36 cents a query, or about 15 cents for the set.
+   - The 2,048-token output allowance must be lowered, or the cap raised, for the largest pools to stay under the 1-cent worst case.
+   - Reaching 0.9 overall also needs a first stage whose pool holds more than 31/35. That is where task types, measured, come in.
+4. **Wiring gap, recorded rather than hidden.** `rerankerForProfile(config, gateway)` builds the reranker from config, and `recallFromBrain({ rerank, runId })` uses it. But neither the fleet-memory hook (`fleet-memory/orchestrator-hook.ts`) nor the CLI wiring (`apps/cli/src/repl/fleet-memory.ts`) passes one yet. Until they do, `mode: llm` changes no seat run. This matters only once a measurement justifies turning rerank on.
+
+### Enforcement added (`improve/docs-corpus.test.ts`, offline, no key)
+
+- The P2-6 floors are unchanged, because the shipped space is unchanged.
+- The replay must not call the task-typed and symmetric spaces into each other (`modeMismatches` 0).
+- The frozen surface refuses `lexical.ts`, `rerank.ts` and `rerank-llm.ts`.
+- The rerank replay must cover all 40 questions on their recorded pools. It asserts:
+  - statuses 23 ranked, 16 abstained, 1 failed;
+  - pool coverage 31/35;
+  - floors: 20/35 overall, exact ≥ 7, para ≥ 5, hop ≥ 8, abstained ≥ 4;
+  - cost: mean 0.2102 cents and max 0.2714 cents a query, under `max_cents_per_query`.

@@ -37,6 +37,7 @@ import { DEFAULT_FLEET_MEMORY_CONFIG, type FleetMemoryConfig } from "./config.js
 import { chunkBrainFile } from "./ingest/brain-chunks.js";
 import { locationTag } from "./ingest/chunk.js";
 import { scoreAgainstWithEvidence, type EmbedFn } from "./lexical.js";
+import { rerankPool, type BrainReranker, type RerankOutcome } from "./rerank.js";
 import {
   BRAIN_DECISIONS_DIR,
   BRAIN_DOCS_DIR,
@@ -205,6 +206,16 @@ export interface BrainRecallResult {
   readonly items: readonly BrainRecallItem[];
   /** Related entries the budget did not fit. */
   readonly dropped: number;
+  /** [P2-13] What the reranker did, when one was handed in: its outcome, the pool size, the spend. */
+  readonly rerank?: BrainRerankReport;
+}
+
+/** [P2-13] One rerank as the recall saw it. `microCents` is the metered spend (0 when no call was made). */
+export interface BrainRerankReport {
+  readonly status: RerankOutcome["status"];
+  readonly pool: number;
+  readonly microCents: number;
+  readonly reason?: string;
 }
 
 export interface BrainRecallInput {
@@ -216,6 +227,10 @@ export interface BrainRecallInput {
   readonly config?: FleetMemoryConfig;
   readonly budgetChars?: number;
   readonly embed?: EmbedFn;
+  /** [P2-13] A second stage over the pool (`rerank.ts`); absent, the blend's order is the recall. */
+  readonly rerank?: BrainReranker;
+  /** [P2-13] The run this recall is for: the reranker's spend is metered on it. */
+  readonly runId?: string;
 }
 
 /** The one line a recalled document adds to the block, paid for up front like a budget line. */
@@ -251,11 +266,16 @@ export async function recallFromBrain(input: BrainRecallInput): Promise<BrainRec
   // ranked FIRST came back as an empty block. The embedder's floor is its own "unrelated" line
   // (`hybrid.ts`); a cosine above it admits the chunk as TF-IDF alone already can. Run recall
   // (`recall.ts`), ranked over sentence-sized items the floor was calibrated on, is unchanged.
-  const { scores, vectorRelated } = await scoreAgainstWithEvidence(input.objective, candidates.map(scorable), input.embed);
-  const related = candidates
+  // [P2-13] Asymmetric: the objective is a question, each chunk a document that may answer it.
+  const scored = await scoreAgainstWithEvidence(input.objective, candidates.map(scorable), input.embed, { asymmetric: true });
+  const { scores, vectorRelated } = scored;
+  const blended = candidates
     .map((c, i) => ({ entry: c, score: scores[i] ?? 0, admitted: (scores[i] ?? 0) >= config.recallMinScore || vectorRelated[i] === true }))
     .filter((c) => c.admitted)
     .sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id));
+  const reranked = input.rerank === undefined ? undefined : await rerankStage(input, candidates, scored, blended);
+  const related = reranked?.related ?? blended;
+  if (reranked !== undefined && related.length === 0) return { block: "", items: [], dropped: 0, rerank: reranked.report };
 
   const header =
     `## Brain recall (decisions, notes and imported documents from this company's brain, ranked against the objective; ` +
@@ -283,7 +303,41 @@ export async function recallFromBrain(input: BrainRecallInput): Promise<BrainRec
       snippet,
     });
   }
-  if (items.length === 0) return { block: "", items: [], dropped: related.length };
+  const report = reranked === undefined ? {} : { rerank: reranked.report };
+  if (items.length === 0) return { block: "", items: [], dropped: related.length, ...report };
   const note = items.some((item) => item.kind === "doc") ? `\n${BRAIN_DOCS_NOTE}` : "";
-  return { block: `${header}${note}\n${lines.join("\n")}`, items, dropped: related.length - items.length };
+  return { block: `${header}${note}\n${lines.join("\n")}`, items, dropped: related.length - items.length, ...report };
+}
+
+interface RankedEntry {
+  readonly entry: BrainIndexEntry;
+  readonly score: number;
+}
+
+/**
+ * [P2-13] The second stage. The pool is the top 20 by cosine and the top 20 by TF-IDF, in the blend's
+ * order; the reranker's picks lead (scored by the reranker), then whatever else the blend admitted.
+ * An abstention is an empty recall. A refusal or a failure is the blend's own order, unchanged.
+ */
+async function rerankStage(
+  input: BrainRecallInput,
+  candidates: readonly BrainIndexEntry[],
+  scored: { readonly scores: readonly number[]; readonly lexical: readonly number[]; readonly cosines: readonly (number | undefined)[] },
+  blended: readonly RankedEntry[],
+): Promise<{ related: RankedEntry[] | undefined; report: BrainRerankReport }> {
+  const pool = rerankPool({ ids: candidates.map((c) => c.id), blend: scored.scores, lexical: scored.lexical, cosines: scored.cosines }).map((i) => candidates[i]!);
+  const outcome = await input.rerank!({
+    query: input.objective,
+    candidates: pool.map((e) => ({ id: e.id, title: e.title, ...(e.heading === undefined ? {} : { heading: e.heading }), text: e.text })),
+    ...(input.runId === undefined ? {} : { runId: input.runId }),
+    seat: input.seat,
+  });
+  const microCents = "usage" in outcome && outcome.usage !== undefined ? outcome.usage.microCents : 0;
+  const report: BrainRerankReport = { status: outcome.status, pool: pool.length, microCents, ...("reason" in outcome ? { reason: outcome.reason } : {}) };
+  if (outcome.status === "abstained") return { related: [], report };
+  if (outcome.status !== "ranked") return { related: undefined, report };
+  const byId = new Map(pool.map((e) => [e.id, e] as const));
+  const picks = outcome.picks.flatMap((p) => (byId.has(p.id) ? [{ entry: byId.get(p.id)!, score: p.score }] : []));
+  const picked = new Set(picks.map((p) => p.entry.id));
+  return { related: [...picks, ...blended.filter((b) => !picked.has(b.entry.id))], report };
 }

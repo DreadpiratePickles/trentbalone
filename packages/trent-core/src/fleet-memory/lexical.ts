@@ -12,16 +12,32 @@
 
 import { HYBRID_VECTOR_FLOOR, blendScores, vectorCredit } from "./hybrid.js";
 
-export type EmbedFn = (texts: readonly string[]) => Promise<number[][]>;
+/** [P2-13] What one text is to the ranking: the question asked, or a document that may answer it. */
+export type EmbedRole = "query" | "document";
+
+/**
+ * [P2-13] A call's options. `roles`, aligned with the texts, lets an embedder with asymmetric task
+ * types (Gemini's RETRIEVAL_QUERY / RETRIEVAL_DOCUMENT) embed each side in its own space; one
+ * without them ignores it. Absent, the call is the symmetric one it always was.
+ */
+export interface EmbedCallOptions {
+  readonly roles?: readonly EmbedRole[];
+}
+
+export type EmbedFn = (texts: readonly string[], options?: EmbedCallOptions) => Promise<number[][]>;
 
 /**
  * An `EmbedFn` that knows its own model's unrelated-text baseline. The seam on
  * `createFleetMemoryHook` is a bare `EmbedFn` and stays one, so the calibration rides on the
  * function itself: `embedder.ts` sets it from `EMBEDDER_ROUTES[route].vectorFloor`, and an
  * embedder that does not declare one gets `HYBRID_VECTOR_FLOOR`.
+ *
+ * [P2-13] `queryFloor` is the same line for a query embedded against documents with task types,
+ * a different space with its own calibration. Present only on an embedder that applies roles.
  */
 export interface CalibratedEmbedFn extends EmbedFn {
   readonly vectorFloor?: number;
+  readonly queryFloor?: number;
 }
 
 const STOP_WORDS = new Set([
@@ -110,6 +126,14 @@ export interface ScoredCandidates {
    * embedder, or when it failed and the scores are the lexical ones.
    */
   readonly vectorRelated: boolean[];
+  /** [P2-13] The two halves the blend was made of: TF-IDF, and the cosine (undefined with no vector). */
+  readonly lexical: number[];
+  readonly cosines: (number | undefined)[];
+}
+
+/** [P2-13] How a ranking is asked. `asymmetric`: the query is a question and the candidates documents. */
+export interface ScoreOptions {
+  readonly asymmetric?: boolean;
 }
 
 /**
@@ -120,18 +144,20 @@ export interface ScoredCandidates {
  * embedder that fails is NOT allowed to fail a run: recall degrades to the lexical order it
  * would have had, because a missing vector index is worse context, not a broken company.
  */
-export async function scoreAgainstWithEvidence(query: string, candidates: readonly string[], embed?: EmbedFn): Promise<ScoredCandidates> {
-  if (candidates.length === 0) return { scores: [], vectorRelated: [] };
+export async function scoreAgainstWithEvidence(query: string, candidates: readonly string[], embed?: EmbedFn, options: ScoreOptions = {}): Promise<ScoredCandidates> {
+  if (candidates.length === 0) return { scores: [], vectorRelated: [], lexical: [], cosines: [] };
   const corpus = [...candidates, query];
   const lexicalVectors = lexicalEmbed(corpus);
   const lexicalQuery = lexicalVectors[lexicalVectors.length - 1]!;
   const lexical = candidates.map((_, i) => cosine(lexicalVectors[i]!, lexicalQuery));
-  const lexicalOnly = (): ScoredCandidates => ({ scores: lexical, vectorRelated: candidates.map(() => false) });
+  const lexicalOnly = (): ScoredCandidates => ({ scores: lexical, vectorRelated: candidates.map(() => false), lexical, cosines: candidates.map(() => undefined) });
   if (embed === undefined) return lexicalOnly();
 
+  // [P2-13] Roles only when asked, so every symmetric caller hands the embedder exactly what it did.
+  const roles: EmbedRole[] | undefined = options.asymmetric === true ? [...candidates.map((): EmbedRole => "document"), "query"] : undefined;
   let vectors: number[][];
   try {
-    vectors = await embed(corpus);
+    vectors = roles === undefined ? await embed(corpus) : await embed(corpus, { roles });
   } catch {
     return lexicalOnly();
   }
@@ -141,10 +167,13 @@ export async function scoreAgainstWithEvidence(query: string, candidates: readon
     const v = vectors[i];
     return v === undefined || v.length === 0 ? undefined : cosineSimilarity(v, vectorQuery);
   });
-  const floor = (embed as CalibratedEmbedFn).vectorFloor;
+  const calibrated = embed as CalibratedEmbedFn;
+  const floor = roles !== undefined && calibrated.queryFloor !== undefined ? calibrated.queryFloor : calibrated.vectorFloor;
   return {
     scores: floor === undefined ? blendScores(lexical, cosines) : blendScores(lexical, cosines, floor),
     vectorRelated: cosines.map((c) => c !== undefined && vectorCredit(c, floor ?? HYBRID_VECTOR_FLOOR) > 0),
+    lexical,
+    cosines,
   };
 }
 

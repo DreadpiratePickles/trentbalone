@@ -240,3 +240,68 @@ brain:
 See `docs/configuration.md` for the rest of the file, and `fleet-memory/README.md` for how the
 brain block sits alongside the memory blocks, the shared skills index and cross-agent recall in the
 three-tier prompt.
+
+## 9. How recall is ranked, and what is measured
+
+**Relatedness.** Brain recall scores every chunk with TF-IDF, blended with the embedding cosine
+when the profile has an embedder (`0.4 x TF-IDF + 0.6 x (cos - floor) / (1 - floor)`,
+`fleet-memory/hybrid.ts`). A chunk is related when either:
+
+- its blend reaches `recallMinScore` (0.12), or
+- its cosine clears the embedder's own calibrated floor (0.6 for `gemini-embedding-001`).
+
+The blend orders both kinds. The second rule exists because a question against a 1,200-character
+chunk sits at cosine 0.55-0.73: before it, answers the blend had ranked first came back as an
+empty block (P2-6).
+
+**Task types (built, off).** Gemini can embed a question as `RETRIEVAL_QUERY` and a chunk as
+`RETRIEVAL_DOCUMENT`.
+
+- Brain recall asks for that (the objective is the query, every chunk a document).
+- The embedder honours it only when created with `taskTypes: true`. It then calls the native
+  `batchEmbedContents` endpoint and caches each task type separately.
+- The task-typed space has its own floor, 0.63, calibrated on the same sentences as the 0.6.
+- It is off by default because it has not been measured on real documents yet: the re-embed ran
+  into the free tier's 1,000-requests-a-day embedding quota.
+- A `GEMINI_BASE_URL` that is not the `/openai` surface keeps the symmetric call.
+
+**Rerank (`brain.rerank`, off by default).** A second stage over a candidate pool:
+
+```yaml
+brain:
+  rerank:
+    mode: llm                  # off (the default) | llm
+    model: gemini-3.5-flash-lite   # default: models.fast, else model
+    max_cents_per_query: 1     # worst case over this is refused; the blend's order is kept
+    min_score: 0.5             # a chunk scored under it is not picked; no pick = no answer
+```
+
+- **The pool** is the top 20 chunks by cosine plus the top 20 by TF-IDF.
+- **The call** is one per query. The model sees each candidate's title, heading and first 300
+  characters, and scores every candidate 0-1 against the question.
+- **Its picks lead**, then the rest of what the blend called related follows.
+- **When nothing clears `min_score`** the block is empty, which is the right answer to a question
+  the brain cannot answer.
+- **A refused, failed or unreadable rerank** keeps the blend's order and never fails a run.
+- **The spend** is metered on the run it belongs to (seat `brain_rerank`), so it appears on the
+  ledger under the run's surface and counts against `budget.daily_cap`.
+
+Measured on the docs corpus (0.21 cents a query), it is **worse** than the hybrid:
+
+- recall@8 is 0.571 against 0.629;
+- 21 of 35 answers start past the 300 characters the model is shown, so it abstains on questions
+  it cannot see the answer to;
+- multi-hop questions gain (5 to 8 of 11) and no-answer questions are refused more often (4/5).
+
+It stays off. **Not wired yet:** `recallFromBrain` takes a reranker, but the fleet-memory hook and
+the CLI do not pass one, so `mode: llm` does not change a seat run today.
+
+**The docs corpus.** The retrieval numbers above come from
+`packages/trent-core/src/improve/docs-corpus.test.ts`, which runs offline in the default suite:
+
+- 28 of Trent's own docs, snapshotted;
+- 40 questions (exact-term, paraphrased, multi-hop, no-answer);
+- the shipped ranker, replaying recorded cosines and recorded rerank scores so CI makes no call.
+
+The live harnesses behind it are `docs-corpus.live.test.ts` and `docs-corpus-rerank.live.test.ts`.
+See `01_discovery/output/retrieval-measurement-2026-09-25.md` for every table.

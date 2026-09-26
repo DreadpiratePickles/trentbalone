@@ -19,15 +19,23 @@
  * Keys are the first 16 hex characters of the sha256 of the exact text the embedder is handed, so
  * a change to the chunker, the importer or the text the ranker scores misses the recording loudly
  * and has to be re-recorded (`docs-corpus.live.test.ts`, about 2 cents) — which is the point.
+ *
+ * [P2-13] A recording is made in ONE space. `task_types: true` means every chunk was embedded as a
+ * RETRIEVAL_DOCUMENT and every question as a RETRIEVAL_QUERY; its replay honours only a call that
+ * names exactly those roles (anything else is counted and refused, so the suite cannot measure a
+ * symmetric ranker against asymmetric cosines) and carries its floor as `queryFloor`. A recording
+ * without it is the symmetric space, and its replay ignores roles exactly as a symmetric embedder does.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { z } from "zod";
 
 import { EXIT, TrentError } from "../errors/index.js";
-import { cosineSimilarity, type CalibratedEmbedFn, type EmbedFn } from "../fleet-memory/lexical.js";
+import { cosineSimilarity, type CalibratedEmbedFn, type EmbedFn, type EmbedRole } from "../fleet-memory/lexical.js";
 
 export const RECORDED_COSINES_FILE = "embeddings.json";
+/** [P2-13] The same corpus and questions embedded with RETRIEVAL_DOCUMENT / RETRIEVAL_QUERY. */
+export const RECORDED_TASK_TYPE_COSINES_FILE = "embeddings-task-types.json";
 
 const Key = z.string().regex(/^[0-9a-f]{16}$/);
 
@@ -38,6 +46,8 @@ const RecordedCosinesSchema = z
     model: z.string().min(1),
     /** The embedder route's calibrated floor (`EMBEDDER_ROUTES[route].vectorFloor`), replayed with it. */
     vector_floor: z.number().min(0).max(0.99),
+    /** [P2-13] True: recorded with asymmetric task types, and `vector_floor` is the route's `queryFloor`. */
+    task_types: z.boolean().optional(),
     captured_at: z.string().min(1),
     note: z.string(),
     /** Text keys of the chunks, in column order. */
@@ -96,6 +106,8 @@ export interface RecordCosinesInput {
   readonly vectorFloor: number;
   readonly capturedAt: string;
   readonly note: string;
+  /** [P2-13] Embed chunks as documents and questions as queries, and say so in the recording. */
+  readonly taskTypes?: boolean;
 }
 
 function distinct(texts: readonly string[]): string[] {
@@ -115,8 +127,9 @@ function distinct(texts: readonly string[]): string[] {
 export async function recordCosines(input: RecordCosinesInput): Promise<RecordedCosines> {
   const chunks = distinct(input.chunkTexts);
   const queries = distinct(input.queries);
-  const chunkVectors = await input.embed(chunks);
-  const queryVectors = await input.embed(queries);
+  const as = (role: EmbedRole, texts: readonly string[]) => (input.taskTypes === true ? { roles: texts.map(() => role) } : undefined);
+  const chunkVectors = await input.embed(chunks, as("document", chunks));
+  const queryVectors = await input.embed(queries, as("query", queries));
   const missing = [...chunkVectors, ...queryVectors].filter((v) => v === undefined || v.length === 0).length;
   if (chunkVectors.length !== chunks.length || queryVectors.length !== queries.length || missing > 0) {
     throw new TrentError({ code: EXIT.PROVIDER, operation: "improve.recorded_embeddings", message: `the embedder returned ${String(missing)} empty vectors; nothing was recorded` });
@@ -130,6 +143,7 @@ export async function recordCosines(input: RecordCosinesInput): Promise<Recorded
     provider: input.provider,
     model: input.model,
     vector_floor: input.vectorFloor,
+    ...(input.taskTypes === true ? { task_types: true } : {}),
     captured_at: input.capturedAt,
     note: input.note,
     chunks: chunks.map(textKey),
@@ -143,6 +157,8 @@ export interface RecordedEmbedStats {
   readonly missingQueries: readonly string[];
   /** Candidate texts the recording has no column for; each scored lexical-only. */
   readonly missingChunks: number;
+  /** [P2-13] Calls whose roles did not match the recording's space; each was refused. */
+  readonly modeMismatches: number;
 }
 
 export interface RecordedEmbedFn extends CalibratedEmbedFn {
@@ -155,10 +171,18 @@ export function recordedEmbedFn(table: RecordedCosines): RecordedEmbedFn {
   const rows = new Map(Object.entries(table.queries).map(([key, row]) => [key, decodeRow(row, table.chunks.length, key)] as const));
   let calls = 0;
   let missingChunks = 0;
+  let modeMismatches = 0;
   const missingQueries = new Set<string>();
+  const asymmetric = table.task_types === true;
 
-  const embed: EmbedFn = async (texts) => {
+  const embed: EmbedFn = async (texts, options) => {
     calls += 1;
+    const roles = options?.roles;
+    const asRecorded = roles !== undefined && roles.length === texts.length && roles.every((r, i) => r === (i === texts.length - 1 ? "query" : "document"));
+    if (asymmetric && !asRecorded) {
+      modeMismatches += 1;
+      throw new TrentError({ code: EXIT.CONFIG, operation: "improve.recorded_embeddings", message: "this recording holds task-typed cosines; a call must name the chunks as documents and the question as the query" });
+    }
     const query = texts[texts.length - 1] ?? "";
     const row = rows.get(textKey(query));
     if (row === undefined) {
@@ -178,6 +202,7 @@ export function recordedEmbedFn(table: RecordedCosines): RecordedEmbedFn {
   };
   return Object.assign(embed, {
     vectorFloor: table.vector_floor,
-    stats: (): RecordedEmbedStats => ({ calls, missingQueries: [...missingQueries], missingChunks }),
+    ...(asymmetric ? { queryFloor: table.vector_floor } : {}),
+    stats: (): RecordedEmbedStats => ({ calls, missingQueries: [...missingQueries], missingChunks, modeMismatches }),
   });
 }

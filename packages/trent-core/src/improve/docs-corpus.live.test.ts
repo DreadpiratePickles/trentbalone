@@ -12,6 +12,11 @@
  * between runs, so a second run pays only for texts that changed. `TRENT_DOCS_CORPUS_REPORT` names
  * a file the full JSON report is written to.
  *
+ * [P2-13] The shipped embedder now embeds brain recall with asymmetric task types (chunks as
+ * RETRIEVAL_DOCUMENT, questions as RETRIEVAL_QUERY), so this harness measures and records that space
+ * into `embeddings-task-types.json`. `TRENT_DOCS_CORPUS_TASK_TYPES=0` measures the symmetric space
+ * instead (`createEmbedder(..., { taskTypes: false })`) and records into `embeddings.json`.
+ *
  * Cost: the shipped embedder has no price table (`model-gateway/pricing.ts` prices chat models), so
  * the spend is the provider's reported token count — or, when a response carries none, the input
  * characters over 4 — at Google's published paid-tier list price for gemini-embedding-001, $0.15 per
@@ -26,11 +31,13 @@ import { describe, expect, it } from "vitest";
 import { createBrain, type BrainExec } from "../fleet-memory/brain.js";
 import { EMBEDDER_ROUTES, createEmbedder, type FetchLike } from "../fleet-memory/embedder.js";
 import { chunkScorableText, importDocsCorpus, loadDocsCorpus, resolveDocsCorpusGoldens } from "./docs-corpus.js";
-import { RECORDED_COSINES_FILE, readRecordedCosines, recordCosines, recordedEmbedFn, writeRecordedCosines } from "./recorded-embedder.js";
+import { RECORDED_COSINES_FILE, RECORDED_TASK_TYPE_COSINES_FILE, readRecordedCosines, recordCosines, recordedEmbedFn, writeRecordedCosines } from "./recorded-embedder.js";
+import type { EmbedFn, EmbedRole } from "../fleet-memory/lexical.js";
 import { RETRIEVAL_MODES, formatModeTables, measureMode, rankerFor, type ModeReport } from "./retrieval-metrics.js";
 
 const LIVE = process.env.TRENT_TEST_LIVE === "1" && (process.env.GEMINI_API_KEY ?? "").trim() !== "";
 const RECORD = process.env.TRENT_RECORD_DOCS_CORPUS === "1";
+const TASK_TYPES = process.env.TRENT_DOCS_CORPUS_TASK_TYPES !== "0";
 const FIXTURE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "docs-corpus");
 const USD_PER_MILLION_TOKENS = 0.15;
 const SPEND_CAP_CENTS = 40;
@@ -46,8 +53,10 @@ interface Meter {
 
 function meteredFetch(meter: Meter): FetchLike {
   return async (url, init) => {
-    const body = typeof init?.body === "string" ? (JSON.parse(init.body) as { input?: unknown }) : {};
-    const inputs = Array.isArray(body.input) ? body.input.filter((x): x is string => typeof x === "string") : [];
+    const body = typeof init?.body === "string" ? (JSON.parse(init.body) as { input?: unknown; requests?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> }) : {};
+    // The compatible dialect sends `input`; the native one ([P2-13]) sends `requests[].content.parts[].text`.
+    const native = Array.isArray(body.requests) ? body.requests.flatMap((r) => (r.content?.parts ?? []).map((part) => part.text)) : [];
+    const inputs = (Array.isArray(body.input) ? body.input : native).filter((x): x is string => typeof x === "string");
     meter.requests += 1;
     meter.inputs += inputs.length;
     meter.chars += inputs.reduce((sum, text) => sum + text.length, 0);
@@ -84,15 +93,19 @@ function spend(meter: Meter): { tokens: number; source: string; cents: number; b
  * 429 the shipped embedder's own three quick attempts could not absorb. Everything after this reads
  * the cache, so the measurement itself makes no request for a chunk.
  */
-const CHARS_PER_MINUTE = 60_000;
+// [P2-13] The native batch endpoint (task types) answered 429 on 16- and 32-text batches at 30k and
+// 60k chars a minute while a one-text probe a minute later answered 200, so the pace is 15k chars and
+// 8 texts a batch by default; `TRENT_DOCS_CORPUS_CHARS_PER_MINUTE` / `_BATCH_TEXTS` override both.
+const CHARS_PER_MINUTE = Number(process.env.TRENT_DOCS_CORPUS_CHARS_PER_MINUTE ?? "") || 15_000;
+const BATCH_TEXTS = Number(process.env.TRENT_DOCS_CORPUS_BATCH_TEXTS ?? "") || 8;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function warmCache(embed: (texts: readonly string[]) => Promise<number[][]>, texts: readonly string[], meter: Meter): Promise<void> {
+async function warmCache(embed: EmbedFn, texts: readonly string[], role: EmbedRole, meter: Meter): Promise<void> {
   const batches: string[][] = [];
   let current: string[] = [];
   let size = 0;
   for (const text of texts) {
-    if (current.length > 0 && (size + text.length > CHARS_PER_MINUTE / 3 || current.length >= 32)) {
+    if (current.length > 0 && (size + text.length > CHARS_PER_MINUTE / 3 || current.length >= BATCH_TEXTS)) {
       batches.push(current);
       current = [];
       size = 0;
@@ -113,11 +126,16 @@ async function warmCache(embed: (texts: readonly string[]) => Promise<number[][]
     const before = meter.chars;
     for (let attempt = 1; ; attempt += 1) {
       try {
-        await embed(batch);
+        await embed(batch, TASK_TYPES ? { roles: batch.map(() => role) } : undefined);
         break;
       } catch (error) {
-        if (attempt >= 4) throw error;
-        await sleep(65_000);
+        const message = error instanceof Error ? error.message : String(error);
+        // The quota's identity and Google's own retry hint, never the key (it travels in a header).
+        const quotaId = /"quotaId":\s*"([^"]+)"/.exec(message)?.[1] ?? "unnamed";
+        const retryDelay = Number(/"retryDelay":\s*"(\d+)s"/.exec(message)?.[1] ?? "0");
+        console.log(`embedding batch attempt ${String(attempt)} failed: ${message.slice(0, 80)} quota=${quotaId} retryDelay=${String(retryDelay)}s`);
+        if (attempt >= 6) throw error;
+        await sleep(Math.max(65_000, (retryDelay + 5) * 1000));
         windowStart = Date.now();
         windowChars = 0;
       }
@@ -141,16 +159,20 @@ describe.skipIf(!LIVE)("[P2-6] the docs corpus against gemini-embedding-001, liv
       const resolved = resolveDocsCorpusGoldens(brain, corpus);
 
       const meter: Meter = { requests: 0, inputs: 0, chars: 0, reportedTokens: 0, responsesWithUsage: 0 };
-      const embedder = createEmbedder({ provider: "google" }, {}, { profileDir: cacheDir, env: process.env, fetchImpl: meteredFetch(meter) });
+      // One attempt per request: the warm-up owns the retry (a 65-second pause), so a 429 is not followed
+      // by the embedder's own quick retries spending the same minute's quota again.
+      const embedder = createEmbedder({ provider: "google" }, {}, { profileDir: cacheDir, env: process.env, fetchImpl: meteredFetch(meter), taskTypes: TASK_TYPES, retry: { attempts: 1 } });
       expect(embedder.provider).toBe("gemini");
+      expect(embedder.taskTypes).toBe(TASK_TYPES);
 
-      await warmCache(embedder.embed, [...resolved.entries.map(chunkScorableText), ...corpus.questions.map((q) => q.query)], meter);
+      await warmCache(embedder.embed, resolved.entries.map(chunkScorableText), "document", meter);
+      await warmCache(embedder.embed, corpus.questions.map((q) => q.query), "query", meter);
       const live: ModeReport[] = [];
       for (const mode of RETRIEVAL_MODES) {
         live.push(await measureMode({ mode, brain, rank: rankerFor(mode, brain, embedder.embed), answerable: resolved.answerable, noAnswer: resolved.noAnswer }));
       }
 
-      const recordingFile = path.join(FIXTURE_DIR, RECORDED_COSINES_FILE);
+      const recordingFile = path.join(FIXTURE_DIR, TASK_TYPES ? RECORDED_TASK_TYPE_COSINES_FILE : RECORDED_COSINES_FILE);
       if (RECORD) {
         const table = await recordCosines({
           embed: embedder.embed,
@@ -158,9 +180,10 @@ describe.skipIf(!LIVE)("[P2-6] the docs corpus against gemini-embedding-001, liv
           queries: corpus.questions.map((q) => q.query),
           provider: embedder.provider,
           model: embedder.model,
-          vectorFloor: EMBEDDER_ROUTES.gemini.vectorFloor,
+          vectorFloor: TASK_TYPES ? EMBEDDER_ROUTES.gemini.queryFloor! : EMBEDDER_ROUTES.gemini.vectorFloor,
+          taskTypes: TASK_TYPES,
           capturedAt: new Date().toISOString(),
-          note: "cosine of each question (row, keyed by sha256 of the query) against each chunk (column, keyed by sha256 of the text the ranker embeds), float32 base64; written by docs-corpus.live.test.ts",
+          note: `cosine of each question (row, keyed by sha256 of the query) against each chunk (column, keyed by sha256 of the text the ranker embeds), float32 base64; ${TASK_TYPES ? "chunks as RETRIEVAL_DOCUMENT, questions as RETRIEVAL_QUERY" : "no task type"}; written by docs-corpus.live.test.ts`,
         });
         writeRecordedCosines(recordingFile, table);
       }
@@ -174,6 +197,7 @@ describe.skipIf(!LIVE)("[P2-6] the docs corpus against gemini-embedding-001, liv
         }
         expect(replay.stats().missingQueries).toEqual([]);
         expect(replay.stats().missingChunks).toBe(0);
+        expect(replay.stats().modeMismatches).toBe(0);
       }
 
       const report = { chunks: resolved.entries.length, answerable: resolved.answerable.length, noAnswer: resolved.noAnswer.length, meter, cost, live, replayed };

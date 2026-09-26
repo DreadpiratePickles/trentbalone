@@ -35,7 +35,11 @@ import {
 } from "./docs-corpus.js";
 import { RECORDED_COSINES_FILE, readRecordedCosines, recordedEmbedFn, type RecordedEmbedFn } from "./recorded-embedder.js";
 import { DEFAULT_RETRIEVAL_MIN_RECALL, gradeRetrievalRecall, retrievalBreached } from "./retrieval-gate.js";
-import { measureMode, rankerFor, type ModeReport } from "./retrieval-metrics.js";
+import { measureMode, rankerFor, rerankedRanker, summariseReranks, type ModeReport } from "./retrieval-metrics.js";
+import { createFrozenSurface } from "./frozen-surface.js";
+import { RECORDED_RERANK_FILE, readRecordedRerank, replayReranker, type ReplayReranker } from "./docs-corpus-rerank.js";
+import { BRAIN_RERANK_DEFAULTS } from "../fleet-memory/rerank.js";
+import type { BrainRerankReport } from "../fleet-memory/brain-index.js";
 
 const FIXTURE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "docs-corpus");
 /**
@@ -112,16 +116,31 @@ describe("[P2-6] the docs corpus is a fixed exam over real documents", () => {
     }
   });
 
-  it("restates, byte for byte, the text the shipped ranker hands the embedder", async () => {
+  it("restates, byte for byte, the text the shipped ranker hands the embedder, and [P2-13] the role of each text", async () => {
     const seen: string[][] = [];
-    const spy: EmbedFn = async (texts) => {
+    const roles: Array<readonly string[] | undefined> = [];
+    const spy: EmbedFn = async (texts, options) => {
       seen.push([...texts]);
+      roles.push(options?.roles);
       return texts.map(() => [1, 0]);
     };
     await recallFromBrain({ profileDir: brain.profileDir, brain, seat: RETRIEVAL_EVAL_SEAT, objective: "which seats carry the business toolset", embed: spy });
     expect(seen).toHaveLength(1);
     expect(seen[0]!.slice(0, -1)).toEqual(resolved.entries.map(chunkScorableText));
     expect(seen[0]!.at(-1)).toBe("which seats carry the business toolset");
+    // Brain recall is query-against-documents: every chunk a document, the objective the query.
+    expect(roles[0]).toEqual([...resolved.entries.map(() => "document"), "query"]);
+  });
+});
+
+describe("[P2-13] the ranker this suite measures is frozen to the improvement loop", () => {
+  it("refuses a draft that writes lexical.ts or the rerank modules, as it refuses hybrid.ts and brain-index.ts", () => {
+    const surface = createFrozenSurface({ profileDir: work, blocks: [] });
+    const fleetMemory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "fleet-memory");
+    for (const file of ["lexical.ts", "rerank.ts", "rerank-llm.ts", "hybrid.ts", "brain-index.ts"]) {
+      expect(surface.violationFor({ path: path.join(fleetMemory, file) })?.frozenClass, file).toBe("ranking");
+    }
+    expect(surface.violationFor({ path: path.join(fleetMemory, "search.ts") })).toBeUndefined();
   });
 });
 
@@ -143,6 +162,7 @@ describe("[P2-6] recall on real documents, enforced", () => {
   it("the recording covers every chunk and every question, so the hybrid measured is the hybrid and not its lexical fallback", () => {
     expect(replay.stats().missingQueries).toEqual([]);
     expect(replay.stats().missingChunks).toBe(0);
+    expect(replay.stats().modeMismatches).toBe(0);
     expect(replay.stats().calls).toBeGreaterThanOrEqual(2 * corpus.questions.length);
   });
 
@@ -180,5 +200,59 @@ describe("[P2-6] recall on real documents, enforced", () => {
   it("the dense half alone keeps its measured floor", () => {
     expect(embedding.overall.hitsAt8).toBeGreaterThanOrEqual(21);
     expect(embedding.byCategory.paraphrased.hitsAt8).toBeGreaterThanOrEqual(6);
+  });
+});
+
+/**
+ * [P2-13] The LLM reranker over the pool (cosine top-20 U TF-IDF top-20), replayed from the scores
+ * `gemini-3.5-flash-lite` gave live on 2026-09-25 (`docs-corpus-rerank.live.test.ts`; the replay was
+ * checked equal to that live run question for question, 35 answerable and 5 no-answer). Measured at the
+ * shipped threshold (`min_score` 0.5, fixed before the run): WORSE than the hybrid overall (20/35
+ * against 22/35) because 21 of 35 answers start past the 300 characters the model is shown, and a
+ * question whose answer it cannot see is abstained. So `brain.rerank` stays off by default. These are
+ * the measured values, as floors; 01_discovery/output/retrieval-measurement-2026-09-25.md has the rest.
+ */
+describe("[P2-13] the LLM reranker on real documents, replayed from its recorded scores", () => {
+  let rerank: ReplayReranker;
+  let reranked: ModeReport;
+  const reports = new Map<string, BrainRerankReport | undefined>();
+  const pools: string[][] = [];
+
+  beforeAll(async () => {
+    const table = readRecordedRerank(path.join(FIXTURE_DIR, RECORDED_RERANK_FILE));
+    expect(table.first_stage).toBe(RECORDED_COSINES_FILE);
+    const embed = recordedEmbedFn(readRecordedCosines(path.join(FIXTURE_DIR, table.first_stage)));
+    rerank = replayReranker(table, BRAIN_RERANK_DEFAULTS.min_score);
+    const watched: typeof rerank = Object.assign(async (request: Parameters<typeof rerank>[0]) => {
+      pools.push(request.candidates.map((c) => c.id));
+      return rerank(request);
+    }, { stats: rerank.stats });
+    reranked = await measureMode({ mode: "rerank", brain, rank: rerankedRanker({ brain, embed, rerank: watched, onReport: (q, r) => reports.set(q, r) }), answerable: resolved.answerable, noAnswer: resolved.noAnswer });
+  }, 300_000);
+
+  it("the recording covers every question on the pool it was made on, so this measures the reranker and not its fallback", () => {
+    expect(rerank.stats()).toEqual({ calls: 40, missing: 0, poolMismatches: 0 });
+    expect(summariseReranks(reports).statuses).toEqual({ ranked: 23, abstained: 16, failed: 1 });
+  });
+
+  it("the pool holds 31 of 35 answers: the ceiling any reranker over it has, under the 0.9 bar", () => {
+    const held = resolved.answerable.filter((g, i) => g.expected_chunk_ids.some((id) => pools[i]!.includes(id)));
+    expect(held.length).toBe(31);
+    expect(Math.max(...pools.map((p) => p.length))).toBeLessThanOrEqual(40);
+  });
+
+  it("holds its measured floor at the shipped threshold: 20/35, multi-hop 8/11, no-answer 4/5 abstained", () => {
+    expect(reranked.overall.hitsAt8).toBeGreaterThanOrEqual(20);
+    expect(reranked.byCategory.exact_term.hitsAt8).toBeGreaterThanOrEqual(7);
+    expect(reranked.byCategory.paraphrased.hitsAt8).toBeGreaterThanOrEqual(5);
+    expect(reranked.byCategory.multi_hop.hitsAt8).toBeGreaterThanOrEqual(8);
+    expect(reranked.noAnswer.abstained).toBeGreaterThanOrEqual(4);
+  });
+
+  it("costs what it was metered at: 0.21 cents a query on average, 0.27 at most, under max_cents_per_query", () => {
+    const spend = summariseReranks(reports);
+    expect(spend.meanCentsPerQuery).toBeCloseTo(0.2102, 3);
+    expect(spend.maxCentsPerQuery).toBeLessThanOrEqual(0.2714);
+    expect(spend.maxCentsPerQuery).toBeLessThan(BRAIN_RERANK_DEFAULTS.max_cents_per_query);
   });
 });

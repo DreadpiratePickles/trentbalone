@@ -394,6 +394,51 @@ verified — which is what the audit's failing test asserts: the five fixture qu
 recall@8 = 1.0 with the shipped ranker, and a ranker patched through the evaluator's `rank` seam
 to return the reverse order fails the gate with the metric named (`improve/retrieval-gate.test.ts`).
 
+## [P2-13] The docs-corpus suite: the ranker measured on real documents
+
+The promoted retrieval goldens above measure a profile's own brain. The ranker itself is measured
+on a fixed exam in the repository: `packages/trent-core/src/improve/docs-corpus.test.ts`, offline
+and in the default suite.
+
+**The exam.** Twenty-eight of Trent's own `docs/*.md`, snapshotted byte for byte with a sha256 per
+file, and imported through the real importer: 625 chunks. Forty questions:
+
+- 12 exact-term;
+- 12 paraphrased (zero shared tokens with the answer);
+- 11 multi-hop;
+- 5 with no answer in the corpus.
+
+Each answer is a phrase that resolves to chunk ids through the shipped chunker.
+
+**Offline equals live.** CI replays recordings, never the network:
+
+- **`embeddings.json`**: each question's cosine against each chunk.
+- **`rerank-scores.json`**: each question's pool and every score the rerank model gave it.
+
+Each live harness asserts its replay reproduces the live ranking question for question:
+`docs-corpus.live.test.ts` for the embeddings (about 2 cents, needs 665 embedding requests of the
+free tier's 1,000 a day) and `docs-corpus-rerank.live.test.ts` for the rerank (about 8.4 cents).
+A recording names its space: a task-typed one (`embeddings-task-types.json`, not yet recorded)
+refuses a symmetric call, and a rerank replay refuses a pool it was not recorded on.
+
+**What it enforces.** The measured values, as floors that only a human raises:
+
+| Ranker | Floor |
+|---|---|
+| Shipped hybrid | recall@8 22/35: every exact term, 5/12 paraphrased, 5/11 multi-hop, 2/5 no-answer abstained |
+| Lexical | 12/35 |
+| Dense half | 21/35 |
+| LLM reranker at its shipped threshold | 20/35, costing 0.21 cents a query |
+
+The suite also asserts the reranker's pool holds 31/35 answers, the ceiling any reranker over it
+has. At its default floor (0.9), the retrieval gate reports a measured breach on this exam, and
+that breach is the open problem.
+
+**Frozen.** `fleet-memory/lexical.ts` (the TF-IDF, the blend's inputs and the relatedness evidence)
+and `fleet-memory/rerank.ts` / `rerank-llm.ts` (the pool, the picks and the prompt) joined
+`recall.ts`, `hybrid.ts`, `brain-index.ts` and `ingest/` in the frozen `ranking` class (gate 1), so a
+draft cannot rewrite the ranker this exam grades.
+
 ## What is deliberately not here
 
 - **Automatic promotion.** Promotion is a human command and stays one (`improve/lifecycle.ts`),

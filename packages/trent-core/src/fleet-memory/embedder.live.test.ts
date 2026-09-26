@@ -78,4 +78,22 @@ describe.skipIf(!LIVE)("live embedder", () => {
     expect(vectorCredit(far, floor)).toBe(0);
     expect(vectorCredit(near, floor)).toBeGreaterThan(0);
   }, 60_000);
+
+  // [P2-13] The same three sentences with asymmetric task types: the objective as a RETRIEVAL_QUERY,
+  // the two candidates as RETRIEVAL_DOCUMENTs, which is how brain recall now embeds. The task-typed
+  // floor (`queryFloor`) is set from these two figures by the rule that gave the symmetric one:
+  // unrelated + 0.3 x (paraphrase - unrelated), to two places (symmetric: 0.529 + 0.3 x 0.225 = 0.60).
+  it.skipIf(secrets.GEMINI_API_KEY === undefined && secrets.GOOGLE_API_KEY === undefined)("with task types, the paraphrase still beats the unrelated sentence and the task-typed floor sits between them", async () => {
+    const embedder = createEmbedder({ provider: "google" }, secrets, { profileDir, taskTypes: true });
+    expect(embedder.taskTypes).toBe(true);
+    const [objective, paraphrase, unrelated] = await embedder.embed([OBJECTIVE, PARAPHRASE, UNRELATED], { roles: ["query", "document", "document"] });
+    const near = cosineSimilarity(objective!, paraphrase!);
+    const far = cosineSimilarity(objective!, unrelated!);
+    const rule = Math.round((far + 0.3 * (near - far)) * 100) / 100;
+    console.error(`[embedder.live] task types: cos(paraphrase)=${near.toFixed(4)} cos(unrelated)=${far.toFixed(4)} rule floor=${rule.toFixed(2)} shipped queryFloor=${String(EMBEDDER_ROUTES.gemini.queryFloor)}`);
+    expect(near).toBeGreaterThan(far);
+    const floor = EMBEDDER_ROUTES.gemini.queryFloor!;
+    expect(vectorCredit(far, floor)).toBe(0);
+    expect(vectorCredit(near, floor)).toBeGreaterThan(0);
+  }, 60_000);
 });

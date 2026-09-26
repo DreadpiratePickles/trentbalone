@@ -11,6 +11,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigManager } from "../config/ConfigManager.js";
 import type { FleetMemoryHookOptions } from "./orchestrator-hook.js";
+import { scoreAgainstWithEvidence, type CalibratedEmbedFn, type EmbedCallOptions } from "./lexical.js";
 import {
   EMBEDDER_ROUTES,
   createEmbedder,
@@ -293,5 +294,135 @@ describe("embedderForProfile", () => {
     fs.writeFileSync(configManager.getSecretsPath(), `GEMINI_API_KEY=${GEMINI_KEY}\n`, { mode: 0o600 });
     const on: FleetMemoryHookOptions["embed"] = embedderForProfile(new ConfigManager({ baseDir }));
     expect(typeof on).toBe("function");
+  });
+});
+
+/**
+ * [P2-13] Asymmetric task types. Google's OpenAI-compatible surface takes no task type, so a call
+ * that names a role per text goes to the native `batchEmbedContents` with RETRIEVAL_QUERY or
+ * RETRIEVAL_DOCUMENT on each request. A call that names none is the request it always was, so run
+ * recall, search, the failure index and the doctor probe are unchanged.
+ */
+describe("[P2-13] task types on the Gemini route", () => {
+  let profileDir: string;
+
+  beforeEach(() => {
+    profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-embed-tt-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(profileDir, { recursive: true, force: true });
+  });
+
+  interface NativeCall {
+    readonly url: string;
+    readonly apiKeyHeader: string;
+    readonly authorization: string;
+    readonly body: { requests?: Array<{ model: string; content: { parts: Array<{ text: string }> }; taskType: string }>; input?: string[] };
+  }
+
+  /** Serves both dialects: the native batch (`embeddings[].values`) and the compatible one (`data[]`). */
+  function bothDialects(vectorFor: (text: string, taskType?: string) => number[]): { calls: NativeCall[]; fetchImpl: (url: string, init?: RequestInit) => Promise<Response> } {
+    const calls: NativeCall[] = [];
+    return {
+      calls,
+      fetchImpl: async (url, init) => {
+        const headers = new Headers(init?.headers ?? {});
+        const body = JSON.parse(String(init?.body ?? "{}")) as NativeCall["body"];
+        calls.push({ url, apiKeyHeader: headers.get("x-goog-api-key") ?? "", authorization: headers.get("authorization") ?? "", body });
+        if (body.requests !== undefined) {
+          return new Response(JSON.stringify({ embeddings: body.requests.map((r) => ({ values: vectorFor(r.content.parts[0]!.text, r.taskType) })) }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: (body.input ?? []).map((t, index) => ({ index, embedding: vectorFor(t) })) }), { status: 200 });
+      },
+    };
+  }
+
+  const byRole = (text: string, taskType?: string): number[] => [text.length, taskType === "RETRIEVAL_QUERY" ? 2 : taskType === "RETRIEVAL_DOCUMENT" ? 3 : 1];
+
+  it("sends a call with roles to the native batchEmbedContents, one taskType per text, the key in a header and never the URL", async () => {
+    const { calls, fetchImpl } = bothDialects(byRole);
+    const embedder = createEmbedder({}, { GEMINI_API_KEY: GEMINI_KEY }, { env: {}, fetchImpl, profileDir, taskTypes: true });
+    const vectors = await embedder.embed(["doc one", "doc two!", "the query"], { roles: ["document", "document", "query"] });
+
+    expect(vectors).toEqual([byRole("doc one", "RETRIEVAL_DOCUMENT"), byRole("doc two!", "RETRIEVAL_DOCUMENT"), byRole("the query", "RETRIEVAL_QUERY")]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents");
+    expect(calls[0]!.url).not.toContain(GEMINI_KEY);
+    expect(calls[0]!.apiKeyHeader).toBe(GEMINI_KEY);
+    expect(calls[0]!.authorization).toBe("");
+    expect(calls[0]!.body.requests).toEqual([
+      { model: "models/gemini-embedding-001", content: { parts: [{ text: "doc one" }] }, taskType: "RETRIEVAL_DOCUMENT" },
+      { model: "models/gemini-embedding-001", content: { parts: [{ text: "doc two!" }] }, taskType: "RETRIEVAL_DOCUMENT" },
+      { model: "models/gemini-embedding-001", content: { parts: [{ text: "the query" }] }, taskType: "RETRIEVAL_QUERY" },
+    ]);
+  });
+
+  it("a call with no roles is the OpenAI-compatible request it always was", async () => {
+    const { calls, fetchImpl } = bothDialects(byRole);
+    const embedder = createEmbedder({}, { GEMINI_API_KEY: GEMINI_KEY }, { env: {}, fetchImpl, profileDir });
+    expect(await embedder.embed(["alpha"])).toEqual([byRole("alpha")]);
+    expect(calls[0]!.url).toBe(`${EMBEDDER_ROUTES.gemini.defaultBaseUrl}/embeddings`);
+    expect(calls[0]!.body).toEqual({ model: "gemini-embedding-001", input: ["alpha"] });
+  });
+
+  it("keys the cache by task type: one text as a query and as a document is two vectors, and neither answers a call with no roles", async () => {
+    const { calls, fetchImpl } = bothDialects(byRole);
+    const make = () => createEmbedder({}, { GEMINI_API_KEY: GEMINI_KEY }, { env: {}, fetchImpl, profileDir, taskTypes: true });
+    const asDocument = await make().embed(["alpha"], { roles: ["document"] });
+    const asQuery = await make().embed(["alpha"], { roles: ["query"] });
+    const plain = await make().embed(["alpha"]);
+    expect([asDocument[0], asQuery[0], plain[0]]).toEqual([byRole("alpha", "RETRIEVAL_DOCUMENT"), byRole("alpha", "RETRIEVAL_QUERY"), byRole("alpha")]);
+    expect(calls).toHaveLength(3);
+    // Each is now cached under its own task type.
+    expect(await make().embed(["alpha", "alpha"], { roles: ["query", "document"] })).toEqual([asQuery[0], asDocument[0]]);
+    expect(await make().embed(["alpha"])).toEqual(plain);
+    expect(calls).toHaveLength(3);
+  });
+
+  it("carries the task-typed floor only where task types apply; the default, OpenAI and a foreign base URL ignore roles", async () => {
+    const { calls, fetchImpl } = bothDialects(byRole);
+    const gemini = createEmbedder({}, { GEMINI_API_KEY: GEMINI_KEY }, { env: {}, fetchImpl, profileDir, taskTypes: true });
+    expect((gemini.embed as CalibratedEmbedFn).queryFloor).toBe(EMBEDDER_ROUTES.gemini.queryFloor);
+    expect((gemini.embed as CalibratedEmbedFn).vectorFloor).toBe(EMBEDDER_ROUTES.gemini.vectorFloor);
+    expect(gemini.taskTypes).toBe(true);
+
+    // Off by default until the docs corpus measures them (the re-embed met the free tier's daily quota).
+    const openai = createEmbedder({}, { OPENAI_API_KEY: OPENAI_KEY }, { env: {}, fetchImpl, profileDir, taskTypes: true });
+    const off = createEmbedder({}, { GEMINI_API_KEY: GEMINI_KEY }, { env: {}, fetchImpl, profileDir });
+    const proxied = createEmbedder({}, { GEMINI_API_KEY: GEMINI_KEY }, { env: { GEMINI_BASE_URL: "https://proxy.example/v1" }, fetchImpl, profileDir, taskTypes: true });
+    for (const embedder of [openai, off, proxied]) {
+      expect((embedder.embed as CalibratedEmbedFn).queryFloor).toBeUndefined();
+      expect(embedder.taskTypes).toBe(false);
+      await embedder.embed(["beta"], { roles: ["query"] });
+    }
+    expect(calls.map((c) => c.url)).toEqual([
+      `${EMBEDDER_ROUTES.openai.defaultBaseUrl}/embeddings`,
+      `${EMBEDDER_ROUTES.gemini.defaultBaseUrl}/embeddings`,
+      "https://proxy.example/v1/embeddings",
+    ]);
+  });
+
+  it("a native response with the wrong number of vectors is a typed failure, not a silent misalignment", async () => {
+    const fetchImpl = async (): Promise<Response> => new Response(JSON.stringify({ embeddings: [{ values: [1, 0] }] }), { status: 200 });
+    const embedder = createEmbedder({}, { GEMINI_API_KEY: GEMINI_KEY }, { env: {}, fetchImpl, profileDir, taskTypes: true });
+    await expect(embedder.embed(["a", "b"], { roles: ["document", "query"] })).rejects.toThrow(/embedding/i);
+  });
+
+  it("the scorer asks for roles only when told the ranking is asymmetric, and then uses the task-typed floor", async () => {
+    const seen: Array<{ texts: readonly string[]; roles: readonly string[] | undefined }> = [];
+    const spy: CalibratedEmbedFn = Object.assign(
+      async (texts: readonly string[], options?: EmbedCallOptions) => {
+        seen.push({ texts, roles: options?.roles });
+        return texts.map((_, i) => (i === texts.length - 1 ? [1, 0] : [0.7, Math.sqrt(1 - 0.49)]));
+      },
+      { vectorFloor: 0.6, queryFloor: 0.75 },
+    );
+    const symmetric = await scoreAgainstWithEvidence("q", ["a", "b"], spy);
+    const asymmetric = await scoreAgainstWithEvidence("q", ["a", "b"], spy, { asymmetric: true });
+    expect(seen.map((s) => s.roles)).toEqual([undefined, ["document", "document", "query"]]);
+    // cosine 0.7 clears the symmetric floor (0.6) and not the task-typed one (0.75).
+    expect(symmetric.vectorRelated).toEqual([true, true]);
+    expect(asymmetric.vectorRelated).toEqual([false, false]);
   });
 });

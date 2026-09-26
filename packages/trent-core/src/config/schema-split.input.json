@@ -86,7 +86,7 @@
   },
   "models": { "fast": "fixture-fast", "executor": "fixture-executor", "planner": "fixture-planner", "judge": "fixture-judge", "fallback_on_pin": true, "reasoning_effort": "low" },
   "tools": { "disclosure_threshold": 40 },
-  "brain": { "enabled": false, "versioning": "off" },
+  "brain": { "enabled": false, "versioning": "off", "rerank": { "mode": "llm", "model": "gemini-3.5-flash-lite", "max_cents_per_query": 0.5, "min_score": 0.6 } },
   "checkpoints": { "enabled": false, "max_bytes_per_run": 123456 },
   "media": { "backend": "host", "hosted_transcription": true, "whisper_model": "/models/ggml-base.en.bin", "image_provider": "openai", "image_model": "fixture-image-model", "image_price_cents": 5, "image_auto_approve_under_cents": 10 },
   "gate": { "ask_classes": ["deploy"] },

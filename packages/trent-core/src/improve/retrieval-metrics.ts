@@ -20,9 +20,10 @@
  * separate them.
  */
 import type { Brain } from "../fleet-memory/brain.js";
-import { loadBrainIndex } from "../fleet-memory/brain-index.js";
+import { loadBrainIndex, recallFromBrain, type BrainRerankReport } from "../fleet-memory/brain-index.js";
+import type { BrainReranker } from "../fleet-memory/rerank.js";
 import { HYBRID_VECTOR_FLOOR } from "../fleet-memory/hybrid.js";
-import { cosineSimilarity, type CalibratedEmbedFn, type EmbedFn } from "../fleet-memory/lexical.js";
+import { cosineSimilarity, type CalibratedEmbedFn, type EmbedFn, type EmbedRole } from "../fleet-memory/lexical.js";
 import {
   DEFAULT_RECALL_K,
   RETRIEVAL_EVAL_SEAT,
@@ -36,18 +37,22 @@ import {
 import { chunkScorableText, type AnswerableCategory, type DocsCorpusGolden, type NoAnswerQuestion } from "./docs-corpus.js";
 
 export const RETRIEVAL_MODES = ["lexical", "embedding", "hybrid"] as const;
-export type RetrievalMode = (typeof RETRIEVAL_MODES)[number];
+/** The first-stage modes, plus [P2-13] `rerank` (the hybrid with the reranker over its pool) and labelled variants. */
+export type RetrievalMode = (typeof RETRIEVAL_MODES)[number] | "rerank" | (string & {});
 export const ANSWERABLE_CATEGORIES: readonly AnswerableCategory[] = ["exact_term", "paraphrased", "multi_hop"];
 /** The tighter cut reported beside the gate's k. */
 export const RECALL_TIGHT_K = 3;
 
 /** The dense half alone (see the header): cosine order above the embedder's calibrated floor. */
 export function embeddingOnlyRanker(options: { readonly brain: Brain; readonly embed: EmbedFn }): RetrievalRanker {
-  const floor = (options.embed as CalibratedEmbedFn).vectorFloor ?? HYBRID_VECTOR_FLOOR;
+  // [P2-13] Asymmetric like brain recall: chunks as documents, the question as the query, and the
+  // task-typed floor when the embedder applies roles.
+  const calibrated = options.embed as CalibratedEmbedFn;
+  const floor = calibrated.queryFloor ?? calibrated.vectorFloor ?? HYBRID_VECTOR_FLOOR;
   return async (query, seat) => {
     const entries = loadBrainIndex({ profileDir: options.brain.profileDir, brain: options.brain }).entries.filter((e) => e.seat === undefined || e.seat === seat);
     if (entries.length === 0) return [];
-    const vectors = await options.embed([...entries.map(chunkScorableText), query]);
+    const vectors = await options.embed([...entries.map(chunkScorableText), query], { roles: [...entries.map((): EmbedRole => "document"), "query"] });
     const q = vectors[vectors.length - 1];
     if (q === undefined || q.length === 0) throw new Error("the embedder returned no vector for the query");
     return entries
@@ -58,8 +63,52 @@ export function embeddingOnlyRanker(options: { readonly brain: Brain; readonly e
   };
 }
 
+/**
+ * [P2-13] The shipped brain recall with a reranker: the blend, the pool, the reranker's picks, then
+ * the rest of the blend. Every recall's rerank report is handed to `onReport` against its query, so a
+ * measurement can count outcomes and spend.
+ */
+export function rerankedRanker(options: { readonly brain: Brain; readonly embed?: EmbedFn; readonly rerank: BrainReranker; readonly onReport?: (query: string, report: BrainRerankReport | undefined) => void }): RetrievalRanker {
+  return async (query, seat) => {
+    const result = await recallFromBrain({
+      profileDir: options.brain.profileDir,
+      brain: options.brain,
+      seat,
+      objective: query,
+      budgetChars: Number.MAX_SAFE_INTEGER,
+      rerank: options.rerank,
+      ...(options.embed === undefined ? {} : { embed: options.embed }),
+    });
+    options.onReport?.(query, result.rerank);
+    return result.items.map((item) => ({ id: item.id, path: item.path, ...(item.page === undefined ? {} : { page: item.page }), score: item.score }));
+  };
+}
+
+/** [P2-13] What the reranks of one measurement did and cost: outcome counts and micro-cents per query. */
+export interface RerankSpendSummary {
+  readonly queries: number;
+  readonly statuses: Readonly<Record<string, number>>;
+  readonly totalMicroCents: number;
+  readonly meanCentsPerQuery: number;
+  readonly maxCentsPerQuery: number;
+}
+
+export function summariseReranks(reports: ReadonlyMap<string, BrainRerankReport | undefined>): RerankSpendSummary {
+  const statuses: Record<string, number> = {};
+  let total = 0;
+  let max = 0;
+  for (const report of reports.values()) {
+    const status = report?.status ?? "none";
+    statuses[status] = (statuses[status] ?? 0) + 1;
+    total += report?.microCents ?? 0;
+    max = Math.max(max, report?.microCents ?? 0);
+  }
+  const n = reports.size;
+  return { queries: n, statuses, totalMicroCents: total, meanCentsPerQuery: n === 0 ? 0 : total / n / 1_000_000, maxCentsPerQuery: max / 1_000_000 };
+}
+
 /** The ranker a mode measures. `embed` is required for `embedding` and `hybrid`. */
-export function rankerFor(mode: RetrievalMode, brain: Brain, embed?: EmbedFn): RetrievalRanker {
+export function rankerFor(mode: (typeof RETRIEVAL_MODES)[number], brain: Brain, embed?: EmbedFn): RetrievalRanker {
   if (mode === "lexical") return brainRanker({ brain });
   if (embed === undefined) throw new Error(`the ${mode} mode needs an embedder`);
   return mode === "hybrid" ? brainRanker({ brain, embed }) : embeddingOnlyRanker({ brain, embed });

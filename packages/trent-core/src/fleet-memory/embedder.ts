@@ -15,11 +15,13 @@
  * `<profileDir>/cache/embeddings/` (0700) means an unchanged run window re-embeds nothing. No key
  * is ever logged, thrown, cached or put in a details bag. With no key the embedder resolves to
  * `none` and `embedderForProfile` returns `undefined`, so recall stays what it was.
+ *
+ * [P2-13] A call that names a role per text (`EmbedCallOptions.roles`) is embedded with Gemini's
+ * asymmetric task types through the native endpoint (`embedder-google.ts`), cached per task type
+ * (`embedder-cache.ts`), and ranked against the route's own task-typed floor (`queryFloor`). A call
+ * that names none is byte-identical to the one before, on every route.
  */
 
-import { createHash } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import {
   DEFAULT_RETRY_POLICY,
   ProviderHttpError,
@@ -29,7 +31,9 @@ import {
   type RetryPolicy,
 } from "../model-gateway/retry.js";
 import { LOCAL_PLACEHOLDER_KEY, aliasBaseUrl, resolveProviderAlias } from "../model-gateway/providers.js";
-import { lexicalEmbedFn, type CalibratedEmbedFn, type EmbedFn } from "./lexical.js";
+import { lexicalEmbedFn, type CalibratedEmbedFn, type EmbedCallOptions, type EmbedFn } from "./lexical.js";
+import { CACHE_SEPARATOR, EmbeddingCache } from "./embedder-cache.js";
+import { GEMINI_TASK_TYPES, batchEmbedBody, batchEmbedUrl, nativeGeminiBase, parseBatchEmbedResponse } from "./embedder-google.js";
 
 /** What ranks the recall. `none` is lexical TF-IDF alone. `auto` is the first provider with a key. */
 export type EmbedderProvider = "gemini" | "openai" | "none";
@@ -64,6 +68,11 @@ export interface EmbedderRoute {
   readonly defaultDims: number;
   /** Cosine at or below which THIS model's vectors mean "unrelated" (`hybrid.ts`). Per model. */
   readonly vectorFloor: number;
+  /**
+   * [P2-13] The same line for a RETRIEVAL_QUERY against RETRIEVAL_DOCUMENTs, on a route that has
+   * asymmetric task types. Absent: the route has none, and roles are ignored.
+   */
+  readonly queryFloor?: number;
 }
 
 export const EMBEDDER_ROUTES: Readonly<Record<"gemini" | "openai", EmbedderRoute>> = {
@@ -81,6 +90,10 @@ export const EMBEDDER_ROUTES: Readonly<Record<"gemini" | "openai", EmbedderRoute
     // objective. 0.60 sits between them with margin. Calibration, not a constant of nature —
     // Google's space is anisotropic and the live proof re-checks it on every run.
     vectorFloor: 0.6,
+    // [P2-13] RETRIEVAL_QUERY against RETRIEVAL_DOCUMENT, measured by `embedder.live.test.ts` on the
+    // same three sentences: unrelated 0.571, paraphrase 0.769. The symmetric floor's own rule
+    // (unrelated + 0.3 x the gap: 0.529 + 0.3 x 0.225 = 0.60) gives 0.63 here.
+    queryFloor: 0.63,
   },
   openai: {
     provider: "openai",
@@ -105,10 +118,6 @@ export const MAX_EMBED_BATCH_SIZE = 256;
 /** One input is truncated here; embedding models refuse a long document outright. */
 export const MAX_EMBED_INPUT_CHARS = 8_000;
 export const DEFAULT_EMBED_TIMEOUT_MS = 20_000;
-/** Cache-key field separator, so "ab"+"c" and "a"+"bc" cannot hash alike. */
-const SEPARATOR = "\u0000";
-const CACHE_DIR_MODE = 0o700;
-const CACHE_FILE_MODE = 0o600;
 
 /** Why the selection landed where it did, so the doctor can say something true about it. */
 export type EmbedderReason = "configured" | "disabled" | "no_key";
@@ -134,6 +143,8 @@ export interface Embedder {
   readonly provider: EmbedderProvider;
   readonly model: string;
   readonly dims: number;
+  /** [P2-13] True when a call's roles are honoured as asymmetric task types. */
+  readonly taskTypes: boolean;
 }
 
 export interface CreateEmbedderOptions {
@@ -147,6 +158,13 @@ export interface CreateEmbedderOptions {
   readonly sleep?: (ms: number) => Promise<void>;
   /** The doctor turns the cache off: a cached probe proves nothing about the key today. */
   readonly useCache?: boolean;
+  /**
+   * [P2-13] `true` honours a call's roles as asymmetric task types on a route that has them. Off by
+   * default until the docs corpus measures them: the re-embed stopped at 317 of 665 texts on the free
+   * tier's 1,000-requests-a-day embedding quota (HTTP 429), so the shipped space is still the symmetric
+   * one the P2-6 numbers were measured in (01_discovery/output/retrieval-measurement-2026-09-25.md).
+   */
+  readonly taskTypes?: boolean;
 }
 
 function envValue(source: SecretLookup, name: string): string | undefined {
@@ -260,70 +278,6 @@ export function selectEmbedderProvider(
   return { ...LEXICAL_ONLY, batchSize, reason: "no_key" };
 }
 
-/**
- * sha256 over the endpoint, the model AND the text. Model plus text is the minimum (a model change
- * must be a miss); the endpoint joins them because one model NAME on two hosts is two spaces.
- */
-function cacheKey(scope: string, model: string, text: string): string {
-  const hash = createHash("sha256");
-  for (const part of [scope, model, text]) hash.update(part).update(SEPARATOR);
-  return hash.digest("hex");
-}
-
-function encodeVector(vector: readonly number[]): string {
-  return Buffer.from(Float32Array.from(vector).buffer).toString("base64");
-}
-
-function decodeVector(encoded: string): number[] {
-  const bytes = Buffer.from(encoded, "base64");
-  const copy = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(copy).set(bytes);
-  return Array.from(new Float32Array(copy));
-}
-
-/** The disk half of the embedder. Every failure here is a cache miss, never a run failure. */
-class EmbeddingCache {
-  readonly #dir: string;
-  readonly #scope: string;
-
-  constructor(profileDir: string, scope: string) {
-    this.#dir = path.join(profileDir, "cache", "embeddings");
-    this.#scope = scope;
-  }
-
-  read(model: string, text: string): number[] | undefined {
-    try {
-      const raw = fs.readFileSync(this.#fileFor(model, text), "utf8");
-      const parsed = JSON.parse(raw) as { model?: unknown; vector?: unknown };
-      if (parsed.model !== model || typeof parsed.vector !== "string") return undefined;
-      return decodeVector(parsed.vector);
-    } catch {
-      return undefined;
-    }
-  }
-
-  write(model: string, text: string, vector: readonly number[]): void {
-    const file = this.#fileFor(model, text);
-    try {
-      fs.mkdirSync(path.dirname(file), { recursive: true, mode: CACHE_DIR_MODE });
-      fs.chmodSync(this.#dir, CACHE_DIR_MODE);
-      fs.writeFileSync(
-        file,
-        JSON.stringify({ model, dims: vector.length, vector: encodeVector(vector) }),
-        { mode: CACHE_FILE_MODE },
-      );
-    } catch {
-      /* a cache that cannot be written is still a working embedder */
-    }
-  }
-
-  // Two hex characters of fan-out: one flat directory would hold every step ever recalled.
-  #fileFor(model: string, text: string): string {
-    const key = cacheKey(this.#scope, model, text);
-    return path.join(this.#dir, key.slice(0, 2), `${key}.json`);
-  }
-}
-
 function parseEmbeddings(payload: unknown, expected: number): number[][] {
   const data = (payload as { data?: unknown })?.data;
   if (!Array.isArray(data) || data.length !== expected) {
@@ -360,29 +314,29 @@ async function fetchWithDeadline(url: string, init: RequestInit, timeoutMs: numb
 /**
  * The live embedder. Every failure is retried under the gateway's policy or thrown; the decision
  * to degrade to lexical belongs to `scoreAgainst`, so a doctor probe still sees the real error.
+ * `nativeBase` is set only when task types apply ([P2-13]); a text with a role then goes to the
+ * native batch endpoint with its task type, and every other text to the compatible one as before.
  */
 function providerEmbed(
   selection: EmbedderSelection,
   apiKey: string,
   cache: EmbeddingCache | undefined,
   options: CreateEmbedderOptions,
+  nativeBase: string | undefined,
 ): EmbedFn {
   const fetchImpl = options.fetchImpl ?? ((url: string, init?: RequestInit) => fetch(url, init));
   const timeoutMs = options.timeoutMs ?? DEFAULT_EMBED_TIMEOUT_MS;
   const policy = resolveRetryPolicy(options.retry ?? DEFAULT_RETRY_POLICY);
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const url = `${selection.baseUrl}/embeddings`;
+  const nativeUrl = nativeBase === undefined ? undefined : batchEmbedUrl(nativeBase, selection.model);
 
-  async function requestBatch(inputs: readonly string[]): Promise<number[][]> {
+  async function send(target: string, headers: Record<string, string>, body: unknown, parse: (payload: unknown) => number[][]): Promise<number[][]> {
     for (let attempt = 1; ; attempt += 1) {
       try {
         const response = await fetchWithDeadline(
-          url,
-          {
-            method: "POST",
-            headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-            body: JSON.stringify({ model: selection.model, input: [...inputs] }),
-          },
+          target,
+          { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(body) },
           timeoutMs,
           fetchImpl,
         );
@@ -395,7 +349,7 @@ function providerEmbed(
             body: await response.text().catch(() => ""),
           });
         }
-        return parseEmbeddings(await response.json(), inputs.length);
+        return parse(await response.json());
       } catch (error) {
         const classified = classifyProviderError(error);
         if (!classified.retryable || attempt >= policy.attempts) throw error;
@@ -408,32 +362,49 @@ function providerEmbed(
     }
   }
 
-  return async (texts) => {
+  /** Symmetric texts go to the compatible surface; task-typed ones to the native batch, each with its own type. */
+  const requestBatch = (inputs: readonly string[], taskTypes: readonly (string | undefined)[]): Promise<number[][]> => {
+    const typed = taskTypes.every((t): t is string => t !== undefined);
+    return !typed || nativeUrl === undefined
+      ? send(url, { authorization: `Bearer ${apiKey}` }, { model: selection.model, input: [...inputs] }, (p) => parseEmbeddings(p, inputs.length))
+      : send(nativeUrl, { "x-goog-api-key": apiKey }, batchEmbedBody(selection.model, inputs, taskTypes as readonly string[]), (p) => parseBatchEmbedResponse(p, inputs.length));
+  };
+
+  return async (texts, call?: EmbedCallOptions) => {
     const prepared = texts.map((t) => t.slice(0, MAX_EMBED_INPUT_CHARS));
     const out = new Array<number[]>(prepared.length).fill([]);
-    // Deduplicated by text: one recall corpus routinely repeats a step output across runs.
-    const pending = new Map<string, number[]>();
+    const taskTypeOf = (index: number): string | undefined => {
+      const role = nativeUrl === undefined ? undefined : call?.roles?.[index];
+      return role === undefined ? undefined : GEMINI_TASK_TYPES[role];
+    };
+    // Deduplicated by (task type, text): one recall corpus routinely repeats a step output across runs.
+    const pending = new Map<string, { text: string; taskType: string | undefined; slots: number[] }>();
     prepared.forEach((text, index) => {
       if (text.trim() === "") return;
-      const hit = cache?.read(selection.model, text);
+      const taskType = taskTypeOf(index);
+      const hit = cache?.read(selection.model, text, taskType);
       if (hit !== undefined) {
         out[index] = hit;
         return;
       }
-      const slots = pending.get(text);
-      if (slots === undefined) pending.set(text, [index]);
-      else slots.push(index);
+      const key = taskType === undefined ? text : `${taskType}${CACHE_SEPARATOR}${text}`;
+      const entry = pending.get(key);
+      if (entry === undefined) pending.set(key, { text, taskType, slots: [index] });
+      else entry.slots.push(index);
     });
 
-    const unique = [...pending.keys()];
-    for (let start = 0; start < unique.length; start += selection.batchSize) {
-      const batch = unique.slice(start, start + selection.batchSize);
-      const vectors = await requestBatch(batch);
-      batch.forEach((text, i) => {
-        const vector = vectors[i] ?? [];
-        cache?.write(selection.model, text, vector);
-        for (const slot of pending.get(text) ?? []) out[slot] = vector;
-      });
+    // A request never mixes dialects; a native one carries a task type per text.
+    const entries = [...pending.values()];
+    for (const group of [entries.filter((e) => e.taskType === undefined), entries.filter((e) => e.taskType !== undefined)]) {
+      for (let start = 0; start < group.length; start += selection.batchSize) {
+        const batch = group.slice(start, start + selection.batchSize);
+        const vectors = await requestBatch(batch.map((e) => e.text), batch.map((e) => e.taskType));
+        batch.forEach((entry, i) => {
+          const vector = vectors[i] ?? [];
+          cache?.write(selection.model, entry.text, vector, entry.taskType);
+          for (const slot of entry.slots) out[slot] = vector;
+        });
+      }
     }
     return out;
   };
@@ -451,22 +422,27 @@ export function createEmbedder(
   const env = options.env ?? process.env;
   const selection = selectEmbedderProvider(config, secrets, env);
   if (selection.provider === "none") {
-    return { embed: lexicalEmbedFn, provider: "none", model: "", dims: 0 };
+    return { embed: lexicalEmbedFn, provider: "none", model: "", dims: 0, taskTypes: false };
   }
   const endpoint = endpointFor(selection.provider, config, env);
   const key = findKey(endpoint.apiKeyEnvs, secrets, env)?.value
     ?? (endpoint.local ? LOCAL_PLACEHOLDER_KEY : undefined);
   if (key === undefined) {
-    return { embed: lexicalEmbedFn, provider: "none", model: "", dims: 0 };
+    return { embed: lexicalEmbedFn, provider: "none", model: "", dims: 0, taskTypes: false };
   }
   const cache = options.useCache === false || options.profileDir === undefined
     ? undefined
-    : new EmbeddingCache(options.profileDir, `${selection.provider}${SEPARATOR}${selection.baseUrl}`);
-  // The floor rides on the function so a bare `EmbedFn` through the hook's seam stays calibrated.
-  const embed: CalibratedEmbedFn = Object.assign(providerEmbed(selection, key, cache, options), {
+    : new EmbeddingCache(options.profileDir, `${selection.provider}${CACHE_SEPARATOR}${selection.baseUrl}`);
+  // [P2-13] Task types need the caller to ask for them, the route to have them, and a native
+  // endpoint behind the base URL.
+  const queryFloor = EMBEDDER_ROUTES[selection.provider].queryFloor;
+  const nativeBase = options.taskTypes !== true || queryFloor === undefined ? undefined : nativeGeminiBase(selection.baseUrl);
+  // The floors ride on the function so a bare `EmbedFn` through the hook's seam stays calibrated.
+  const embed: CalibratedEmbedFn = Object.assign(providerEmbed(selection, key, cache, options, nativeBase), {
     vectorFloor: selection.vectorFloor,
+    ...(nativeBase === undefined ? {} : { queryFloor }),
   });
-  return { embed, provider: selection.provider, model: selection.model, dims: selection.dims };
+  return { embed, provider: selection.provider, model: selection.model, dims: selection.dims, taskTypes: nativeBase !== undefined };
 }
 
 /** The minimum of `ConfigManager` this needs; the real one satisfies it structurally. */

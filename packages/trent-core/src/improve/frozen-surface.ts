@@ -14,7 +14,8 @@
  *   judge_input_memory every other configured block, because the judge's inputs are the outputs of
  *                      prompts those blocks are rendered into (`tools/memory/index.ts` puts every
  *                      block in the prelude), so a memory delta moves the grader
- *   ranking            [W3] `fleet-memory/{recall,hybrid,brain-index}.ts` and `fleet-memory/ingest/`:
+ *   ranking            [W3] `fleet-memory/{recall,hybrid,brain-index}.ts` and `fleet-memory/ingest/`,
+ *                      [P2-13] `fleet-memory/{lexical,rerank,rerank-llm}.ts`:
  *                      what the recall gate measures, so a draft cannot edit its way past the floor
  *   configured         anything else the profile listed in `improve.frozen_paths`
  *
@@ -61,6 +62,10 @@ export const RANKING_SURFACE_PATHS: readonly string[] = siblingDirs("fleet-memor
   path.join(dir, "hybrid.ts"),
   path.join(dir, "brain-index.ts"),
   path.join(dir, "ingest"),
+  // [P2-13] TF-IDF and the relatedness evidence (P2-6), and the reranker's pool, picks and prompt.
+  path.join(dir, "lexical.ts"),
+  path.join(dir, "rerank.ts"),
+  path.join(dir, "rerank-llm.ts"),
 ]);
 
 /** The judge's own prompt, and any prompt file kept beside it. */
