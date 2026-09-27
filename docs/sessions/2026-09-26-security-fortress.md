@@ -254,3 +254,86 @@ d46287e: offline proof de-circularized (real trentFetch, dial-proven vs wiring-a
 wiring-identity check), coverage scan catches bare fetch/node:net/spawns, grade de-conflates egressProxy
 vs l3FirewallAvailable. Council framing holds: "defense-in-depth with stated residuals" until Wave 2's
 adversarial proofs (D8 fuzz, D9 provenance property) land. Awaiting 2nd session's Wave 2/3 HEAD to push.
+
+## Wave 1 complete (peer pushed d46287e); Wave 3 dispatched
+- bb88cc landed D5/D6/D17 as d46287e and pushed origin to d46287e (includes my 6672e4f). It stops
+  there; Wave 2/3 are this session's. Pushes stay with bb88cc/Bobby — ping it with HEAD when gated.
+- New constraint relayed to agents: egress/registry.test.ts coverage scan fails on unregistered raw
+  network primitives; grade inputs are egressProxy + l3FirewallAvailable; createForcedOfflineDial gone.
+- Wave 3 dispatched (6 agents total now): D3 rebind pin (EgressProxy/offline/dial), D19 media key via
+  broker (tools/media, CredentialBroker), D15 `trent security preset` (apps/cli security + config).
+  D16 receipt held until D3 (EgressProxy) + D9 (provenance) land — it composes from both.
+- The narrowed D12 agent was ALSO stopped by a safety classifier before writing anything (read-only;
+  no files changed — verified via git status). Two stops on the hardline-floor area: NOT re-attempting
+  or rephrasing. D8 (fuzz), D12 (denylist: ~/.kube, ~/.config/gh, ~/.azure, .pypirc, .terraform.d,
+  .gnupg, env dumps), red-team Breaks 10/11/13/14 are PARKED for Bobby to scope/implement directly.
+- D19 committed (7a69576): fallback (scoped claim + redaction); 4 real leak paths closed. Host-side model calls also read keys directly — the broker is sandbox-only, now stated in docs.
+- D13 committed (1ec7a89): http MCP consent keyed on origin+path, tool-def hash pin; stdio artifact
+  pin (exact-version launchers, @sha256 images, content-hashed scripts/binaries). NEW HOLE the agent
+  flagged and I fixed in the same commit: `trent mcp consent` re-approves a drift, so the
+  lower-trents-own-guardrails hardline regex now covers `mcp (add|consent)` (red 1 -> green 26/26).
+  Shared-file technique: docs/security.md staged as HEAD+D13-hunk via hash-object/update-index so the
+  D15 Presets section stayed out; README 160->161.
+- D3 committed (ef38f3c): proxy + offline guard resolve once, check all addresses, dial the IP.
+  Behaviour change: private-resolving allowlisted names need IP-literal allowlist; offline https to a
+  DNS name refused. Residuals: Node fetch drops Host; offline redirects not re-checked.
+- D9+D11 green (916 incl. Docker terminal suite): provenance-registry.ts declaration table +
+  registration guard + fast-check property; egress-seat terminal calls tag untrusted and mark the
+  workspace -> later file_ops/terminal/code_execution on it are untrusted (process-scoped; solo
+  sessions persist). Friction to tell Bobby: `npm test` routes to the egress seat, so it taints too.
+- D15 green (1902): `trent security preset paranoid|standard` over 5 real knobs; offline, MCP consent,
+  sandbox limits have no config key (listed, not invented). README -> 162 once stacked on D13.
+- Re-gating D9+D11 and D15 on HEAD ef38f3c before commit.
+- Committed f0b18c1 (D9+D11, 972/972 on ef38f3c) and 4b8122d (D15; 1895 pass + an onTaskUpdate RPC
+  timeout under load, targeted re-run 172/172). Tree clean except this log + unrelated notes/.
+- Dispatched D16 (per-run security receipt; composes EgressProxy/CredentialBroker/provenance/taint)
+  and D10 (threat-map JSON + CI gate that every mitigated/partial threat names a present test; honest
+  residual entries for D8/D12/Breaks 10-14 and the founder-gated items).
+- D10 committed (bfacd1d): 64-threat map + gate (21 mitigated / 23 partial / 10 residual / 3 oos /
+  7 founder-gated). 34/34 isolated.
+- O-03 CONFIRMED by reading HEAD (Fable): wireTools (apps/cli/src/repl/tools.ts) starts the host
+  EgressProxy regardless of offline mode with the full intercept_domains; EgressProxy dials upstream by
+  raw socket and never consults offline; LOOPBACK_ALLOWLIST (egress/offline-config.ts) has no caller.
+  So a host-side tool whose request reaches the loopback proxy passes trentFetch's loopback rule and
+  the proxy goes off-machine. Fix (after D16 lands — it is editing EgressProxy.ts + repl/tools.ts):
+  offline-aware proxy chokepoint (upstream must resolve to loopback, via pinned-lookup) + collapse the
+  REPL/`egress start` allowlist to LOOPBACK_ALLOWLIST when offline; red test = offline proxy CONNECT
+  to an allowlisted public host must be refused.
+- D16 committed (aea0d25): per-run receipt (egress per host via EgressProxy onDecision, broker
+  injections by provider name, untrusted/taint, holds/refusals, posture). Sentinel key never appears.
+  Verified on bfacd1d too (docs-truth+receipt+egress 177/177, tsc 0, scan 0).
+- O-03 fix dispatched (Opus): offline-aware EgressProxy chokepoint (non-loopback upstream refused
+  offline, `offline_non_loopback`, before any socket) + LOOPBACK_ALLOWLIST collapse in wireTools and
+  `trent egress start`; threat-map O-03 -> mitigated with the new tests.
+- O-03 committed (bb84b82): offline proxy refuses non-loopback upstream (403 offline_non_loopback,
+  before any socket) + LOOPBACK_ALLOWLIST collapse; Bun-proven. Threat map 22/22/10/3/7; O-05 note
+  updated by me. NEW residual to tell Bobby: offline, a non-loopback NAME still reaches the system
+  resolver before refusal (trentFetch and proxy both resolve-then-decide) — a DNS-name leak channel
+  offline; fix = refuse non-literal, non-localhost names offline without resolving.
+- Full clean-HEAD core+cli suite running on bb84b82 (isolate.sh packages/trent-core apps/cli).
+- FULL clean-HEAD suite on bb84b82: 583 files / 5449 passed / 2 skipped, tsc/build/scan 0, ISOLATED rc=0 (5226 at session start -> +223 tests). Offline DNS-name fix in flight.
+- Offline DNS-name fix committed (cb9cb94): pinOfflineLocal — offline, only loopback literals,
+  localhost/*.localhost (pinned 127.0.0.1) and allowedHosts pass; every other name refused with ZERO
+  resolver calls (trentFetch + proxy). Bun-proven. I rewrote the stale docs/security.md offline
+  layer-1/proxy wording ("resolves the target") to match. Full suite re-running on cb9cb94.
+
+## State at close of this session's waves (7827ad)
+Landed this session (on top of peer's ff70bea D2 + d46287e D5/D6/D17):
+  6672e4f D1+D4 · 7a69576 D19 · 1ec7a89 D13 (+hardline `mcp consent`) · ef38f3c D3 · f0b18c1 D9+D11 ·
+  4b8122d D15 · bfacd1d D10 · aea0d25 D16 · bb84b82 O-03 · cb9cb94 offline DNS-name.
+Council D1–D10 status: D1 D2 D3 D4 D5 D6 D9 D10 done; D7 n/a (not a decision); D8 NOT done (parked).
+  So the "provably secure" framing stays OFF: "defense-in-depth with stated residuals and
+  per-property proofs" — the threat map (docs/security-threat-map.json) is the live ledger.
+PARKED for Bobby (a safety classifier stopped two agents on this area; not re-attempted):
+  D8 hardline fuzz harness; D12 cred denylist (~/.kube, ~/.config/gh, ~/.azure, .pypirc,
+  .terraform.d, .gnupg, env dumps); red-team RT-10/11/13/14/15. All recorded as residual/partial in
+  the threat map. RT-13/14 + D12 are small pattern edits in governance/hardline.ts.
+Friction introduced (deliberate, conservative): after any egress-seat terminal command (incl. `npm
+  test`, which routes to the egress seat) the workspace is network-derived -> memory/brain writes held.
+Founder-gated: signed release + SLSA, external pen-test, SBOM, GitHub private vuln reporting,
+  file apps/web T-11 seat-error secret log. Push: bb88cc/Bobby only.
+- FULL clean-HEAD suite on cb9cb94: 584 files / 5455 passed / 2 skipped / 1 failed — the failure is
+  terminal.test.ts "times out a runaway command and says so" (`sleep 30` vs exec timeout) at load avg
+  ~375; re-run alone on the same cb9cb94 worktree: 11/11 pass. Same load flake the D9 agent saw at
+  load 527-660. Not a regression (cb9cb94 touches egress only). tsc/build/scan 0.
+- Handed HEAD to bb88cc for the push.
