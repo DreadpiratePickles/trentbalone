@@ -50,19 +50,10 @@ export function createTrentFetch(options: TrentFetchOptions = {}): FetchLike {
 /**
  * The default dial every module's raw-`fetch` fallback uses: loopback-only while offline, transparent
  * otherwise. Consults `process.env.TRENT_OFFLINE` on every call.
+ *
+ * [D5] This is the single dial the offline proof exercises. The proof fires THIS object (not a
+ * freshly-constructed always-on guard) so a refusal proves the actual wiring, not just that
+ * `assertLocalTarget` refuses a public IP; `trent security --offline` sets `TRENT_OFFLINE` around the
+ * canary so this real dial engages even on a process that was not launched offline.
  */
 export const trentFetch: FetchLike = createTrentFetch();
-
-/**
- * A dial that ALWAYS enforces the loopback-only rule, regardless of `TRENT_OFFLINE`. Used by the
- * offline proof (`trent security --offline`, `doctor/checks/offline.ts`) so it can exercise the guard
- * on a process that is not itself offline — the canary to `192.0.2.1` must be refused whether or not
- * the operator launched this command with offline on.
- */
-export function createForcedOfflineDial(options: TrentFetchOptions = {}): FetchLike {
-  const allow = options.allowedHosts;
-  return async (input, init) => {
-    await assertLocalTarget(targetOf(input), allow === undefined ? {} : { allowedHosts: allow });
-    return fetch(input, init);
-  };
-}

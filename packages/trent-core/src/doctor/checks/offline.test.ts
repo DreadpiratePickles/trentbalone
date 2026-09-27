@@ -49,6 +49,13 @@ describe("proveOffline", () => {
     expect(proof.rows.find((r) => r.id === "a")?.status).toBe("loopback-only");
     expect(proof.rows.find((r) => r.id === "c")?.status).toBe("blocked");
     expect(proof.rows.every((r) => r.status !== "open")).toBe(true);
+    // [D5] each row is honest about HOW it is proven: a trentFetch row is dial-proven (the canary
+    // fires the real shared trentFetch it falls back to); a proxy row is wiring-asserted; config /
+    // tool gates carry their own method.
+    expect(proof.rows.find((r) => r.id === "a")?.proof).toBe("dial-proven");
+    expect(proof.rows.find((r) => r.id === "b")?.proof).toBe("wiring-asserted");
+    expect(proof.rows.find((r) => r.id === "c")?.proof).toBe("tool-gate");
+    expect(proof.rows.find((r) => r.id === "e")?.proof).toBe("config-rejected");
   });
 
   it("marks a trentFetch loopback-only row OPEN when the canary is NOT refused", async () => {
@@ -76,6 +83,22 @@ describe("proveOffline", () => {
     expect(proof.config.violations.length).toBeGreaterThan(0);
     expect(proof.rows[0]?.status).toBe("open");
     expect(proof.ok).toBe(false);
+  });
+
+  it("[D5] force mode fires the REAL trentFetch (not a synthetic always-on dial) and restores the env", async () => {
+    const before = process.env.TRENT_OFFLINE;
+    // No injected dial: the default must be the real shared `trentFetch`, and force must make the
+    // process offline for the duration of the canary so that real dial actually refuses 192.0.2.1.
+    const proof = await proveOffline({ config: CLEAN_LOCAL_CONFIG, force: true });
+
+    expect(proof.canary.blocked).toBe(true);
+    expect(proof.canary.target).toBe(OFFLINE_CANARY_URL);
+    // The process is put back exactly as it was — force does not leak offline mode.
+    expect(process.env.TRENT_OFFLINE).toBe(before);
+    // The real registry: trentFetch rows are dial-proven, proxy rows are wiring-asserted.
+    expect(proof.rows.find((r) => r.id === "model-openai-compat")?.proof).toBe("dial-proven");
+    expect(proof.rows.find((r) => r.id === "web")?.proof).toBe("wiring-asserted");
+    expect(proof.rows.some((r) => r.status === "open")).toBe(false);
   });
 
   it("reports offline:false and an empty verdict when offline is off", async () => {

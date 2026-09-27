@@ -41,7 +41,9 @@ describe("gradeSecurity is pure and total", () => {
     expect(g.grade).toBe("A");
     expect(g.score).toBe(0);
     expect(g.inputs.findings).toEqual({ critical: 0, high: 0, medium: 0, low: 0, total: 0 });
-    expect(g.inputs.posture.egressFirewall).toBe(true);
+    // D17: the proxy and the L3 firewall are DISTINCT posture facts, no longer conflated.
+    expect(g.inputs.posture.egressProxy).toBe(true);
+    expect(g.inputs.posture.l3FirewallAvailable).toBe(true);
     expect(g.inputs.posture.hardlineRuleCount).toBe(40);
     expect(typeof g.rationale).toBe("string");
   });
@@ -87,6 +89,34 @@ describe("the grade is monotonic — adding a finding never improves it", () => 
       expect(next).toBeGreaterThanOrEqual(last);
       last = next;
     }
+  });
+});
+
+describe("D17: egressProxy and l3FirewallAvailable are de-conflated posture facts", () => {
+  it("reports the L3 firewall available on a docker backend with the egress proxy on", () => {
+    const g = gradeSecurity(report([]));
+    expect(g.inputs.posture.egressProxy).toBe(true);
+    expect(g.inputs.posture.l3FirewallAvailable).toBe(true);
+  });
+
+  it("reports the L3 firewall UNavailable on a local backend even while the proxy is on", () => {
+    const sections = secureSections();
+    const egress = sections.find((s) => s.id === "egress")!;
+    egress.details.sandboxBackend = "local";
+    const g = gradeSecurity(report([], sections));
+    // The app-level proxy setting is still on...
+    expect(g.inputs.posture.egressProxy).toBe(true);
+    // ...but the kernel-level firewall only exists behind the docker egress backend.
+    expect(g.inputs.posture.l3FirewallAvailable).toBe(false);
+  });
+
+  it("reports the L3 firewall UNavailable when the egress proxy is off", () => {
+    const sections = secureSections();
+    const egress = sections.find((s) => s.id === "egress")!;
+    egress.details.enabled = false;
+    const g = gradeSecurity(report([], sections));
+    expect(g.inputs.posture.egressProxy).toBe(false);
+    expect(g.inputs.posture.l3FirewallAvailable).toBe(false);
   });
 });
 

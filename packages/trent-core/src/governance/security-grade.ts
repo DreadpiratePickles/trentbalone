@@ -46,7 +46,7 @@ const SEVERITY_WEIGHT: Readonly<Record<SecuritySeverity, number>> = { critical: 
 
 /** Penalty per weak posture. The secure state of each is 0, so a clean default profile scores 0. */
 const POSTURE_WEIGHT = {
-  egressFirewallOff: 8,
+  egressProxyOff: 8,
   sandboxLocal: 8,
   autonomyFloorLifted: 60,
   hardlineFloorGone: 50,
@@ -62,8 +62,21 @@ export interface SecurityGradeInputs {
     readonly total: number;
   };
   readonly posture: {
-    /** Egress proxy on, so a tool's outbound request is brokered. */
-    readonly egressFirewall: boolean;
+    /**
+     * The app-level egress proxy is on, so a tool's outbound request is brokered and allowlisted.
+     * This is a SEPARATE fact from {@link l3FirewallAvailable}: the proxy is Trent's own code, the
+     * L3 firewall is the kernel-level network jail the docker egress backend builds around it.
+     */
+    readonly egressProxy: boolean;
+    /**
+     * The kernel-level L3 egress firewall (the docker `--internal` network with its forwarder) is in
+     * use — true only when the sandbox runs on the docker egress backend AND the proxy is on, since
+     * the firewall is the sandbox's only route to that proxy. On the local backend there is no such
+     * firewall, so a non-allowlisted host is proxy-refused, not unreachable. Reported to de-conflate
+     * "brokered" (the proxy) from "unreachable" (the firewall); it does not itself move the grade
+     * (its weak states — local backend, proxy off — are already penalised by their own inputs).
+     */
+    readonly l3FirewallAvailable: boolean;
     /** Sandbox backend isolates the host filesystem and environment (not "local"). */
     readonly sandboxIsolated: boolean;
     /** Prompt redaction on. Reported, not graded (opt-in by design). */
@@ -113,8 +126,11 @@ export function gradeSecurity(report: SecurityAuditReport): SecurityGrade {
   for (const finding of report.findings) counts[finding.severity] += 1;
   const findings = { ...counts, total: report.findings.length };
 
-  const egressFirewall = Boolean(detail(report, "egress", "enabled", true));
+  const egressProxy = Boolean(detail(report, "egress", "enabled", true));
   const sandboxIsolated = detail<string>(report, "egress", "sandboxBackend", "docker") !== "local";
+  // The L3 firewall exists only when the docker egress backend stands it up AROUND the proxy: it is
+  // the sandbox's only route to the proxy, so it needs both the isolated backend and the proxy on.
+  const l3FirewallAvailable = sandboxIsolated && egressProxy;
   const promptRedaction = Boolean(detail(report, "redaction", "redactPrompts", false));
   const mcpResultScrubbing = Boolean(detail(report, "mcp", "resultScrubbing", true));
   const autonomyLiftsAnyFloor = Boolean(detail(report, "autonomy", "liftsAnyFloor", false));
@@ -123,7 +139,7 @@ export function gradeSecurity(report: SecurityAuditReport): SecurityGrade {
     ? null
     : Number(detail(report, "approvals", "hardlineCount", 0));
 
-  const posture = { egressFirewall, sandboxIsolated, promptRedaction, mcpResultScrubbing, autonomyLiftsAnyFloor, hardlineRuleCount };
+  const posture = { egressProxy, l3FirewallAvailable, sandboxIsolated, promptRedaction, mcpResultScrubbing, autonomyLiftsAnyFloor, hardlineRuleCount };
 
   const findingPenalty =
     counts.critical * SEVERITY_WEIGHT.critical +
@@ -132,7 +148,7 @@ export function gradeSecurity(report: SecurityAuditReport): SecurityGrade {
     counts.low * SEVERITY_WEIGHT.low;
 
   let posturePenalty = 0;
-  if (!egressFirewall) posturePenalty += POSTURE_WEIGHT.egressFirewallOff;
+  if (!egressProxy) posturePenalty += POSTURE_WEIGHT.egressProxyOff;
   if (!sandboxIsolated) posturePenalty += POSTURE_WEIGHT.sandboxLocal;
   if (autonomyLiftsAnyFloor) posturePenalty += POSTURE_WEIGHT.autonomyFloorLifted;
   if (hardlineRuleCount !== null && hardlineRuleCount <= 0) posturePenalty += POSTURE_WEIGHT.hardlineFloorGone;
@@ -157,7 +173,7 @@ function rationaleFor(
     parts.push(`${findings.total} finding${findings.total === 1 ? "" : "s"} (${bySev.join(", ")}) = ${findingPenalty}`);
   }
   const weak: string[] = [];
-  if (!posture.egressFirewall) weak.push("egress firewall off");
+  if (!posture.egressProxy) weak.push("egress proxy off");
   if (!posture.sandboxIsolated) weak.push("sandbox not isolated");
   if (posture.autonomyLiftsAnyFloor) weak.push("an autonomy floor is lifted");
   if (posture.hardlineRuleCount !== null && posture.hardlineRuleCount <= 0) weak.push("no hardline floor");

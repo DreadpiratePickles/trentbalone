@@ -199,6 +199,17 @@ const statusSubSpec: CommandSpec = {
       `  ${paint(d.grade)} ${ctx.theme.meta(`score ${d.score}`)} ${ctx.theme.body(`profile ${d.profile}`)}`,
       `  ${ctx.theme.meta(d.rationale)}`,
       "",
+      // De-conflated posture (D17): the app-level proxy and the kernel-level L3 firewall are distinct.
+      `  ${ctx.theme.emphasis("POSTURE")}`,
+      `    ${ctx.theme.meta("egress proxy".padEnd(20, " "))} ${
+        d.inputs.posture.egressProxy ? ctx.theme.success("on") : ctx.theme.error("off")
+      }`,
+      `    ${ctx.theme.meta("L3 firewall".padEnd(20, " "))} ${
+        d.inputs.posture.l3FirewallAvailable
+          ? ctx.theme.success("available (docker egress backend)")
+          : ctx.theme.needsApproval("not available (proxy-refused, not unreachable)")
+      }`,
+      "",
       `  ${ctx.theme.emphasis("CHECKS")} ${ctx.theme.meta("(each section and its worst finding)")}`,
     ];
     for (const check of d.checks) {
@@ -243,6 +254,12 @@ function offlineLines(proof: OfflineProof, ctx: CommandContext): string[] {
     }`,
   );
   lines.push("");
+  // [D5] Distinguish rows the live canary actually dialed (dial-proven) from rows covered
+  // structurally (wiring-asserted) — the output must not claim a dial it did not make.
+  const dialProven = proof.rows.filter((r) => r.proof === "dial-proven").length;
+  const wiringAsserted = proof.rows.filter((r) => r.proof === "wiring-asserted").length;
+  lines.push(`  ${ctx.theme.meta("proof")}   ${ctx.theme.value(`${dialProven} dial-proven`)}, ${ctx.theme.value(`${wiringAsserted} wiring-asserted`)} ${ctx.theme.meta("(the rest are config- or tool-gated)")}`);
+  lines.push("");
   for (const row of proof.rows) {
     const status =
       row.status === "open"
@@ -250,7 +267,13 @@ function offlineLines(proof: OfflineProof, ctx: CommandContext): string[] {
         : row.status === "blocked"
           ? ctx.theme.success("blocked")
           : ctx.theme.success("loopback-only");
-    lines.push(`  ${status.padEnd(14, " ")} ${ctx.theme.value(row.id.padEnd(22, " "))} ${ctx.theme.meta(row.layer)}`);
+    const proofTag =
+      row.proof === "dial-proven"
+        ? ctx.theme.success("dial-proven")
+        : row.proof === "wiring-asserted"
+          ? ctx.theme.needsApproval("wiring-asserted")
+          : ctx.theme.meta(row.proof);
+    lines.push(`  ${status.padEnd(14, " ")} ${ctx.theme.value(row.id.padEnd(22, " "))} ${proofTag.padEnd(16, " ")} ${ctx.theme.meta(row.layer)}`);
   }
   lines.push("");
   lines.push(`  ${ctx.theme.meta(proof.caveat)}`);

@@ -177,7 +177,8 @@ describe("trent security status (the posture card + letter grade)", () => {
     inputs: {
       findings: { critical: number; high: number; medium: number; low: number; total: number };
       posture: {
-        egressFirewall: boolean;
+        egressProxy: boolean;
+        l3FirewallAvailable: boolean;
         sandboxIsolated: boolean;
         promptRedaction: boolean;
         mcpResultScrubbing: boolean;
