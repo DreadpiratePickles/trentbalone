@@ -13,7 +13,7 @@
 import { ConfigManager } from "@trent/core/config/index.js";
 import { GatewayManager, linkRunApprovals, readSetting, WebhookServer, webhookOnly, type RunApprovalLink } from "@trent/core/gateway/index.js"; // [P3] readSetting, WebhookServer, webhookOnly
 import { gatewayRunningError, liveGatewayHolder, profileLockPath, type ProfileLockHolder } from "@trent/core/profile/locks.js";
-import { egressBindHosts, TokenManager } from "@trent/core/egress/index.js";
+import { egressBindHosts, offlineInterceptDomains, TokenManager } from "@trent/core/egress/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { openWebhookRoutes, webhookStatus, webhookStatusLines, WebhooksConfigSchema, type OpenedWebhookRoutes, type WebhooksConfig, type WebhookStatusView } from "@trent/core/webhooks/index.js"; // [H3] webhook routes; [P3] WebhooksConfigSchema, WebhooksConfig
 import type { CommandContext } from "../context.js";
@@ -312,11 +312,14 @@ export const egressSpec: CommandSpec = {
         // Same bind rule as the REPL: loopback, plus the Docker bridge gateway on Linux so the
         // sandbox containers can reach the proxy (token-gated; wildcards are refused).
         const bindHosts = await egressBindHosts({ backend: config.terminal.backend === "docker" ? "docker" : "local" });
+        // [O-03] Offline, the loopback allowlist (undefined online: the proxy reads config itself).
+        const offlineDomains = offlineInterceptDomains(undefined);
         const proxy = await startEgressProxy({
           configManager: ctx.config(),
           port: config.egress.proxy_port,
           tokenManager: new TokenManager(),
           bindHosts,
+          ...(offlineDomains ? { interceptDomains: offlineDomains } : {}),
         });
         return {
           data: {
@@ -324,7 +327,7 @@ export const egressSpec: CommandSpec = {
             port: proxy.port,
             bindHosts,
             listening: proxy.isListening(),
-            interceptDomains: [...config.egress.intercept_domains],
+            interceptDomains: [...(offlineDomains ?? config.egress.intercept_domains)],
             caCertPath: proxy.caCertPath,
           },
           keepAlive: true,

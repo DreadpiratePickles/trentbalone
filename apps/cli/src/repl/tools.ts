@@ -21,7 +21,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
-import { EgressProxy, TokenManager, credentialHostsForProvider, egressBindHosts, isOffline, type EgressDecision } from "@trent/core/egress/index.js";
+import { EgressProxy, TokenManager, credentialHostsForProvider, egressBindHosts, isOffline, offlineInterceptDomains, type EgressDecision } from "@trent/core/egress/index.js";
 import { createRunSecurityCollector, type RunSecurityCollector } from "@trent/core/governance/security-receipt-collector.js"; // [D16]
 import type { ConfigManager } from "@trent/core/config/index.js";
 import { SANDBOX_IMAGE } from "@trent/core/terminal/index.js";
@@ -240,7 +240,8 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
       });
       handle = await (deps.startEgress ?? startEgressProxy)({
         configManager: deps.configManager,
-        interceptDomains: deps.config.egress?.intercept_domains,
+        // [O-03] offline, the loopback allowlist; the proxy also refuses any non-loopback upstream itself
+        interceptDomains: offlineInterceptDomains(deps.config.egress?.intercept_domains),
         credentials,
         // [egress host binding] the key goes only to the host the provider's model calls go to
         credentialHosts: credentialHostsForProvider(deps.config.provider, process.env),

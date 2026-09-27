@@ -15,6 +15,8 @@
  * literal someone allowlisted is taken as written, bar cloud metadata), and dials that exact address
  * as a literal. SNI, certificate verification and the Host header stay the hostname. There is no
  * second resolution for a rebinding server to answer differently.
+ * [O-03] Offline, every CONNECT and forward is pinned under the LOOPBACK policy instead and refused
+ * (`offline_non_loopback`) unless every address is on this machine, whatever the allowlist says.
  */
 import http from "node:http";
 import https from "node:https";
@@ -26,6 +28,7 @@ import { CertificateAuthority } from "./CertificateAuthority.js";
 import { applyCredentials, extractToken, isHostAllowed, normalizeHost } from "./CredentialBroker.js";
 import type { SecretWithheld } from "./host-binding.js";
 import { PinRefused, isIpLiteral, resolvePinned } from "./pinned-lookup.js";
+import { REFUSAL_OFFLINE, pinOfflineUpstream, proxyIsOffline } from "./offline-proxy.js"; // [O-03]
 import type { LookupFn } from "../tools/web/url-safety.js";
 import type { ProxyTokenRecord } from "./TokenStorePort.js";
 import type { ConfigManager } from "../config/ConfigManager.js";
@@ -64,6 +67,7 @@ export interface EgressProxyOptions {
    * given the host, the reason code and the credential outcome, never a header, token or secret.
    */
   onDecision?: (decision: EgressDecision) => void;
+  offline?: boolean; // [O-03] loopback upstreams only; absent, TRENT_OFFLINE is read at each decision
 }
 
 /** [D16] One proxy decision. `rule` is the refusal's reason code; `credential` what the broker did. */
@@ -81,6 +85,7 @@ const WITHHELD_MEMORY = 1024;
 interface Target {
   host: string;
   port: number;
+  pinned?: Target; // [O-03] the loopback address an offline CONNECT resolved for this tunnel
 }
 
 const REFUSAL_NO_TOKEN = {
@@ -148,6 +153,7 @@ export class EgressProxy {
   private readonly upstreamOverrides: Record<string, UpstreamOverride>;
   private readonly lookup?: LookupFn;
   private readonly onDecision?: (decision: EgressDecision) => void; // [D16]
+  private readonly offline?: boolean; // [O-03]
   private readonly targets = new WeakMap<net.Socket, Target>();
   private readonly sockets = new Set<net.Socket>();
   private readonly logger: StructuredLogger;
@@ -173,6 +179,7 @@ export class EgressProxy {
     this.upstreamOverrides = options?.upstreamOverrides ?? {};
     this.lookup = options?.lookup;
     this.onDecision = options?.onDecision;
+    this.offline = options?.offline;
     this.logger = new StructuredLogger({ runId: "egress", stage: "egress.proxy", ...(options?.log ? { sink: options.log } : {}) });
   }
 
@@ -226,7 +233,7 @@ export class EgressProxy {
         void this.handlePlain(req, res);
       });
       server.on("connect", (req, socket: net.Socket, head: Buffer) => {
-        this.handleConnect(req, socket, head);
+        void this.handleConnect(req, socket, head);
       });
       server.on("connection", (socket) => {
         this.sockets.add(socket);
@@ -267,7 +274,7 @@ export class EgressProxy {
   }
 
   /** CONNECT: the only place a tunnel is opened, and the first allowlist gate. */
-  private handleConnect(req: http.IncomingMessage, socket: net.Socket, head: Buffer): void {
+  private async handleConnect(req: http.IncomingMessage, socket: net.Socket, head: Buffer): Promise<void> {
     socket.on("error", () => socket.destroy());
 
     const authority = req.url ?? "";
@@ -278,6 +285,18 @@ export class EgressProxy {
       refuseConnect(socket, 403, "host_not_allowlisted");
       this.decide({ host, port, verdict: "refused", rule: "host_not_allowlisted" });
       return;
+    }
+
+    let target: Target = { host, port };
+    if (proxyIsOffline(this.offline)) { // [O-03] the tunnel opens only to an upstream wholly on loopback
+      const pinned = await this.offlinePin(target);
+      if (!pinned) {
+        refuseConnect(socket, 403, REFUSAL_OFFLINE.reason);
+        this.decide({ host, port, verdict: "refused", rule: REFUSAL_OFFLINE.reason });
+        return;
+      }
+      if (socket.destroyed) return;
+      target = { host, port, pinned };
     }
 
     let leaf: { certPem: string; keyPem: string };
@@ -298,7 +317,7 @@ export class EgressProxy {
       key: leaf.keyPem,
     });
     secure.on("error", () => secure.destroy());
-    this.targets.set(secure, { host, port });
+    this.targets.set(secure, target);
     this.interceptor?.emit("connection", secure);
   }
 
@@ -369,7 +388,10 @@ export class EgressProxy {
    * the answer is held to the host's policy; `refused: true` means an address was outside it (403),
    * `refused: false` that there was no usable answer (502).
    */
-  private async pinUpstream(target: Target): Promise<Target | { refused: boolean }> {
+  private async pinUpstream(target: Target): Promise<Target | { refused: boolean; offline?: true }> {
+    if (proxyIsOffline(this.offline)) {
+      return target.pinned ?? (await this.offlinePin(target)) ?? { refused: true, offline: true }; // [O-03]
+    }
     const override = this.upstreamOverrides[target.host];
     if (override) return override;
     try {
@@ -385,6 +407,11 @@ export class EgressProxy {
       });
       return { refused: err.address !== null };
     }
+  }
+
+  /** [O-03] The offline pin: a loopback literal to dial, or null (logged) when the upstream is off the machine. */
+  private offlinePin(target: Target): Promise<Target | null> {
+    return pinOfflineUpstream(target, this.upstreamOverrides[target.host], this.lookup, (f) => this.logger.warn("egress.offline_refused", f));
   }
 
   /**
@@ -416,9 +443,10 @@ export class EgressProxy {
 
     const dial = await this.pinUpstream(target);
     if ("refused" in dial) {
-      writeJson(res, dial.refused ? 403 : 502, dial.refused ? REFUSAL_ADDRESS : { error: "egress_upstream_error", reason: "unresolvable_host" });
+      const body = dial.offline ? REFUSAL_OFFLINE : dial.refused ? REFUSAL_ADDRESS : { error: "egress_upstream_error", reason: "unresolvable_host" };
+      writeJson(res, dial.refused ? 403 : 502, body);
       req.resume();
-      this.decide({ ...where, verdict: "refused", rule: dial.refused ? REFUSAL_ADDRESS.reason : "unresolvable_host" });
+      this.decide({ ...where, verdict: "refused", rule: body.reason });
       return;
     }
 

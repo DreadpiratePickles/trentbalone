@@ -184,6 +184,10 @@ dispatcher would not apply to Bun's native `fetch`:
    the browser toolset is disabled, faster-whisper is refused unless its model is already cached, and
    `trent update` refuses.
 
+The host egress proxy is offline-aware: it starts with the loopback allowlist, and it refuses any
+CONNECT or forward whose upstream resolves to an address that is not loopback with
+`offline_non_loopback` before an upstream socket opens (`egress/EgressProxy.offline.test.ts`).
+
 **Scope: this is airtight only on `backend: docker`.** Layers 1 and 2 guard Trent's own
 `fetch`-based dials and its config front door on any backend, and layer 3 stands down the egress
 container. But a subprocess Trent spawns through the `terminal` or `code_execution` tool — `curl`,
@@ -886,8 +890,8 @@ that prove the part that is mitigated, and a one-line residual for the part that
 
 | Status | Threats |
 |---|---|
-| `mitigated` | 21 |
-| `partial` | 23 |
+| `mitigated` | 22 |
+| `partial` | 22 |
 | `residual` | 10 |
 | `out-of-scope` | 3 |
 | `founder-gated` | 7 |

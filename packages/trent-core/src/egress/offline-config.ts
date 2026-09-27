@@ -5,8 +5,8 @@
  * is the declarative half: at run boot, when offline is on, it scans the loaded config for every
  * setting that names a hosted destination and refuses the run with one actionable list, rather than
  * starting and silently leaving the machine. The runtime tool gates (no egress container, browser
- * off, faster-whisper cached-only) and the loopback-only proxy allowlist land in S2b; this closes the
- * config front door (D6 O-01/O-04/O-05/O-08/O-10).
+ * off, faster-whisper cached-only) land in S2b and the loopback-only proxy allowlist in O-03
+ * ({@link offlineInterceptDomains}); this closes the config front door (D6 O-01/O-04/O-05/O-08/O-10).
  */
 import { resolveProviderAlias } from "../model-gateway/providers.js";
 import { isOffline } from "./offline.js";
@@ -23,6 +23,19 @@ const HOSTED_EMBEDDERS = new Set(["gemini", "google", "openai"]);
 
 /** The intercept_domains an offline run collapses its allowlist to (wired where the proxy is built). */
 export const LOOPBACK_ALLOWLIST: readonly string[] = ["127.0.0.1", "::1", "localhost"];
+
+/**
+ * [O-03] The allowlist a proxy is started with: {@link LOOPBACK_ALLOWLIST} offline, whatever was
+ * configured; the configured list (or undefined, "let the proxy read config") online. Used by the
+ * REPL's `wireTools` and `trent egress start`. The proxy also refuses any non-loopback upstream
+ * offline on its own (`egress/offline-proxy.ts`); this keeps its allowlist honest about that.
+ */
+export function offlineInterceptDomains(
+  configured: readonly string[] | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): readonly string[] | undefined {
+  return isOffline(env) ? [...LOOPBACK_ALLOWLIST] : configured;
+}
 
 function isLoopbackUrl(raw: string): boolean {
   try {

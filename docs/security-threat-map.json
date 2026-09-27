@@ -80,11 +80,21 @@
       { "file": "packages/trent-core/src/doctor/checks/offline.test.ts", "name": "[D5] force mode fires the REAL trentFetch" }
     ],
     "residual": "trentFetch is Trent's own chokepoint, not a process guard: subprocess, native-addon and raw-socket egress sit outside it (RT-06, RT-09, GAP-BUN-UNDICI)" },
-    { "id": "O-03", "title": "Default intercept_domains allow cloud hosts under a local provider", "status": "partial",
+    { "id": "O-03", "title": "Default intercept_domains allow cloud hosts under a local provider", "status": "mitigated",
     "tests": [
-      { "file": "packages/trent-core/src/tools/sandbox.offline.test.ts", "name": "refuses a network run and never builds the egress network" }
+      { "file": "packages/trent-core/src/tools/sandbox.offline.test.ts", "name": "refuses a network run and never builds the egress network" },
+      { "file": "packages/trent-core/src/egress/EgressProxy.offline.test.ts", "name": "offline: a CONNECT to an allowlisted host that resolves public is refused offline_non_loopback and opens no upstream socket" },
+      { "file": "packages/trent-core/src/egress/EgressProxy.offline.test.ts", "name": "offline: a plain-HTTP forward to an allowlisted host that resolves public is refused offline_non_loopback before any upstream request" },
+      { "file": "packages/trent-core/src/egress/EgressProxy.offline.test.ts", "name": "offline: refuses when ANY address in the one answer is off the machine" },
+      { "file": "packages/trent-core/src/egress/EgressProxy.offline.test.ts", "name": "offline: an allowlisted upstream that resolves to loopback is still reached, resolved once" },
+      { "file": "packages/trent-core/src/egress/EgressProxy.offline.test.ts", "name": "offline: an upstream override that points off the machine is refused; a loopback override still works" },
+      { "file": "packages/trent-core/src/egress/EgressProxy.offline.test.ts", "name": "offline is read from TRENT_OFFLINE when the option is not given" },
+      { "file": "packages/trent-core/src/egress/EgressProxy.offline.test.ts", "name": "online: the same public answer is still dialled at its pinned address (behaviour unchanged)" },
+      { "file": "packages/trent-core/src/egress/EgressProxy.offline.test.ts", "name": "collapses to LOOPBACK_ALLOWLIST offline and keeps the configured list online" },
+      { "file": "apps/cli/src/repl/__tests__/tools.offline.test.ts", "name": "offline: wireTools hands the proxy the loopback allowlist, not the configured intercept_domains" },
+      { "file": "apps/cli/src/commands/__tests__/egress-start-offline.test.ts", "name": "offline: trent egress start hands the proxy the loopback allowlist and reports it" }
     ],
-    "residual": "LOOPBACK_ALLOWLIST in egress/offline-config.ts has no consumer at 4b8122d: the host proxy keeps its configured intercept_domains offline (unverified end to end)" },
+    "residual": "offline, the proxy still asks the system resolver about a non-loopback name before refusing it (the same resolve-then-decide rule trentFetch uses), so the name itself can reach DNS" },
     { "id": "O-04", "title": "Model calls never asserted local; hosted escalation reachable", "status": "mitigated",
     "tests": [
       { "file": "packages/trent-core/src/egress/offline-config.test.ts", "name": "names a hosted chat provider" },
@@ -96,7 +106,7 @@
       { "file": "packages/trent-core/src/egress/offline-config.test.ts", "name": "names hosted escalation, a hosted embedder, a remote OTLP endpoint, and an enabled gateway" },
       { "file": "packages/trent-core/src/tools/social/build.test.ts", "name": "returns a reason and no adapter when there is no fetchImpl seam and no egress" }
     ],
-    "residual": "gateway and cron alerts are config-rejected offline; social publish offline relies on the proxy allowlist, which is not collapsed (O-03)" },
+    "residual": "gateway and cron alerts are config-rejected offline; social publish offline goes through the egress proxy, which since O-03 refuses any non-loopback upstream while offline; social itself has no separate offline gate" },
     { "id": "O-06", "title": "The browser tool is unrestricted network egress", "status": "mitigated",
     "tests": [
       { "file": "packages/trent-core/src/tools/browser/browser.offline.test.ts", "name": "reports unavailable when offline is on" },
