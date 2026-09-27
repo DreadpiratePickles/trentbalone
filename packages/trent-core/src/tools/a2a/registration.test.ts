@@ -73,16 +73,19 @@ describe("the a2a toolset is registered everywhere a toolset must be", () => {
     expect(A2A_TOOL_SCHEMAS.map((schema) => schema.name)).toEqual([...A2A_TOOL_NAMES]);
   });
 
-  it("floors and keys the send and nothing else; the discover is a network read and the history a local read", () => {
+  it("floors and keys the send; every a2a call is also inbound, because a peer is another agent (SEC-1 T-03)", () => {
     for (const name of A2A_TOOL_NAMES) {
       const floored = classFloorOf({ adapter: A2A_ADAPTER_NAME, scopes: SCOPES, tool: name, args: {} }, CLASS_FLOOR);
       if (A2A_WRITE_TOOLS.has(name)) expect(floored, name).toEqual(["external_send"]);
       else expect(floored, name).toEqual([]);
       expect(isSideEffecting(A2A_ADAPTER_NAME, name), name).toBe(A2A_WRITE_TOOLS.has(name));
     }
-    expect(classifyCall({ adapter: A2A_ADAPTER_NAME, scopes: SCOPES, tool: "a2a_discover", args: { url: "https://agent.example.test/" } })).toEqual(["network"]);
-    expect(classifyCall({ adapter: A2A_ADAPTER_NAME, scopes: SCOPES, tool: "a2a_history", args: { peer: "hermes" } })).toEqual(["read_only"]);
-    expect(classifyCall({ adapter: A2A_ADAPTER_NAME, scopes: SCOPES, tool: "a2a_list", args: {} })).toEqual(["read_only"]);
+    // a2a joined the untrusted adapters (T-03): a peer's answer is text authored off this machine, so
+    // every a2a call carries `inbound`. That is what makes a send or memory write after reading a peer
+    // ask for a human. The base class (network read / local read) is unchanged.
+    expect(classifyCall({ adapter: A2A_ADAPTER_NAME, scopes: SCOPES, tool: "a2a_discover", args: { url: "https://agent.example.test/" } })).toEqual(["network", "inbound"]);
+    expect(classifyCall({ adapter: A2A_ADAPTER_NAME, scopes: SCOPES, tool: "a2a_history", args: { peer: "hermes" } })).toEqual(["read_only", "inbound"]);
+    expect(classifyCall({ adapter: A2A_ADAPTER_NAME, scopes: SCOPES, tool: "a2a_list", args: {} })).toEqual(["read_only", "inbound"]);
   });
 
   it("is skipped with a reason when the egress proxy is not running and no test transport is given", () => {
