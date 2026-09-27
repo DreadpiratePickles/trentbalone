@@ -1,0 +1,12 @@
+# Trent Fleet security contact (RFC 9116)
+# Trent is a local-first agent harness; there is no hosted service to attack. These point at the
+# source repository's private reporting channel. See SECURITY.md and docs/security.md for scope.
+
+Contact: https://github.com/DreadpiratePickles/trentbalone/security/advisories/new
+Policy: https://github.com/DreadpiratePickles/trentbalone/blob/main/SECURITY.md
+Preferred-Languages: en
+Expires: 2027-09-26T00:00:00.000Z
+
+# Do not put vulnerability details, a proof of concept, or any credential in a public issue.
+# Use the GitHub "Report a vulnerability" flow above (private vulnerability reporting must be
+# enabled on the repository by the maintainer).

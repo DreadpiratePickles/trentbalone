@@ -188,3 +188,33 @@ S2b agent (registry + doctor offline proof + browser/whisper/updater gates) stil
 - Deferred (not built): S5.5 paranoid preset (`trent security preset`), S5.2 receipt, S5.4 egress
   ledger, S5.6 explain/diff — follow-ups; the hardline rule already pre-blocks `security preset`.
 - Next: full clean-HEAD core+cli suite; then AGENTS.md defect status, memory, report.
+
+## 500-line ceiling fix + LLM Council convened
+- 3be38cd: extracted browser wiring into tools/browser/build.ts (tools/index.ts had hit 512 lines from
+  the social+browser wiring; now 497). The sole full-suite failure. tsc/build fix: build.ts config param
+  typed BrowserAttachConfigSource (ToolBuildConfig satisfies it), not TrentConfig.
+- Bobby: push, log, continuation prompt, finish deferred security, AND run Karpathy's LLM Council to
+  critique + make binding decisions to make it provably secure.
+- Council (4 Opus reviewers, read-only -> 02_plan/output/security-council-*-2026-09-26.md): redteam
+  (senior cybersecurity consultant), architect (defense-in-depth), verification (proven vs asserted +
+  the proof harness), product (completeness/shippability/defaults). Then Fable chair synthesis -> ranked
+  decisions -> autonomous implementation. Full core+cli suite re-running (b8waeaosv) before push.
+
+## PUSH BLOCKED on Bobby's credentials
+`git push origin feature/trent-fleet-v2` fails: gh here is account `getshitonltd` which lacks write to
+DreadpiratePickles/trentbalone (403); the DreadpiratePickles token is in the macOS keychain this
+non-interactive session can't unlock. 20 commits (c7d50ae..3be38cd) ready. Bobby pushes from his own
+terminal: `git push origin feature/trent-fleet-v2`. Remote URL restored to the original DreadpiratePickles@ form.
+Full clean-HEAD suite on 3be38cd: 563 files / 5226 passed / 10 skipped, tsc/build/scan 0; the exit=1 was
+a vitest-worker onTaskUpdate RPC timeout under concurrent-agent load, not a test failure.
+
+## LLM Council round 2 (4 Opus reviewers -> chair verdict)
+Reviews: 02_plan/output/security-council-{redteam,architect,verification,product}-2026-09-26.md.
+Verdict + ranked decisions: 02_plan/output/security-council-verdict-2026-09-26.md. Consensus: strong
+architecture, NOT yet "provably secure" — fix claims-stronger-than-code + replace enumerated-sample
+proofs with real/adversarial ones. Framing dialed to "defense-in-depth with stated residuals" until
+D1-D10 land. Wave 1 dispatched (Opus, disjoint files): D1 DNS-egress truthfulness (egress-network/docs),
+D5+D6+D17 real offline proof + bare-fetch coverage + grade honesty (registry/dial/doctor/security),
+D2 panic revokes brokered egress tokens (TokenManager/panic). Added .well-known/security.txt (RFC 9116);
+SECURITY.md was already a real policy. Wave 2 queued: D8 floor fuzz+fast-check, D9/D11 provenance
+property + taint terminal/file reads, D12 cred denylist, then surfacing (D15 preset, D16 receipt).
