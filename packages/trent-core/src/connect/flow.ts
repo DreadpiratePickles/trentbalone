@@ -8,6 +8,7 @@
  */
 import { EXIT, TrentError } from "../errors/index.js";
 import { startLoopback } from "./loopback.js";
+import { trentFetch } from "../egress/dial.js";
 import {
   buildAuthorizationUrl,
   exchangeCode,
@@ -89,7 +90,7 @@ function requestInput(store: ConnectStore, provider: ConnectProvider, spec: OAut
     spec,
     endpoints: deps.endpoints ?? spec.endpoints,
     ...appCredentials(store, provider, operation),
-    fetchImpl: deps.fetchImpl ?? ((url, init) => fetch(url, init)),
+    fetchImpl: deps.fetchImpl ?? trentFetch,
     now: deps.now ?? (() => new Date()),
   };
 }

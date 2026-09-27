@@ -11,6 +11,7 @@
  * founder sees the prompt and the price, and it stamps the bound row so the step's yes covers
  * the replay of this call and no other (`autonomy-dispatch.ts` does the same for the class floor).
  */
+import { trentFetch } from "../../egress/dial.js";
 import fs from "node:fs";
 import { currentBoundApprovals, requireBoundApproval, type BoundCall } from "../../governance/bound-approvals.js";
 import { recordToolSpend } from "../../governance/spend-ledger.js";
@@ -156,7 +157,7 @@ export function createImageTool(ctx: ToolContext, options: ImageToolOptions): Im
       }
       let image;
       try {
-        image = await generateImage(p.route, { prompt: p.prompt, aspect: p.aspect }, options.env, options.fetchImpl ?? fetch);
+        image = await generateImage(p.route, { prompt: p.prompt, aspect: p.aspect }, options.env, options.fetchImpl ?? trentFetch);
       } catch (error) {
         return fail(action, `${IMAGE_TOOL} failed: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}; nothing was written or charged`);
       }

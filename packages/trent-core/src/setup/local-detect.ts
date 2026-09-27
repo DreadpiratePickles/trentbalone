@@ -21,6 +21,7 @@
  * Only GET requests, and `/api/show`, which reads. Nothing carries a key.
  */
 
+import { trentFetch } from "../egress/dial.js";
 import { aliasBaseUrl } from "../model-gateway/providers.js";
 import { describeProbeFailure } from "./local-runtime.js";
 
@@ -150,7 +151,7 @@ function listOf<T>(value: unknown, map: (entry: Json) => T | undefined): T[] {
 }
 
 export function createLocalDiscovery(deps: LocalDiscoveryDeps = {}): LocalDiscoveryPort {
-  const doFetch = deps.fetch ?? ((input, init) => fetch(input, init));
+  const doFetch = deps.fetch ?? trentFetch;
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   /** The parsed JSON of a 2xx answer, undefined for any other answer; throws only when nothing answers. */

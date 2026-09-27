@@ -16,6 +16,7 @@
  */
 import { EXIT, TrentError } from "../../errors/index.js";
 import { withRefreshLock } from "../../connect/lock.js";
+import { trentFetch } from "../../egress/dial.js";
 import { startLoopback, type LoopbackListener } from "../../connect/loopback.js";
 import { pkcePair, randomUrlToken, requestTokenAt, type TokenResponse } from "../../connect/oauth.js";
 import { REFRESH_WINDOW_MS } from "../../connect/resolver.js";
@@ -100,7 +101,7 @@ function selectScope(challengeScope: string | undefined, resourceScopes: readonl
 /** The browser login. Writes the client and the tokens to the profile secrets file in one step. */
 export async function loginMcpServer(server: string, url: string, deps: McpLoginDeps): Promise<McpLoginResult> {
   const now = deps.now ?? (() => new Date());
-  const wire: WireDeps = { fetchImpl: deps.fetchImpl ?? ((u, init) => fetch(u, init)), ...(deps.lookup === undefined ? {} : { lookup: deps.lookup }), allowHttp: new URL(url).protocol === "http:" };
+  const wire: WireDeps = { fetchImpl: deps.fetchImpl ?? trentFetch, ...(deps.lookup === undefined ? {} : { lookup: deps.lookup }), allowHttp: new URL(url).protocol === "http:" };
 
   const challenge = await probeChallenge(url, wire);
   const resource = await discoverProtectedResource(url, challenge, wire);

@@ -16,6 +16,7 @@
 
 import type { ReasoningEffort } from "./call-policy.js";
 import { ProviderHttpError } from "./retry.js";
+import { trentFetch } from "../egress/dial.js";
 import type { FetchLike } from "./openai-compat.js";
 import type { GatewayCompletion, GatewayMessage, GatewayStreamEvent, GatewayToolCall, GatewayToolDefinition, ProviderContentBlock, ProviderStreamFrame } from "./types.js";
 
@@ -401,7 +402,7 @@ export async function* streamAnthropicMessages(input: AnthropicInput, route: Ant
     controller.abort();
   }, headersMs);
   try {
-    const fetchImpl = route.fetchImpl ?? ((u: string, i?: RequestInit) => fetch(u, i));
+    const fetchImpl = route.fetchImpl ?? trentFetch;
     const headers = { "x-api-key": route.apiKey, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json" };
     let response: Response;
     try {

@@ -15,6 +15,7 @@
  * send its calls. No request carries a key, and nothing is sent anywhere but that URL.
  */
 
+import { trentFetch } from "../egress/dial.js";
 import { KEYLESS_ALIASES, PROVIDER_ALIAS_ROUTES, aliasBaseUrl } from "../model-gateway/providers.js";
 
 export type LocalProvider = "ollama" | "lmstudio";
@@ -93,7 +94,7 @@ export interface LocalRuntimeDeps {
 }
 
 export function createLocalRuntime(deps: LocalRuntimeDeps = {}): LocalRuntimePort {
-  const doFetch = deps.fetch ?? ((input, init) => fetch(input, init));
+  const doFetch = deps.fetch ?? trentFetch;
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   async function getJson(url: string): Promise<unknown> {

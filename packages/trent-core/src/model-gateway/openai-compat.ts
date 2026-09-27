@@ -25,6 +25,7 @@
  */
 
 import { ProviderHttpError } from "./retry.js";
+import { trentFetch } from "../egress/dial.js";
 import type { ReasoningEffort } from "./call-policy.js";
 import { LOCAL_MODEL_SETTINGS } from "./local-runtime.js";
 import type { GatewayMessage, GatewayResponseFormat, ProviderStreamFrame } from "./types.js"; // [L1] GatewayResponseFormat
@@ -209,7 +210,7 @@ export async function* streamCompatChat(input: CompatChatInput, route: CompatRou
   }
   let finished = false;
   try {
-    const fetchImpl = route.fetchImpl ?? ((u: string, i?: RequestInit) => fetch(u, i));
+    const fetchImpl = route.fetchImpl ?? trentFetch;
     const headers = { ...route.headers, authorization: `Bearer ${route.apiKey}`, "content-type": "application/json" };
     let response: Response;
     try {

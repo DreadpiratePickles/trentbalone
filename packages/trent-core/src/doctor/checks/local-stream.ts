@@ -7,6 +7,7 @@
  * (`parseCompatUsage`). The bearer is the non-secret placeholder the alias bridge sends to a local
  * runtime (`LOCAL_PLACEHOLDER_KEY`), never an operator key.
  */
+import { trentFetch } from "../../egress/dial.js";
 import { buildCompatChatBody, parseCompatUsage, type CompatUsage } from "../../model-gateway/openai-compat.js";
 import { LOCAL_PLACEHOLDER_KEY } from "../../model-gateway/providers.js";
 import type { ReasoningEffort } from "../../model-gateway/call-policy.js";
@@ -53,7 +54,7 @@ async function openChat(route: LocalChatRoute, request: LocalChatRequest, signal
     ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
     ...(request.responseFormat === undefined ? {} : { responseFormat: request.responseFormat }), // [C11]
   });
-  const doFetch = route.fetchImpl ?? ((url: string, init?: RequestInit) => fetch(url, init));
+  const doFetch = route.fetchImpl ?? trentFetch;
   const url = chatUrl(route.baseUrl);
   const response = await doFetch(url, {
     method: "POST",

@@ -24,6 +24,7 @@
  * Nothing here logs a key. A route carries the NAME of the variable the key is read from; the
  * key is read at send time and travels in a header, never in a URL or an error.
  */
+import { trentFetch } from "../../egress/dial.js";
 import crypto from "node:crypto";
 import { EXIT, TrentError } from "../../errors/TrentError.js";
 import { LOCAL_PLACEHOLDER_KEY, PROVIDER_ALIAS_ROUTES, aliasBaseUrl, resolveProviderAlias } from "../../model-gateway/providers.js";
@@ -216,7 +217,7 @@ export class ImageProviderError extends Error {
 }
 
 /** Sends one prompt to the route and returns the bytes. The key is read here and goes in a header. */
-export async function generateImage(route: ImageRoute, input: { prompt: string; aspect: ImageAspect }, env: NodeJS.ProcessEnv, fetchImpl: FetchLike = fetch): Promise<GeneratedImage> {
+export async function generateImage(route: ImageRoute, input: { prompt: string; aspect: ImageAspect }, env: NodeJS.ProcessEnv, fetchImpl: FetchLike = trentFetch): Promise<GeneratedImage> {
   const key = envValue(env, route.keyEnv) ?? (route.local ? LOCAL_PLACEHOLDER_KEY : undefined);
   if (key === undefined) throw configError(`${route.keyEnv} is not set`, route.keyEnv);
   const gemini = route.kind === "gemini";

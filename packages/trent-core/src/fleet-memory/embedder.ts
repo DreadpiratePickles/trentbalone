@@ -29,6 +29,7 @@
 import { DEFAULT_RETRY_POLICY, resolveRetryPolicy, type RetryPolicy } from "../model-gateway/retry.js";
 import { LOCAL_PLACEHOLDER_KEY, aliasBaseUrl, resolveProviderAlias } from "../model-gateway/providers.js";
 import { HYBRID_VECTOR_FLOOR } from "./hybrid.js";
+import { trentFetch } from "../egress/dial.js";
 import { lexicalEmbedFn, type CalibratedEmbedFn, type EmbedCallOptions, type EmbedFn } from "./lexical.js";
 import { CACHE_SEPARATOR, EmbeddingCache } from "./embedder-cache.js";
 import { GEMINI_TASK_TYPES, batchEmbedBody, batchEmbedUrl, nativeGeminiBase, parseBatchEmbedResponse } from "./embedder-google.js";
@@ -336,7 +337,7 @@ function providerEmbed(
   options: CreateEmbedderOptions,
   nativeBase: string | undefined,
 ): EmbedFn {
-  const fetchImpl = options.fetchImpl ?? ((url: string, init?: RequestInit) => fetch(url, init));
+  const fetchImpl = options.fetchImpl ?? trentFetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_EMBED_TIMEOUT_MS;
   const policy = resolveRetryPolicy(options.retry ?? DEFAULT_RETRY_POLICY);
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));

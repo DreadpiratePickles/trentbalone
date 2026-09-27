@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { EgressBlocked } from "../egress/offline.js";
 import { ConfigManager } from "../config/ConfigManager.js";
 import type { FleetMemoryHookOptions } from "./orchestrator-hook.js";
 import { scoreAgainstWithEvidence, type CalibratedEmbedFn, type EmbedCallOptions } from "./lexical.js";
@@ -424,5 +425,27 @@ describe("[P2-13] task types on the Gemini route", () => {
     // cosine 0.7 clears the symmetric floor (0.6) and not the task-typed one (0.75).
     expect(symmetric.vectorRelated).toEqual([true, true]);
     expect(asymmetric.vectorRelated).toEqual([false, false]);
+  });
+});
+
+describe("offline dial guard — no injected fetch", () => {
+  // [SEC-2 S2a-2] The hosted embedder's fetch fallback is now `trentFetch`; offline it cannot reach a
+  // public base URL. `192.0.2.1` (RFC 5737 TEST-NET-1) is a public literal — no DNS needed. Retries
+  // are off so the refusal surfaces at once.
+  const OFFLINE = process.env.TRENT_OFFLINE;
+  afterEach(() => {
+    if (OFFLINE === undefined) delete process.env.TRENT_OFFLINE;
+    else process.env.TRENT_OFFLINE = OFFLINE;
+  });
+
+  it("refuses a hosted embedder base URL with EgressBlocked while offline", async () => {
+    process.env.TRENT_OFFLINE = "1";
+    const embedder = createEmbedder(
+      { memory: { embedder: { base_url: "http://192.0.2.1" } } },
+      { GEMINI_API_KEY: GEMINI_KEY },
+      { env: {}, useCache: false, retry: { attempts: 1 }, sleep: async () => {} },
+    );
+    expect(embedder.provider).toBe("gemini");
+    await expect(embedder.embed(["alpha"])).rejects.toBeInstanceOf(EgressBlocked);
   });
 });

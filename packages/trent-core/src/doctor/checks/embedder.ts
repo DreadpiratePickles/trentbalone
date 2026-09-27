@@ -16,6 +16,7 @@
  * dimensions it returns, the floor it is ranked against, and how many of the three fixed triples
  * that floor gets right (`fleet-memory/embedder-calibration.ts`). A cloud 404 names the model.
  */
+import { trentFetch } from "../../egress/dial.js";
 import {
   DEFAULT_EMBED_TIMEOUT_MS,
   createEmbedder,
@@ -55,7 +56,7 @@ function secretsOf(ctx: DoctorContext): Record<string, string | undefined> {
 
 /** The model names a local runtime serves: Ollama's `/api/tags`, or the OpenAI dialect's `/models`. */
 async function listLocalModels(provider: LocalEmbedderProvider, baseUrl: string, ctx: DoctorContext): Promise<string[]> {
-  const fetchImpl = ctx.fetchImpl ?? ((url: string, init?: RequestInit) => fetch(url, init));
+  const fetchImpl = ctx.fetchImpl ?? trentFetch;
   const ollama = LOCAL_EMBEDDER_ROUTES[provider].dialect === "ollama";
   const response = await fetchWithDeadline(ollama ? `${baseUrl}/api/tags` : `${baseUrl}/models`, { method: "GET" }, ctx.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS, fetchImpl);
   if (!response.ok) throw new ProviderHttpError({ provider: LOCAL_EMBEDDER_ROUTES[provider].label, status: response.status, statusText: response.statusText });

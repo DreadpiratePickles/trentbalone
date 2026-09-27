@@ -7,3 +7,4 @@ export * from "./EgressProxy.js";
 export * from "./bind-hosts.js";
 export * from "./host-binding.js";
 export * from "./provider-hosts.js";
+export * from "./dial.js";

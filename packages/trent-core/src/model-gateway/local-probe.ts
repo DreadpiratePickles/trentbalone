@@ -22,6 +22,7 @@
  * has it, which is when the gateway sends the field.
  */
 
+import { trentFetch } from "../egress/dial.js";
 import type { ProviderAlias } from "./providers.js";
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -147,7 +148,7 @@ export async function readContextWindow(input: WindowProbeInput): Promise<Contex
   const key = `${input.alias} ${rootOf(input.baseUrl)} ${input.model}`;
   const cached = windows.get(key);
   if (cached) return cached;
-  const fetchImpl = input.fetchImpl ?? ((url: string, init?: RequestInit) => fetch(url, init));
+  const fetchImpl = input.fetchImpl ?? trentFetch;
   const timeoutMs = input.timeoutMs ?? PROBE_TIMEOUT_MS;
   const native = input.alias === "lmstudio" ? await probeLmStudio(fetchImpl, input, timeoutMs) : await probeOllama(fetchImpl, input, timeoutMs);
   const reported = native.window ?? (await probeLlamaCpp(fetchImpl, input, timeoutMs));
@@ -161,7 +162,7 @@ export async function readContextWindow(input: WindowProbeInput): Promise<Contex
 
 /** Ollama's `/api/show` capabilities for `model`, or undefined when the server cannot be asked. */
 export async function ollamaCapabilities(input: { baseUrl: string; model: string; fetchImpl?: FetchLike; timeoutMs?: number }): Promise<readonly string[] | undefined> {
-  const fetchImpl = input.fetchImpl ?? ((url: string, init?: RequestInit) => fetch(url, init));
+  const fetchImpl = input.fetchImpl ?? trentFetch;
   const show = await ollamaShow(fetchImpl, input.baseUrl, input.model, input.timeoutMs ?? PROBE_TIMEOUT_MS);
   return Array.isArray(show?.capabilities) ? (show.capabilities as unknown[]).filter((c): c is string => typeof c === "string") : undefined;
 }

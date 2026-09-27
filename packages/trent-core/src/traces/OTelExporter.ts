@@ -2,6 +2,7 @@
 // Adheres to OpenTelemetry Semantic Conventions for Generative AI systems (gen_ai.*)
 
 import { createHash } from "node:crypto";
+import { trentFetch } from "../egress/dial.js";
 import { redactTranscript } from "../telemetry/redact.js";
 
 export interface TraceStepInput {
@@ -95,7 +96,7 @@ export class OTelExporter {
     this.endpoint = options?.endpoint || process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318/v1/traces";
     this.headers = options?.headers || {};
     this.serviceName = options?.serviceName || "trent-fleet";
-    this.fetchImpl = options?.fetchImpl || (typeof fetch !== "undefined" ? fetch : (() => Promise.resolve({ ok: true, status: 200 } as any)));
+    this.fetchImpl = options?.fetchImpl || (typeof fetch !== "undefined" ? trentFetch : (() => Promise.resolve({ ok: true, status: 200 } as any)));
   }
 
   /**

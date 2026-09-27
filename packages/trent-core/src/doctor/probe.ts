@@ -1,3 +1,4 @@
+import { trentFetch } from "../egress/dial.js";
 import { spawn } from "node:child_process";
 import type { ExecResult, FetchLike } from "./types.js";
 
@@ -64,7 +65,7 @@ export async function probeHttp(
   init: RequestInit,
   options?: ProbeOptions & { signal?: AbortSignal },
 ): Promise<HttpProbe> {
-  const doFetch = options?.fetchImpl ?? ((u: string, i?: RequestInit) => fetch(u, i));
+  const doFetch = options?.fetchImpl ?? trentFetch;
   const timeoutMs = options?.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
 
   const outcome = await withDeadline(

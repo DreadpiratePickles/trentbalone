@@ -4,9 +4,10 @@
  * `reasoning_effort`, so all three facts below were false before this file's module existed.
  * Offline: every response is a fixture handed to an injected `fetch`.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { buildCompatChatBody, parseCompatUsage, streamGoogleCompatChat } from "./openai-compat.js";
+import { buildCompatChatBody, parseCompatUsage, streamCompatChat, streamGoogleCompatChat } from "./openai-compat.js";
+import { EgressBlocked } from "../egress/offline.js";
 import { ProviderHttpError } from "./retry.js";
 import type { ProviderStreamFrame } from "./types.js";
 
@@ -131,5 +132,24 @@ describe("streamGoogleCompatChat", () => {
   it("an error object inside the stream fails the attempt instead of ending it as a quiet success", async () => {
     const { fetchImpl } = fakeFetch(sse([{ error: { code: 503, message: "overloaded" } }]));
     await expect(collect(streamGoogleCompatChat({ model: "m", messages: MESSAGES, temperature: 0, maxTokens: 8 }, { ...route, fetchImpl }))).rejects.toThrow(/503|overloaded/);
+  });
+});
+
+describe("offline dial guard — no injected fetch", () => {
+  // [SEC-2 S2a-2] With no `fetchImpl` seam the fallback is now `trentFetch`, so an offline run cannot
+  // reach a hosted base URL. `192.0.2.1` (RFC 5737 TEST-NET-1) is a public literal — no DNS needed.
+  const OFFLINE = process.env.TRENT_OFFLINE;
+  afterEach(() => {
+    if (OFFLINE === undefined) delete process.env.TRENT_OFFLINE;
+    else process.env.TRENT_OFFLINE = OFFLINE;
+  });
+
+  it("refuses a hosted base URL with EgressBlocked while offline", async () => {
+    process.env.TRENT_OFFLINE = "1";
+    const gen = streamCompatChat(
+      { model: "gemini-3.5-flash-lite", messages: MESSAGES, temperature: 0, maxTokens: 16 },
+      { apiKey: "test-key", baseUrl: "http://192.0.2.1", label: "google" },
+    );
+    await expect(collect(gen)).rejects.toBeInstanceOf(EgressBlocked);
   });
 });

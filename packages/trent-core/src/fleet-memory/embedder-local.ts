@@ -21,6 +21,7 @@
  * `applyAppEmbeddingEnv` is G10: the wrapped app's own embedding calls follow `memory.embedder`.
  */
 
+import { trentFetch } from "../egress/dial.js";
 import {
   DEFAULT_RETRY_POLICY,
   ProviderHttpError,
@@ -305,7 +306,7 @@ export function createLocalEmbedder(selection: LocalEmbedderSelection, options: 
   const route = LOCAL_EMBEDDER_ROUTES[selection.provider];
   const profile = localModelProfile(selection.model);
   const honoured = options.taskTypes !== false && (profile.queryPrefix !== undefined || profile.documentPrefix !== undefined);
-  const fetchImpl = options.fetchImpl ?? ((url: string, init?: RequestInit) => fetch(url, init));
+  const fetchImpl = options.fetchImpl ?? trentFetch;
   const policy = resolveRetryPolicy(options.retry ?? DEFAULT_RETRY_POLICY);
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const warn = options.warn ?? defaultWarn;
