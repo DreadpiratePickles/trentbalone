@@ -26,11 +26,38 @@ import {
 import { buttonsAsText, nowIso, TransportError } from "../transport/http.js";
 import { SmtpClient } from "./email/smtp.js";
 import { ImapClient, bareAddress, stripQuotedReply } from "./email/imap.js";
-import { checkSenderAuth } from "./email/auth-results.js";
+import { checkSenderAuth, type SenderAuthVerdict } from "./email/auth-results.js";
 import type { Security } from "./email/lineSocket.js";
 
 export const EMAIL_DEFAULT_POLL_MS = 30_000;
 const CURSOR_KEY = "email.uid";
+
+/**
+ * [T-09] Why the sender-auth check refuses to trust the topmost Authentication-Results without a
+ * pinned authserv-id: on an MTA that writes no header of its own, the sender's own header becomes
+ * the topmost one, and there is no per-mail way to tell them apart. So rather than guess per mail,
+ * the adapter fails closed at config time and names the one setting that resolves it.
+ */
+export const EMAIL_AUTHSERV_ID_UNSET_REASON =
+  "gateway.email.authserv_id is not set; refusing inbound mail — set gateway.email.authserv_id to your mailbox provider's authserv-id (docs/gateway.md), or set gateway.email.require_authenticated_from: false to disable the check";
+
+/** How inbound sender authentication is resolved from `gateway.email`, decided once per poll. */
+export type SenderAuthPolicy =
+  | { readonly mode: "off" }
+  | { readonly mode: "pinned"; readonly authservId: string }
+  | { readonly mode: "fail-closed"; readonly reason: string };
+
+/**
+ * `require_authenticated_from: false` turns the check off. Otherwise an authserv-id is required:
+ * with one the pinned server's verdict decides, and without one the adapter fails closed rather
+ * than trust a forgeable topmost header.
+ */
+export function resolveSenderAuthPolicy(email: { require_authenticated_from?: boolean; authserv_id?: string } | undefined): SenderAuthPolicy {
+  if (email?.require_authenticated_from === false) return { mode: "off" };
+  const authservId = email?.authserv_id?.trim() ?? "";
+  if (authservId === "") return { mode: "fail-closed", reason: EMAIL_AUTHSERV_ID_UNSET_REASON };
+  return { mode: "pinned", authservId };
+}
 
 export class EmailAdapter implements TransportAdapter {
   readonly platformId = "email";
@@ -83,6 +110,9 @@ export class EmailAdapter implements TransportAdapter {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    // [T-09] Say once, at startup, that inbound is failing closed for want of an authserv-id.
+    const policy = resolveSenderAuthPolicy(this.ctx.config.loadConfig().gateway?.email);
+    if (policy.mode === "fail-closed") (this.ctx.logger ?? SILENT_LOGGER).warn("email: inbound mail is refused until it is configured", { reason: policy.reason });
     if (!this.setting("EMAIL_IMAP_HOST")) return; // outbound-only configuration
     const interval = Number(this.setting("EMAIL_POLL_INTERVAL_MS") ?? EMAIL_DEFAULT_POLL_MS);
     const tick = async (): Promise<void> => {
@@ -100,10 +130,9 @@ export class EmailAdapter implements TransportAdapter {
     await this.polling;
   }
 
-  /** `gateway.email`: only an explicit `require_authenticated_from: false` turns the check off. */
-  private senderAuthPolicy(): { required: boolean; authservId?: string } {
-    const email = this.ctx.config.loadConfig().gateway?.email;
-    return { required: email?.require_authenticated_from !== false, authservId: email?.authserv_id };
+  /** `gateway.email` resolved to the sender-auth policy this poll enforces. */
+  private senderAuthPolicy(): SenderAuthPolicy {
+    return resolveSenderAuthPolicy(this.ctx.config.loadConfig().gateway?.email);
   }
 
   async pollOnce(): Promise<number> {
@@ -120,14 +149,17 @@ export class EmailAdapter implements TransportAdapter {
         this.ctx.store.mutate((s) => { s.cursors[CURSOR_KEY] = String(uid); });
         const h = fetched.headers;
         const sender = bareAddress(h.from);
-        if (policy.required) {
-          const auth = checkSenderAuth({
-            authservId: policy.authservId,
-            fromAddress: sender,
-            fromHeaderCount: fetched.headerValues.from?.length ?? 0,
-            authenticationResults: fetched.headerValues["authentication-results"] ?? [],
-            receivedSpf: fetched.headerValues["received-spf"] ?? [],
-          });
+        if (policy.mode !== "off") {
+          // [T-09] A pinned server decides; an unset authserv-id fails closed rather than guess per mail.
+          const auth: SenderAuthVerdict = policy.mode === "fail-closed"
+            ? { ok: false, verdict: policy.reason }
+            : checkSenderAuth({
+                authservId: policy.authservId,
+                fromAddress: sender,
+                fromHeaderCount: fetched.headerValues.from?.length ?? 0,
+                authenticationResults: fetched.headerValues["authentication-results"] ?? [],
+                receivedSpf: fetched.headerValues["received-spf"] ?? [],
+              });
           if (!auth.ok) {
             // Refused before pairing and routing: no code, no agent, no approval. Never the subject or body.
             (this.ctx.logger ?? SILENT_LOGGER).warn("email: refused mail whose From is not authenticated", { from: sender, verdict: auth.verdict });

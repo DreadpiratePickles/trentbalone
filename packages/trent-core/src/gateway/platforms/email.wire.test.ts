@@ -27,12 +27,22 @@ function mail(uid: number, opts: { from?: string; auth?: string[]; text?: string
   return { uid, headers: `${lines.join("\r\n")}\r\n\r\n`, text: opts.text ?? `do the thing ${uid}\r\n` };
 }
 
+/** A config.yaml on disk carrying a `gateway.email` override, read back by a fresh manager. */
+function configManagerWith(email: { require_authenticated_from?: boolean; authserv_id?: string }): { manager: ConfigManager; dir: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trent-email-auth-"));
+  const config = new ConfigManager({ baseDir: dir });
+  const current = config.loadConfig();
+  config.saveConfig({ ...current, gateway: { ...current.gateway, email: { ...current.gateway.email, ...email } } });
+  return { manager: new ConfigManager({ baseDir: dir }), dir };
+}
+
 describe("EmailAdapter against local SMTP and IMAP servers", () => {
   let smtp: FakeSmtpServer;
   let imap: FakeImapServer;
   let adapter: EmailAdapter;
   let store: MemoryGatewayStore;
   let settings: Record<string, string>;
+  let outerConfigDir: string;
 
   beforeEach(async () => {
     smtp = new FakeSmtpServer();
@@ -45,13 +55,17 @@ describe("EmailAdapter against local SMTP and IMAP servers", () => {
       EMAIL_IMAP_HOST: "127.0.0.1", EMAIL_IMAP_PORT: String(imap.port), EMAIL_IMAP_SECURITY: "none",
       EMAIL_FROM: "Trent <bot@example.com>", EMAIL_POLL_INTERVAL_MS: "50",
     };
-    adapter = new EmailAdapter({ config: new ConfigManager({ baseDir: "/nonexistent/trent-gateway-test" }), store, settings });
+    // The safe default fails closed without an authserv_id, so the base adapter names the receiving MTA.
+    const built = configManagerWith({ authserv_id: MTA });
+    outerConfigDir = built.dir;
+    adapter = new EmailAdapter({ config: built.manager, store, settings });
   });
 
   afterEach(async () => {
     await adapter.stop();
     await smtp.stop();
     await imap.stop();
+    if (outerConfigDir) fs.rmSync(outerConfigDir, { recursive: true, force: true });
   });
 
   it("submits over SMTP with EHLO/AUTH PLAIN/MAIL/RCPT/DATA and a threaded RFC 5322 message", async () => {
@@ -119,7 +133,7 @@ describe("EmailAdapter against local SMTP and IMAP servers", () => {
     });
 
     /** The real gateway core over the real adapter; `pollOnce` drives one IMAP round deterministically. */
-    function gateway(config = new ConfigManager({ baseDir: "/nonexistent/trent-gateway-test" })) {
+    function gateway(config = configWith({ authserv_id: MTA })) {
       manager = new GatewayManager(config, {
         store: new MemoryGatewayStore(),
         agentHandler: async (_agentId, m) => { seen.push(m); return `on it: ${m.content}`; },
@@ -239,14 +253,40 @@ describe("EmailAdapter against local SMTP and IMAP servers", () => {
       ]);
     });
 
-    it("unset: topmost header is used as today", async () => {
-      const { manager: m, email } = gateway();
+    it("[T-09] unset authserv_id fails closed: even a topmost DMARC pass is refused, and the reason names authserv_id", async () => {
+      // Without authserv_id nothing says which header is the receiving server's, so trusting the
+      // topmost one is forgeable on an MTA that writes none. The safe default refuses all inbound
+      // mail and tells the operator to set authserv_id (docs/gateway.md), rather than guess per mail.
+      const { manager: m, email } = gateway(configWith({ require_authenticated_from: true })); // authserv_id unset
       m.getPairing().grant({ platform: "email", senderId: "ops@example.com", scope: "dm", tier: "admin" });
-      // Without authserv_id nothing says which header is the server's, so the topmost one decides,
-      // even when it is the sender's own: the reason docs/gateway.md recommends setting it.
-      imap.messages = [mail(17, { auth: ["forged.example; dmarc=pass header.from=example.com", DMARC_FAIL] })];
+      imap.messages = [mail(17, { auth: [DMARC_PASS] }), mail(18, { auth: ["forged.example; dmarc=pass header.from=example.com"] })];
       await email.pollOnce();
-      expect(seen.map((x) => x.content)).toEqual(["do the thing 17"]);
+      expect(seen).toEqual([]);
+      expect(m.getPairing().listPendingCodes()).toEqual([]);
+      expect(smtp.mails).toEqual([]);
+      expect(warnings.map((w) => w.fields)).toEqual([
+        { from: "ops@example.com", verdict: expect.stringContaining("authserv_id") },
+        { from: "ops@example.com", verdict: expect.stringContaining("authserv_id") },
+      ]);
+      // The refusal never leaks the subject or the body.
+      expect(JSON.stringify(warnings)).not.toMatch(/Secret plan|do the thing/);
+    });
+
+    it("[T-09] authserv_id set: a correctly authenticated mail from that server is accepted as before", async () => {
+      const { manager: m, email } = gateway(configWith({ authserv_id: MTA }));
+      m.getPairing().grant({ platform: "email", senderId: "ops@example.com", scope: "dm", tier: "regular" });
+      imap.messages = [mail(19, { from: "Ada <ops@example.com>", auth: [DMARC_PASS] })];
+      await email.pollOnce();
+      expect(seen.map((x) => x.content)).toEqual(["do the thing 19"]);
+      expect(warnings).toEqual([]);
+    });
+
+    it("[T-09] require_authenticated_from false leaves inbound unchanged even without authserv_id", async () => {
+      const { manager: m, email } = gateway(configWith({ require_authenticated_from: false }));
+      m.getPairing().grant({ platform: "email", senderId: "ops@example.com", scope: "dm", tier: "regular" });
+      imap.messages = [mail(20, { auth: [DMARC_FAIL] }), mail(21)];
+      await email.pollOnce();
+      expect(seen.map((x) => x.content)).toEqual(["do the thing 20", "do the thing 21"]);
       expect(warnings).toEqual([]);
     });
 
