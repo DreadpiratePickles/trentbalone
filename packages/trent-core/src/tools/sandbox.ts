@@ -23,6 +23,10 @@ import type { ToolContext } from "./types.js";
 export const WORKSPACE_MOUNT = "/workspace";
 export const SPILLOVER_MOUNT = "/trent/spillover";
 const DEFAULT_PROXY_PORT = 8089;
+// [SEC-3 T-10] Default memory ceiling for a seat container. Generous enough for normal build/test
+// work, bounded so an agent-run process cannot exhaust the host's RAM. `--pids-limit` capped process
+// count but not memory.
+const DEFAULT_SANDBOX_MEMORY = "2g";
 
 /** The proxy port the sandbox reaches the proxy on, from `egress.proxyUrl`. */
 export function proxyPortFromUrl(proxyUrl: string): number {
@@ -61,6 +65,8 @@ export function sandboxDockerOptions(
       { hostPath: spilloverDir(ctx.profileDir), containerPath: SPILLOVER_MOUNT, readOnly: true },
     ],
     pidsLimit: 256,
+    memory: DEFAULT_SANDBOX_MEMORY, // [SEC-3 T-10] a host-OOM ceiling; --pids-limit alone left memory unbounded
+
     ...(egress
       ? {
           caCertPath: egress.caCertPath,

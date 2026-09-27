@@ -60,6 +60,9 @@ describe("sandboxDockerOptions — egress backend joins the internal net, points
     expect(args).toContain("--cap-drop=ALL");
     expect(args).toContain("--security-opt=no-new-privileges");
     expect(args[args.indexOf("--pids-limit") + 1]).toBe("256");
+    // [SEC-3 T-10] a memory ceiling so a runaway process cannot OOM the host.
+    expect(args).toContain("--memory");
+    expect(args[args.indexOf("--memory") + 1]).toMatch(/^\d+(?:[bkmg])?$/i);
   });
 
   it("the isolated backend stays --network none with no proxy env and no extra host", () => {
