@@ -44,6 +44,14 @@ export interface DockerCreateOptions {
   /** Extra hosts as `name:ip`, e.g. host.docker.internal:host-gateway. */
   extraHosts?: string[];
   /**
+   * `--dns` servers for the container. The egress seat pins this to a loopback sinkhole
+   * (`127.0.0.1`) so the embedded resolver's upstream answers nothing: external names cannot
+   * resolve in the seat, independent of the daemon's per-version embedded-resolver forwarding
+   * policy. `--add-host` entries live in `/etc/hosts` and are consulted before DNS, so
+   * `host.docker.internal` still resolves. Unset leaves Docker's default resolver.
+   */
+  dns?: string[];
+  /**
    * `--user uid:gid`. On Linux a bind mount keeps the host's ownership, and `--cap-drop=ALL`
    * removes CAP_DAC_OVERRIDE, so the container can only write the workspace as its owner. Unset
    * keeps the image's own user (Docker Desktop maps ownership; root owns what root mounts).
@@ -122,6 +130,7 @@ export function buildCreateArgs(options: DockerCreateOptions): string[] {
   if (options.memory) args.push("--memory", options.memory);
   if (options.pidsLimit) args.push("--pids-limit", String(options.pidsLimit));
   for (const host of options.extraHosts ?? []) args.push("--add-host", host);
+  for (const server of options.dns ?? []) args.push("--dns", server);
   if (options.user) args.push("--user", options.user);
 
   if (options.caCertPath) {
@@ -203,6 +212,7 @@ export class DockerBackend implements TerminalBackend {
       pidsLimit: options?.pidsLimit,
       readOnlyRootfs: options?.readOnlyRootfs,
       extraHosts: options?.extraHosts,
+      dns: options?.dns,
       user: options?.user ?? resolveContainerUser(options?.hostIdentity ?? currentHostIdentity()),
     };
     this.execTimeoutMs = options?.execTimeoutMs ?? DEFAULT_TIMEOUT_MS;

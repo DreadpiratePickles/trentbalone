@@ -54,6 +54,11 @@ describe("sandboxDockerOptions — egress backend joins the internal net, points
     expect(args).toContain("host.docker.internal:172.22.0.3");
     expect(args.join(" ")).not.toContain("host-gateway");
 
+    // [SEC-1 / D1] The seat's DNS upstream is pinned to a loopback sinkhole, so an external name
+    // cannot resolve in the seat (DNS-over-UDP exfil) regardless of the daemon's embedded-resolver
+    // forwarding policy. The live assertion is the gated test in tools/terminal/terminal.test.ts.
+    expect(args[args.indexOf("--dns") + 1]).toBe("127.0.0.1");
+
     // Egress plumbing is intact: proxy env + CA + token, and the strong flags are not weakened.
     expect(args).toContain("HTTPS_PROXY=http://host.docker.internal:8089");
     expect(args).toContain(`OPENAI_API_KEY=trnt_egress_${"a".repeat(32)}`);
@@ -70,6 +75,8 @@ describe("sandboxDockerOptions — egress backend joins the internal net, points
     expect(args[args.indexOf("--network") + 1]).toBe("none");
     expect(args.join(" ")).not.toContain("host.docker.internal");
     expect(args.some((a) => a.startsWith("HTTPS_PROXY="))).toBe(false);
+    // The isolated seat is --network none: no resolver, no DNS plumbing to pin.
+    expect(args).not.toContain("--dns");
     expect(args).toContain("--cap-drop=ALL");
   });
 });

