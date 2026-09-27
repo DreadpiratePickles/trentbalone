@@ -1,6 +1,6 @@
 # Doctor
 
-`trent doctor` runs 23 checks. Each one inspects something real: a file, a daemon, a socket, an
+`trent doctor` runs 24 checks. Each one inspects something real: a file, a daemon, a socket, an
 authenticated request. None of them return a hard-coded green.
 
 ```bash
@@ -61,7 +61,7 @@ when the variable is unset or empty (`apps/cli/src/env-defaults.ts`), so today t
 when a different value was set explicitly, and the fix is to remove that value. They are transcripts, not specifications;
 the table below is the current list, and a run of `trent doctor` here today reports `total 20`.
 
-## The 23 checks
+## The 24 checks
 
 | # | Name | What it actually inspects | Auto-fixable |
 |---|---|---|:---:|
@@ -88,6 +88,7 @@ the table below is the current list, and a run of `trent doctor` here today repo
 | 21 | Business Providers | Reads the `trent connect` state of Stripe, Google, Square and Twilio by NAME (`ConnectStore.read`, which never returns a value) and prints one line per provider: connected, expired, or not connected with `trent connect <provider>`. A skip when none is connected; the business toolset is off until one is. See [business.md](business.md) | no |
 | 22 | Social Platforms | Reads the `trent connect` state of Meta, Google, Bluesky and Buffer by name (`ConnectStore.read`, never a value), builds the social toolset's own platform matrix from it (`tools/social/matrix.ts`) and reports which platforms a post reaches and by which route, the review each still needs, and whether the `social` toolset is enabled. Skips with nothing connected, warns when a provider is connected but the toolset is off | no |
 | 23 | Local Model | Runs only when the provider is local (`ollama`, `lmstudio`, or any provider whose base URL is a loopback host, which is how a llama.cpp `llama-server` is reached); a hosted provider is a skip. Identifies the runtime by what answers at the base URL (Ollama `/api/version`, llama.cpp `/props`, LM Studio `/api/v1/models`, otherwise a generic `/v1/models`) and names its version; nothing answering fails, naming the URL. Checks every configured model is present (`/api/tags` or `/v1/models`) and fails with the exact `ollama pull <tag>` when one is not; an Ollama cloud model is never sent a prompt. Runs a five-case tool-call smoke test through the wrapper's model gateway, scored N/5 with each failing case named, then the same five cases on the solo format (the solo prompt, constrained output), also scored N/5. <!-- [C11] --> Measures the time to first token on a fresh 4K-token prompt. Reads the effective context window and the server's slots. See [below](#the-local-model-check) | no |
+| 24 | Offline egress proof | Runs only when offline mode is on (`TRENT_OFFLINE` set); a normal run is a skip. Enumerates every network-capable path from the egress registry and reports each as blocked, loopback-only or OPEN, actively dialing the RFC 5737 literal `192.0.2.1` through a forced-offline `trentFetch` to prove the guard refuses it, and running `assertOfflineConfig` on the loaded profile. Fails if any path is OPEN — the canary not being refused flips every dial path to OPEN, a hosted setting flips the config-gated paths. This is what `trent security --offline` reports. See [security.md](security.md), "Offline mode" | no |
 
 Checks 6, 9 and 13 used to return hard-coded green from inside a try block that could not throw.
 Each now has a test that induces a real failure and asserts it is reported

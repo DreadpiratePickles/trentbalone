@@ -49,7 +49,7 @@ trent doctor
 ```
 <!-- proof: clone with -b because the default branch `main` does not carry this code yet (`gh api repos/DreadpiratePickles/trentbalone/readme` 404); package.json "postinstall" runs `prisma generate` for the SQLite schema and "cli:bun" is `bun --no-env-file apps/cli/src/index.ts` (npm install on a clean worktree: exit 0, 12 s, client generated, docs/sessions/2026-09-25-p2a1-release-path.md); `trent improve status --json` on one profile: under cli:bun {"durable":true} and trent.db exists, under cli {"durable":false,"reason":"the SQLite store needs Bun ..."}; no export line is needed: apps/cli/src/env-defaults.ts sets TRENT_QUEUE_FALLBACK=disabled when it is unset, and the doctor's Standalone Environment Contract check passes without it -->
 
-`trent doctor` runs 23 checks, prints the command that fixes each failure, and exits 3 while one
+`trent doctor` runs 24 checks, prints the command that fixes each failure, and exits 3 while one
 fails. Then add a key and run setup:
 <!-- proof: `trent doctor --no-color` on a keyless profile: "total 22 passed 12 warnings 3 failed 2 skipped 5", exit 3 (API Credentials: no key; Sandbox & Workbench: Docker daemon stopped), each failure followed by a "fix:" line; docs/doctor.md -->
 
@@ -287,7 +287,7 @@ Where Trent is ahead:
 
 ## Commands
 
-`trent --help` lists 37 commands, 158 with their subcommands. The ones most people start with:
+`trent --help` lists 38 commands, 160 with their subcommands. The ones most people start with:
 <!-- proof: `npx tsx apps/cli/src/index.ts --help` exit 0; the counts are checked against COMMAND_SPECS by docs-truth.test.ts "states the command counts the registry actually has" -->
 
 ```
@@ -299,7 +299,7 @@ trent run "<objective>"                # one objective, no terminal; exit 0 done
 trent run "<objective>" --model <id>   # the whole run (planner, critic, consolidator, every seat) on one model
 trent run - --format stream-json       # objective on stdin, one JSON object per line
 trent --tui                            # full-screen terminal UI on the same session engine
-trent doctor                           # 23 checks; exit 3 on a configuration failure
+trent doctor                           # 24 checks; exit 3 on a configuration failure
 trent fleet packs                      # also: install <pack>, show <seat>, list
 trent service install                  # gateway, cron and heartbeat as one launchd or systemd service
 trent approvals list                   # everything waiting on you; approve <id> / reject <id>

@@ -135,6 +135,33 @@ of [terminal.md](terminal.md) and `packages/trent-core/src/terminal/egress-netwo
 `LocalBackend` is named "Local Execution Backend (Development Only)" for a reason: it runs commands
 on the host with the host's environment. It is not a sandbox.
 
+## Offline mode
+
+Set `TRENT_OFFLINE=1` (or run with `--offline`) and nothing may leave the machine. The switch is
+one-way: config can turn it on, never off, and child runs (delegate, cron, gateway) inherit it, so a
+run started offline stays offline for its whole tree.
+
+Enforcement is in three layers, because the shipped binary is compiled with Bun and a Node network
+dispatcher would not apply to Bun's native `fetch`:
+
+1. **The dial chokepoint.** Every module that dials with the platform `fetch` routes through
+   `trentFetch` (`egress/dial.ts`), which resolves the target and refuses anything that is not
+   loopback before a socket opens. Loopback is classified by the same rule the SSRF floor uses, so a
+   public host reached through a local-looking name (DNS rebinding) is still refused.
+2. **The config front door.** At run boot `assertOfflineConfig` refuses a profile that would still
+   reach the network — a hosted model provider, hosted escalation, a hosted embedder, a non-loopback
+   OTLP endpoint, or an enabled messaging gateway — naming each with its fix, before anything opens.
+3. **Tool gates.** The egress sandbox creates no container (there is no allowlisted host to reach),
+   the browser toolset is disabled, faster-whisper is refused unless its model is already cached, and
+   `trent update` refuses.
+
+`trent security --offline` (and the `check_offline` doctor check) prove it: they enumerate every
+network-capable path from the egress registry (`egress/registry.ts`), dial the RFC 5737 literal
+`192.0.2.1` through a forced-offline `trentFetch` and assert it is refused, run `assertOfflineConfig`
+on the loaded profile, and exit non-zero if any path is OPEN. A coverage test fails if a new
+network-capable module is added without being registered, so the surface cannot grow silently. This
+proves the `trentFetch` and config-gated paths and the disabled tools; it is not a kernel firewall.
+
 ## File permissions
 
 | Path | Mode | Enforced by |
@@ -326,7 +353,7 @@ negative case in `hardline.test.ts`.
 | `write-to-trent-secrets` | a write to `~/.trent/.env`, the egress `ca.key`/`ca.crt`/`tokens.json`, `workspace-trust.json`, or a control-plane file (`config.yaml`, `hooks-consent.json`, `gateway.json`, `approvals-audit.ndjson`, `idempotency.json`) under `~/.trent` or the profile directory — writing these would lower a guardrail or forge a decision |
 | `read-trent-env-or-ssh-keys` | a read of `~/.trent/.env`, of anything under `~/.ssh`, or of Trent's own keys: `keys/*.key` (the audit signing key), `egress/ca.key` and `egress/tokens.json` under `~/.trent` or the profile directory (`governance/hardline.test.ts`) |
 | `read-external-credentials` | a read of the operator's own cloud, git, npm or docker credentials: anything under `~/.aws`, `~/.config/gcloud` or `~/.docker`, or `~/.netrc`, `~/.git-credentials`, `~/.npmrc` in the home directory |
-| `lower-trents-own-guardrails` | a command that invokes the Trent CLI to change Trent's own protections — `trent config set`, `trent hooks consent`/`hooks add`, `trent mcp add`, `trent approvals approve`/`approve-all`/`resolve`, `trent connect`, `trent security preset` — which are the operator's to change, never a tool's |
+| `lower-trents-own-guardrails` | a command that invokes the Trent CLI to change Trent's own protections — `trent config set`, `trent hooks consent`/`hooks add`, `trent mcp add`, `trent approvals approve`/`approve-all`/`resolve`, `trent connect`, or a `security preset` change — which are the operator's to change, never a tool's |
 | `force-push-to-a-protected-branch` | `git push --force` (or `-f`, or a `+refspec`) naming `main`, `master`, `trunk`, `develop`, `release`, `production` or `prod` |
 
 Commands are matched over the deobfuscated variants the approval floor already generates
