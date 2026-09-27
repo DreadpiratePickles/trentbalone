@@ -12,6 +12,7 @@ import type { McpServersConfig } from "../../config/schema.js";
 import { SUMMARY_LIMIT } from "../spillover.js";
 import { isBuiltinToolName } from "../tool-names.js";
 import { mcpToolName, MCP_SERVER_NAME_PATTERN, resolveTemplate } from "./config.js";
+import { mcpConsentAll } from "./consent.js";
 import { createMcpAdapters, MCP_ADAPTER_NAME, MCP_STATUS_TOOL, type McpAdapterBuild } from "./index.js";
 
 const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), "__fixtures__", "fake-mcp-server.mjs");
@@ -46,7 +47,8 @@ function stdioServer(extra: Partial<Extract<McpServersConfig[string], { transpor
 }
 
 async function build(servers: McpServersConfig, env: NodeJS.ProcessEnv = HOST_ENV): Promise<McpAdapterBuild> {
-  const built = await createMcpAdapters({ mcp_servers: servers }, { profileDir, env });
+  // [T-08] Discovery connects real stdio children, so consent is pre-granted for these tests.
+  const built = await createMcpAdapters({ mcp_servers: servers }, { profileDir, env, consent: mcpConsentAll() });
   builds.push(built);
   return built;
 }

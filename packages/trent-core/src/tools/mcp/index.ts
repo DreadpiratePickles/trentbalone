@@ -23,6 +23,23 @@ import { mcpToolName } from "./config.js";
 export { connectMcpServer, connectFailureReason, MCP_CONNECT_TIMEOUT_MS, type McpConnection, type McpConnectDeps, type McpToolInfo } from "./client.js";
 export { mcpToolName, resolveTemplate, resolveTemplateRecord, containsTemplate, sanitiseComponent, MCP_SERVER_NAME_PATTERN } from "./config.js";
 export { McpScanFindingSchema, scanMcpTools, scrubMcpResult, toolInstructionStrings, type McpScanFinding } from "./scan.js";
+export {
+  MCP_CONSENT_FILE,
+  MCP_CONSENT_VERSION,
+  mcpConsentPath,
+  mcpLaunchSpecHash,
+  mcpToolDefHash,
+  readMcpConsent,
+  writeMcpConsent,
+  grantMcpConsent,
+  revokeMcpConsent,
+  fileConsentGate,
+  mcpConsentAll,
+  type McpConsentEntry,
+  type McpConsentRecord,
+  type McpConsentGate,
+  type McpConsentStatus,
+} from "./consent.js";
 
 export const MCP_ADAPTER_NAME = "mcp";
 export const MCP_STATUS_TOOL = "mcp_status";

@@ -161,6 +161,32 @@ describe("trent mcp", () => {
     expect(result.exitCode).toBe(EXIT.OK);
     expect(fs.existsSync(path.join(home, "config.yaml"))).toBe(false);
   });
+
+  it("[T-08] add records spawn consent with a pinned tool-def hash (0600), which the runtime then honours; remove drops it", async () => {
+    const { readMcpConsent, mcpConsentPath, connectMcpServer } = await import("@trent/core/tools/mcp/index.js");
+    const { McpServerConfigSchema } = await import("@trent/core/config/index.js");
+    const entry = McpServerConfigSchema.parse({ transport: "stdio", command: process.execPath, args: [FIXTURE] });
+
+    // Before any add, the runtime refuses to spawn the unconsented server (nothing recorded).
+    await expect(connectMcpServer("fake", entry, { env: process.env, profileDir: home })).rejects.toThrow(/consent/i);
+
+    expect((await runCli(["mcp", "add", "fake", "--command", process.execPath, "--args", FIXTURE, "--json"])).exitCode).toBe(EXIT.OK);
+    const record = readMcpConsent(home);
+    expect(record.consented).toHaveLength(1);
+    expect(record.consented[0]!.tools).toMatch(/^[0-9a-f]{64}$/); // tool defs pinned
+    expect(fs.statSync(mcpConsentPath(home)).mode & 0o777).toBe(0o600);
+
+    // With consent recorded, the runtime connects to the same server and lists its tools.
+    const conn = await connectMcpServer("fake", entry, { env: process.env, profileDir: home });
+    try {
+      expect((await conn.listTools()).map((t) => t.name)).toContain("echo");
+    } finally {
+      await conn.close();
+    }
+
+    expect((await runCli(["mcp", "remove", "fake", "--json"])).exitCode).toBe(EXIT.OK);
+    expect(readMcpConsent(home).consented).toEqual([]); // consent does not outlive the server
+  });
 });
 
 /**

@@ -29,7 +29,7 @@ import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { McpServerConfigSchema, McpServersConfigSchema, MCP_SERVER_NAME_PATTERN, type McpServerConfig, type McpServersConfig } from "@trent/core/config/index.js";
 import { isSecretName } from "@trent/core/terminal/env-scrub.js";
 import { isBuiltinToolName } from "@trent/core/tools/tool-names.js";
-import { connectFailureReason, connectMcpServer, containsTemplate, mcpToolName, scanMcpTools, type McpScanFinding } from "@trent/core/tools/mcp/index.js";
+import { connectFailureReason, connectMcpServer, containsTemplate, grantMcpConsent, mcpConsentAll, mcpToolDefHash, revokeMcpConsent, scanMcpTools, mcpToolName, type McpScanFinding } from "@trent/core/tools/mcp/index.js";
 import type { CommandSpec } from "../registry.js";
 import type { CommandContext } from "../context.js";
 import { mcpServeSpec } from "./mcp-serve.js";
@@ -184,18 +184,27 @@ interface ScanOutcome {
   readonly scanRan: boolean;
   readonly reason?: string;
   readonly findings: McpScanFinding[];
+  /** [T-08] The tool-definition hash to pin at consent time; present only when the scan ran. */
+  readonly toolsHash?: string;
 }
 
-/** Connects once, lists the tools and scans them. Unreachable is an outcome, not an error. */
+/**
+ * Connects once, lists the tools and scans them. Unreachable is an outcome, not an error.
+ *
+ * [T-08] `trent mcp add` is the deliberate operator step, so this connect bypasses the spawn gate
+ * (an stdio server has no consent yet — recording it is what `add` does next). It also captures the
+ * tool-definition hash so the caller can pin it.
+ */
 async function scanAtAdd(name: string, entry: McpServerConfig, store: McpOAuthStore): Promise<ScanOutcome> {
   let connection;
   try {
-    connection = await connectMcpServer(name, entry, { env: process.env, oauth: { store } });
+    connection = await connectMcpServer(name, entry, { env: process.env, oauth: { store }, consent: mcpConsentAll() });
   } catch (error) {
     return { scanRan: false, reason: connectFailureReason(error), findings: [] };
   }
   try {
-    return { scanRan: true, findings: scanMcpTools(await connection.listTools()) };
+    const tools = await connection.listTools();
+    return { scanRan: true, findings: scanMcpTools(tools), toolsHash: mcpToolDefHash(tools) };
   } catch (error) {
     return { scanRan: false, reason: `tools/list failed: ${connectFailureReason(error)}`, findings: [] };
   } finally {
@@ -291,6 +300,8 @@ export const mcpSpec: CommandSpec = {
           });
         }
         manager.set(`${MCP_CONFIG_KEY}.${name}`, { ...entry, scanRan: scan.scanRan, ...(flagged ? { flagged: scan.findings } : {}) });
+        // [T-08] Adding a server is the explicit operator consent to spawn it; pin its tool defs too.
+        grantMcpConsent(manager.getProfileDir(), name, entry, scan.toolsHash);
         if (flagged) ctx.err(`warning: ${name} is installed flagged; the scan found ${describeFindings(scan.findings)}`);
         return {
           data: {
@@ -315,8 +326,11 @@ export const mcpSpec: CommandSpec = {
       run(ctx, _opts, args) {
         const name = String(args[0]);
         if (ctx.dryRun) return { data: { dryRun: true, command: "mcp remove", name } };
-        if (!readServers(ctx)[name]) fail("mcp.remove", "no server with that name is configured", name);
+        const existing = readServers(ctx)[name];
+        if (!existing) fail("mcp.remove", "no server with that name is configured", name);
         ctx.config().delete(`${MCP_CONFIG_KEY}.${name}`);
+        // [T-08] A removed server's spawn consent does not outlive it (silent: re-adding re-consents).
+        revokeMcpConsent(ctx.config().getProfileDir(), name, existing);
         // [H2] A removed server's OAuth client and tokens do not outlive it.
         const oauthRemoved = oauthStore(ctx).remove(name);
         return { data: { removed: name, count: Object.keys(readServers(ctx)).length, ...(oauthRemoved.length > 0 ? { oauthRemoved } : {}) } };
@@ -350,7 +364,8 @@ export const mcpSpec: CommandSpec = {
         }
         const withLogin = login === undefined ? {} : { login };
         try {
-          const connection = await connectMcpServer(name, entry, { env: process.env, oauth: { store: oauthStore(ctx) } });
+          // [T-08] `test` is an operator diagnostic, run deliberately, so it bypasses the spawn gate.
+          const connection = await connectMcpServer(name, entry, { env: process.env, oauth: { store: oauthStore(ctx) }, consent: mcpConsentAll() });
           try {
             const listed = await connection.listTools();
             const tools = listed.map((t) => mcpToolName(name, t.name));

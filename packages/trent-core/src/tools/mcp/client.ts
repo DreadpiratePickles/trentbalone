@@ -28,7 +28,7 @@
  * seat: secret-shaped runs become numbered tokens, hit counts are logged, values never are.
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StdioClientTransport, type StdioServerParameters } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { McpServerConfig } from "../../config/schema.js";
 import { OWN_CREDENTIAL_HEADER } from "../../egress/CredentialBroker.js";
@@ -37,6 +37,7 @@ import { StructuredLogger } from "../../telemetry/logger.js";
 import { createEgressFetch, type EgressClientOptions, type FetchLike } from "../web/proxied-fetch.js";
 import { checkUrlSafety, type LookupFn } from "../web/url-safety.js";
 import { resolveTemplateRecord } from "./config.js";
+import { fileConsentGate, mcpToolDefHash, type McpConsentGate } from "./consent.js";
 import { createBearerSource, mcpLoginRequired, type McpBearerSource } from "./http-oauth.js";
 import { isMcpOAuthEntry, McpOAuthStore } from "./http-oauth-store.js";
 import type { OAuthFetch } from "./http-oauth-wire.js";
@@ -65,9 +66,19 @@ export interface McpConnection {
   close(): Promise<void>;
 }
 
+/** [T-08] How a stdio child is spawned; the default is `StdioClientTransport`. A test asserts against the seam. */
+export type StdioTransportFactory = (params: StdioServerParameters) => StdioClientTransport;
+
 export interface McpConnectDeps {
   /** The host env: source of `${VAR}` values and of the scrubbed base env for stdio children. */
   readonly env: NodeJS.ProcessEnv;
+  /**
+   * [T-08] The consent gate. Defaults to `fileConsentGate(profileDir)` when a profile is given, and
+   * to "nothing is consented" otherwise, so a stdio server with no recorded consent never spawns.
+   */
+  readonly consent?: McpConsentGate;
+  /** [T-08] Test/override seam for spawning a stdio child; defaults to `new StdioClientTransport`. */
+  readonly stdioTransport?: StdioTransportFactory;
   /** The egress proxy as reachable from THIS process; required for http servers. */
   readonly egress?: Omit<EgressClientOptions, "lookup">;
   /** Test seam: replaces the egress fetch for http servers. */
@@ -168,7 +179,8 @@ async function connectStdio(name: string, config: Extract<McpServerConfig, { tra
   const declared = resolveTemplateRecord(config.env, deps.env);
   if (declared.missing.length) throw new Error(`env references unset variable(s): ${declared.missing.join(", ")}`);
   const env = { ...scrubChildEnv(deps.env), ...declared.values };
-  const transport = new StdioClientTransport({
+  const spawn = deps.stdioTransport ?? ((params: StdioServerParameters) => new StdioClientTransport(params));
+  const transport = spawn({
     command: config.command,
     args: [...config.args],
     env,
@@ -226,9 +238,47 @@ async function connectHttp(name: string, config: Extract<McpServerConfig, { tran
   return wrap(name, client, deps);
 }
 
+/** The gate a connect uses: an explicit override, else the profile's file gate, else no consent. */
+function resolveConsentGate(deps: McpConnectDeps): McpConsentGate | undefined {
+  return deps.consent ?? (deps.profileDir === undefined ? undefined : fileConsentGate(deps.profileDir));
+}
+
+/**
+ * [T-08] Rug-pull defense: when a pinned tool-def hash exists, the server's live tool definitions
+ * must still hash to it. A mismatch closes the connection and refuses, rather than let changed
+ * descriptions reach the seat as instructions.
+ */
+async function enforceToolPin(connection: McpConnection, pinned: string | undefined): Promise<McpConnection> {
+  if (pinned === undefined) return connection;
+  let tools;
+  try {
+    tools = await connection.listTools();
+  } catch (error) {
+    await connection.close();
+    throw error;
+  }
+  const actual = mcpToolDefHash(tools);
+  if (actual !== pinned) {
+    await connection.close();
+    throw new Error("the server's tool definitions changed since consent (a possible rug pull); re-consent with `trent mcp consent` after reviewing them");
+  }
+  return connection;
+}
+
 /** Connects to one configured server. Throws with a value-free reason on any failure. */
-export function connectMcpServer(name: string, config: McpServerConfig, deps: McpConnectDeps): Promise<McpConnection> {
-  return config.transport === "stdio" ? connectStdio(name, config, deps) : connectHttp(name, config, deps);
+export async function connectMcpServer(name: string, config: McpServerConfig, deps: McpConnectDeps): Promise<McpConnection> {
+  const gate = resolveConsentGate(deps);
+  if (config.transport === "stdio") {
+    // [T-08] The spawn gate: an stdio server is host code, so it never spawns without recorded consent.
+    const status = gate?.status(name, config) ?? { consented: false };
+    if (!status.consented) {
+      throw new Error(`stdio MCP server "${name}" has no recorded consent to spawn; review its launch command and run \`trent mcp consent ${name}\` (nothing was executed)`);
+    }
+    return enforceToolPin(await connectStdio(name, config, deps), status.toolsHash);
+  }
+  // http/SSE has no local spawn, so no spawn gate; the tool-def pin still applies when one is recorded.
+  const status = gate?.status(name, config);
+  return enforceToolPin(await connectHttp(name, config, deps), status?.toolsHash);
 }
 
 /** The message a failed connect is reported with; never a header, an env value or a stack. */

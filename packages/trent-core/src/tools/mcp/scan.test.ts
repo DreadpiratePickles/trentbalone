@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { McpServerConfig } from "../../config/schema.js";
 import { connectMcpServer, type McpConnection } from "./client.js";
+import { mcpConsentAll } from "./consent.js";
 import { scanMcpTools, scrubMcpResult } from "./scan.js";
 
 const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), "__fixtures__", "fake-mcp-server.mjs");
@@ -33,7 +34,8 @@ function server(extraArgs: string[] = []): McpServerConfig {
 }
 
 async function connect(extraArgs: string[] = []): Promise<McpConnection> {
-  const c = await connectMcpServer("fake", server(extraArgs), { env: HOST_ENV });
+  // [T-08] These tests connect a fake stdio server deliberately, so consent is pre-granted.
+  const c = await connectMcpServer("fake", server(extraArgs), { env: HOST_ENV, consent: mcpConsentAll() });
   open.push(c);
   return c;
 }
@@ -59,7 +61,7 @@ describe("install-time scan", () => {
 describe("result scrubbing", () => {
   it("a result carrying an API key reaches the caller masked, with the hit counted by kind", async () => {
     const hits: Record<string, unknown>[] = [];
-    const c = await connectMcpServer("fake", server(), { env: HOST_ENV, redactionLog: (_event, fields) => hits.push(fields) });
+    const c = await connectMcpServer("fake", server(), { env: HOST_ENV, consent: mcpConsentAll(), redactionLog: (_event, fields) => hits.push(fields) });
     open.push(c);
     const result = await c.callTool("echo", { text: `key=${FAKE_KEY} done` });
     expect(result.text).not.toContain(FAKE_KEY);
