@@ -36,6 +36,22 @@ describe("floorBlock — the hardline floor over deobfuscated variants", () => {
     expect(floorBlock("npm test")).toBeNull();
     expect(floorBlock("echo 'does this use mkfs?'")).toBeNull();
   });
+
+  it("[SEC-3 T-06] sees a destructive spelling inside an interpreter -c/-e payload", () => {
+    // os.system / subprocess spellings reduce to the shell command inside them, caught for free once
+    // the payload is a variant; the pure rmtree(expanduser) spelling is caught by its own floor rule.
+    expect(floorBlock(`python3 -c 'import os; os.system("rm -rf ~")'`)).not.toBeNull();
+    expect(floorBlock(`node -e 'require("child_process").execSync("rm -rf /")'`)).not.toBeNull();
+    expect(floorBlock(`perl -e 'system("rm -rf /etc")'`)).not.toBeNull();
+    expect(floorBlock(`python3 -c 'import shutil,os; shutil.rmtree(os.path.expanduser("~"))'`)).toMatch(/rmtree|home/);
+    expect(floorBlock(`python -c "import shutil; shutil.rmtree('/')"`)).not.toBeNull();
+  });
+
+  it("[SEC-3 T-06] does not fire on a harmless interpreter payload", () => {
+    expect(floorBlock(`python3 -c 'print(1 + 1)'`)).toBeNull();
+    expect(floorBlock(`node -e 'console.log("rmtree is a word")'`)).toBeNull();
+    expect(floorBlock(`python3 -c 'import shutil; shutil.rmtree("build/cache")'`)).toBeNull();
+  });
 });
 
 describe("dangerous — findings that need approval, all of them at once", () => {

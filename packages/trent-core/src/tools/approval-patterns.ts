@@ -72,6 +72,10 @@ export const HARDLINE_PATTERNS: readonly CommandPattern[] = compile(
     [CMDPOS + String.raw`mkfs(\.[a-z0-9]+)?\b`, "format filesystem (mkfs)"],
     [CMDPOS + String.raw`dd\b[^\n]*\bof=/dev/(sd|nvme|hd|mmcblk|vd|xvd)[a-z0-9]*`, "dd to raw block device"],
     [String.raw`>\s*/dev/(sd|nvme|hd|mmcblk|vd|xvd)[a-z0-9]*\b`, "redirect to raw block device"],
+    // [SEC-3 T-06] The scripting spelling of a home/root wipe that has no `rm` to catch:
+    // `shutil.rmtree(os.path.expanduser("~"))` or `rmtree("/")`. Extracted from an interpreter
+    // -c/-e payload by approval-floors, then matched here. A relative path (build/cache) is not hit.
+    [String.raw`\brmtree\s*\(\s*[^)]*(?:expanduser\s*\(\s*["']~|["']/["']|["']~["']|["']\$?\{?home)`, "recursive delete of home/root (rmtree)"],
     [String.raw`:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:`, "fork bomb"],
     [CMDPOS + String.raw`kill\s+(-[^\s]+\s+)*-1\b`, "kill all processes"],
     [CMDPOS + String.raw`(shutdown|reboot|halt|poweroff)\b`, "system shutdown/reboot"],
