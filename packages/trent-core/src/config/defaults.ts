@@ -43,6 +43,10 @@ export const DEFAULT_CONFIG: TrentConfig = {
       "api.openai.com",
       "api.anthropic.com",
       "generativelanguage.googleapis.com",
+      // [T-04] social publish: Bluesky's AT Protocol PDS (BLUESKY_DEFAULT_SERVICE) and Buffer's
+      // GraphQL endpoint (BUFFER_DEFAULT_ENDPOINT), the social toolset's two fixed provider hosts.
+      "bsky.social",
+      "api.buffer.com",
     ],
   },
   gateway: {

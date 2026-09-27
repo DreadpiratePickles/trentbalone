@@ -43,7 +43,9 @@
       "intercept_domains": [
         "api.openai.com",
         "api.anthropic.com",
-        "generativelanguage.googleapis.com"
+        "generativelanguage.googleapis.com",
+        "bsky.social",
+        "api.buffer.com"
       ]
     },
     "gateway": {

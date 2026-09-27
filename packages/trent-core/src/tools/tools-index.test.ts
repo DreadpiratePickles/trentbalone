@@ -90,6 +90,15 @@ describe("buildTrentToolAdapters wires web, skills and cron", () => {
     await Promise.all(adapters.map((a) => a.cleanup()));
   });
 
+  it("[T-04] skips social with a visible reason when there is no egress and no seam", async () => {
+    const { adapters, skipped } = buildTrentTools({ toolsets: ["social"], disabled_toolsets: [] }, deps);
+    expect(toolsetAdapters(adapters)).not.toContain("social");
+    const social = skipped.find((s) => s.toolset === "social");
+    expect(social, "social must be skipped, not built without a transport").toBeDefined();
+    expect(social?.reason).toMatch(/egress/i);
+    await Promise.all(adapters.map((a) => a.cleanup()));
+  });
+
   it("every ToolsetSchema value is implemented or explicitly not-yet-implemented with a reason", () => {
     const implemented = new Set<string>(IMPLEMENTED_TOOLSETS);
     const pending = new Map<string, string>(NOT_YET_IMPLEMENTED.map((entry) => [entry.toolset, entry.reason]));

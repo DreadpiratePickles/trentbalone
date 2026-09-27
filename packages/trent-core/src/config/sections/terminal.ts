@@ -31,5 +31,7 @@ export const EgressConfigSchema = z.object({
   enabled: z.boolean().default(true),
   proxy_port: z.number().default(8089),
   auto_token: z.boolean().default(true),
-  intercept_domains: z.array(z.string()).default(["api.openai.com", "api.anthropic.com", "generativelanguage.googleapis.com"]),
+  // [T-04] `bsky.social` and `api.buffer.com` are the social toolset's two fixed provider hosts
+  // (social publish); the model-provider hosts precede them. See config/defaults.ts.
+  intercept_domains: z.array(z.string()).default(["api.openai.com", "api.anthropic.com", "generativelanguage.googleapis.com", "bsky.social", "api.buffer.com"]),
 });

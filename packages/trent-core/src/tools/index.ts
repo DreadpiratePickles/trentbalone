@@ -40,7 +40,8 @@ import { browserAttachOptions, createBrowserAdapter } from "./browser/index.js";
 import { askVision, createVisionAdapter, type VisionGateway } from "./vision/index.js";
 import { createMediaAdapter } from "./media/index.js";
 import { buildBusinessToolset, type BusinessBuildSeams } from "./business/build.js";
-import { createSocialAdapter, type SocialAdapterOptions } from "./social/index.js";
+import { buildSocialToolset } from "./social/build.js";
+import { type SocialAdapterOptions } from "./social/index.js";
 import { buildA2aToolset, type A2aBuildSeams } from "./a2a/build.js"; // [P2-9] a2a
 import { seatCapability } from "../fleet/seat-capabilities.js";
 // [D5] tool descriptions: what a promoted improvement draft replaced, read at registration.
@@ -327,8 +328,12 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
       // transcription path exists only with a gateway AND `media.hosted_transcription`.
       adapters.push(createMediaAdapter(ctx, { env: deps.env ?? process.env, ...(config.media ? { media: config.media } : {}), ...(deps.gateway ? { gateway: deps.gateway } : {}) }));
     } else if (toolset === "social") {
-      // [B1] Tokens from `trent connect` through the profile; every write is bound inside `execute` and by the chain below.
-      adapters.push(createSocialAdapter(ctx, { ...(deps.social ?? {}), ...(deps.seat === undefined ? {} : { seat: deps.seat }) }));
+      // [B1][T-04] Through the egress proxy (the user's own connect token, own-credential marked),
+      // tokens from `trent connect`, every write bound in `execute` and by the chain below. No proxy
+      // and no test seam means no transport, so the toolset is skipped with a reason (docs/social.md).
+      const social = buildSocialToolset(deps.social, egress, egressReason, deps.seat, ctx);
+      if (social.adapter !== undefined) adapters.push(social.adapter);
+      else skipped.push({ toolset, reason: social.reason });
     } else if (toolset === "vision") {
       // Without a gateway the adapter is built `unavailable`: every call says not_available, never a stub.
       adapters.push(createVisionAdapter({ workspace: deps.workspace, profileDir: deps.profileDir, ...(deps.gateway ? { gateway: deps.gateway } : {}), ...(egress ? { egress } : {}) }));
