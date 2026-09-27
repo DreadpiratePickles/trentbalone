@@ -31,3 +31,5 @@ export * from "./checks/business.js";
 export * from "./checks/social.js";
 // [L0-4] local model runtime
 export * from "./checks/local-model.js";
+// [SEC-2 S2b-2] offline egress proof
+export * from "./checks/offline.js";

@@ -36,6 +36,7 @@ import { createTodoAdapter, type TodoAdapter } from "./todo/index.js";
 import { discloseAdapters, DEFAULT_DISCLOSURE_THRESHOLD, isToolBridge } from "./tool_search/index.js";
 import { createTerminalAdapter } from "./terminal/index.js";
 import { createWebToolsAdapter } from "./web/index.js";
+import { isOffline } from "../egress/offline.js";
 import { browserAttachOptions, createBrowserAdapter } from "./browser/index.js";
 import { askVision, createVisionAdapter, type VisionGateway } from "./vision/index.js";
 import { createMediaAdapter } from "./media/index.js";
@@ -354,6 +355,12 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
       if (toolset === "web") {
         adapters.push(createWebToolsAdapter({ profileDir: deps.profileDir, env: deps.env ?? process.env, egress }));
       } else {
+        // [SEC-2 S2b-2 / O-06] Offline disables the browser toolset: a launched browser is proxied
+        // but attach-mode and UDP (QUIC/WebRTC) egress are not loopback-only.
+        if (isOffline(deps.env ?? process.env)) {
+          skipped.push({ toolset, reason: "offline mode: the browser tool is disabled (attach-mode and UDP egress are not loopback-only)" });
+          continue;
+        }
         const gateway = deps.gateway;
         adapters.push(
           createBrowserAdapter({

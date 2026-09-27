@@ -21,6 +21,7 @@ import {
   type SecurityFinding,
   type SecuritySection,
 } from "@trent/core/governance/security-audit.js";
+import { proveOffline, type OfflineProof } from "@trent/core/doctor/index.js";
 import type { CommandContext } from "../context.js";
 import type { CommandSpec } from "../registry.js";
 
@@ -119,8 +120,92 @@ const auditSubSpec: CommandSpec = {
   },
 };
 
+/** The shape `trent security --offline` returns (JSON) and renders (human). */
+interface OfflineRenderData extends OfflineProof {
+  readonly kind: "offline";
+}
+
+/** The subcommand listing `trent security` (no flag) falls back to. */
+interface ListingData {
+  readonly kind: "listing";
+  readonly command: string;
+  readonly description: string;
+  readonly subcommands: Array<{ name: string; description: string; usage: string }>;
+}
+
+function offlineLines(proof: OfflineProof, ctx: CommandContext): string[] {
+  const lines = [ctx.theme.emphasis("OFFLINE EGRESS PROOF"), ""];
+  if (!proof.offline) {
+    lines.push(`  ${ctx.theme.needsApproval("offline mode is off")} — this ran the proof anyway; every row reflects the offline gate it WOULD get.`);
+    lines.push("");
+  }
+  lines.push(
+    `  ${ctx.theme.meta("canary")}  ${
+      proof.canary.blocked ? ctx.theme.success(`refused ${proof.canary.target}`) : ctx.theme.error(`NOT refused ${proof.canary.target}`)
+    } ${ctx.theme.meta(proof.canary.detail)}`,
+  );
+  lines.push(
+    `  ${ctx.theme.meta("config")}  ${
+      proof.config.ok ? ctx.theme.success("no hosted settings") : ctx.theme.error(proof.config.violations.join("; "))
+    }`,
+  );
+  lines.push("");
+  for (const row of proof.rows) {
+    const status =
+      row.status === "open"
+        ? ctx.theme.error("OPEN")
+        : row.status === "blocked"
+          ? ctx.theme.success("blocked")
+          : ctx.theme.success("loopback-only");
+    lines.push(`  ${status.padEnd(14, " ")} ${ctx.theme.value(row.id.padEnd(22, " "))} ${ctx.theme.meta(row.layer)}`);
+  }
+  lines.push("");
+  lines.push(`  ${ctx.theme.meta(proof.caveat)}`);
+  const open = proof.rows.filter((r) => r.status === "open").length;
+  lines.push(`  ${open === 0 ? ctx.theme.success("every egress path is covered") : ctx.theme.error(`${open} path(s) OPEN`)}`);
+  return lines;
+}
+
 export const securitySpec: CommandSpec = {
   name: "security",
   description: "Read-only security reports over the active profile",
+  options: [
+    { flags: "--offline", description: "Prove the offline egress surface is loopback-only; exit non-zero if any path is OPEN" },
+  ],
   subcommands: [auditSubSpec],
+  async run(ctx, opts) {
+    if (opts.offline === true) {
+      const manager = ctx.config();
+      let config: unknown = {};
+      try {
+        config = manager.loadConfig();
+      } catch {
+        /* a profile that will not load is the audit's finding, not this proof's; prove against {} */
+      }
+      // `force`: run the proof as if offline is on even when this process is not, so an operator can
+      // certify coverage before flipping the switch. The canary is refused by the forced-offline dial.
+      const proof = await proveOffline({ config, force: true });
+      return { data: { kind: "offline", ...proof }, exitCode: proof.ok ? EXIT.OK : EXIT.RUN_FAILED };
+    }
+    return {
+      data: {
+        kind: "listing",
+        command: "security",
+        description: securitySpec.description,
+        subcommands: (securitySpec.subcommands ?? []).map((s) => ({
+          name: s.name.split(" ")[0] ?? s.name,
+          description: s.description,
+          usage: `security ${s.name}`,
+        })),
+      },
+    };
+  },
+  render(data, ctx) {
+    const d = data as unknown as OfflineRenderData | ListingData;
+    if (d.kind === "offline") return offlineLines(d, ctx);
+    const listing = d as ListingData;
+    const lines = [ctx.theme.emphasis("SECURITY"), ctx.theme.body(listing.description), ""];
+    for (const sub of listing.subcommands) lines.push(`  ${ctx.theme.value(sub.usage.padEnd(22, " "))} ${ctx.theme.meta(sub.description)}`);
+    return lines;
+  },
 };

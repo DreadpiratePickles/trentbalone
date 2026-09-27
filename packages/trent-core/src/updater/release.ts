@@ -17,6 +17,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { EXIT, TrentError } from "../errors/index.js";
+import { assertLocalTarget, EgressBlocked, isOffline } from "../egress/offline.js";
 import { assertValidVersion } from "./version.js";
 
 export const RELEASE_REPO = "DreadpiratePickles/trentbalone";
@@ -196,6 +197,16 @@ async function get(url: URL, src: Source, signal: AbortSignal | undefined, sink?
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     if (current.protocol !== "https:") throw fail("refusing a non-https URL", current.origin);
     if (!src.allowedHosts.includes(current.host)) throw fail("refusing to contact a host outside the release source", current.host);
+    // [SEC-2 S2b-2 / gap 1] Defense in depth: node:https is not wrapped by trentFetch, so refuse a
+    // non-loopback release host directly while offline (the `trent update` command refuses first).
+    if (isOffline()) {
+      try {
+        await assertLocalTarget(current);
+      } catch (err) {
+        if (err instanceof EgressBlocked) throw fail(`offline mode: refusing to contact ${current.host}`, current.host, EXIT.USAGE);
+        throw err;
+      }
+    }
     const response = await requestOnce(current, src.ca, signal, sink);
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.location;

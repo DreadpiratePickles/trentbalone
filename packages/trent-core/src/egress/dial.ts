@@ -52,3 +52,17 @@ export function createTrentFetch(options: TrentFetchOptions = {}): FetchLike {
  * otherwise. Consults `process.env.TRENT_OFFLINE` on every call.
  */
 export const trentFetch: FetchLike = createTrentFetch();
+
+/**
+ * A dial that ALWAYS enforces the loopback-only rule, regardless of `TRENT_OFFLINE`. Used by the
+ * offline proof (`trent security --offline`, `doctor/checks/offline.ts`) so it can exercise the guard
+ * on a process that is not itself offline — the canary to `192.0.2.1` must be refused whether or not
+ * the operator launched this command with offline on.
+ */
+export function createForcedOfflineDial(options: TrentFetchOptions = {}): FetchLike {
+  const allow = options.allowedHosts;
+  return async (input, init) => {
+    await assertLocalTarget(targetOf(input), allow === undefined ? {} : { allowedHosts: allow });
+    return fetch(input, init);
+  };
+}

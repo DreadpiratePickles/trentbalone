@@ -18,6 +18,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parseAction, record, stringArg, type ToolSpec } from "../action.js";
+import { isOffline } from "../../egress/offline.js";
 import { fitSummary } from "../spillover.js";
 import type { ToolCallRecord, TrentToolAdapter } from "../types.js";
 import { renderToolInstructions } from "../web/schemas.js";
@@ -112,7 +113,13 @@ export function createBrowserAdapter(options: BrowserAdapterOptions): TrentToolA
   /** `attach` on a navigation picks the browser; any other call uses the one the run is on. */
   const modeFor = (tool: string, args: Record<string, unknown>): BrowserMode =>
     tool === "browser_navigate" && args.attach === true ? "attached" : tool === "browser_navigate" && args.attach === false ? "launched" : mode;
-  const available = session !== null || attached.enabled;
+  // [SEC-2 S2b-2 / O-06] Offline disables the browser outright. A launched Chromium goes through the
+  // proxy and is CA-pinned, but attach-mode drives the owner's own Chrome and browsers speak UDP
+  // (QUIC/WebRTC) the proxy never sees — neither is loopback-only, so offline refuses the toolset.
+  const offline = isOffline(options.env ?? process.env);
+  const OFFLINE_REFUSAL =
+    "offline mode: the browser tool is disabled. A launched browser is proxied but attach-mode and UDP (QUIC/WebRTC) egress are not loopback-only.";
+  const available = !offline && (session !== null || attached.enabled);
 
   const done = (action: string, status: ToolCallRecord["status"], summary: string): ToolCallRecord =>
     record(BROWSER_ADAPTER_NAME, action, status, fitSummary(summary, options.profileDir, "browser", SNAPSHOT_LIMIT));
@@ -200,6 +207,7 @@ export function createBrowserAdapter(options: BrowserAdapterOptions): TrentToolA
     async execute(action) {
       const { tool, args, error } = parseAction(action, SPECS);
       if (error) return fail(action, error);
+      if (offline) return record(BROWSER_ADAPTER_NAME, action, "blocked", OFFLINE_REFUSAL);
       const want = modeFor(tool, args);
       try {
         const result =
@@ -217,6 +225,7 @@ export function createBrowserAdapter(options: BrowserAdapterOptions): TrentToolA
     },
     async dryRun(action) {
       const { tool, args, error } = parseAction(action, SPECS);
+      if (offline) return record(BROWSER_ADAPTER_NAME, action, "blocked", OFFLINE_REFUSAL);
       if (!error && modeFor(tool, args) === "attached") {
         try {
           return await attached.dryRun(action, tool, args);

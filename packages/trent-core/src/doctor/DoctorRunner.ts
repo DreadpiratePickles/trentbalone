@@ -45,6 +45,8 @@ import { checkBusiness } from "./checks/business.js";
 import { checkSocial } from "./checks/social.js";
 // [L0-4] local model runtime
 import { checkLocalModel } from "./checks/local-model.js";
+// [SEC-2 S2b-2] offline egress proof
+import { checkOffline } from "./checks/offline.js";
 
 export interface DoctorRunnerOptions {
   checks?: DoctorCheck[];
@@ -92,6 +94,8 @@ export const DEFAULT_CHECKS: readonly DoctorCheck[] = [
   checkBusiness,
   // [B1] social
   checkSocial,
+  // [SEC-2 S2b-2] offline egress proof (a no-op skip unless TRENT_OFFLINE is on)
+  checkOffline,
   // [L0-4] local model runtime: last, because under a local provider it is the slow one
   checkLocalModel,
 ];

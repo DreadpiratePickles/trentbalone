@@ -15,6 +15,7 @@ import { DockerBackend, type DockerCreateOptions } from "../terminal/DockerBacke
 import { LocalBackend } from "../terminal/LocalBackend.js";
 import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
 import { ensureEgressNetwork, type EgressNetwork } from "../terminal/egress-network.js";
+import { isOffline } from "../egress/offline.js";
 import type { TerminalBackend, TerminalExecutionResult } from "../terminal/types.js";
 import { spilloverDir } from "./spillover.js";
 import type { ToolContext } from "./types.js";
@@ -181,6 +182,17 @@ class DockerSandbox implements Sandbox {
   async run(command: string, options?: SandboxRunOptions): Promise<TerminalExecutionResult> {
     let backend: DockerBackend;
     if (options?.network === true) {
+      // [SEC-2 S2b-2 / gap 2, Fable change 5] Offline creates NO egress container and NO egress
+      // network: there is no allowlisted non-loopback host to reach, so the network-backed path is
+      // skipped with an honest reason rather than standing up a firewall that can reach nothing.
+      if (isOffline()) {
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr: "offline mode: no egress container is created (there is no allowlisted non-loopback host to reach). Run without offline mode for network tooling.",
+          durationMs: 0,
+        };
+      }
       try {
         backend = await this.ensureEgressBackend();
       } catch (error) {

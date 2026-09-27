@@ -15,7 +15,9 @@
  * never returns transcript-shaped text that no engine produced (AGENTS.md invariant 2).
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { isOffline } from "../../egress/offline.js";
 import { currentSpendLedger } from "../../governance/spend-ledger.js";
 import { currentToolCallContext } from "../../governance/tool-call-context.js";
 import type { GatewayMessage, ModelGateway } from "../../model-gateway/types.js";
@@ -54,6 +56,30 @@ export interface TranscribeInput {
   /** `media.hosted_transcription`. */
   readonly hostedAllowed: boolean;
   readonly gateway?: TranscriptionGateway;
+  /** Offline gate. Defaults to `isOffline(env)`; when on, faster-whisper is refused unless cached. */
+  readonly offline?: boolean;
+  /** Environment the offline check and the HF cache path are read from; defaults to `process.env`. */
+  readonly env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * The Hugging Face hub cache faster-whisper downloads into: `$HF_HOME/hub`, else
+ * `$XDG_CACHE_HOME/huggingface/hub`, else `~/.cache/huggingface/hub`.
+ */
+export function fasterWhisperCacheDir(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.HF_HOME) return path.join(env.HF_HOME, "hub");
+  const base = env.XDG_CACHE_HOME && env.XDG_CACHE_HOME.trim() !== "" ? env.XDG_CACHE_HOME : path.join(os.homedir(), ".cache");
+  return path.join(base, "huggingface", "hub");
+}
+
+/** Whether the faster-whisper model for `size` is already in the HF cache (repo Systran/faster-whisper-<size>). */
+export function fasterWhisperModelCached(size: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const dir = path.join(fasterWhisperCacheDir(env), `models--Systran--faster-whisper-${size}`);
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 export type TranscribeResult = { ok: true; transcript: Transcript } | { ok: false; reason: string };
@@ -75,16 +101,33 @@ export function findWhisperModel(profileDir: string, configured: string): string
 /** Which engine a call would take, before anything runs: the adapter's approval question. */
 export type EnginePlan = { engine: "whisper.cpp"; model: string } | { engine: "faster-whisper" } | { engine: "hosted" } | { engine: "none"; reason: string };
 
-export async function planEngine(input: Pick<TranscribeInput, "backend" | "profileDir" | "whisperModel" | "hostedAllowed" | "gateway">): Promise<EnginePlan> {
+export async function planEngine(input: Pick<TranscribeInput, "backend" | "profileDir" | "whisperModel" | "hostedAllowed" | "gateway" | "offline" | "env">): Promise<EnginePlan> {
+  const env = input.env ?? process.env;
+  const offline = input.offline ?? isOffline(env);
   const installed = await input.backend.installed();
   if (installed["whisper-cli"]) {
     const hostModel = findWhisperModel(input.profileDir, input.whisperModel);
+    // whisper.cpp with a local ggml model is always allowed — it is a local binary against a local
+    // file (docker runs it `--network none`), so offline changes nothing here.
     if (hostModel !== undefined) return { engine: "whisper.cpp", model: hostModel };
     if (input.backend.kind === "docker") return { engine: "whisper.cpp", model: MEDIA_IMAGE_MODEL };
   }
   if (installed.python3 && input.backend.kind === "host") {
     const probe = await input.backend.run("python3", pythonModuleProbeArgs("faster_whisper"), { timeoutMs: 30_000 });
-    if (probe.code === 0) return { engine: "faster-whisper" };
+    if (probe.code === 0) {
+      // [SEC-2 S2b-2 / O-07] faster-whisper downloads its model from Hugging Face on first use, over
+      // the network and outside the proxy. Offline refuses it unless the model is already cached.
+      if (offline && !fasterWhisperModelCached(FASTER_WHISPER_MODEL, env)) {
+        return {
+          engine: "none",
+          reason:
+            `offline mode: faster-whisper would download the '${FASTER_WHISPER_MODEL}' model from Hugging Face, ` +
+            `which is not cached at ${fasterWhisperCacheDir(env)}. Pre-download it while online, install whisper.cpp with a ` +
+            `local ggml model (put one in ${path.join(input.profileDir, "models")} or set media.whisper_model), or run without offline mode.`,
+        };
+      }
+      return { engine: "faster-whisper" };
+    }
   }
   if (input.hostedAllowed && input.gateway) return { engine: "hosted" };
   const missing = installed["whisper-cli"] ? "whisper-cli is installed but no ggml model file was found" : "no local whisper engine is installed";

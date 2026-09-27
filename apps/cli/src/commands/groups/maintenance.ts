@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { ConfigManager } from "@trent/core/config/index.js";
 import { UpdateChecker } from "@trent/core/updater/index.js";
 import { EXIT, TrentError } from "@trent/core/errors/index.js";
+import { isOffline } from "@trent/core/egress/offline.js";
 import { refuseUnderLiveWriters } from "@trent/core/profile/locks.js";
 import { CLI_VERSION, type CommandSpec } from "../registry.js";
 
@@ -15,6 +16,15 @@ export const updateSpec: CommandSpec = {
   async run(ctx) {
     if (ctx.dryRun) {
       return { data: { dryRun: true, command: "update", currentVersion: CLI_VERSION } };
+    }
+    // [SEC-2 S2b-2 / gap 1] The updater dials GitHub over node:https, which trentFetch cannot wrap.
+    // Offline mode refuses the command outright rather than reaching the network.
+    if (isOffline()) {
+      throw new TrentError({
+        code: EXIT.USAGE,
+        operation: "update",
+        message: "offline mode is on (TRENT_OFFLINE); refusing to check for updates, which would contact github.com. Run without offline mode to update.",
+      });
     }
     const info = await new UpdateChecker(CLI_VERSION).checkForUpdates();
     return { data: { ...info } };
