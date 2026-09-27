@@ -8,7 +8,6 @@ terminal:
   backend: docker             # docker | local
   docker:
     image: trent-sandbox:latest
-    network: bridge
 ```
 
 ## Status
@@ -31,8 +30,10 @@ receives it as one opaque argv element.
 
 Container flags applied on create:
 
-- `--network` from `terminal.docker.network`. `none` is full isolation; a named bridge is used when
-  egress is proxied.
+- `--network none` for the isolated sandbox — full L3 isolation, the default for every command that
+  does not need the network. The egress sandbox instead joins a per-seat `--internal` network behind
+  a forwarder sidecar (see [Egress](#egress) below); there is no configurable bridge, and the old
+  `terminal.docker.network` key (which never reached the sandbox) has been removed.
 - `--cap-drop=ALL`
 - `--security-opt=no-new-privileges`
 - `--read-only` when a read-only root filesystem is requested
@@ -119,19 +120,42 @@ version is that a sandboxed process holds `trnt_egress_…` tokens under the nor
 through a local TLS-intercepting proxy, and cannot reach a host outside
 `egress.intercept_domains`.
 
-Where that proxy listens depends on the platform. The bridge container reaches it as
-`http://host.docker.internal:<port>` through `--add-host host.docker.internal:host-gateway`. On
-Docker Desktop (macOS, Windows) the VM forwards that alias to the host's loopback, so a
-`127.0.0.1` listener is enough. On Linux the alias resolves to the bridge **gateway**
-(`172.17.0.1` by default), and a loopback-only proxy is unreachable from the container:
-`curl: (7) Failed to connect to example.com:443 over proxy host.docker.internal`. So on Linux
-with the Docker backend the REPL also binds the gateway address, discovered with
-`docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}'` (falling back to
-`172.17.0.1`). The proxy never binds `0.0.0.0` or `::`; `EgressProxy` throws on a wildcard, and
-`egressBindHosts` never produces one. The extra listener enforces the same two gates as loopback
-(host allowlist at CONNECT, session token on every request), which
-`EgressProxy.test.ts` proves by sending a tokenless request to the non-loopback listener and
-getting `407`; see the threat model in `scripts/installer/THREAT-MODEL.md`.
+### The egress firewall (SEC-1 / T-01)
+
+The allowlist used to bind only clients that honour `HTTPS_PROXY`: the egress container ran on the
+default `bridge` with `--add-host host.docker.internal:host-gateway`, so a `curl --noproxy '*'
+https://<ip>` or a raw socket reached any host the daemon could. The egress sandbox is now
+L3-firewalled by network topology (`packages/trent-core/src/terminal/egress-network.ts`), so the
+**only** L3 destination it can reach is the proxy:
+
+- A **per-seat `--internal` Docker network** (`trent-egress-<label>`). An internal network has no
+  external route and its own subnet, so there is no public egress and no cross-seat lateral movement.
+  As a side effect it also blocks DNS-over-UDP to external names (the upstream resolver is
+  unroutable, so public names return SERVFAIL) without adding any resolver.
+- A minimal **dual-homed forwarder sidecar** (`trent-fwd-<label>`) that joins both the internal
+  network and the `bridge`, and relays exactly one TCP port to the host proxy. It runs a tiny
+  python3 TCP relay baked into the **pinned sandbox image** (`SANDBOX_IMAGE`, which carries python3),
+  under the same `--cap-drop=ALL` / `no-new-privileges` posture as every sandbox container. No extra
+  image is pulled; if the sandbox image is absent the firewall simply fails closed (SEC-2 skips the
+  egress container entirely in offline mode anyway).
+- The egress sandbox joins **only** the internal network, with `--add-host
+  host.docker.internal:<forwarder internal ip>` (never `host-gateway`), so its proxy alias resolves
+  to the forwarder and nothing else is routable.
+
+**Fail closed.** If the internal network or the forwarder cannot be built, or the forwarder has no
+internal IP, no egress container is created and the caller gets a clear `egress firewall
+unavailable: …` reason — there is never a silent fallback to the old bridge.
+
+The **host proxy bind logic is unchanged**. It still listens on loopback (macOS/Windows Docker
+Desktop, where the VM forwards `host.docker.internal` to host loopback) and additionally on the
+bridge **gateway** on Linux (`172.17.0.1` by default, discovered with `docker network inspect bridge
+--format '{{(index .IPAM.Config 0).Gateway}}'`); the forwarder reaches it over its bridge leg
+exactly as the egress container used to. The proxy never binds `0.0.0.0` or `::`; `EgressProxy`
+throws on a wildcard, and `egressBindHosts` never produces one. Both listeners enforce the same two
+gates (host allowlist at CONNECT, session token on every request), which `EgressProxy.test.ts`
+proves by sending a tokenless request to the non-loopback listener and getting `407`; see the threat
+model in `scripts/installer/THREAT-MODEL.md`. The topology was measured on this Docker Desktop host
+in `02_plan/output/security-egress-firewall-spike-2026-09-26.md`.
 
 ## Not yet implemented
 

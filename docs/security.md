@@ -123,6 +123,15 @@ the host shell parsed the command, the working directory and every environment v
 injection reachable by any agent-authored string. It also set no network flags, so the sandbox could
 reach whatever the host could.
 
+Network isolation now has two shapes. The isolated sandbox runs `--network none`. The egress sandbox
+is **L3-firewalled**: it joins a per-seat `--internal` Docker network whose only routable peer is a
+dual-homed forwarder sidecar that relays one port to the host proxy, so the only host it can reach is
+the proxy — a `curl --noproxy '*' https://<ip>` or a raw socket has no route off the internal
+network. Before this, the egress container sat on the default bridge with a `host-gateway` route, so
+the allowlist bound only clients that honoured `HTTPS_PROXY`. If the firewall cannot be built the
+egress sandbox is not created (fail closed, never a bridge fallback). See the egress-firewall section
+of [terminal.md](terminal.md) and `packages/trent-core/src/terminal/egress-network.ts`.
+
 `LocalBackend` is named "Local Execution Backend (Development Only)" for a reason: it runs commands
 on the host with the host's environment. It is not a sandbox.
 

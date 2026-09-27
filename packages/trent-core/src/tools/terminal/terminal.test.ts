@@ -27,10 +27,10 @@ function dockerCli(args: string[]): Promise<{ code: number; stdout: string; stde
 const gate = await probeDockerSandbox();
 const dockerAvailable = gate.ready;
 
-async function inspect(name: string): Promise<{ networkMode: string; capDrop: string; noNewPrivileges: boolean }> {
-  const res = await dockerCli(["inspect", "--format", "{{.HostConfig.NetworkMode}}|{{json .HostConfig.CapDrop}}|{{json .HostConfig.SecurityOpt}}", name]);
-  const [networkMode = "", capDrop = "", securityOpt = ""] = res.stdout.trim().split("|");
-  return { networkMode, capDrop, noNewPrivileges: securityOpt.includes("no-new-privileges") };
+async function inspect(name: string): Promise<{ networkMode: string; capDrop: string; noNewPrivileges: boolean; extraHosts: string }> {
+  const res = await dockerCli(["inspect", "--format", "{{.HostConfig.NetworkMode}}|{{json .HostConfig.CapDrop}}|{{json .HostConfig.SecurityOpt}}|{{json .HostConfig.ExtraHosts}}", name]);
+  const [networkMode = "", capDrop = "", securityOpt = "", extraHosts = ""] = res.stdout.trim().split("|");
+  return { networkMode, capDrop, noNewPrivileges: securityOpt.includes("no-new-privileges"), extraHosts };
 }
 
 describe.skipIf(!dockerAvailable)(`terminal on Docker${gate.skipNote}`, () => {
@@ -96,11 +96,26 @@ describe.skipIf(!dockerAvailable)(`terminal on Docker${gate.skipNote}`, () => {
     const egress = names.find((n) => n.includes("egress"));
     expect(egress).toBeDefined();
     const facts = await inspect(egress!);
-    expect(facts.networkMode).toBe("bridge");
+    // [SEC-1/T-01] The egress sandbox joins the per-seat `--internal` network, NEVER the default
+    // bridge, and its host.docker.internal points at the forwarder sidecar, not host-gateway.
+    expect(facts.networkMode).toMatch(/^trent-egress-/);
+    expect(facts.networkMode).not.toBe("bridge");
+    expect(facts.extraHosts).toContain("host.docker.internal:");
+    expect(facts.extraHosts).not.toContain("host-gateway");
     expect(facts.capDrop).toBe('["ALL"]');
     // The isolated container is untouched: no network, ever.
     const env = await adapter.execute('terminal {"command":"env | grep -c PROXY || true"}', {});
     expect(env.summary).toMatch(/^0$/m);
+  }, 180_000);
+
+  it("[SEC-1/T-01] cannot reach a non-proxy host at L3 — a --noproxy dial to a raw IP is unreachable", async () => {
+    // The whole point of the firewall: even bypassing HTTPS_PROXY, the only routable peer on the
+    // internal network is the forwarder. A raw dial to a public IP fails at L3, not at the proxy.
+    // 192.0.2.1 is RFC 5737 documentation space — never a real destination, no DNS involved.
+    const result = await adapter.execute('terminal {"command":"curl --noproxy \'*\' -sS --max-time 6 https://192.0.2.1/ ; echo rc=$?"}', {});
+    expect(result.summary).toMatch(/rc=[1-9]/); // curl failed
+    expect(result.summary).toMatch(/unreachable|couldn't connect|could not connect|failed to connect|timed out|timeout/i);
+    expect(result.summary).not.toMatch(/rc=0/);
   }, 180_000);
 
   it("the floor holds inside execute, i.e. with approval already granted", async () => {

@@ -13,8 +13,11 @@ export const TerminalConfigSchema = z.object({
   backend: TerminalBackendSchema.default("docker"),
   docker: z
     .object({
+      // [SEC-1/T-01] The `network` key was removed: it never reached the sandbox (dead wiring — the
+      // tool builder passed `docker: { image }` only), and the egress sandbox now runs behind a
+      // per-seat `--internal` network + forwarder sidecar (see terminal/egress-network.ts), not a
+      // configurable bridge. The isolated sandbox is always `--network none`.
       image: z.string().default(SANDBOX_IMAGE),
-      network: z.string().default("bridge"),
     })
     .default({}),
   ssh: z

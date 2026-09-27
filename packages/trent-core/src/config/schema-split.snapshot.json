@@ -29,8 +29,7 @@
     "terminal": {
       "backend": "docker",
       "docker": {
-        "image": "trent-sandbox:1",
-        "network": "bridge"
+        "image": "trent-sandbox:1"
       },
       "ssh": {
         "port": 22
@@ -279,8 +278,7 @@
     "terminal": {
       "backend": "local",
       "docker": {
-        "image": "fixture/sandbox:1",
-        "network": "host"
+        "image": "fixture/sandbox:1"
       },
       "ssh": {
         "host": "fixture.internal",

@@ -84,8 +84,6 @@ export interface ToolContext {
   readonly backend: "docker" | "local";
   readonly docker?: {
     readonly image: string;
-    /** Bridge network used only for commands that need egress; `none` otherwise. */
-    readonly bridgeNetwork?: string;
   };
   /** When set, egress-needing commands run behind the proxy; without it they have no network at all. */
   readonly egress?: {

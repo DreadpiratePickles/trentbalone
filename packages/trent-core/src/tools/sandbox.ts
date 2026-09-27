@@ -11,16 +11,74 @@
 import { mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { DockerBackend } from "../terminal/DockerBackend.js";
+import { DockerBackend, type DockerCreateOptions } from "../terminal/DockerBackend.js";
 import { LocalBackend } from "../terminal/LocalBackend.js";
 import { SANDBOX_IMAGE } from "../terminal/sandbox-image.js";
+import { ensureEgressNetwork, type EgressNetwork } from "../terminal/egress-network.js";
 import type { TerminalBackend, TerminalExecutionResult } from "../terminal/types.js";
 import { spilloverDir } from "./spillover.js";
 import type { ToolContext } from "./types.js";
 
 export const WORKSPACE_MOUNT = "/workspace";
 export const SPILLOVER_MOUNT = "/trent/spillover";
-const DEFAULT_BRIDGE = "bridge";
+const DEFAULT_PROXY_PORT = 8089;
+
+/** The proxy port the sandbox reaches the proxy on, from `egress.proxyUrl`. */
+export function proxyPortFromUrl(proxyUrl: string): number {
+  try {
+    const port = Number(new URL(proxyUrl).port);
+    return Number.isInteger(port) && port > 0 ? port : DEFAULT_PROXY_PORT;
+  } catch {
+    return DEFAULT_PROXY_PORT;
+  }
+}
+
+/** The forwarder's address inside the egress sandbox: `host.docker.internal` is repointed here. */
+export interface EgressWiring {
+  readonly networkName: string;
+  readonly forwarderIp: string;
+}
+
+/**
+ * The `docker create` options for one sandbox container. Pure, so the isolation flags and the
+ * egress-firewall wiring (`--network <internal net>`, `--add-host host.docker.internal:<forwarder>`,
+ * never `host-gateway`) are unit-testable.
+ */
+export function sandboxDockerOptions(
+  ctx: ToolContext,
+  containerName: string,
+  opts: { network: string; egressWiring?: EgressWiring },
+): DockerCreateOptions {
+  const egress = opts.egressWiring !== undefined ? ctx.egress : undefined;
+  return {
+    containerName,
+    image: ctx.docker?.image ?? SANDBOX_IMAGE,
+    network: opts.network,
+    workdir: WORKSPACE_MOUNT,
+    volumes: [
+      { hostPath: ctx.workspace, containerPath: WORKSPACE_MOUNT },
+      { hostPath: spilloverDir(ctx.profileDir), containerPath: SPILLOVER_MOUNT, readOnly: true },
+    ],
+    pidsLimit: 256,
+    ...(egress
+      ? {
+          caCertPath: egress.caCertPath,
+          proxyUrl: egress.proxyUrl,
+          proxyToken: egress.token,
+          credentialEnvNames: [...(egress.credentialEnvNames ?? [])],
+          // host.docker.internal points at the forwarder's internal IP — the ONLY reachable L3
+          // destination on the `--internal` network. Never `host-gateway`, which would re-open a
+          // broad route to the host and defeat the firewall.
+          extraHosts: [`host.docker.internal:${opts.egressWiring!.forwarderIp}`],
+        }
+      : {}),
+  };
+}
+
+/** Injectable seams for `DockerSandbox`, so the egress-firewall path is testable without a daemon. */
+export interface SandboxDeps {
+  readonly ensureEgressNetwork?: typeof ensureEgressNetwork;
+}
 
 export interface SandboxRunOptions {
   /** Working directory as the sandbox sees it. Defaults to the workspace root. */
@@ -58,9 +116,15 @@ class DockerSandbox implements Sandbox {
   private readonly roots: ReadonlyArray<readonly [string, string]>;
   private isolated: DockerBackend | undefined;
   private egress: DockerBackend | undefined;
+  private egressNetwork: EgressNetwork | undefined;
   private readonly label = randomBytes(4).toString("hex");
+  private readonly ensureNetwork: typeof ensureEgressNetwork;
 
-  constructor(private readonly ctx: ToolContext) {
+  constructor(
+    private readonly ctx: ToolContext,
+    deps: SandboxDeps = {},
+  ) {
+    this.ensureNetwork = deps.ensureEgressNetwork ?? ensureEgressNetwork;
     this.roots = [
       [ctx.workspace, WORKSPACE_MOUNT],
       [spilloverDir(ctx.profileDir), SPILLOVER_MOUNT],
@@ -71,43 +135,65 @@ class DockerSandbox implements Sandbox {
     return mapPath(hostPath, this.roots);
   }
 
-  private backend(network: boolean): DockerBackend {
-    if (!network) {
-      this.isolated ??= this.create("none", false);
-      return this.isolated;
+  private makeBackend(name: string, network: string, egressWiring?: EgressWiring): DockerBackend {
+    // Docker creates a missing bind-mount source as a root-owned directory; make it ours first.
+    mkdirSync(spilloverDir(this.ctx.profileDir), { recursive: true });
+    return new DockerBackend(
+      sandboxDockerOptions(this.ctx, name, egressWiring ? { network, egressWiring } : { network }),
+    );
+  }
+
+  private seatName(role: "egress" | "isolated"): string {
+    return `trent-seat-${role}-${process.pid}-${this.label}`;
+  }
+
+  private isolatedBackend(): DockerBackend {
+    // The isolated sandbox is unchanged: full L3 isolation, `--network none`, no egress plumbing.
+    this.isolated ??= this.makeBackend(this.seatName("isolated"), "none");
+    return this.isolated;
+  }
+
+  /**
+   * The egress sandbox, built behind the L3 firewall: a per-seat `--internal` network plus a
+   * forwarder sidecar. FAIL CLOSED — if the firewall cannot be built the error propagates and no
+   * egress container is created; there is never a silent fallback to the default bridge.
+   */
+  private async ensureEgressBackend(): Promise<DockerBackend> {
+    if (this.egress) return this.egress;
+    if (!this.ctx.egress) {
+      throw new Error("egress firewall unavailable: no egress proxy is configured for this sandbox");
     }
-    this.egress ??= this.create(this.ctx.docker?.bridgeNetwork ?? DEFAULT_BRIDGE, true);
+    const net = await this.ensureNetwork({
+      label: this.label,
+      // The forwarder always runs the pinned sandbox image, never `ctx.docker.image`: the relay
+      // needs python3, which the sandbox image carries and an arbitrary configured image may not.
+      image: SANDBOX_IMAGE,
+      proxyPort: proxyPortFromUrl(this.ctx.egress.proxyUrl),
+    });
+    this.egressNetwork = net;
+    this.egress = this.makeBackend(this.seatName("egress"), net.networkName, {
+      networkName: net.networkName,
+      forwarderIp: net.forwarderInternalIp,
+    });
     return this.egress;
   }
 
-  private create(network: string, withEgress: boolean): DockerBackend {
-    // Docker creates a missing bind-mount source as a root-owned directory; make it ours first.
-    mkdirSync(spilloverDir(this.ctx.profileDir), { recursive: true });
-    const egress = withEgress ? this.ctx.egress : undefined;
-    return new DockerBackend({
-      containerName: `trent-seat-${withEgress ? "egress" : "isolated"}-${process.pid}-${this.label}`,
-      image: this.ctx.docker?.image ?? SANDBOX_IMAGE,
-      network,
-      workdir: WORKSPACE_MOUNT,
-      volumes: [
-        { hostPath: this.ctx.workspace, containerPath: WORKSPACE_MOUNT },
-        { hostPath: spilloverDir(this.ctx.profileDir), containerPath: SPILLOVER_MOUNT, readOnly: true },
-      ],
-      pidsLimit: 256,
-      ...(egress
-        ? {
-            caCertPath: egress.caCertPath,
-            proxyUrl: egress.proxyUrl,
-            proxyToken: egress.token,
-            credentialEnvNames: [...(egress.credentialEnvNames ?? [])],
-            extraHosts: ["host.docker.internal:host-gateway"],
-          }
-        : {}),
-    });
-  }
-
   async run(command: string, options?: SandboxRunOptions): Promise<TerminalExecutionResult> {
-    const backend = this.backend(options?.network === true);
+    let backend: DockerBackend;
+    if (options?.network === true) {
+      try {
+        backend = await this.ensureEgressBackend();
+      } catch (error) {
+        // Fail closed: no egress container, and a clear reason — not today's proxy-honour-only bridge.
+        const reason = error instanceof Error ? error.message : String(error);
+        const stderr = /egress firewall unavailable/i.test(reason)
+          ? reason
+          : `egress firewall unavailable: ${reason}`;
+        return { exitCode: 1, stdout: "", stderr, durationMs: 0 };
+      }
+    } else {
+      backend = this.isolatedBackend();
+    }
     try {
       return await backend.exec(command, { cwd: options?.cwd ?? WORKSPACE_MOUNT, timeoutMs: options?.timeoutMs });
     } catch (error) {
@@ -120,9 +206,13 @@ class DockerSandbox implements Sandbox {
   }
 
   async cleanup(): Promise<void> {
+    // Remove the seat containers first (they are attached to the internal network), then the
+    // forwarder and the per-seat network the firewall created.
     await Promise.all([this.isolated?.cleanup(), this.egress?.cleanup()]);
+    await this.egressNetwork?.cleanup();
     this.isolated = undefined;
     this.egress = undefined;
+    this.egressNetwork = undefined;
   }
 }
 
@@ -155,8 +245,8 @@ class LocalSandbox implements Sandbox {
   }
 }
 
-export function createSandbox(ctx: ToolContext): Sandbox {
-  return ctx.backend === "docker" ? new DockerSandbox(ctx) : new LocalSandbox(ctx);
+export function createSandbox(ctx: ToolContext, deps: SandboxDeps = {}): Sandbox {
+  return ctx.backend === "docker" ? new DockerSandbox(ctx, deps) : new LocalSandbox(ctx);
 }
 
 /** POSIX single-quote escaping: the only way a path or literal enters a `sh -c` string. */

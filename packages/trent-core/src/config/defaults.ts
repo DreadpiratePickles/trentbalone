@@ -29,7 +29,6 @@ export const DEFAULT_CONFIG: TrentConfig = {
     backend: "docker",
     docker: {
       image: SANDBOX_IMAGE,
-      network: "bridge",
     },
     ssh: {
       port: 22,

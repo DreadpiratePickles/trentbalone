@@ -8,7 +8,7 @@
   "budget": { "daily_cap": 2500, "currency": "EUR", "per_run_cap": 250, "alert_thresholds": [25, 60, 90] },
   "terminal": {
     "backend": "local",
-    "docker": { "image": "fixture/sandbox:1", "network": "host" },
+    "docker": { "image": "fixture/sandbox:1" },
     "ssh": { "host": "fixture.internal", "port": 2222, "user": "trent", "key_path": "/keys/id_ed25519" }
   },
   "egress": { "enabled": false, "proxy_port": 9090, "auto_token": false, "intercept_domains": ["api.fixture.test"] },
