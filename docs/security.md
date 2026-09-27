@@ -824,6 +824,58 @@ The `lower-trents-own-guardrails` hardline rule refuses `trent security preset` 
 the operator can run it. Code: `config/security-presets.ts`. Tests: `security-presets.test.ts` and
 `apps/cli/src/commands/__tests__/security-preset.test.ts`.
 
+### Run receipt
+
+`trent run` ends with a short receipt of what security did during the run. In text mode it is
+printed after the cost line. With `--json`, and on the final `result` line of
+`--format stream-json`, it is the `securityReceipt` key. It changes no exit code. If the collector
+fails, the run loses its receipt and nothing else.
+
+```
+Security receipt
+  egress     proxy on · 3 allowed · 1 refused
+             allowed  api.openai.com ×3
+             refused  exfil.example ×1 (host_not_allowlisted)
+  secrets    openai key held by the broker: injected into 3 request(s), withheld from 0; the value is never shown
+  untrusted  2 call(s): web_search ×2 · workspace network-derived
+  holds      1 · provenance hold: memory
+  refusals   1 · hardline rm-root-home: terminal
+  tools      read_file ×4, web_search ×2, terminal ×1
+  posture    offline off · terminal local (not isolated)
+```
+
+Every line counts events from a gate that already exists. The receipt enforces nothing.
+
+| Line | Source |
+|---|---|
+| `egress` | `EgressProxy`'s `onDecision` hook: one event per request it allowed or refused, with the refusal's reason code |
+| `secrets` | `applyCredentials`' `onInjected` and `onWithheld` callbacks. The provider appears only when its key was handed to a running broker |
+| `untrusted` | the build's provenance ledger (each call's own tag) and the `tools/terminal/taint.ts` workspace marker |
+| `holds`, `refusals` | the dispatch chain's own `needs_approval` and `blocked` records. The rule is parsed from the fixed summary formats in `autonomy.ts` and `provenance.ts` |
+| `posture` | `TRENT_OFFLINE` and the resolved sandbox backend. The local backend is marked not isolated |
+
+The receipt never holds a secret. It keeps hosts (control bytes stripped, length capped), a provider
+name, tool names from the build's own vocabulary, and rule ids. It never keeps a header, token,
+action argument or tool summary. `security-receipt.sentinel.test.ts` sends a sentinel key through a
+real proxy, checks that the key reached the upstream, and checks that neither the key nor the token
+appears in the receipt's JSON or its human render.
+
+What it does not show, because nothing records it yet:
+
+- Model calls made by the host process. These are not proxied, so they never appear under `egress`
+  or `secrets`.
+- Egress that skips the proxy: host-side `trentFetch` paths, packets the Docker L3 firewall drops,
+  and dials the offline chokepoint refuses.
+- A past run's receipt. It is not persisted, so the spec's run-output `--receipt` view does not exist.
+- Whether a solo hold was parked or refused. It is counted as a hold.
+
+Scope: the collector belongs to the runtime's tool wiring. `trent run`, including `--solo`, builds
+one runtime per run, so its receipt covers exactly one run. The REPL, gateway, cron and heartbeat
+keep a runtime alive across runs and do not print a receipt. Code: `governance/security-receipt.ts`
+(view and render) and `security-receipt-collector.ts`. Tests: `security-receipt.test.ts`,
+`security-receipt.sentinel.test.ts`, `apps/cli/src/repl/__tests__/tools.receipt.test.ts` and
+`apps/cli/src/commands/__tests__/run-receipt.test.ts`.
+
 ## Threat → test map
 
 `docs/security-threat-map.json` lists every threat the security documents name: T-01 to T-12 from

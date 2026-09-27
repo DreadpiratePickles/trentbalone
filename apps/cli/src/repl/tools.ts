@@ -21,12 +21,14 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
-import { EgressProxy, TokenManager, credentialHostsForProvider, egressBindHosts } from "@trent/core/egress/index.js";
+import { EgressProxy, TokenManager, credentialHostsForProvider, egressBindHosts, isOffline, type EgressDecision } from "@trent/core/egress/index.js";
+import { createRunSecurityCollector, type RunSecurityCollector } from "@trent/core/governance/security-receipt-collector.js"; // [D16]
 import type { ConfigManager } from "@trent/core/config/index.js";
 import { SANDBOX_IMAGE } from "@trent/core/terminal/index.js";
 import {
   buildTrentToolAdapters,
   buildTrentTools,
+  createProvenanceLedger, // [D16]
   enabledToolsets,
   type DelegatePort,
   type ProvenanceLedger, // [C2]
@@ -95,6 +97,8 @@ export interface StartEgressInput {
    * `trent egress start` daemon passes the durable file-backed manager so tokens issued elsewhere resolve.
    */
   readonly tokenManager?: TokenManager;
+  /** [D16] Told of every allowed or refused request, for the run's security receipt. Observes only. */
+  readonly onDecision?: (decision: EgressDecision) => void;
 }
 
 export interface ToolWiringDeps {
@@ -134,6 +138,8 @@ export interface ToolWiring {
   readonly provenance?: ProvenanceLedger;
   readonly sandbox: ReplSandbox;
   readonly egress: ReplEgressStatus;
+  /** [D16] What security did while this wiring was up, read at the end of a run for its receipt. */
+  readonly security?: RunSecurityCollector;
   cleanup(): Promise<void>;
 }
 
@@ -166,6 +172,7 @@ export async function startEgressProxy(input: StartEgressInput): Promise<EgressH
     configManager: input.configManager,
     ...(input.interceptDomains ? { interceptDomains: [...input.interceptDomains] } : {}),
     ...(input.bindHosts ? { bindHosts: [...input.bindHosts] } : {}),
+    ...(input.onDecision ? { onDecision: input.onDecision } : {}), // [D16]
   });
   await proxy.start();
   let token: string;
@@ -216,6 +223,9 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
   const sandbox = await resolveSandbox(deps);
   const toolsets = enabledToolsets(deps.config);
 
+  // [D16] The run's security collector: fed by the proxy, the build's ledger and the built adapters below.
+  const security = createRunSecurityCollector({ backend: sandbox.backend, offline: isOffline(process.env), egressState: "off", workspace: deps.workspace });
+  const credentials = providerCredentials(deps.config);
   let handle: EgressHandle | undefined;
   let egress: ReplEgressStatus;
   if (deps.config.egress?.enabled === false) {
@@ -231,10 +241,11 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
       handle = await (deps.startEgress ?? startEgressProxy)({
         configManager: deps.configManager,
         interceptDomains: deps.config.egress?.intercept_domains,
-        credentials: providerCredentials(deps.config),
+        credentials,
         // [egress host binding] the key goes only to the host the provider's model calls go to
         credentialHosts: credentialHostsForProvider(deps.config.provider, process.env),
         bindHosts,
+        onDecision: (decision) => security.egressDecision(decision), // [D16]
       });
       egress = { state: "on", port: handle.port };
     } catch (error) {
@@ -242,8 +253,11 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
     }
   }
 
+  // [D16] Only the provider NAME reaches the receipt, and only when its key was handed to a running broker.
+  security.setEgressState(egress.state, egress.state === "on" && Object.keys(credentials).length > 0 ? deps.config.provider : undefined);
   const buildDeps: ToolBuildDeps = {
     workspace: deps.workspace,
+    provenance: security.observeLedger(createProvenanceLedger()), // [D16] the build's own ledger, observed
     profileDir: deps.profileDir,
     pluginsDir: path.join(deps.profileDir, "plugins"),
     backend: sandbox.backend,
@@ -273,7 +287,8 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
     await handle?.stop();
     throw error;
   }
-  const { adapters, skipped } = build;
+  const { skipped } = build;
+  const adapters = security.observeAdapters(build.adapters); // [D16] the dispatch chain's holds and refusals, observed
 
   let cleaned = false;
   return {
@@ -287,6 +302,7 @@ export async function wireTools(deps: ToolWiringDeps): Promise<ToolWiring> {
     ...(build.provenance === undefined ? {} : { provenance: build.provenance }), // [C2]
     sandbox,
     egress,
+    security, // [D16]
     cleanup: async () => {
       if (cleaned) return;
       cleaned = true;

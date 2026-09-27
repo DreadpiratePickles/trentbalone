@@ -58,6 +58,21 @@ export interface EgressProxyOptions {
   log?: (line: string) => void;
   /** [D3] The resolver for the single upstream resolution. Defaults to `dns.promises.lookup`. */
   lookup?: LookupFn;
+  /**
+   * [D16] Told of every request the proxy allowed or refused, for the run's security receipt. It
+   * observes only: it is called after the decision is made, a throw from it is swallowed, and it is
+   * given the host, the reason code and the credential outcome, never a header, token or secret.
+   */
+  onDecision?: (decision: EgressDecision) => void;
+}
+
+/** [D16] One proxy decision. `rule` is the refusal's reason code; `credential` what the broker did. */
+export interface EgressDecision {
+  readonly host: string;
+  readonly port?: number;
+  readonly verdict: "allowed" | "refused";
+  readonly rule?: string;
+  readonly credential?: "injected" | "withheld" | "none";
 }
 
 /** Bound on the remembered (token, host) pairs a withheld line was written for; cleared when full. */
@@ -132,6 +147,7 @@ export class EgressProxy {
   private readonly upstreamCa?: string[];
   private readonly upstreamOverrides: Record<string, UpstreamOverride>;
   private readonly lookup?: LookupFn;
+  private readonly onDecision?: (decision: EgressDecision) => void; // [D16]
   private readonly targets = new WeakMap<net.Socket, Target>();
   private readonly sockets = new Set<net.Socket>();
   private readonly logger: StructuredLogger;
@@ -156,7 +172,17 @@ export class EgressProxy {
     this.upstreamCa = options?.upstreamCa;
     this.upstreamOverrides = options?.upstreamOverrides ?? {};
     this.lookup = options?.lookup;
+    this.onDecision = options?.onDecision;
     this.logger = new StructuredLogger({ runId: "egress", stage: "egress.proxy", ...(options?.log ? { sink: options.log } : {}) });
+  }
+
+  /** [D16] Reports a decision already made. The observer can neither change it nor break the proxy. */
+  private decide(decision: EgressDecision): void {
+    try {
+      this.onDecision?.(decision);
+    } catch {
+      // An observer never fails what it observes.
+    }
   }
 
   public getTokenManager(): TokenManager {
@@ -250,6 +276,7 @@ export class EgressProxy {
 
     if (!isHostAllowed(host, this.interceptDomains)) {
       refuseConnect(socket, 403, "host_not_allowlisted");
+      this.decide({ host, port, verdict: "refused", rule: "host_not_allowlisted" });
       return;
     }
 
@@ -258,6 +285,7 @@ export class EgressProxy {
       leaf = this.ca.issueLeaf(host);
     } catch {
       refuseConnect(socket, 403, "certificate_issue_failed");
+      this.decide({ host, port, verdict: "refused", rule: "certificate_issue_failed" });
       return;
     }
 
@@ -306,6 +334,7 @@ export class EgressProxy {
       );
     } catch {
       writeJson(res, 400, { error: "egress_refused", reason: "unparseable_target" });
+      this.decide({ host: "", verdict: "refused", rule: "unparseable_target" });
       return;
     }
 
@@ -368,9 +397,11 @@ export class EgressProxy {
     target: Target,
     useTls: boolean
   ): Promise<void> {
+    const where = { host: target.host, port: target.port }; // [D16]
     if (!isHostAllowed(target.host, this.interceptDomains)) {
       writeJson(res, 403, REFUSAL_HOST);
       req.resume();
+      this.decide({ ...where, verdict: "refused", rule: REFUSAL_HOST.reason });
       return;
     }
 
@@ -379,6 +410,7 @@ export class EgressProxy {
     if (!record) {
       writeJson(res, 407, REFUSAL_NO_TOKEN);
       req.resume();
+      this.decide({ ...where, verdict: "refused", rule: REFUSAL_NO_TOKEN.reason });
       return;
     }
 
@@ -386,14 +418,23 @@ export class EgressProxy {
     if ("refused" in dial) {
       writeJson(res, dial.refused ? 403 : 502, dial.refused ? REFUSAL_ADDRESS : { error: "egress_upstream_error", reason: "unresolvable_host" });
       req.resume();
+      this.decide({ ...where, verdict: "refused", rule: dial.refused ? REFUSAL_ADDRESS.reason : "unresolvable_host" });
       return;
     }
 
+    let credential: EgressDecision["credential"] = "none"; // [D16] what the broker did, never what it wrote
     const headers = applyCredentials(req.headers, target.host, record, {
       port: target.port,
-      onWithheld: (event) => this.noteWithheld(record, event),
+      onWithheld: (event) => {
+        credential = "withheld";
+        this.noteWithheld(record, event);
+      },
+      onInjected: () => {
+        credential = "injected";
+      },
     });
     headers.host ??= target.host;
+    this.decide({ ...where, verdict: "allowed", credential });
 
     const options: https.RequestOptions = {
       host: dial.host,

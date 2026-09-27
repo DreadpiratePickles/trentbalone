@@ -43,6 +43,7 @@ import type { OrcEvent } from "@trent/core/orchestrator/index.js";
 import { parseModelPin } from "@trent/core/orchestrator/model-env.js";
 import { verdictOf, verdictResultFields, type RunFailureVerdict, type VerdictResultFields } from "@trent/core/orchestrator/verdict.js"; // [P2-11]
 import { questionFromEvent } from "@trent/core/tools/human/index.js";
+import { buildSecurityReceipt, renderSecurityReceipt, type SecurityReceipt } from "@trent/core/governance/security-receipt.js"; // [D16]
 import { ApprovalGate } from "../../repl/approvals.js";
 import { quietStdoutForMachines, routeAppOutputToLog } from "./run-output.js"; // [S2]
 import { BudgetLedger, formatCents } from "../../repl/budget.js";
@@ -83,6 +84,8 @@ type RunResult = {
   mode: AgentMode;
   error?: string;
   approval_id?: string;
+  /** [D16] What security did during the run (`governance/security-receipt.ts`); absent when the runtime kept no collector. */
+  securityReceipt?: SecurityReceipt;
 } & Partial<VerdictResultFields>; // [P2-11] a failed run's verdict (`orchestrator/verdict.ts`): reason, failed_steps, ...
 
 function fail(message: string, target?: string): never {
@@ -168,6 +171,16 @@ function exitFor(result: RunResult, stop: StopReason | undefined): ExitCode {
   if (result.status === "paused") return EXIT.APPROVAL_REQUIRED;
   if (result.status === "cancelled") return stop === "budget" ? EXIT.BUDGET : EXIT.INTERRUPT;
   return result.reason === "model_calls_failed" ? EXIT.PROVIDER : EXIT.RUN_FAILED; // [P2-11] 5 when a provider refused the run's calls
+}
+
+/** [D16] The run's receipt, read once the stream has ended. A collector that fails costs the receipt, never the run or its exit code. */
+function securityReceiptOf(runtime: HeadlessRuntime): SecurityReceipt | undefined {
+  try {
+    const collector = runtime.tools?.security;
+    return collector === undefined ? undefined : buildSecurityReceipt(collector.snapshot());
+  } catch {
+    return undefined;
+  }
 }
 
 interface Drive {
@@ -363,6 +376,8 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
     ...(error === undefined ? {} : { error }),
     ...(approvalId === undefined ? {} : { approval_id: approvalId }), ...verdictResultFields(verdict), // [P2-11]
   };
+  const securityReceipt = securityReceiptOf(runtime); // [D16] off the hot path: after the last event
+  if (securityReceipt !== undefined) result.securityReceipt = securityReceipt;
 
   const emitFinal = (drive: Drive): void => {
     if (streaming) out(JSON.stringify(drive.result));
@@ -374,6 +389,7 @@ async function driveRun(ctx: CommandContext, objective: string, format: Format, 
         `  ${formatCents(drive.result.cost_cents)} · ${drive.result.duration_ms}ms · run ${drive.result.run_id ?? "none"}`,
       ),
     );
+    if (drive.result.securityReceipt !== undefined) for (const line of renderSecurityReceipt(drive.result.securityReceipt)) out(ctx.theme.meta(line)); // [D16]
   };
 
   return { drive: { result, stop }, release: async () => { await release(); finish(); }, emitFinal };

@@ -79,6 +79,8 @@ export interface CredentialTarget {
   readonly port?: number;
   /** Called when the record's secret is withheld from this host. Given the host, never the secret. */
   readonly onWithheld?: (event: SecretWithheld) => void;
+  /** [D16] Called once when the record's secret is written onto this request. Given nothing: never the secret. */
+  readonly onInjected?: () => void;
 }
 // [/egress host binding]
 
@@ -118,6 +120,7 @@ export function applyCredentials(
 
   if (!secret) return out;
 
+  destination.onInjected?.(); // [D16] every branch below writes the secret
   const explicit = record.realCredentials.headerName;
   if (explicit) {
     out[explicit.toLowerCase()] = secret;
