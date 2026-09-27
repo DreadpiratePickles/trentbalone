@@ -23,6 +23,7 @@ import {
 } from "@trent/core/governance/security-audit.js";
 import { gradeSecurity, type SecurityGrade } from "@trent/core/governance/security-grade.js";
 import { proveOffline, type OfflineProof } from "@trent/core/doctor/index.js";
+import { presetSubSpec } from "./security-preset.js"; // [D15] preset
 import type { CommandContext } from "../context.js";
 import type { CommandSpec } from "../registry.js";
 
@@ -284,11 +285,11 @@ function offlineLines(proof: OfflineProof, ctx: CommandContext): string[] {
 
 export const securitySpec: CommandSpec = {
   name: "security",
-  description: "Read-only security reports over the active profile",
+  description: "Security reports over the active profile, and the operator-only posture preset",
   options: [
     { flags: "--offline", description: "Prove the offline egress surface is loopback-only; exit non-zero if any path is OPEN" },
   ],
-  subcommands: [statusSubSpec, auditSubSpec],
+  subcommands: [statusSubSpec, auditSubSpec, presetSubSpec],
   async run(ctx, opts) {
     if (opts.offline === true) {
       const manager = ctx.config();

@@ -798,6 +798,32 @@ teach a reader to skip the section.
 `packages/trent-core/src/governance/security-audit.ts`, tested in `security-audit.test.ts` and
 `apps/cli/src/commands/__tests__/security.test.ts`.
 
+### Presets
+
+`trent security preset paranoid` sets the hard posture in one command; `trent security preset
+standard` puts the same keys back to their documented defaults; `trent security preset` with no
+name shows which preset is active (or `custom`) and what each would change. A preset is a bundle of
+keys the gate chain already reads, not a new mode: applying one is exactly the same as setting those
+keys by hand.
+
+| Key | `paranoid` | `standard` |
+|---|---|---|
+| `terminal.backend` | `docker` | `docker` |
+| `egress.enabled` | `true` | `true` |
+| `autonomy` | `ask_always` | `ask_dangerous` |
+| `privacy.redact_prompts` | `true` | `false` |
+| `disabled_toolsets` | adds `browser`, `social` | removes `browser`, `social` |
+
+No other key is touched, and any other `disabled_toolsets` entry stays. The command prints the diff and
+the grade before and after (the same grade as `trent security status`). `--dry-run` writes nothing and
+still shows both. `--json` returns the same data. A second apply changes nothing and does not write the file.
+Four things in the S5.5 bundle have no config key, so no preset sets them. Offline is per run only
+(`--offline`, `TRENT_OFFLINE`). MCP consent is always required. The sandbox's pids and memory limits
+are fixed in `tools/sandbox.ts`. No key makes a run fail when the L3 firewall cannot be built.
+The `lower-trents-own-guardrails` hardline rule refuses `trent security preset` from a tool, so only
+the operator can run it. Code: `config/security-presets.ts`. Tests: `security-presets.test.ts` and
+`apps/cli/src/commands/__tests__/security-preset.test.ts`.
+
 ## Reported, not fixed: defects in the wrapped application
 
 `apps/web/` is read-only in this repository. These are real and they are outside the CLI's scope.
