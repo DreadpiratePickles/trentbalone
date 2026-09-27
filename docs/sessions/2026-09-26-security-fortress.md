@@ -110,3 +110,81 @@ sandbox's --add-host host.docker.internal repoints at the forwarder's internal I
 egress container) if net/forwarder can't be built. Side finding: `terminal.docker.network` is a live
 schema key but DEAD wiring (tools/index.ts:290 passes image only) -> wire it or delete it.
 Implementable now; delegate to Opus after S1.4 lands (both reference tools/index.ts).
+
+## Landings + in-flight (checkpoint)
+Committed: 73b8435 S1.2+S1.3 (git-tree deny, vision/media/a2a taint); 1e6a4e2 S1.4 (social through the
+egress proxy, bsky.social+api.buffer.com allowlisted); 3a38eb7 docs (audits, plan, review, specs);
+5d2a84f S2a-1 (egress/offline.ts: one-way switch + loopback-only assertLocalTarget).
+Follow-up chip spawned: createEgressFetch forwards only string bodies (Bluesky binary blob would send
+empty) — task_79ee1e98.
+In flight: S1.1 firewall (per-seat --internal net + forwarder sidecar, fail-closed) on sandbox.ts/
+DockerBackend.ts/tools/index.ts; S2a-2 dial chokepoint (egress/dial.ts trentFetch + rewire ~9 direct-
+fetch modules) on model-gateway/embedder/connect/traces/updater/cron.
+Remaining SEC-2: S2a-3 config loader (offline rejects hosted provider/escalate/embedder/otlp/gateway,
+loopback-only allowlist, no egress container, escalation unavailable); S2b-1 egress/registry.ts +
+coverage test; S2b-2 doctor/checks/offline.ts + `trent security --offline` proof (RFC5737 canary) +
+browser/faster-whisper gates, run under Bun. Then SEC-3 (floors), SEC-4 (mcp consent, email fail-closed),
+SEC-5 (trust-UX surfaces).
+
+## SEC-1 COMPLETE
+- 73b8435 S1.2/S1.3, 1e6a4e2 S1.4, 5d2a84f S2a-1 (SEC-2 core), ba8d3a0 S1.1 firewall.
+- S1.1 live-verified on this Docker Desktop host: 403-through-proxy holds; curl --noproxy 192.0.2.1
+  Network unreachable. terminal.docker.network (dead key) deleted. All four SEC-1 gaps that
+  contradicted printed guarantees are closed.
+- S2a-2 dial agent still running (egress/dial.ts + egress/index.ts + rewiring model-gateway/embedder/
+  connect/traces/updater/cron). Commit when it lands, then S2a-3 config loader.
+
+## SEC-2a COMPLETE
+- 5d2a84f S2a-1 (offline.ts: switch + loopback rule), f81190f S2a-2 (dial.ts chokepoint + ~15 modules
+  rewired), 892805a S2a-3 (offline-config.ts + assertOfflineConfig wired into createHeadlessRuntime).
+- Offline flags for S2b: updater/release.ts dials via node:https (needs config rejection or a socket
+  gate — trentFetch can't wrap it); cron alert transport is injected deps.alert (confirm wiring);
+  no-egress-container + loopback-only proxy allowlist + escalation-unavailable are runtime gates for S2b.
+- Next: S2b-1 egress/registry.ts + coverage test; S2b-2 doctor/checks/offline.ts + `trent security
+  --offline` proof (RFC5737 192.0.2.1 canary) + browser/faster-whisper offline gates, run under Bun.
+  Delegated to an Opus agent.
+
+## SEC-3 landing (defense-in-depth floors)
+- 1d880a3 SEC-3a hardline: read-external-credentials (T-05, ~/.aws etc.), write-to-trent-secrets
+  broadened to control files (T-07: config.yaml/hooks-consent.json/gateway.json/approvals-audit.ndjson/
+  idempotency.json), new lower-trents-own-guardrails rule (the Hermes H-X-02 class: refuses `trent
+  config set|hooks consent|mcp add|approvals approve|connect|security preset` from a tool). docs table
+  update held for the docs reconciliation pass (S2b agent may also touch docs/security.md).
+- SEC-3b approval-floors (T-06, isolating): interpreter -c/-e payload extraction + shell-exec-call arg
+  extraction (os.system/system/execSync/subprocess.*) so `python3 -c 'os.system("rm -rf ~")'` and
+  `perl -e 'system("rm -rf /etc")'` hit the floor; new hardline pattern for rmtree(expanduser("~"))/
+  rmtree("/"). 238 governance/approval tests green locally.
+- T-10 sandbox --memory limit: deferred until S2b lands (S2b edits sandbox.ts).
+Uncommitted in tree: my docs/security.md hardline-table edit (to fold into docs reconciliation).
+S2b agent (registry + doctor offline proof + browser/whisper/updater gates) still running.
+
+## SEC-2 COMPLETE (offline mode, provable)
+- c6d9719 SEC-3b interpreter payloads; e68d799 S2b (registry 33 rows + coverage test, doctor/checks/
+  offline.ts + `trent security --offline` proof dialing RFC5737 192.0.2.1, browser/whisper/updater/
+  sandbox offline gates). Bun-proven: trentFetch refuses 192.0.2.1 under Bun's native fetch (bun 1.4.2).
+- SEC-4 agent (MCP consent T-08 + email fail-closed T-09) still running on mcp/email (disjoint).
+- Now unblocked: T-10 sandbox --memory cap (sandbox.ts committed); SEC-5 trust-UX (security.ts committed;
+  spec at 02_plan/output/security-trust-ux-spec-2026-09-26.md).
+- Docs reconciliation still pending: my SEC-3 hardline-table rows in docs/security.md (uncommitted, survived
+  — S2b did not touch docs), plus offline-mode docs. Do in a docs pass near the end.
+
+## SEC-4 + T-10 landed; two concurrent-wave regressions handled
+- 985c6b7 T-10 sandbox --memory 2g. d7c6be0 SEC-4-A MCP consent-before-spawn + tool-def pin.
+  a34ea3a SEC-4-B email fail-closed without authserv_id.
+- Regression 1 (a2a/registration): my SEC-1 T-03 (a2a in UNTRUSTED_ADAPTERS) made classifyCall tag
+  every a2a call `inbound` (adapterProvenance is adapter-level). DECISION: keep a2a uniformly untrusted
+  (conservative, consistent with vision/media; a peer is another agent) and update the registration
+  test to expect the inbound tags. a2a_list/history now also inbound = minor safe friction (a send
+  after reading a peer is held). Committed as its own fix (isolating).
+- Regression 2 (docs-truth "23 checks"): S2b added a 24th doctor check (checkOffline). Fix = docs 23->24
+  in README.md + docs/doctor.md. DEFERRED to the docs reconciliation pass (README is being edited by the
+  SEC-5 agent for `trent panic`); docs-truth stays red until then, fixed before final verification.
+- SEC-5 agent (posture card + grade, trent panic) still running.
+
+## SEC-5 landed + docs reconciled
+- 04442a8 S5.1 posture card + letter grade (`trent security status`), 6877632 S5.3 `trent panic`.
+- a932be7 a2a test fix; 8c22cba hardline docs; e28a014 docs reconcile (README 38/160 commands, 24
+  doctor checks + row, docs/security.md "Offline mode" section).
+- Deferred (not built): S5.5 paranoid preset (`trent security preset`), S5.2 receipt, S5.4 egress
+  ledger, S5.6 explain/diff — follow-ups; the hardline rule already pre-blocks `security preset`.
+- Next: full clean-HEAD core+cli suite; then AGENTS.md defect status, memory, report.
