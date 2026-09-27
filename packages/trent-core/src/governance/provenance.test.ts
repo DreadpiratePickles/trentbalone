@@ -45,7 +45,8 @@ const skills = adapter("skills", ["skills_list", "skill_view", "skill_manage"]);
 
 describe("adapterProvenance", () => {
   it("names web, browser, MCP and plugin output untrusted and everything Trent runs itself trusted", () => {
-    expect([...UNTRUSTED_ADAPTERS].sort()).toEqual(["a2a", "browser", "inbound", "mcp", "media", "plugins", "vision", "web"]);
+    // [D9] derived from `tools/provenance-registry.ts`; the read-only app's own off-machine adapters are declared too.
+    expect([...UNTRUSTED_ADAPTERS].sort()).toEqual(["a2a", "browser", "camofox", "github", "inbound", "mcp", "media", "plugins", "steel browser", "vision", "web"]);
     expect(adapterProvenance("web", "web_extract")).toBe("untrusted");
     expect(adapterProvenance("browser", "browser_get_text")).toBe("untrusted");
     expect(adapterProvenance("mcp", "mcp_status")).toBe("untrusted");

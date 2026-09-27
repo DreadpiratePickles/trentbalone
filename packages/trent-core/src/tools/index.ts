@@ -408,6 +408,7 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
   const ledger = deps.provenance ?? createProvenanceLedger();
   const tagged = provenanceAdapters(guarded, {
     ledger,
+    workspace: deps.workspace, // [D11] reads of a workspace a network command wrote into are untrusted
     ...(config.provenance === undefined ? {} : { policy: config.provenance }),
     hold: (input) =>
       holdMemoryWrite({

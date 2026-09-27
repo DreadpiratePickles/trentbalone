@@ -16,6 +16,7 @@ import { createSandbox, shellQuote, type Sandbox } from "../sandbox.js";
 import { fitSummary, headTail } from "../spillover.js";
 import type { ToolCallRecord, ToolContext, TrentToolAdapter } from "../types.js";
 import { ProcessRegistry, type BackgroundProcess } from "./processes.js";
+import { isNetworkDerivedCall, markNetworkDerived } from "./taint.js";
 
 export const TERMINAL_NAME = "terminal";
 export const TERMINAL_SCOPES = ["terminal", "process_manage"];
@@ -95,10 +96,15 @@ export function createTerminalAdapter(ctx: ToolContext, sandbox: Sandbox = creat
     const workdir = resolveWorkdir(stringArg(args, "workdir"));
     const network = args.network === true || NEEDS_EGRESS.test(command);
     const useEgress = network && ctx.egress !== undefined;
+    // [D11] Network-derived output is untrusted, and the workspace it may have written into is
+    // marked BEFORE the command runs: a download that fails halfway has still written (taint.ts).
+    const derived = isNetworkDerivedCall(network, useEgress, sandbox.kind);
+    if (derived) markNetworkDerived(ctx.workspace);
+    const tag = (result: ToolCallRecord): ToolCallRecord => (derived ? { ...result, provenance: "untrusted" } : result);
 
     if (args.background === true) {
       const proc = await processes.start(command, workdir, useEgress);
-      return record(TERMINAL_NAME, action, "completed", `Started background process session_id=${proc.id} (pid ${proc.pid}) in ${workdir}. Use process_manage to poll, wait, read the log or kill it.`);
+      return tag(record(TERMINAL_NAME, action, "completed", `Started background process session_id=${proc.id} (pid ${proc.pid}) in ${workdir}. Use process_manage to poll, wait, read the log or kill it.`));
     }
 
     const timeoutS = intArg(args.timeout, DEFAULT_TIMEOUT_S, 1, MAX_TIMEOUT_S);
@@ -120,7 +126,7 @@ export function createTerminalAdapter(ctx: ToolContext, sandbox: Sandbox = creat
     ].filter(Boolean);
     const body = fitSummary(output.trimEnd() || "(no output)", ctx.profileDir, "terminal");
     const summary = noteParts.length ? `${body}\n${noteParts.join(" ")}` : body;
-    return record(TERMINAL_NAME, action, timedOut ? "failed" : "completed", summary);
+    return tag(record(TERMINAL_NAME, action, timedOut ? "failed" : "completed", summary));
   }
 
   async function manage(action: string, args: Record<string, unknown>): Promise<ToolCallRecord> {

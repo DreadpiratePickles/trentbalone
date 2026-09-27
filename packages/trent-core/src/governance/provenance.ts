@@ -12,7 +12,9 @@
  * The rule here is narrow and mechanical. Every call through the wrapper is tagged `trusted` or
  * `untrusted`; `untrusted` is the web, browser, MCP and plugin adapters, plus any adapter that
  * tagged its own result untrusted, which is how a delegated child that read a page marks the
- * parent's step. The tags accumulate per STEP. A write into a layer every seat reads — the
+ * parent's step. [D11] A terminal command on the egress seat tags itself, and once one has written
+ * into the workspace every workspace read (`readsWorkspace` in `tools/provenance-registry.ts`) is
+ * untrusted too. The tags accumulate per STEP. A write into a layer every seat reads — the
  * `memory` tool, a brain note — made in a step that holds an untrusted tag is held for approval
  * rather than written, naming the tools it came from, and `skill_manage` is refused outright,
  * because a skill is executable content (F24) and the quarantine that would hold one is the
@@ -22,6 +24,8 @@
  * that is the detection problem F12 says is unsolved. It gates the combination instead.
  */
 import { record } from "../tools/action.js";
+import { declaredUntrustedAdapters, readsWorkspace } from "../tools/provenance-registry.js"; // [D9] the declarations
+import { isNetworkDerived } from "../tools/terminal/taint.js"; // [D11] network-derived workspaces
 import type { Provenance, ToolCallRecord, TrentToolAdapter } from "../tools/types.js";
 import { toolNameOf } from "./idempotent-dispatch.js";
 import type { PolicyClass } from "./policy-rules.js"; // [S1.1] type only: policy-rules imports this module
@@ -43,10 +47,11 @@ export type { Provenance } from "../tools/types.js";
 // does: a described remote image, a transcribed remote clip, and an A2A peer's answer are all text
 // somebody else authored. They belong in the same quarantine as a fetched page — a memory or skill
 // write derived from them in the same step is held, not written straight through.
-export const UNTRUSTED_ADAPTERS: readonly string[] = ["web", "browser", "mcp", "plugins", "inbound", "vision", "media", "a2a"];
-
+// [D9] DERIVED from `tools/provenance-registry.ts`, where every adapter must declare itself (the
+// registration guard fails a build that registers one that did not), plus the `inbound` class.
 /** [U1] The scope an adapter declares when its results are text somebody outside this machine wrote. */
 export const INBOUND_SCOPE = "inbound";
+export const UNTRUSTED_ADAPTERS: readonly string[] = [...declaredUntrustedAdapters(), INBOUND_SCOPE];
 /** Tool-name tokens that mean the same without a declaration: `inbox_list`, `inbound_sms`. */
 const INBOUND_NAME = /(?:^|_)(?:inbound|inbox)(?:_|$)/;
 
@@ -238,6 +243,12 @@ export interface ProvenanceOptions {
    * recorded is a write silently dropped.
    */
   readonly hold?: (input: HeldWriteInput) => string;
+  /**
+   * [D11] The workspace these adapters work in. Once a network-derived command has written into it
+   * (`tools/terminal/taint.ts`), every call to an adapter declared `readsWorkspace` is untrusted.
+   * Absent, only the adapters' own tags apply.
+   */
+  readonly workspace?: string;
 }
 
 const WHY_UNTRUSTED = "this step read output from";
@@ -287,7 +298,9 @@ function wrapExecute(adapter: TrentToolAdapter, ledger: ProvenanceLedger, option
     const result = await adapter.execute(action, payload);
     // The adapter's own tag wins when it is the worse one: a delegated child that read a page
     // says so on its record, and nothing here may promote that back to trusted.
-    const provenance = ledger.note(tool === "" ? adapter.name : tool, worstProvenance([adapterProvenance(adapter.name, tool, adapter.scopes), provenanceOf(result)]));
+    // [D11] Read AFTER the call, so the command that fetched into the workspace is counted too.
+    const workspace: Provenance = options.workspace !== undefined && readsWorkspace(adapter.name) && isNetworkDerived(options.workspace) ? "untrusted" : "trusted";
+    const provenance = ledger.note(tool === "" ? adapter.name : tool, worstProvenance([adapterProvenance(adapter.name, tool, adapter.scopes), provenanceOf(result), workspace]));
     return { ...result, provenance: tainted ? worstProvenance([provenance, "untrusted"]) : provenance };
   };
 }
