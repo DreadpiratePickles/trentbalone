@@ -49,6 +49,7 @@ import { hooksSpec } from "./groups/hooks.js";
 import { workspaceSpec } from "./groups/workspace.js";
 import { brainSpec } from "./groups/brain.js";
 import { securitySpec } from "./groups/security.js";
+import { panicSpec } from "./groups/panic.js"; // [S5.3] the big red button
 import { connectSpec } from "./groups/connect.js";
 import { benchSpec } from "./groups/bench.js"; // [C16]
 import { FLEET_FLAG_HELP, TEAM_FLAG_HELP, bareLaunchPlan, launchModeOf } from "../runtime/launch-mode.js"; // [C11.2]
@@ -118,6 +119,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   jobsSpec,
   hooksSpec,
   securitySpec,
+  panicSpec, // [S5.3] trent panic: revoke all pairings + stop in-flight work
   connectSpec,
   a2aSpec,
   acpSpec,

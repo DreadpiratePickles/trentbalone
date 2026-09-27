@@ -81,6 +81,19 @@ export class PairingManager {
     });
   }
 
+  /**
+   * Revoke every current pairing at once and return how many were removed. The batch behind
+   * `trent panic`: the next message from any of them gets a fresh code, exactly as `revoke` does
+   * per sender. Pairing codes are left alone — this drops trust, not the pending gate.
+   */
+  revokeAll(): number {
+    return this.store.mutate((s) => {
+      const removed = s.pairings.length;
+      s.pairings = [];
+      return removed;
+    });
+  }
+
   list(): PairingRow[] {
     return this.store.snapshot().pairings;
   }
