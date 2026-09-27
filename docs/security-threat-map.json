@@ -1,0 +1,332 @@
+{
+  "$comment": "D10 threat -> test map. Gate: apps/cli/src/commands/__tests__/docs-truth-threat-map.test.ts. Framing: defense-in-depth with stated residuals and per-property proofs, not 'provably secure'.",
+  "statuses": ["mitigated","partial","residual","out-of-scope","founder-gated"],
+  "threats": [
+    { "id": "T-01", "title": "Egress seat allowlist was proxy-honour-only (container on the default bridge)", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/terminal/terminal.test.ts", "name": "[SEC-1/T-01] cannot reach a non-proxy host at L3" },
+      { "file": "packages/trent-core/src/tools/sandbox.egress-firewall.test.ts", "name": "emits --network <internal net> and --add-host host.docker.internal:<forwarder ip>, never host-gateway" },
+      { "file": "packages/trent-core/src/tools/sandbox.egress-firewall.test.ts", "name": "surfaces a clear reason and creates no egress container when the firewall cannot be built" }
+    ],
+    "residual": "backend: docker only (LocalBackend has no network isolation, RT-05); the live L3 test needs Docker; IPv6/UDP unassessed (RT-04)" },
+    { "id": "T-02", "title": ".git/hooks writable by file tools (host persistence at the next git command)", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/file_ops/file-ops.test.ts", "name": "denies writes into .git/hooks and .git generally" }
+    ] },
+    { "id": "T-03", "title": "Vision, media and a2a output not tainted untrusted", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/governance/provenance.test.ts", "name": "holds a memory write after a remote image is described: vision output is untrusted" },
+      { "file": "packages/trent-core/src/governance/provenance-registration.test.ts", "name": "UNTRUSTED_ADAPTERS is derived from the declarations, plus the inbound class" },
+      { "file": "packages/trent-core/src/governance/provenance-registration.test.ts", "name": "an adapter whose tools reach off this machine is declared off_machine, and never plain trusted" }
+    ] },
+    { "id": "T-04", "title": "Social and media adapters dialled with a raw fetch outside the proxy and SSRF floor", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/tools-index.test.ts", "name": "[T-04] skips social with a visible reason when there is no egress and no seam" },
+      { "file": "packages/trent-core/src/tools/social/build.test.ts", "name": "builds on egress and routes the adapter's transport through the proxied fetch with the own-credential marker" },
+      { "file": "packages/trent-core/src/tools/media/image.key-leak.test.ts", "name": "the key is in neither the thrown error nor the tool record" }
+    ],
+    "residual": "media_image stays host-side and reads its provider key directly (the broker is sandbox-only); D19 scoped the claim and closed the key-leak paths" },
+    { "id": "T-05", "title": "Tools can read the operator's cloud, git, npm and docker credentials", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/governance/hardline.test.ts", "name": "fires on the common credential locations, by path and by command" }
+    ],
+    "residual": "D12 not built: ~/.kube, ~/.config/gh, ~/.azure, .pypirc and env/printenv dumps are not blocked (RT-12); bare-operand evasion open (RT-13)" },
+    { "id": "T-06", "title": "Interpreter -c/-e payloads hide destructive commands from the floor", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/approval-floors.test.ts", "name": "[SEC-3 T-06] sees a destructive spelling inside an interpreter -c/-e payload" },
+      { "file": "packages/trent-core/src/tools/approval-floors.test.ts", "name": "[SEC-3 T-06] does not fire on a harmless interpreter payload" }
+    ],
+    "residual": "only quoted-literal payloads are extracted: expression payloads (RT-10) and write-then-run scripts (RT-11) evade it; no fuzz harness (GAP-D8-FUZZ)" },
+    { "id": "T-07", "title": "Trent's own control-plane files writable from a tool", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/governance/hardline.test.ts", "name": "[SEC-3 T-07] also protects the control-plane files that decide what runs and what is approved" },
+      { "file": "packages/trent-core/src/governance/hardline.test.ts", "name": "fires on config set, hooks consent, mcp add, approvals approve and connect" }
+    ],
+    "residual": "the CLI self-lowering rule is evaded by shell-variable indirection (RT-14); the control-file write protection still holds" },
+    { "id": "T-08", "title": "stdio MCP is unverified host execution; the scan ran after connect", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/mcp/consent.test.ts", "name": "refuses to spawn a stdio server with no recorded consent, and never invokes the spawn seam" },
+      { "file": "packages/trent-core/src/tools/mcp/consent.test.ts", "name": "refuses a consented server whose tool definitions changed since the pinned hash (rug pull)" },
+      { "file": "apps/cli/src/commands/__tests__/mcp.test.ts", "name": "[T-08] add records spawn consent with a pinned tool-def hash" },
+      { "file": "packages/trent-core/src/tools/mcp/artifact.test.ts", "name": "a node script: unchanged verifies, an edited script is refused" }
+    ] },
+    { "id": "T-09", "title": "Inbound email forgeable without authserv_id", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/gateway/platforms/email.wire.test.ts", "name": "[T-09] unset authserv_id fails closed" },
+      { "file": "packages/trent-core/src/gateway/platforms/email.wire.test.ts", "name": "[T-09] authserv_id set: a correctly authenticated mail from that server is accepted as before" }
+    ] },
+    { "id": "T-10", "title": "Sandbox had no memory limit (host OOM)", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/sandbox.egress-firewall.test.ts", "name": "emits --network <internal net> and --add-host host.docker.internal:<forwarder ip>, never host-gateway" }
+    ],
+    "residual": "the 2g ceiling and pids limit are fixed in tools/sandbox.ts with no config key; no CPU limit" },
+    { "id": "T-11", "title": "apps/web seat-error log can carry a secret; seat turns bypass prompt redaction", "status": "founder-gated",
+    "tests": [],
+    "residual": "apps/web is read-only here: file it against the app (AGENTS.md defect 8); until then 'no secret reaches a log' is false end to end" },
+    { "id": "T-12", "title": "No signed release has been cut, so the verified-update path is unexercised", "status": "founder-gated",
+    "tests": [],
+    "residual": "tag + signing secrets + reachable release URLs are Bobby's release step (05_release/output/release-runbook.md)" },
+    { "id": "O-01", "title": "No offline switch", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/offline.test.ts", "name": "is on for a truthy TRENT_OFFLINE and off otherwise" },
+      { "file": "packages/trent-core/src/egress/offline.test.ts", "name": "turns on from the environment or from config, and config false can never lower the environment" },
+      { "file": "apps/cli/src/runtime/headless.local-models.test.ts", "name": "[SEC-2 S2a-3] refuses to boot offline when the profile is hosted" }
+    ] },
+    { "id": "O-02", "title": "The egress proxy is not a global chokepoint", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/dial.test.ts", "name": "refuses a non-loopback destination while offline, before opening a socket" },
+      { "file": "packages/trent-core/src/egress/registry.test.ts", "name": "registers or explicitly excuses every network-capable module" },
+      { "file": "packages/trent-core/src/egress/registry.test.ts", "name": "every dial-proven (trentFetch) row's module really routes through trentFetch" },
+      { "file": "packages/trent-core/src/doctor/checks/offline.test.ts", "name": "[D5] force mode fires the REAL trentFetch" }
+    ],
+    "residual": "trentFetch is Trent's own chokepoint, not a process guard: subprocess, native-addon and raw-socket egress sit outside it (RT-06, RT-09, GAP-BUN-UNDICI)" },
+    { "id": "O-03", "title": "Default intercept_domains allow cloud hosts under a local provider", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/sandbox.offline.test.ts", "name": "refuses a network run and never builds the egress network" }
+    ],
+    "residual": "LOOPBACK_ALLOWLIST in egress/offline-config.ts has no consumer at 4b8122d: the host proxy keeps its configured intercept_domains offline (unverified end to end)" },
+    { "id": "O-04", "title": "Model calls never asserted local; hosted escalation reachable", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/offline-config.test.ts", "name": "names a hosted chat provider" },
+      { "file": "packages/trent-core/src/egress/offline-config.test.ts", "name": "names hosted escalation, a hosted embedder, a remote OTLP endpoint, and an enabled gateway" },
+      { "file": "packages/trent-core/src/model-gateway/openai-compat.test.ts", "name": "refuses a hosted base URL with EgressBlocked while offline" }
+    ] },
+    { "id": "O-05", "title": "Gateway platforms, social publish and cron alerts bypass the proxy", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/offline-config.test.ts", "name": "names hosted escalation, a hosted embedder, a remote OTLP endpoint, and an enabled gateway" },
+      { "file": "packages/trent-core/src/tools/social/build.test.ts", "name": "returns a reason and no adapter when there is no fetchImpl seam and no egress" }
+    ],
+    "residual": "gateway and cron alerts are config-rejected offline; social publish offline relies on the proxy allowlist, which is not collapsed (O-03)" },
+    { "id": "O-06", "title": "The browser tool is unrestricted network egress", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/browser/browser.offline.test.ts", "name": "reports unavailable when offline is on" },
+      { "file": "packages/trent-core/src/tools/browser/browser.offline.test.ts", "name": "blocks every call with a reason naming attach-mode/UDP, even a well-formed navigate" }
+    ] },
+    { "id": "O-07", "title": "faster-whisper downloads models outside the proxy", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/media/transcribe.offline.test.ts", "name": "refuses faster-whisper offline when the model is not cached, naming the cache path" }
+    ] },
+    { "id": "O-08", "title": "OTel exporter can post to a remote endpoint offline", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/offline-config.test.ts", "name": "names hosted escalation, a hosted embedder, a remote OTLP endpoint, and an enabled gateway" }
+    ] },
+    { "id": "O-09", "title": "The doctor has no offline-egress proof", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/doctor/checks/offline.test.ts", "name": "passes when every row is gated and the canary is refused" },
+      { "file": "packages/trent-core/src/doctor/checks/offline.test.ts", "name": "marks a trentFetch loopback-only row OPEN when the canary is NOT refused" },
+      { "file": "apps/cli/src/commands/__tests__/security.test.ts", "name": "trent security --offline (the offline egress proof)" },
+      { "file": "packages/trent-core/src/egress/registry.test.ts", "name": "registers or explicitly excuses every network-capable module" }
+    ],
+    "residual": "the proof dials trentFetch rows and asserts proxy/node:https rows by wiring; it is not a kernel firewall" },
+    { "id": "O-10", "title": "Hosted embedder reachable by explicit config", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/offline-config.test.ts", "name": "names hosted escalation, a hosted embedder, a remote OTLP endpoint, and an enabled gateway" },
+      { "file": "packages/trent-core/src/fleet-memory/embedder.test.ts", "name": "refuses a hosted embedder base URL with EgressBlocked while offline" }
+    ] },
+    { "id": "RT-01", "title": "DNS exfiltration from the egress seat through the embedded resolver", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/terminal/terminal.test.ts", "name": "[SEC-1/D1] cannot resolve an external name over DNS from the egress seat" },
+      { "file": "packages/trent-core/src/tools/sandbox.egress-firewall.test.ts", "name": "emits --network <internal net> and --add-host host.docker.internal:<forwarder ip>, never host-gateway" }
+    ],
+    "residual": "the live test needs Docker; LocalBackend resolves with the host's DNS (RT-05)" },
+    { "id": "RT-02", "title": "The forwarder's bridge leg", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/sandbox.egress-firewall.test.ts", "name": "runs the pinned relay image with host-gateway, cap-drop ALL and no-new-privileges" },
+      { "file": "packages/trent-core/src/tools/sandbox.egress-firewall.test.ts", "name": "creates the internal network + forwarder, connects the bridge, and returns the forwarder IP" }
+    ] },
+    { "id": "RT-03", "title": "The forwarder is an open TCP relay to the proxy", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/EgressProxy.test.ts", "name": "refuses a tokenless request on the bridge listener and never forwards it" },
+      { "file": "packages/trent-core/src/egress/EgressProxy.test.ts", "name": "REFUSES a request bearing an unknown token and never forwards it" }
+    ],
+    "residual": "the relay is unauthenticated and protocol-blind; a compromised seat can load the proxy (DoS), accepted" },
+    { "id": "RT-04", "title": "IPv6, UDP and QUIC from the egress seat", "status": "residual",
+    "tests": [],
+    "residual": "unassessed: no live ip -6 route or UDP/QUIC canary from inside the seat exists" },
+    { "id": "RT-05", "title": "LocalBackend has no firewall at all", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/terminal/taint.test.ts", "name": "on the local backend nothing isolates a network command, so it is untrusted even without a proxy" }
+    ],
+    "residual": "LocalBackend has no network namespace, firewall or proxy interposition; docs scope every reach claim to backend: docker (D4)" },
+    { "id": "RT-06", "title": "Subprocess network is uncovered by offline mode", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/sandbox.offline.test.ts", "name": "refuses a network run and never builds the egress network" }
+    ],
+    "residual": "on LocalBackend TRENT_OFFLINE does not stop a subprocess curl, git or pip; only the Docker backend withholds the network" },
+    { "id": "RT-07", "title": "A bare fetch() bypasses the guard and the coverage test", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/registry.test.ts", "name": "registers or explicitly excuses every network-capable module" },
+      { "file": "packages/trent-core/src/egress/registry.test.ts", "name": "every dial-proven (trentFetch) row's module really routes through trentFetch" },
+      { "file": "packages/trent-core/src/egress/registry.test.ts", "name": "every wiring-asserted loopback-only row's module references the transport it claims" }
+    ],
+    "residual": "a regex source scan, not runtime interception" },
+    { "id": "RT-08", "title": "Resolve-then-connect TOCTOU / DNS rebinding", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/dial.rebind.test.ts", "name": "rewrites the dial to the pinned loopback literal and keeps the Host header as the name" },
+      { "file": "packages/trent-core/src/egress/dial.rebind.test.ts", "name": "reaches a real loopback server through the platform fetch with the second answer poisoned" },
+      { "file": "packages/trent-core/src/egress/EgressProxy.rebind.test.ts", "name": "CONNECT: dials the first, validated answer once" },
+      { "file": "packages/trent-core/src/egress/EgressProxy.rebind.test.ts", "name": "refuses when ANY address in the one answer is private" }
+    ],
+    "residual": "offline redirects are not re-checked (GAP-OFFLINE-REDIRECT)" },
+    { "id": "RT-09", "title": "Native addons and unenumerated config front doors", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/offline-config.test.ts", "name": "throws once, listing every hosted setting, and names offline mode" }
+    ],
+    "residual": "native addons and hosted URLs in other config (plugins, MCP http, business base URLs) rely on the runtime dial gate; the field list is curated" },
+    { "id": "RT-10", "title": "Hardline: nested payload that is not a quoted literal", "status": "residual",
+    "tests": [],
+    "residual": "unfixed: os.system(base64.b64decode(...)), a variable or an f-string extracts nothing; the D8 fuzz harness is not built" },
+    { "id": "RT-11", "title": "Hardline: write a script, then run it", "status": "residual",
+    "tests": [],
+    "residual": "unfixed and inherent to a command scanner: printf > /tmp/x.py; python3 /tmp/x.py is two harmless-looking steps" },
+    { "id": "RT-12", "title": "Credential-read coverage is a short denylist", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/governance/hardline.test.ts", "name": "fires on the common credential locations, by path and by command" }
+    ],
+    "residual": "D12 not built: ~/.kube, ~/.config/gh, ~/.azure, .pypirc, ~/.terraform.d, ~/.gnupg and bare env/printenv dumps are not blocked" },
+    { "id": "RT-13", "title": "Hardline: path-token evasion on the read rules", "status": "residual",
+    "tests": [],
+    "residual": "unfixed: a bare relative operand (tar -C ~ .aws, cd ~ && cat .aws/credentials) is not a path token, so the read rules never see it" },
+    { "id": "RT-14", "title": "Hardline: self-lowering through shell-variable indirection", "status": "residual",
+    "tests": [],
+    "residual": "unfixed: T=trent; $T config set ... (or an alias) slips lower-trents-own-guardrails; config.yaml stays a write-protected control file" },
+    { "id": "RT-15", "title": "find -exec rm / xargs rm are DANGEROUS, not HARDLINE", "status": "residual",
+    "tests": [],
+    "residual": "unfixed: approvable at ask_dangerous, and a loop-wide yes can carry a later destructive spelling in the same step" },
+    { "id": "RT-16", "title": "MCP consent pinned the argv, not the code", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/mcp/artifact.test.ts", "name": "[D13] package launchers need an exact version" },
+      { "file": "packages/trent-core/src/tools/mcp/artifact.test.ts", "name": "an npm-installed bin is also pinned by its package.json, so an upgrade with an identical entry file is refused" },
+      { "file": "packages/trent-core/src/tools/mcp/consent-http.test.ts", "name": "a consented script connects; the same script edited after consent is refused before spawn" }
+    ],
+    "residual": "a pinned server can still change behaviour without changing its bytes (remote calls, data files)" },
+    { "id": "RT-17", "title": "The http MCP path had no consent gate", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/mcp/consent-http.test.ts", "name": "refuses an unconsented http server before sending anything, naming the consent command" },
+      { "file": "packages/trent-core/src/tools/mcp/consent-http.test.ts", "name": "pins the tool-definition hash on the first consented connect, then refuses a drift" },
+      { "file": "apps/cli/src/commands/__tests__/mcp.test.ts", "name": "[D13] trent mcp consent" }
+    ] },
+    { "id": "RT-18", "title": "MCP tool results are never filtered for instructions", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/governance/provenance.test.ts", "name": "names web, browser, MCP and plugin output untrusted and everything Trent runs itself trusted" }
+    ],
+    "residual": "inherent: results are tainted, which holds a durable write, not an in-session action; no model-level fix" },
+    { "id": "RT-19", "title": "Only shared-memory and skill writes are gated by provenance", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/governance/auto-review-policy.test.ts", "name": "escalates a call whose preview or arguments carry an untrusted-provenance string" },
+      { "file": "packages/trent-core/src/governance/untrusted-inbound.test.ts", "name": "[P3] the auto reviewer never decides a stamped row" }
+    ],
+    "residual": "taint stops persistence, not action: a tainted step's terminal, gateway send or file write is gated only by that tool's own approval" },
+    { "id": "RT-20", "title": "Workspace file reads were trusted (indirect injection via a repo)", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/terminal/taint.test.ts", "name": "git clone, then read_file README.md in a later step, then a memory write: the write is held on the durable path" },
+      { "file": "packages/trent-core/src/tools/terminal/taint.test.ts", "name": "after an egress-seat call, file_ops, terminal and code_execution reads of that workspace are untrusted in any later step" }
+    ],
+    "residual": "taint is process-scoped and set by a network command in this process; a repo cloned before the run or outside Trent reads as trusted" },
+    { "id": "RT-21", "title": "Taint granularity outside a seat turn", "status": "mitigated",
+    "tests": [
+      { "file": "packages/trent-core/src/governance/provenance.test.ts", "name": "falls back to one key per build when there is no run or step to key on" },
+      { "file": "packages/trent-core/src/solo/taint.test.ts", "name": "[S1.1] B1: the provenance taint is the session's, not the step's" }
+    ],
+    "residual": "the fallback over-taints (conservative)" },
+    { "id": "RT-22", "title": "The proxy sees every plaintext body", "status": "residual",
+    "tests": [],
+    "residual": "inherent to TLS interception: owning the Trent process owns every intercepted session; output redaction is shape-based" },
+    { "id": "RT-23", "title": "The opaque token is a bearer within the allowlist", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/CredentialBroker.test.ts", "name": "a token minted for host A adds no credential header to allowlisted host B, while A still receives it" },
+      { "file": "packages/trent-core/src/egress/TokenManager.test.ts", "name": "revokes every valid token at once, returns the count, and refuses them afterwards" },
+      { "file": "apps/cli/src/commands/__tests__/panic.test.ts", "name": "revokes every brokered egress token and reports the count" }
+    ],
+    "residual": "an exfiltrated token replays within its bound hosts until revoked or expired; no per-request nonce" },
+    { "id": "RT-24", "title": "apps/web seat-error secret log (T-11)", "status": "founder-gated",
+    "tests": [],
+    "residual": "apps/web is read-only here; file it against the app" },
+    { "id": "OWASP-LLM01", "title": "Prompt injection", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/governance/provenance.property.test.ts", "name": "a write is held exactly when an untrusted read preceded it in its taint scope, in every scope mode" },
+      { "file": "packages/trent-core/src/governance/provenance-registration.test.ts", "name": "a new off-machine adapter nobody declared fails the guard, whatever it is called" },
+      { "file": "packages/trent-core/src/tools/terminal/taint.test.ts", "name": "git clone, then read_file README.md in a later step, then a memory write" }
+    ],
+    "residual": "taint stops persistence, not action (RT-19); session_search output is trusted (GAP-SESSION-SEARCH); no model-level fix" },
+    { "id": "OWASP-LLM02", "title": "Sensitive information disclosure", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/EgressProxy.host-binding.test.ts", "name": "the provider host receives the key; another allowlisted host receives the request with no credential" },
+      { "file": "packages/trent-core/src/egress/EgressProxy.test.ts", "name": "never places the real secret in the sandbox environment" },
+      { "file": "packages/trent-core/src/tools/media/image.key-leak.test.ts", "name": "the key is in neither the thrown error nor the tool record" },
+      { "file": "packages/trent-core/src/tools/web/web.test.ts", "name": "secret-shaped query strings" },
+      { "file": "packages/trent-core/src/telemetry/redact.test.ts", "name": "redacts provider API keys already known to the error layer" }
+    ],
+    "residual": "the apps/web seat-error log (T-11), plaintext at the proxy (RT-22) and credential-read gaps (RT-12) remain" },
+    { "id": "OWASP-LLM03", "title": "Supply chain", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/mcp/consent.test.ts", "name": "refuses to spawn a stdio server with no recorded consent" },
+      { "file": "packages/trent-core/src/tools/mcp/artifact.test.ts", "name": "[D13] scripts and binaries are pinned by content" },
+      { "file": "packages/trent-core/src/tools/mcp/consent-http.test.ts", "name": "[D13] http MCP consent-on-first-connect" }
+    ],
+    "residual": "no signed release, SLSA gate or SBOM yet (T-12, FG-SLSA, FG-SBOM)" },
+    { "id": "OWASP-LLM04", "title": "Data and model poisoning (memory and skills)", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/governance/provenance.test.ts", "name": "holds a memory write made in a step that read untrusted output, and names the tools it came from" },
+      { "file": "packages/trent-core/src/governance/provenance.test.ts", "name": "refuses skill_manage from an untrusted step by default and names the reason, leaving reads alone" }
+    ],
+    "residual": "model weights, chat templates and local runtimes are not verified by Trent" },
+    { "id": "OWASP-LLM05", "title": "Improper output handling", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/approval-floors.test.ts", "name": "sees through backslash escapes, empty quotes, $IFS, env and subshell wrappers" },
+      { "file": "packages/trent-core/src/governance/hardline.test.ts", "name": "fires on curl|sh, wget|bash and the process-substitution spelling" }
+    ],
+    "residual": "model output reaching a shell is gated by floors and approvals, which RT-10, RT-11 and RT-13 evade" },
+    { "id": "OWASP-LLM06", "title": "Excessive agency", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/governance/gate-chain.test.ts", "name": "asks for a post, an SMS and a charge, executes none of them unapproved, and still runs a read" },
+      { "file": "packages/trent-core/src/governance/bound-approvals.test.ts", "name": "runs the previewed call on its replay and parks the next send of the step unapproved" },
+      { "file": "packages/trent-core/src/governance/autonomy.test.ts", "name": "refuses a hardline hit at every level, naming the rule" },
+      { "file": "apps/cli/src/commands/__tests__/security-preset.test.ts", "name": "raises the grade on a weakened profile" }
+    ],
+    "residual": "floor bypasses RT-10, RT-11, RT-13, RT-14 and RT-15 are open; the D8 fuzz harness is not built" },
+    { "id": "OWASP-LLM07", "title": "System prompt leakage", "status": "out-of-scope",
+    "tests": [],
+    "residual": "Trent's prompts carry no secrets (keys are brokered, prompts redacted); prompt text is not treated as confidential" },
+    { "id": "OWASP-LLM08", "title": "Vector and embedding weaknesses", "status": "out-of-scope",
+    "tests": [],
+    "residual": "recall embeddings are a per-profile local store with no multi-tenant index; poisoning what is stored is OWASP-LLM04" },
+    { "id": "OWASP-LLM09", "title": "Misinformation", "status": "out-of-scope",
+    "tests": [],
+    "residual": "factual accuracy of model output is not a security property of the wrapper" },
+    { "id": "OWASP-LLM10", "title": "Unbounded consumption", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/tools/sandbox.egress-firewall.test.ts", "name": "emits --network <internal net> and --add-host host.docker.internal:<forwarder ip>, never host-gateway" },
+      { "file": "packages/trent-core/src/config/agent-solo-schema.test.ts", "name": "has a ceiling a typo cannot pass: several hundred calls, not thousands" },
+      { "file": "packages/trent-core/src/solo/budget.test.ts", "name": "[S1.1] C2: a prompt over the window is never sent" }
+    ],
+    "residual": "sandbox memory and pids are capped, CPU is not; spend is ledgered, but no per-run cap enforcement test is mapped here" },
+    { "id": "GAP-D8-FUZZ", "title": "Adversarial fuzz harness for the hardline floor (D8)", "status": "residual",
+    "tests": [],
+    "residual": "not built: no fast-check corpus or property test with a published miss set; parked for Bobby to scope" },
+    { "id": "GAP-BUN-UNDICI", "title": "Bun's native fetch does not honour an undici global dispatcher", "status": "partial",
+    "tests": [
+      { "file": "packages/trent-core/src/egress/registry.test.ts", "name": "every dial-proven (trentFetch) row's module really routes through trentFetch" },
+      { "file": "packages/trent-core/src/egress/dial.test.ts", "name": "reads offline mode at call time, not at import time" }
+    ],
+    "residual": "the shipped binary is Bun: only code routed through trentFetch or createEgressFetch is guarded; a global dispatcher or ProxyAgent guards nothing" },
+    { "id": "GAP-OFFLINE-REDIRECT", "title": "Offline redirects are not re-checked", "status": "residual",
+    "tests": [],
+    "residual": "trentFetch validates the first URL; a redirect to a public host while offline is not re-validated" },
+    { "id": "GAP-SESSION-SEARCH", "title": "session_search output is trusted", "status": "residual",
+    "tests": [],
+    "residual": "declared trusted in tools/provenance-registry.ts, so untrusted text kept in past transcripts re-enters a step untainted" },
+    { "id": "FG-SLSA", "title": "Reproducible build + SLSA provenance + tamper-refusal release gate", "status": "founder-gated",
+    "tests": [],
+    "residual": "needs a pushed tag and the signing secrets; the release workflow signs but no release exists" },
+    { "id": "FG-PENTEST", "title": "External penetration test of the broker, sandbox and offline guarantee", "status": "founder-gated",
+    "tests": [],
+    "residual": "in-repo tests prove only the properties their authors thought of; commissioning a pen-test is Bobby's call" },
+    { "id": "FG-SBOM", "title": "SBOM and dependency provenance per release", "status": "founder-gated",
+    "tests": [],
+    "residual": "no cyclonedx/syft SBOM or advisory scan is published; the offline guarantee assumes no dependency opens its own socket" },
+    { "id": "FG-PVR", "title": "GitHub private vulnerability reporting", "status": "founder-gated",
+    "tests": [],
+    "residual": "a repository setting only the owner can enable; SECURITY.md and .well-known/security.txt exist" }
+  ]
+}

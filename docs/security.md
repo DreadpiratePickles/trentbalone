@@ -824,6 +824,42 @@ The `lower-trents-own-guardrails` hardline rule refuses `trent security preset` 
 the operator can run it. Code: `config/security-presets.ts`. Tests: `security-presets.test.ts` and
 `apps/cli/src/commands/__tests__/security-preset.test.ts`.
 
+## Threat → test map
+
+`docs/security-threat-map.json` lists every threat the security documents name: T-01 to T-12 from
+the hardening plan, O-01 to O-10 from the offline audit, the red-team's Breaks 1 to 24 (RT-01 to
+RT-24), and the OWASP Top 10 for LLM Applications (OWASP-LLM01 to OWASP-LLM10). It also lists the
+council's open items and the steps only the founder can take. Each entry has a status, the tests
+that prove the part that is mitigated, and a one-line residual for the part that is not.
+
+| Status | Threats |
+|---|---|
+| `mitigated` | 21 |
+| `partial` | 23 |
+| `residual` | 10 |
+| `out-of-scope` | 3 |
+| `founder-gated` | 7 |
+| `total` | 64 |
+
+A `residual` entry names no test because nothing proves it closed. Several are open: the hardline
+fuzz harness (D8), the credential denylist gaps (`~/.kube`, `~/.config/gh`, `~/.azure`, `.pypirc`,
+env dumps; D12), red-team Breaks 10, 11, 13 and 14, offline redirects that are not re-checked, and
+`session_search` output, which is still trusted. The founder-gated entries are a signed release and
+SLSA gate, an external pen-test, an SBOM, GitHub private vulnerability reporting, and the
+`apps/web` T-11 seat-error log.
+
+`apps/cli/src/commands/__tests__/docs-truth-threat-map.test.ts` fails CI in any of these cases:
+
+- a threat ID in those documents has no entry;
+- a status is unknown;
+- a `mitigated` or `partial` entry names no test;
+- a named test file is missing;
+- a named test title is absent from its file;
+- the counts above differ from the map.
+
+The honest claim is defense-in-depth with stated residuals and per-property proofs. It is not
+"provably secure".
+
 ## Reported, not fixed: defects in the wrapped application
 
 `apps/web/` is read-only in this repository. These are real and they are outside the CLI's scope.
