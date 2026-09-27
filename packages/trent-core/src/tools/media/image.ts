@@ -216,25 +216,62 @@ export class ImageProviderError extends Error {
   }
 }
 
-/** Sends one prompt to the route and returns the bytes. The key is read here and goes in a header. */
-export async function generateImage(route: ImageRoute, input: { prompt: string; aspect: ImageAspect }, env: NodeJS.ProcessEnv, fetchImpl: FetchLike = trentFetch): Promise<GeneratedImage> {
-  const key = envValue(env, route.keyEnv) ?? (route.local ? LOCAL_PLACEHOLDER_KEY : undefined);
-  if (key === undefined) throw configError(`${route.keyEnv} is not set`, route.keyEnv);
+/** A key is one unbroken token; a line break or a control character in it makes the platform's header check quote the value. */
+const UNSAFE_KEY = /[\s\u0000-\u001f\u007f]/;
+
+/**
+ * The key out of a message: the whole value and each line or word of it, longest first, because a
+ * header error quotes a value up to its line break and a provider may quote part of it (D19).
+ */
+export function redactKey(text: string, key: string): string {
+  const pieces = [key, ...key.split(/\s+/)].filter((piece) => piece.length >= 4).sort((a, b) => b.length - a.length);
+  return pieces.reduce((out, piece) => out.split(piece).join("[redacted]"), text);
+}
+
+async function readJson(response: Response, route: ImageRoute): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    // Never the parser's message: it quotes the start of the body, which a provider may have filled with the key.
+    throw new ImageProviderError(`${route.provider} ${route.model} answered HTTP ${response.status} with a body that is not JSON`, response.status);
+  }
+}
+
+async function send(route: ImageRoute, input: { prompt: string; aspect: ImageAspect }, key: string, fetchImpl: FetchLike): Promise<GeneratedImage> {
   const gemini = route.kind === "gemini";
   const url = gemini ? `${route.baseUrl}/models/${encodeURIComponent(route.model)}:generateContent` : `${route.baseUrl}/images/generations`;
   const headers: Record<string, string> = gemini ? { "content-type": "application/json", "x-goog-api-key": key } : { "content-type": "application/json", authorization: `Bearer ${key}` };
   const body = gemini ? buildGeminiImageRequest(input.prompt, input.aspect) : buildOpenAiImageRequest(route.model, input.prompt, input.aspect);
   const response = await fetchImpl(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS) });
   if (!response.ok) {
-    const reason = (await errorReason(response)).split(key).join("[redacted]");
+    const reason = await errorReason(response);
     throw new ImageProviderError(`${route.provider} answered HTTP ${response.status}${reason ? `: ${reason}` : ""}`, response.status);
   }
-  const parsed = gemini ? parseGeminiImage(await response.json()) : parseOpenAiImage(await response.json());
+  const json = await readJson(response, route);
+  const parsed = gemini ? parseGeminiImage(json) : parseOpenAiImage(json);
   if (!("data" in parsed)) throw new ImageProviderError(`${route.provider} ${route.model} answered with no image${parsed.text ? `: ${clipText(parsed.text)}` : ""}`);
   const bytes = Buffer.from(parsed.data, "base64");
   const mimeType = sniffImage(bytes);
   if (mimeType === null) throw new ImageProviderError(`${route.provider} ${route.model} answered with ${bytes.length} bytes that are not a PNG, JPEG, GIF or WebP; nothing was written`);
   return { bytes, mimeType };
+}
+
+/**
+ * Sends one prompt to the route and returns the bytes. The key is read here, in the Trent host
+ * process, and goes in a header; it is not brokered (D19, `docs/security.md`). Every failure,
+ * the provider's, the parser's or the transport's, is rethrown as a fresh error whose message has
+ * the key taken out and which carries no cause, so no part of the key reaches a tool record.
+ */
+export async function generateImage(route: ImageRoute, input: { prompt: string; aspect: ImageAspect }, env: NodeJS.ProcessEnv, fetchImpl: FetchLike = trentFetch): Promise<GeneratedImage> {
+  const key = envValue(env, route.keyEnv) ?? (route.local ? LOCAL_PLACEHOLDER_KEY : undefined);
+  if (key === undefined) throw configError(`${route.keyEnv} is not set`, route.keyEnv);
+  if (UNSAFE_KEY.test(key)) throw configError(`${route.keyEnv} holds a line break, a space or a control character; a key is one unbroken token (the value is not shown)`, route.keyEnv);
+  try {
+    return await send(route, input, key, fetchImpl);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ImageProviderError(redactKey(message, key), error instanceof ImageProviderError ? error.status : undefined);
+  }
 }
 
 const EXTENSIONS: Readonly<Record<ImageMime, string>> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" };

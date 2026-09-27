@@ -18,6 +18,15 @@ difference in kind, not a feature comparison.
 
 The sandbox holds an opaque token. The host holds the secret. They meet only inside the proxy.
 
+That is the scope of "brokered": sandboxed code never sees a real key. Calls the Trent host process
+makes on its own account are not brokered. They read the real key from the host environment and
+never pass it to a tool result. These calls are every model call (`model-gateway/anthropic-client.ts`,
+`openai-compat.ts`, and hosted `media_transcribe` through the gateway), `media_image`
+(`tools/media/image.ts`), and the OAuth exchanges in `connect/flow.ts` and `tools/mcp/http-oauth.ts`.
+`media_image` rejects a key with a line break before sending. It strips the key from every error,
+including provider 401 and 500 bodies, non-JSON bodies and transport errors
+(`tools/media/image.key-leak.test.ts`, D19).
+
 ```
 sandboxed process                    egress proxy (host)              upstream API
   OPENAI_API_KEY=trnt_egress_…  ──▶   1. CONNECT: host in            ──▶  real key in
