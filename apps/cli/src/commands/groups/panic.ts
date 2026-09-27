@@ -20,6 +20,7 @@
  */
 import path from "node:path";
 import { FileGatewayStore, PairingManager, type PairingRow } from "@trent/core/gateway/index.js";
+import { TokenManager, egressTokenStorePath } from "@trent/core/egress/index.js";
 import { liveGatewayHolder, liveWriters, type ProfileLockHolder } from "@trent/core/profile/locks.js";
 import type { CommandContext } from "../context.js";
 import type { CommandSpec } from "../registry.js";
@@ -49,10 +50,23 @@ interface PanicData {
   readonly stopTargets: readonly StopTarget[];
   readonly signalled: boolean;
   readonly signal: string;
+  /** Brokered egress tokens actually revoked (0 under --dry-run). */
+  readonly egressTokensRevoked: number;
+  /** Brokered egress tokens that were live when panic ran — the count --dry-run WOULD revoke. */
+  readonly egressTokensActive: number;
 }
 
 function storeOf(ctx: CommandContext): FileGatewayStore {
   return new FileGatewayStore(path.join(ctx.config().getProfileDir(), "gateway.json"));
+}
+
+/**
+ * The egress token broker on this home. Egress material is global to a home (`<baseDir>/egress`),
+ * not per-profile, so panic points at `<baseDir>/egress/tokens.json` - the very file a running
+ * `EgressProxy` re-reads and validates against, so a revocation here denies its next request.
+ */
+function egressBroker(ctx: CommandContext): TokenManager {
+  return new TokenManager({ filePath: egressTokenStorePath(ctx.config().getBaseDir()) });
 }
 
 function view(row: PairingRow): PairedView {
@@ -82,15 +96,22 @@ export const panicSpec: CommandSpec = {
   description: "Revoke every gateway pairing and ask any in-flight work on this profile to stop",
   run(ctx) {
     const targets = stopTargets(ctx);
+    const broker = egressBroker(ctx);
+    // How many egress tokens are live right now — the count a dry-run WOULD drop, and the
+    // cross-check for the real revoke below.
+    const egressTokensActive = broker.listActiveTokens().length;
 
     if (ctx.dryRun) {
       const pairings = storeOf(ctx).snapshot().pairings.map(view);
-      return { data: { dryRun: true, command: "panic", revoked: 0, pairings, stopTargets: targets, signalled: false, signal: STOP_SIGNAL } };
+      return { data: { dryRun: true, command: "panic", revoked: 0, pairings, stopTargets: targets, signalled: false, signal: STOP_SIGNAL, egressTokensRevoked: 0, egressTokensActive } };
     }
 
     // Snapshot who is paired BEFORE the revoke, so the report names exactly what it dropped.
     const before = storeOf(ctx).snapshot().pairings.map(view);
     const revoked = new PairingManager(storeOf(ctx)).revokeAll();
+    // Drop egress trust in the same breath as the pairings, BEFORE any SIGTERM: a step that ignores
+    // the signal still loses its brokered token, so in-flight exfiltration cannot outlive panic.
+    const egressTokensRevoked = broker.revokeAll();
 
     let signalled = false;
     for (const target of targets) {
@@ -102,7 +123,7 @@ export const panicSpec: CommandSpec = {
       }
     }
 
-    return { data: { command: "panic", revoked, pairings: before, stopTargets: targets, signalled, signal: STOP_SIGNAL } };
+    return { data: { command: "panic", revoked, pairings: before, stopTargets: targets, signalled, signal: STOP_SIGNAL, egressTokensRevoked, egressTokensActive } };
   },
   render(data, ctx) {
     const d = data as unknown as PanicData;
@@ -111,6 +132,7 @@ export const panicSpec: CommandSpec = {
     if (d.dryRun === true) {
       lines.push(`  ${ctx.theme.meta("would revoke")} ${ctx.theme.value(`${d.pairings.length} pairing${d.pairings.length === 1 ? "" : "s"}`)}`);
       for (const p of d.pairings) lines.push(`    ${ctx.theme.value(`${p.platform} ${p.senderId}`)} ${ctx.theme.meta(`${p.tier}, ${p.scope}`)}`);
+      lines.push(`  ${ctx.theme.meta("would revoke")} ${ctx.theme.value(`${d.egressTokensActive} egress token${d.egressTokensActive === 1 ? "" : "s"}`)}`);
       lines.push(`  ${ctx.theme.meta(`would signal ${STOP_SIGNAL} to`)} ${ctx.theme.value(`${d.stopTargets.length} process(es)`)}`);
       for (const t of d.stopTargets) lines.push(`    ${ctx.theme.value(`pid ${t.pid}`)} ${ctx.theme.meta(`${t.role} ${t.label}`)}`);
       return lines;
@@ -118,6 +140,7 @@ export const panicSpec: CommandSpec = {
 
     lines.push(`  ${ctx.theme.needsApproval("revoked")} ${ctx.theme.value(`${d.revoked} pairing${d.revoked === 1 ? "" : "s"}`)}`);
     for (const p of d.pairings) lines.push(`    ${ctx.theme.value(`${p.platform} ${p.senderId}`)} ${ctx.theme.meta(`${p.tier}, ${p.scope}`)}`);
+    lines.push(`  ${ctx.theme.needsApproval("revoked")} ${ctx.theme.value(`${d.egressTokensRevoked} egress token${d.egressTokensRevoked === 1 ? "" : "s"}`)}`);
     if (d.stopTargets.length === 0) {
       lines.push(`  ${ctx.theme.meta("no live gateway, run, service or heartbeat lock on this profile to stop")}`);
       lines.push(`  ${ctx.theme.meta("a bare run in another terminal takes no writer lock — stop it there with Ctrl+C")}`);

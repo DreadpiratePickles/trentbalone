@@ -11,6 +11,7 @@ import path from "node:path";
 import { ConfigManager } from "@trent/core/config/index.js";
 import { EXIT } from "@trent/core/errors/index.js";
 import { FileGatewayStore, PairingManager } from "@trent/core/gateway/index.js";
+import { TokenManager, egressTokenStorePath } from "@trent/core/egress/index.js";
 import { runCli } from "../index.js";
 
 interface PanicJson {
@@ -21,7 +22,20 @@ interface PanicJson {
   stopTargets: Array<{ pid: number; role: string; label: string }>;
   signalled: boolean;
   signal: string;
+  egressTokensRevoked: number;
+  egressTokensActive: number;
 }
+
+// The egress token broker panic must reach: the same file the running proxy validates against,
+// derived from this profile's base dir so the test stays hermetic under TRENT_HOME.
+const egressTokens = (): TokenManager =>
+  new TokenManager({ filePath: egressTokenStorePath(profileDir()) });
+
+const seedEgressTokens = (): void => {
+  const manager = egressTokens();
+  manager.issueToken("eng-ai-engineer", { apiKey: "sk-live-1" });
+  manager.issueToken("ceo", { apiKey: "sk-live-2" });
+};
 
 let home: string;
 
@@ -97,5 +111,52 @@ describe("trent panic revokes every pairing", () => {
     const data = JSON.parse(result.stdout) as PanicJson;
     expect(data.revoked).toBe(0);
     expect(data.pairings).toEqual([]);
+  });
+});
+
+describe("trent panic drops egress trust too", () => {
+  it("revokes every brokered egress token and reports the count", async () => {
+    seedPairings();
+    seedEgressTokens();
+    expect(egressTokens().listActiveTokens()).toHaveLength(2);
+
+    const result = await runCli(["panic", "--json"]);
+
+    expect(result.exitCode, result.stdout).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as PanicJson;
+    expect(data.egressTokensRevoked).toBe(2);
+    // After panic the proxy (which validates against this same file) refuses every former token.
+    expect(egressTokens().listActiveTokens()).toEqual([]);
+  });
+
+  it("names the egress-token count in the human report", async () => {
+    seedEgressTokens();
+
+    const result = await runCli(["panic"]);
+
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(result.stdout).toContain("2 egress token");
+  });
+
+  it("under --dry-run revokes no egress tokens but reports the would-be count", async () => {
+    seedEgressTokens();
+
+    const result = await runCli(["panic", "--dry-run", "--json"]);
+
+    expect(result.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as PanicJson;
+    expect(data.egressTokensRevoked).toBe(0);
+    expect(data.egressTokensActive).toBe(2);
+    // Nothing was touched: the tokens still resolve.
+    expect(egressTokens().listActiveTokens()).toHaveLength(2);
+  });
+
+  it("carries egressTokensRevoked even when no egress tokens exist", async () => {
+    const result = await runCli(["panic", "--json"]);
+
+    expect(result.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as PanicJson;
+    expect(data.egressTokensRevoked).toBe(0);
+    expect(data.egressTokensActive).toBe(0);
   });
 });

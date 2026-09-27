@@ -40,8 +40,18 @@ export interface IssueTokenOptions {
 
 export const TOKEN_PREFIX = "trnt_egress_";
 
+/**
+ * Where a Trent home keeps its egress token store: `<baseDir>/egress/tokens.json`. The egress
+ * material (CA + tokens) is global to a home, not per-profile, so callers that only know the base
+ * dir (`ConfigManager.getBaseDir()`) can point a `TokenManager` at the very file the running proxy
+ * validates against — which is how `trent panic` revokes live tokens from a separate process.
+ */
+export function egressTokenStorePath(baseDir: string): string {
+  return path.join(baseDir, "egress", "tokens.json");
+}
+
 function defaultTokenPath(): string {
-  return path.join(os.homedir(), ".trent", "egress", "tokens.json");
+  return egressTokenStorePath(path.join(os.homedir(), ".trent"));
 }
 
 function isExpired(record: ProxyTokenRecord, now: number): boolean {
@@ -114,6 +124,26 @@ export class TokenManager {
     let count = 0;
     for (const record of this.store.all()) {
       if (record.agentId === agentId && !record.revoked) {
+        this.store.put({ ...record, revoked: true });
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * The kill switch: mark EVERY still-valid token revoked and return how many were dropped. After
+   * it, `resolveToken` - and therefore the `EgressProxy`, which validates through it - refuses every
+   * previously-valid token, so an in-flight agent step still holding one can make no further
+   * outbound call. Already-revoked or expired records are not "valid" and are neither re-touched nor
+   * counted, so the return value is exactly the number of live tokens this call took down (matching
+   * `listActiveTokens().length` at the moment it runs).
+   */
+  public revokeAll(): number {
+    const now = Date.now();
+    let count = 0;
+    for (const record of this.store.all()) {
+      if (!record.revoked && !isExpired(record, now)) {
         this.store.put({ ...record, revoked: true });
         count++;
       }

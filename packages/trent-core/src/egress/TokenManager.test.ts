@@ -81,6 +81,40 @@ describe("TokenManager", () => {
     expect(manager.resolveToken(c)).not.toBeNull();
   });
 
+  it("revokes every valid token at once, returns the count, and refuses them afterwards", () => {
+    const manager = new TokenManager({ filePath: file });
+    const a = manager.issueToken("agent-a", { apiKey: "k1" });
+    const b = manager.issueToken("agent-b", { apiKey: "k2" });
+    expect(manager.resolveToken(a)).not.toBeNull();
+    expect(manager.resolveToken(b)).not.toBeNull();
+
+    // The kill switch drops egress trust wholesale.
+    expect(manager.revokeAll()).toBe(2);
+
+    // resolveToken is the exact validation the EgressProxy runs, so a null here is a proxy refusal.
+    expect(manager.resolveToken(a)).toBeNull();
+    expect(manager.resolveToken(b)).toBeNull();
+    expect(manager.listActiveTokens()).toHaveLength(0);
+
+    // And a running proxy (a separate process over the same file) refuses them too.
+    const restarted = new TokenManager({ filePath: file });
+    expect(restarted.resolveToken(a)).toBeNull();
+    expect(restarted.resolveToken(b)).toBeNull();
+  });
+
+  it("revokeAll counts only the still-valid tokens and is a no-op on an empty store", () => {
+    const empty = new TokenManager({ filePath: file });
+    expect(empty.revokeAll()).toBe(0);
+
+    const manager = new TokenManager({ filePath: file });
+    const a = manager.issueToken("agent-a", { apiKey: "k1" });
+    manager.issueToken("agent-b", { apiKey: "k2" });
+    manager.revokeToken(a); // already gone: revokeAll must not double-count it
+
+    expect(manager.revokeAll()).toBe(1);
+    expect(manager.revokeAll()).toBe(0);
+  });
+
   it("never exposes credentials through listActiveTokens", () => {
     const manager = new TokenManager({ filePath: file });
     manager.issueToken("ceo", { apiKey: REAL_SECRET });
