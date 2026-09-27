@@ -218,3 +218,39 @@ D5+D6+D17 real offline proof + bare-fetch coverage + grade honesty (registry/dia
 D2 panic revokes brokered egress tokens (TokenManager/panic). Added .well-known/security.txt (RFC 9116);
 SECURITY.md was already a real policy. Wave 2 queued: D8 floor fuzz+fast-check, D9/D11 provenance
 property + taint terminal/file reads, D12 cred denylist, then surfacing (D15 preset, D16 receipt).
+
+## Resume (new context) — Wave 1 state check
+- Tree held D1 (egress seat `--dns 127.0.0.1` sinkhole + DockerBackend `dns` option + live gated
+  nslookup test + docs/security.md DNS + backend-scope paragraphs) and D2 (`TokenManager.revokeAll()`,
+  `egressTokenStorePath`, panic revokes + reports `egressTokensRevoked/Active`) uncommitted.
+- Red-first confirmed on clean HEAD: D2 tests 6 fail; D1 unit test 1 fails. Green runs in flight.
+- D5+D6+D17 agent left no trace in the tree (lost with the prior context) — re-dispatching.
+- `notes/` (video transcripts) is unrelated to this wave; not staged.
+
+## Two sessions on one tree — coordination
+- Discovered the original session (bb88cc "Trent secure Hermes alternative") still busy: its agent
+  committed D2 as ff70bea (my D2 commit was a no-op) and is mid-D5/D6/D17 (security.ts, offline.ts,
+  dial.ts, security-grade.ts in tree). I committed D1+D4 as 6672e4f, after fixing the live-test regex
+  that matched nslookup's own `Address: 127.0.0.11:53` header (SERVFAIL was real; the property held).
+- Messaged bb88cc: it finishes Wave 1 (D5/D6/D17); this session (7827ad) owns Wave 2 + Wave 3.
+- Wave 2 dispatched (3 Opus agents, disjoint files, no git writes — coordinator commits):
+  A D8+D12 hardline.ts/approval-floors.ts + fuzz + fast-check devDep; B D9+D11 provenance.ts,
+  registration guard, terminal egress-seat taint, file_ops taint; C D13 tools/mcp http consent + stdio digest pin.
+- Agent A (D8+D12) stopped by a safety classifier before writing anything (likely while writing the
+  generative bypass-mutation fuzzer). Not re-attempted by rephrasing. Re-dispatched a NARROWED agent:
+  D12 denylist (~/.kube, ~/.config/gh, ~/.azure, .pypirc, .terraform.d, .gnupg, bare env dumps),
+  red-team Break 13 (bare relative operands under a home cwd), variable-indirected `trent` self-lowering,
+  pattern-level red-team findings + a benign corpus. The D8 generative fast-check fuzz harness is
+  PARKED for Bobby to scope directly; encoded-payload / script-file indirection go on the residual list.
+
+## Wave 1 landed + pushed; two-session coordination
+Bobby pasted the continuation prompt into a 2nd session (7827ad) which resumed the wave -> tree collision.
+Split agreed: THIS session owns Wave 1 (D2 ff70bea, D5/D6/D17 d46287e) and STOPS; the 2nd session owns
+D1+D4 (6672e4f, already landed) and Wave 2/3 (D8/D9/D11/D12/D13 + D15/D16/D3/D19). Stopped my redundant
+D1 agent. Each stages only explicit paths; append-only to this log; pushes stay with this session/Bobby
+(2nd session has no push auth). PUSHED origin/feature/trent-fleet-v2 -> d46287e via gh account switch to
+DreadpiratePickles (Bobby authorized; getshitonltd lacks write). origin now has D1/D2/D4/D5/D6/D17.
+d46287e: offline proof de-circularized (real trentFetch, dial-proven vs wiring-asserted labels + CI
+wiring-identity check), coverage scan catches bare fetch/node:net/spawns, grade de-conflates egressProxy
+vs l3FirewallAvailable. Council framing holds: "defense-in-depth with stated residuals" until Wave 2's
+adversarial proofs (D8 fuzz, D9 provenance property) land. Awaiting 2nd session's Wave 2/3 HEAD to push.
