@@ -41,6 +41,7 @@ import { applyLocalModelEnv, type LocalModelConfig } from "@trent/core/model-gat
 import { appEmbedder } from "./headless-wiring.js"; // [L1]
 import { guardAppDatabase, type AppStoreState, type FleetMemoryHook } from "@trent/core/fleet-memory/index.js";
 import { acquireProfileWriter } from "@trent/core/profile/locks.js";
+import { assertOfflineConfig } from "@trent/core/egress/offline-config.js"; // [SEC-2 S2a-3]
 import { runSessionHooks } from "@trent/core/hooks/index.js";
 import { loadWorkspaceContext, type WorkspaceContext } from "@trent/core/workspace-context/index.js";
 import { createVersionPinHook, type VersionPinHook } from "@trent/core/fleet/index.js";
@@ -244,6 +245,10 @@ export async function createHeadlessRuntime(deps: HeadlessRuntimeDeps): Promise<
   // [P2-1] A malformed pin is refused before anything is opened or registered.
   const pin = deps.model === undefined ? undefined : parseModelPin(deps.model);
   const config = deps.config ?? (deps.configManager.loadConfig() as unknown as ReplConfig);
+  // [SEC-2 S2a-3] Offline mode is a promise: if it is on, refuse a profile that would still reach
+  // the network, naming every hosted setting, before anything is opened. The dial chokepoint blocks
+  // a stray call at runtime; this fails the run fast with the fix, rather than starting it.
+  assertOfflineConfig(config);
   const profileDir = deps.configManager.getProfileDir();
   const workspace = deps.workspace ?? process.cwd();
   // Every surface built on this graph writes the profile, so it is a live writer on it from here

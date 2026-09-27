@@ -8,3 +8,5 @@ export * from "./bind-hosts.js";
 export * from "./host-binding.js";
 export * from "./provider-hosts.js";
 export * from "./dial.js";
+export * from "./offline.js";
+export * from "./offline-config.js";

@@ -95,4 +95,30 @@ describe("[L0-2] the headless runtime bridges models.local", () => {
     await runtimeFor(undefined);
     for (const name of Object.values(LOCAL_MODEL_ENV)) expect(process.env[name], name).toBeUndefined();
   });
+
+  it("[SEC-2 S2a-3] refuses to boot offline when the profile is hosted, naming the setting", async () => {
+    const configManager = new ConfigManager({ profile: `offline-${Math.random().toString(36).slice(2, 8)}` });
+    const config = configManager.loadConfig();
+    config.terminal.backend = "local";
+    config.provider = "openai"; // hosted
+    configManager.saveConfig(config);
+    const savedOffline = process.env.TRENT_OFFLINE;
+    process.env.TRENT_OFFLINE = "1";
+    try {
+      await expect(
+        createHeadlessRuntime({
+          configManager,
+          workspace: REPO_ROOT,
+          createOrchestrator: () => { throw new Error("must refuse before building the orchestrator"); },
+          buildAdapters: () => { throw new Error("must refuse before building adapters"); },
+          startEgress: async () => { throw new Error("must refuse before starting egress"); },
+          probeDocker: async () => ({ daemon: false, imagePresent: false }),
+          openStore: async () => { throw new Error("must refuse before opening the store"); },
+        }),
+      ).rejects.toThrow(/offline mode is on.*provider/is);
+    } finally {
+      if (savedOffline === undefined) delete process.env.TRENT_OFFLINE;
+      else process.env.TRENT_OFFLINE = savedOffline;
+    }
+  });
 });
