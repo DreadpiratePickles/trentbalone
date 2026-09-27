@@ -174,9 +174,10 @@ Enforcement is in three layers, because the shipped binary is compiled with Bun 
 dispatcher would not apply to Bun's native `fetch`:
 
 1. **The dial chokepoint.** Every module that dials with the platform `fetch` routes through
-   `trentFetch` (`egress/dial.ts`), which resolves the target and refuses anything that is not
-   loopback before a socket opens. Loopback is classified by the same rule the SSRF floor uses, so a
-   public host reached through a local-looking name (DNS rebinding) is still refused.
+   `trentFetch` (`egress/dial.ts`), which refuses anything that is not loopback before a socket
+   opens — and, for a name, before any DNS query (see below). Loopback is classified by the same rule
+   the SSRF floor uses, and the target is pinned to the address it was checked against, so a
+   local-looking name cannot be rebound to a public host.
 2. **The config front door.** At run boot `assertOfflineConfig` refuses a profile that would still
    reach the network — a hosted model provider, hosted escalation, a hosted embedder, a non-loopback
    OTLP endpoint, or an enabled messaging gateway — naming each with its fix, before anything opens.
@@ -185,8 +186,13 @@ dispatcher would not apply to Bun's native `fetch`:
    `trent update` refuses.
 
 The host egress proxy is offline-aware: it starts with the loopback allowlist, and it refuses any
-CONNECT or forward whose upstream resolves to an address that is not loopback with
+CONNECT or forward whose upstream is not loopback by definition (a loopback literal, `localhost`,
+or `*.localhost`) with
 `offline_non_loopback` before an upstream socket opens (`egress/EgressProxy.offline.test.ts`).
+
+Offline, non-local names are refused without a DNS query: only IP literals, `localhost`, `*.localhost`
+(pinned to 127.0.0.1) and operator-configured local hosts pass, so a secret encoded in a hostname
+never reaches a resolver (`egress/dial.offline-names.test.ts`, `egress/EgressProxy.offline.test.ts`).
 
 **Scope: this is airtight only on `backend: docker`.** Layers 1 and 2 guard Trent's own
 `fetch`-based dials and its config front door on any backend, and layer 3 stands down the egress

@@ -15,8 +15,8 @@
  * literal someone allowlisted is taken as written, bar cloud metadata), and dials that exact address
  * as a literal. SNI, certificate verification and the Host header stay the hostname. There is no
  * second resolution for a rebinding server to answer differently.
- * [O-03] Offline, every CONNECT and forward is pinned under the LOOPBACK policy instead and refused
- * (`offline_non_loopback`) unless every address is on this machine, whatever the allowlist says.
+ * [O-03] Offline, every CONNECT and forward is pinned with NO resolver instead and refused
+ * (`offline_non_loopback`) unless it is loopback by definition, whatever the allowlist says.
  */
 import http from "node:http";
 import https from "node:https";
@@ -411,7 +411,7 @@ export class EgressProxy {
 
   /** [O-03] The offline pin: a loopback literal to dial, or null (logged) when the upstream is off the machine. */
   private offlinePin(target: Target): Promise<Target | null> {
-    return pinOfflineUpstream(target, this.upstreamOverrides[target.host], this.lookup, (f) => this.logger.warn("egress.offline_refused", f));
+    return pinOfflineUpstream(target, this.upstreamOverrides[target.host], (f) => this.logger.warn("egress.offline_refused", f));
   }
 
   /**

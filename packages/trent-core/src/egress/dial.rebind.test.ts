@@ -8,6 +8,12 @@
  * guard returns the validated address and `trentFetch` connects to exactly that literal.
  *
  * Every resolver here is injected and answers differently on its second query. No real DNS.
+ *
+ * [DNS-name leak] Offline, no name is resolved at all any more (the query itself leaves the machine):
+ * `*.localhost` is pinned to 127.0.0.1 by definition and any other name is refused unresolved. The
+ * tests below used `model.rebind.test` resolved through the injected lookup; they now use
+ * `model.localhost`, and every resolver must stay at ZERO calls. The pinning mechanics they pin (the
+ * dial goes to the literal, the Host header keeps the name) are unchanged.
  */
 import http from "node:http";
 import net from "node:net";
@@ -54,22 +60,24 @@ function stubGlobalFetch(): Seen[] {
 }
 
 describe("[D3] assertLocalTarget returns the address it validated", () => {
-  it("pins a name to the loopback answer of its single resolution", async () => {
-    const dns = rebinding(["127.0.0.1"], ["203.0.113.9"]);
-    const pin = await assertLocalTarget("http://model.rebind.test:11434/api", { lookup: dns.lookup });
-    expect(pin).toMatchObject({ host: "model.rebind.test", address: "127.0.0.1" });
-    expect(dns.calls).toEqual(["model.rebind.test"]);
+  it("pins a *.localhost name to 127.0.0.1 without any resolution", async () => {
+    const dns = rebinding(["203.0.113.9"], ["203.0.113.9"]);
+    const pin = await assertLocalTarget("http://model.localhost:11434/api", { lookup: dns.lookup });
+    expect(pin).toMatchObject({ host: "model.localhost", address: "127.0.0.1" });
+    expect(dns.calls).toEqual([]);
   });
 
-  it("prefers the IPv4 loopback answer when the one resolution holds both families", async () => {
+  it("pins a *.localhost name to IPv4 loopback even when a resolver would answer ::1 first", async () => {
     const dns = rebinding(["::1", "127.0.0.1"], ["203.0.113.9"]);
     const pin = await assertLocalTarget("http://svc.localhost:8080/", { lookup: dns.lookup });
     expect(pin?.address).toBe("127.0.0.1");
+    expect(dns.calls).toEqual([]);
   });
 
-  it("still refuses a name whose one answer is off the machine", async () => {
-    const dns = rebinding(["203.0.113.9"], ["127.0.0.1"]);
+  it("refuses a name that is not local by definition without resolving it, even if it would answer loopback", async () => {
+    const dns = rebinding(["127.0.0.1"], ["127.0.0.1"]);
     await expect(assertLocalTarget("http://model.rebind.test:11434/", { lookup: dns.lookup })).rejects.toBeInstanceOf(EgressBlocked);
+    expect(dns.calls).toEqual([]);
   });
 });
 
@@ -78,36 +86,41 @@ describe("[D3] offline trentFetch connects to the validated address, not a secon
     process.env.TRENT_OFFLINE = "1";
     const dns = rebinding(["127.0.0.1"], ["203.0.113.9"]);
     const seen = stubGlobalFetch();
-    const res = await createTrentFetch({ lookup: dns.lookup })("http://model.rebind.test:11434/api/chat?x=1", { method: "POST", body: "{}" });
+    const res = await createTrentFetch({ lookup: dns.lookup })("http://model.localhost:11434/api/chat?x=1", { method: "POST", body: "{}" });
     expect(res.status).toBe(200);
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toMatchObject({ url: "http://127.0.0.1:11434/api/chat?x=1", method: "POST", host: "model.rebind.test:11434", body: "{}" });
-    expect(dns.calls).toEqual(["model.rebind.test"]);
+    expect(seen[0]).toMatchObject({ url: "http://127.0.0.1:11434/api/chat?x=1", method: "POST", host: "model.localhost:11434", body: "{}" });
+    expect(dns.calls).toEqual([]);
   });
 
-  it("pins an IPv6 loopback answer as a bracketed literal", async () => {
+  // An IPv6 pin used to come from a `*.localhost` name answering ::1; offline no answer is asked for,
+  // so IPv6 loopback is reached only as a literal, which is dialled as written.
+  it("leaves an IPv6 loopback literal untouched, consulting no resolver", async () => {
     process.env.TRENT_OFFLINE = "1";
-    const dns = rebinding(["::1"], ["203.0.113.9"]);
+    const dns = rebinding(["203.0.113.9"], ["203.0.113.9"]);
     const seen = stubGlobalFetch();
-    await createTrentFetch({ lookup: dns.lookup })("http://svc.localhost:8080/v1", { method: "GET" });
+    await createTrentFetch({ lookup: dns.lookup })("http://[::1]:8080/v1", { method: "GET" });
     expect(seen[0]?.url).toBe("http://[::1]:8080/v1");
+    expect(dns.calls).toEqual([]);
   });
 
   it("pins a Request input too, keeping its method and body", async () => {
     process.env.TRENT_OFFLINE = "1";
     const dns = rebinding(["127.0.0.1"], ["203.0.113.9"]);
     const seen = stubGlobalFetch();
-    const req = new Request("http://model.rebind.test:11434/api", { method: "PUT", body: "payload" });
+    const req = new Request("http://model.localhost:11434/api", { method: "PUT", body: "payload" });
     await createTrentFetch({ lookup: dns.lookup })(req);
-    expect(seen[0]).toMatchObject({ url: "http://127.0.0.1:11434/api", method: "PUT", host: "model.rebind.test:11434", body: "payload" });
+    expect(seen[0]).toMatchObject({ url: "http://127.0.0.1:11434/api", method: "PUT", host: "model.localhost:11434", body: "payload" });
+    expect(dns.calls).toEqual([]);
   });
 
-  it("refuses https to a DNS name offline: TLS cannot be pinned to the validated address", async () => {
+  it("refuses https to a *.localhost name offline: TLS cannot be pinned to the validated address", async () => {
     process.env.TRENT_OFFLINE = "1";
     const dns = rebinding(["127.0.0.1"], ["203.0.113.9"]);
     const seen = stubGlobalFetch();
-    await expect(createTrentFetch({ lookup: dns.lookup })("https://model.rebind.test:8443/")).rejects.toBeInstanceOf(EgressBlocked);
+    await expect(createTrentFetch({ lookup: dns.lookup })("https://model.localhost:8443/")).rejects.toThrow(/cannot be pinned/);
     expect(seen).toHaveLength(0);
+    expect(dns.calls).toEqual([]);
   });
 
   it("leaves a loopback literal and plain `localhost` untouched, consulting no resolver", async () => {
@@ -136,11 +149,12 @@ describe("[D3] offline trentFetch connects to the validated address, not a secon
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as net.AddressInfo).port;
     try {
-      // If the platform fetch re-resolved the name it would get 192.0.2.1 (TEST-NET-1) and fail.
-      const dns = rebinding(["127.0.0.1"], ["192.0.2.1"]);
-      const res = await createTrentFetch({ lookup: dns.lookup })(`http://model.rebind.test:${port}/real`, { method: "GET" });
+      // Every answer is poisoned (192.0.2.1, TEST-NET-1): a dial that asked the resolver, or a platform
+      // fetch that re-resolved the name, would fail. Offline the name is pinned by definition instead.
+      const dns = rebinding(["192.0.2.1"], ["192.0.2.1"]);
+      const res = await createTrentFetch({ lookup: dns.lookup })(`http://model.localhost:${port}/real`, { method: "GET" });
       expect(await res.text()).toBe("served:/real");
-      expect(dns.calls).toEqual(["model.rebind.test"]);
+      expect(dns.calls).toEqual([]);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

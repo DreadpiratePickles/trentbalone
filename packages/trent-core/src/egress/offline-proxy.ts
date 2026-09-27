@@ -5,19 +5,19 @@
  * dial guard in `egress/dial.ts`, so that guard never sees its dials. A host-side tool whose request
  * reached the loopback listener therefore passed the guard's loopback rule and then left the machine
  * through the proxy. This module is the proxy's own copy of that rule, built on the same pieces: offline is
- * decided by {@link isOffline} (egress/offline.ts), and the upstream is resolved exactly once through
- * {@link resolvePinned} under the `loopback` policy, so every address in the one answer must be
- * loopback and the literal returned is the one the proxy dials (no second resolution to rebind).
+ * decided by {@link isOffline} (egress/offline.ts), and the upstream is pinned by
+ * {@link pinOfflineLocal} WITHOUT a resolver: a loopback literal as written, `localhost` / `*.localhost`
+ * to 127.0.0.1 by definition, and every other name refused before any DNS query (the query name is
+ * itself a channel off the machine). The literal returned is the one the proxy dials.
  *
  * An `upstreamOverrides` entry (tests, staging) is held to the same rule: offline, an override that
  * points off the machine is refused like any other target. Every override the test suites use points
  * at 127.0.0.1, which passes.
  *
- * Pure apart from the injected resolver: this module never opens a socket.
+ * Pure: this module never resolves a name and never opens a socket.
  */
-import type { LookupFn } from "../tools/web/url-safety.js";
 import { isOffline } from "./offline.js";
-import { PinRefused, resolvePinned } from "./pinned-lookup.js";
+import { PinRefused, pinOfflineLocal } from "./pinned-lookup.js";
 
 /** The refusal body a plain-HTTP or intercepted request gets offline; the CONNECT header carries `reason`. */
 export const REFUSAL_OFFLINE = {
@@ -47,19 +47,19 @@ export type OfflineRefusal = {
 };
 
 /**
- * Resolve the upstream for `target` once under the loopback policy. Returns the literal address and
- * port to dial, or null after telling `onRefused` why it may not be dialled offline (an address off
- * the machine, or no answer at all). With an override, the override's address is what is checked.
+ * Pin the upstream for `target` with no resolver. Returns the literal address and port to dial, or
+ * null after telling `onRefused` why it may not be dialled offline (an address off the machine, or a
+ * name that is not local by definition, refused unresolved). With an override, the override is what is
+ * checked.
  */
 export async function pinOfflineUpstream(
   target: OfflineUpstream,
   override: OfflineUpstream | undefined,
-  lookup: LookupFn | undefined,
   onRefused: (refusal: OfflineRefusal) => void = () => {},
 ): Promise<OfflineUpstream | null> {
   const dial = override ?? target;
   try {
-    const pin = await resolvePinned(dial.host, { policy: "loopback", ...(lookup ? { lookup } : {}) });
+    const pin = pinOfflineLocal(dial.host);
     return { host: pin.address, port: dial.port };
   } catch (err) {
     if (!(err instanceof PinRefused)) throw err;

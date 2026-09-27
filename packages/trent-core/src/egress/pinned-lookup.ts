@@ -11,7 +11,8 @@
  * Policies:
  *   - `public`   a DNS name the proxy allowlisted: every address must be routable public space.
  *                Private, loopback, link-local, CGNAT, multicast and cloud-metadata answers are refused.
- *   - `loopback` a `*.localhost` name, or any name the offline guard is checking: loopback only.
+ *   - `loopback` a `*.localhost` name dialled online: loopback only. (Offline nothing is resolved at
+ *                all: {@link pinOfflineLocal} pins by definition and refuses every other name.)
  *   - `explicit` an IP literal someone wrote down (an allowlist entry, an override): no DNS happens,
  *                so there is nothing to rebind; only cloud-metadata and unspecified addresses are refused.
  *
@@ -121,6 +122,28 @@ export async function resolvePinned(host: string, options: ResolvePinnedOptions 
     family: net.isIPv6(bareHost(picked.address)) ? 6 : 4,
     addresses: answer.map((a) => bareHost(a.address)),
   };
+}
+
+/** The address a `localhost` / `*.localhost` name is pinned to offline: IPv4 loopback, what local runtimes bind. */
+export const LOCALHOST_PIN = "127.0.0.1";
+
+/**
+ * [O-02/O-03] The offline pin, with NO resolver: a DNS query is itself egress, so offline no name is
+ * ever sent to one. An IP literal is checked as written (loopback only). `localhost` and `*.localhost`
+ * (RFC 6761: always this machine) are pinned to {@link LOCALHOST_PIN} by definition. Any other name is
+ * refused ({@link PinRefused}, address null) without being resolved, so a secret encoded in the name
+ * (`<secret>.attacker.tld`) never reaches a resolver. Operator-vouched hosts are the caller's business.
+ */
+export function pinOfflineLocal(host: string): PinnedTarget {
+  const h = bareHost(host);
+  const literal = net.isIP(h);
+  if (literal !== 0) {
+    const violation = addressViolation(h, "loopback");
+    if (violation !== null) throw new PinRefused(h, h, `resolves to ${h}, which is ${violation}`);
+    return { host: h, address: h, family: literal === 6 ? 6 : 4, addresses: [h] };
+  }
+  if (isLocalhostName(h)) return { host: h, address: LOCALHOST_PIN, family: 4, addresses: [LOCALHOST_PIN] };
+  throw new PinRefused(h, null, "is a DNS name that is not loopback by definition; offline it is refused without a DNS query (use an IP literal, localhost, or a configured local host)");
 }
 
 /** `address` as it goes into a URL authority: IPv6 bracketed. */
