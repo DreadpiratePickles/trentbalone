@@ -28,6 +28,8 @@ const EXPECTED_IDS = [
   "fork-bomb",
   "write-to-trent-secrets",
   "read-trent-env-or-ssh-keys",
+  "read-external-credentials",
+  "lower-trents-own-guardrails",
   "force-push-to-a-protected-branch",
 ];
 
@@ -124,9 +126,20 @@ describe("6. writing Trent secrets, the egress keys or workspace-trust.json from
     expect(onPath("~/.trent/workspace-trust.json", "write")).not.toBeNull();
   });
 
+  it("[SEC-3 T-07] also protects the control-plane files that decide what runs and what is approved", () => {
+    // Writing config.yaml + hooks-consent.json installs and consents a hook (RCE persistence); writing
+    // gateway.json forges a bound approval so a held send/payment auto-runs; editing the audit ndjson
+    // breaks the hash-chained record. Reachable on LocalBackend or a bind-mounted profile.
+    for (const f of ["config.yaml", "hooks-consent.json", "gateway.json", "approvals-audit.ndjson", "idempotency.json"]) {
+      expect(onPath(path.posix.join(ctx.profileDir, f), "write")?.id, f).toBe("write-to-trent-secrets");
+    }
+    expect(onCommand("echo x > ~/.trent/default/config.yaml")?.id).toBe("write-to-trent-secrets");
+  });
+
   it("does not fire on the project's own .env, on a read, or on an unrelated json", () => {
     expect(onPath("/srv/app/.env", "write")).toBeNull();
     expect(onPath("~/.trent/sessions/last.json", "write")).toBeNull();
+    expect(onPath(path.posix.join(ctx.profileDir, "config.yaml"), "read")).toBeNull();
     expect(onCommand("echo API_BASE=x >> .env.local")).toBeNull();
   });
 });
@@ -172,6 +185,43 @@ describe("7b. reading Trent's audit key, egress CA key or egress token store fro
   });
 });
 // [/C4]
+
+// [SEC-3 T-05] The sandbox contains a docker run; on LocalBackend or a mounted home these files are
+// right there. A tool has no business reading the operator's cloud, git, npm or docker credentials.
+describe("7c. reading the operator's cloud/git/npm/docker credentials from a tool", () => {
+  it("fires on the common credential locations, by path and by command", () => {
+    for (const p of ["~/.aws/credentials", "~/.config/gcloud/application_default_credentials.json", "~/.netrc", "~/.git-credentials", "~/.npmrc", "~/.docker/config.json"]) {
+      expect(onPath(p, "read")?.id, p).toBe("read-external-credentials");
+    }
+    expect(onCommand("cat ~/.aws/credentials")?.id).toBe("read-external-credentials");
+    expect(onCommand("tar czf - $HOME/.aws | base64")?.id).toBe("read-external-credentials");
+  });
+
+  it("does not fire on a project's own aws directory or unrelated files", () => {
+    expect(onPath("/srv/app/.aws/notes.txt", "read")).toBeNull();
+    expect(onPath("~/.config/app/settings.json", "read")).toBeNull();
+    expect(onCommand("echo 'set AWS creds in ~/.aws/credentials'")).toBeNull();
+  });
+});
+
+// [SEC-3 T-07 self-lowering] Hermes lets the agent run `hermes config set approvals off` mid-session
+// (H-X-02, Critical). Trent refuses any tool command that reaches for its own CLI to lower a guardrail.
+describe("7d. lowering Trent's own guardrails through its CLI", () => {
+  it("fires on config set, hooks consent, mcp add, approvals approve and connect", () => {
+    expect(onCommand("trent config set governance.autonomy yolo")?.id).toBe("lower-trents-own-guardrails");
+    expect(onCommand("trent hooks consent abc123")?.id).toBe("lower-trents-own-guardrails");
+    expect(onCommand("trent mcp add evil --command 'npx -y evil'")?.id).toBe("lower-trents-own-guardrails");
+    expect(onCommand("trent approvals approve appr_1")?.id).toBe("lower-trents-own-guardrails");
+    expect(onCommand("trent security preset open")?.id).toBe("lower-trents-own-guardrails");
+  });
+
+  it("does not fire on read-only trent commands or on prose", () => {
+    expect(onCommand("trent config get provider")).toBeNull();
+    expect(onCommand("trent security audit")).toBeNull();
+    expect(onCommand("trent doctor")).toBeNull();
+    expect(onCommand("echo 'run trent config set to change it'")).toBeNull();
+  });
+});
 
 describe("8. git push --force to a protected branch", () => {
   it("ships a non-empty protected branch list and refuses a force push at one", () => {

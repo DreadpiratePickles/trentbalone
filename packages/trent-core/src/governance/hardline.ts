@@ -128,12 +128,18 @@ const WRITE_VERB = new RegExp(
   "i",
 );
 
+// [SEC-3 T-07] Trent's control-plane files: writing these lowers a guardrail or forges a decision.
+// config.yaml holds the autonomy level, deny globs and egress allowlist; hooks-consent.json is what
+// makes a hook run; gateway.json is the bound-approval store (a forged row auto-runs a held send or
+// payment); approvals-audit.ndjson is the hash-chained record; idempotency.json gates replay.
+const CONTROL_FILES: ReadonlySet<string> = new Set(["config.yaml", "hooks-consent.json", "gateway.json", "approvals-audit.ndjson", "idempotency.json"]);
+
 function isTrentWriteTarget(target: string, ctx: HardlineContext): boolean {
   const trentDir = normaliseTarget(path.posix.join(ctx.home.replace(/\\/g, "/"), ".trent"), ctx);
   const inTrent = under(target, trentDir) || under(target, normaliseTarget(ctx.profileDir, ctx));
   if (!inTrent) return false;
   const base = path.posix.basename(target);
-  if (base === ".env" || base === "workspace-trust.json") return true;
+  if (base === ".env" || base === "workspace-trust.json" || CONTROL_FILES.has(base)) return true;
   return EGRESS_FILES.has(base) && target.includes("/egress/");
 }
 
@@ -153,6 +159,21 @@ function isTrentReadTarget(target: string, ctx: HardlineContext): boolean {
   const trentDir = normaliseTarget(path.posix.join(home, ".trent"), ctx);
   const inTrent = under(target, trentDir) || under(target, normaliseTarget(ctx.profileDir, ctx));
   return inTrent && (path.posix.basename(target) === ".env" || isTrentKeyMaterial(target)); // [C4]
+}
+
+// [SEC-3 T-05] The operator's OTHER credentials: cloud, git, npm, docker. The sandbox contains a docker
+// run, but on LocalBackend or a bind-mounted home these sit right beside the workspace. Directory
+// prefixes are blocked whole (~/.aws, ~/.config/gcloud, ~/.docker); the dotfiles are matched by name.
+function isExternalCredentialTarget(target: string, ctx: HardlineContext): boolean {
+  const home = ctx.home.replace(/\\/g, "/");
+  for (const dir of [".aws", ".config/gcloud", ".docker"]) {
+    if (under(target, normaliseTarget(path.posix.join(home, dir), ctx))) return true;
+  }
+  const base = path.posix.basename(target);
+  if (base === ".netrc" || base === ".git-credentials" || base === ".npmrc") {
+    return under(target, normaliseTarget(home, ctx));
+  }
+  return false;
 }
 
 /** The delete targets that have no recovery path: root, home, `~/.trent`, this profile. */
@@ -263,6 +284,29 @@ export const HARDLINE_RULES: readonly HardlineRule[] = [
     matches(subject, ctx) {
       if (subject.kind === "path") return subject.access === "read" && isTrentReadTarget(normaliseTarget(subject.value, ctx), ctx);
       return pathTokens(viewOf(subject.value)).some((token) => isTrentReadTarget(normaliseTarget(token, ctx), ctx));
+    },
+  },
+  {
+    id: "read-external-credentials",
+    reason: "a tool may never read the operator's cloud, git, npm or docker credentials (~/.aws, ~/.config/gcloud, ~/.docker, ~/.netrc, ~/.git-credentials, ~/.npmrc); those are not the model's to hold",
+    matches(subject, ctx) {
+      if (subject.kind === "path") return subject.access === "read" && isExternalCredentialTarget(normaliseTarget(subject.value, ctx), ctx);
+      return pathTokens(viewOf(subject.value)).some((token) => isExternalCredentialTarget(normaliseTarget(token, ctx), ctx));
+    },
+  },
+  {
+    id: "lower-trents-own-guardrails",
+    // Hermes lets a tool run `hermes config set approvals off` mid-session (H-X-02, Critical). Trent's
+    // own protections are the operator's to change, never a tool's, so a command that invokes the Trent
+    // CLI to edit config, consent a hook, add an MCP server, approve a held action, connect a credential
+    // or loosen the security preset is refused whatever the autonomy level.
+    reason: "a tool may not run the Trent CLI to lower Trent's own guardrails (config set, hooks consent, mcp add, approvals approve, connect, security preset); those are the operator's to change",
+    matches(subject) {
+      if (subject.kind !== "command") return false;
+      return anyMatch(
+        viewOf(subject.value).masked,
+        /\btrent\s+(?:config\s+set|hooks\s+(?:consent|add)|mcp\s+add|approvals\s+(?:approve|approve-all|resolve)|connect\b|security\s+preset)\b/i,
+      );
     },
   },
   {
