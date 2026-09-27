@@ -21,6 +21,7 @@ import { EgressProxy } from "../../egress/EgressProxy.js";
 import { TokenManager } from "../../egress/TokenManager.js";
 import { AS_HOST, FakeAuthServer, FakeOAuthMcp, LOOKUP, MCP_HOST, fakeBrowser, routingFetch, type FakeOAuthMcpOptions } from "./__fixtures__/fake-oauth-mcp.js";
 import { connectMcpServer } from "./client.js";
+import { mcpConsentAll } from "./consent.js";
 import { loginMcpServer } from "./http-oauth.js";
 import { McpOAuthStore, mcpOAuthEnvNames, mcpOAuthHeaderTemplate } from "./http-oauth-store.js";
 
@@ -81,6 +82,7 @@ function entry(headers: Record<string, string>): McpServerConfig {
 function viaProxy(config: McpServerConfig, env: NodeJS.ProcessEnv = {}, now?: () => Date) {
   return connectMcpServer("fake", config, {
     env,
+    consent: mcpConsentAll(), // [D13] consent is covered in consent-http.test.ts; these tests are about the wire
     egress: { proxyUrl: `http://127.0.0.1:${proxy.getPort()}`, token: brokerToken },
     lookup: LOOKUP,
     oauth: { store, ...(now === undefined ? {} : { now }) },

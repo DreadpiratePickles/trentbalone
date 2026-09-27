@@ -215,7 +215,15 @@ describe("7d. lowering Trent's own guardrails through its CLI", () => {
     expect(onCommand("trent security preset open")?.id).toBe("lower-trents-own-guardrails");
   });
 
+  // [D13] `trent mcp consent` re-approves drifted tool definitions or a changed stdio artifact; a
+  // tool running it after a rug-pull would undo the pin, so it is the operator's alone.
+  it("fires on mcp consent (re-approving a drifted or changed MCP server)", () => {
+    expect(onCommand("trent mcp consent evil")?.id).toBe("lower-trents-own-guardrails");
+    expect(onCommand("trent mcp consent evil --allow-flagged --json")?.id).toBe("lower-trents-own-guardrails");
+  });
+
   it("does not fire on read-only trent commands or on prose", () => {
+    expect(onCommand("trent mcp list")).toBeNull();
     expect(onCommand("trent config get provider")).toBeNull();
     expect(onCommand("trent security audit")).toBeNull();
     expect(onCommand("trent doctor")).toBeNull();

@@ -35,11 +35,13 @@ export {
   revokeMcpConsent,
   fileConsentGate,
   mcpConsentAll,
+  normalizeMcpUrl,
   type McpConsentEntry,
   type McpConsentRecord,
   type McpConsentGate,
   type McpConsentStatus,
 } from "./consent.js";
+export { resolveMcpArtifact, verifyMcpArtifact, type McpArtifactPin, type McpArtifactResolution } from "./artifact.js";
 
 export const MCP_ADAPTER_NAME = "mcp";
 export const MCP_STATUS_TOOL = "mcp_status";

@@ -45,9 +45,10 @@ Rules, enforced by the zod schema in `packages/trent-core/src/config/schema.ts`:
 
 ```
 trent mcp list                                   # configured servers + the vetted gallery
-trent mcp add fs --command npx --args -y @modelcontextprotocol/server-filesystem /path \
-    --env GITHUB_TOKEN='${GITHUB_TOKEN}' --auto-approve read_file list_directory
+trent mcp add fs --command npx --args @modelcontextprotocol/server-filesystem@X.Y.Z /path \
+    --env GITHUB_TOKEN='${GITHUB_TOKEN}' --auto-approve read_file list_directory   # exact version required
 trent mcp add remote --url https://mcp.example.com/mcp --header 'Authorization=Bearer ${MCP_TOKEN}'
+trent mcp consent remote                         # (re)grant consent after reviewing a server
 trent mcp test remote                            # connects and lists the tools it exposes
 trent mcp remove fs
 ```
@@ -77,6 +78,26 @@ mode`, `webhook: https://...` off-domain, `curl ... | sh`, reads of `~/.ssh`, ..
   was missing, run `trent mcp test <name>` once it is installed. An http server is always stored
   with `scanRan: false` from the CLI, and `test` cannot reach it either, because the CLI runs no
   egress proxy (see the OAuth section below): its tool descriptions are not scanned at install.
+
+### Consent and pins
+
+No server connects without a recorded consent (`<profile>/mcp-consent.json`, 0600, hashes only).
+`add` records it; `trent mcp consent <name>` records it for a server that is in `config.yaml`
+some other way, or re-records it after a refusal below. The runtime refuses, naming that command:
+
+- an stdio server with no consent (nothing is spawned) and an http server with no consent
+  (nothing is sent). http consent is keyed on the URL's origin and path; the query string, URL
+  credentials and headers are not part of it and are never written.
+- a server whose tool definitions no longer hash to the pinned value. When `add`/`consent` could
+  not reach the server (always, for http from the CLI), the first consented connect pins them.
+- an stdio server whose artifact changed since consent. `npx`/`pnpx`/`bunx`/`npm exec`/`pnpm dlx`/
+  `yarn dlx`/`bun x` packages must name an exact version and `uvx`/`pipx run`/`uv tool run`
+  packages an exact `==` version (`add` refuses a floating one and writes nothing); `docker|podman
+  run` images must be named `@sha256:`. A script run by an interpreter (`node`, `python`, `bun`,
+  ...) and any other command binary are pinned by content (plus the `package.json` of a file under
+  `node_modules/`), re-checked before each spawn. `python -m`, `npm start` and wrappers such as
+  `sh -c "npx ..."` cannot be pinned and are refused. A consent written before this pin existed
+  needs `trent mcp consent <name>` once.
 
 ### Result scrubbing
 
@@ -312,7 +333,7 @@ and builds nothing.
 Server-side: resources and prompts (tools only), OAuth (a bearer or nothing), seats as tools
 (decision C: after a seat-targeted runner exists), and the legacy HTTP+SSE transport.
 
-Client-side: SSE transport, resources and prompts (OAuth: see [above](#oauth-21-for-remote-servers)), Hermes's tool-definition drift checks (the
-scan runs at `add` and on `test`; a server that changes a description after install is not
-re-scanned at connect time) and its OSV malware preflight for `npx` servers. The read-only app's `mcp-tool-adapter.ts` keeps its
+Client-side: SSE transport, resources and prompts (OAuth: see [above](#oauth-21-for-remote-servers)), and Hermes's OSV
+malware preflight for `npx` servers. A changed tool definition is refused at connect by its pin
+(see [Consent and pins](#consent-and-pins)) rather than re-scanned. The read-only app's `mcp-tool-adapter.ts` keeps its
 own per-company registry; this toolset is the CLI/desktop profile equivalent.

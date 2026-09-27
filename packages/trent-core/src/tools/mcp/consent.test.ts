@@ -11,6 +11,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { McpServerConfig } from "../../config/schema.js";
+import { resolveMcpArtifact, type McpArtifactPin } from "./artifact.js";
 import { connectMcpServer, type McpConnection, type StdioTransportFactory } from "./client.js";
 import { fileConsentGate, grantMcpConsent, mcpConsentAll, mcpConsentPath, mcpToolDefHash, readMcpConsent, type McpConsentGate } from "./consent.js";
 
@@ -28,8 +29,15 @@ afterEach(async () => {
   for (const c of open.splice(0)) await c.close();
 });
 
-function server(extraArgs: string[] = []): McpServerConfig {
+function server(extraArgs: string[] = []): Extract<McpServerConfig, { transport: "stdio" }> {
   return { transport: "stdio", command: process.execPath, args: [FIXTURE, ...extraArgs], env: {}, auto_approve: [], enabled: true };
+}
+
+/** [D13] What `trent mcp add` pins alongside the launch spec: the script the server runs. */
+function artifact(): McpArtifactPin {
+  const resolved = resolveMcpArtifact(server(), { cwd: process.cwd(), env: HOST_ENV });
+  if (!resolved.ok) throw new Error(resolved.reason);
+  return resolved.pin;
 }
 
 describe("[T-08] consent before spawn", () => {
@@ -61,7 +69,7 @@ describe("[T-08] consent before spawn", () => {
     await expect(connectMcpServer("fake", server(), { env: HOST_ENV, profileDir, stdioTransport: spawnSpy })).rejects.toThrow(/consent/i);
     expect(spy.count).toBe(0);
     // The operator records consent; the file is 0600 and now the same connect proceeds.
-    grantMcpConsent(profileDir, "fake", server());
+    grantMcpConsent(profileDir, "fake", server(), undefined, artifact());
     expect(fs.statSync(mcpConsentPath(profileDir)).mode & 0o777).toBe(0o600);
     expect(readMcpConsent(profileDir).consented).toHaveLength(1);
     const c = await connectMcpServer("fake", server(), { env: HOST_ENV, profileDir });
@@ -70,7 +78,7 @@ describe("[T-08] consent before spawn", () => {
   });
 
   it("refuses a consented server whose tool definitions changed since the pinned hash (rug pull)", async () => {
-    const gate: McpConsentGate = { status: () => ({ consented: true, toolsHash: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" }) };
+    const gate: McpConsentGate = { status: () => ({ consented: true, artifact: artifact(), toolsHash: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" }) };
     await expect(connectMcpServer("fake", server(), { env: HOST_ENV, consent: gate })).rejects.toThrow(/tool definitions changed|rug pull/i);
   });
 
@@ -80,9 +88,9 @@ describe("[T-08] consent before spawn", () => {
     const toolsHash = mcpToolDefHash(await probe.listTools());
     await probe.close();
     const profileDir = fs.mkdtempSync(path.join(root, "pinned-"));
-    grantMcpConsent(profileDir, "fake", server(), toolsHash);
+    grantMcpConsent(profileDir, "fake", server(), toolsHash, artifact());
     const gate = fileConsentGate(profileDir);
-    expect(gate.status("fake", server())).toEqual({ consented: true, toolsHash });
+    expect(gate.status("fake", server())).toEqual({ consented: true, toolsHash, artifact: artifact() });
     const c = await connectMcpServer("fake", server(), { env: HOST_ENV, consent: gate });
     open.push(c);
     expect((await c.listTools()).length).toBeGreaterThan(0);

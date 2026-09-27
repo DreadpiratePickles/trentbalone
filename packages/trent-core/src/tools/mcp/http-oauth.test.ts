@@ -20,6 +20,7 @@ import { ConfigManager } from "../../config/ConfigManager.js";
 import type { McpServerConfig } from "../../config/schema.js";
 import { AS_HOST, FakeAuthServer, FakeOAuthMcp, LOOKUP, MCP_HOST, fakeBrowser, routingFetch, type FakeAuthServerOptions, type FakeOAuthMcpOptions } from "./__fixtures__/fake-oauth-mcp.js";
 import { connectMcpServer } from "./client.js";
+import { grantMcpConsent, mcpConsentAll } from "./consent.js";
 import { createMcpAdapters } from "./index.js";
 import { loginMcpServer, type McpLoginDeps } from "./http-oauth.js";
 import { McpOAuthStore, mcpOAuthEnvNames, mcpOAuthHeaderTemplate } from "./http-oauth-store.js";
@@ -70,7 +71,7 @@ function entry(headers: Record<string, string> = { Authorization: mcpOAuthHeader
 }
 
 function connect(now?: () => Date, config: McpServerConfig = entry()) {
-  return connectMcpServer("fake", config, { env: {}, fetchImpl: routingFetch(routes), lookup: LOOKUP, oauth: { store, ...(now === undefined ? {} : { now }) }, redactionLog: () => undefined });
+  return connectMcpServer("fake", config, { env: {}, consent: mcpConsentAll(), fetchImpl: routingFetch(routes), lookup: LOOKUP, oauth: { store, ...(now === undefined ? {} : { now }) }, redactionLog: () => undefined });
 }
 
 const hours = (n: number) => () => new Date(Date.now() + n * 3600_000);
@@ -312,6 +313,7 @@ describe("the seat path", () => {
     for (const profile of ["default", "work"]) {
       const profileManager = new ConfigManager({ baseDir: home, profile });
       await login("fake", { store: new McpOAuthStore(profileManager) });
+      grantMcpConsent(profileManager.getProfileDir(), "fake", entry()); // [D13] the seat path reads the profile's consent
       const built = await createMcpAdapters(
         { mcp_servers: { fake: entry() } },
         { profileDir: profileManager.getProfileDir(), env: {}, fetchImpl: routingFetch(routes), lookup: LOOKUP, redactionLog: () => undefined },

@@ -23,6 +23,7 @@ import type { McpServersConfig } from "../../config/schema.js";
 import { CertificateAuthority } from "../../egress/CertificateAuthority.js";
 import { EgressProxy } from "../../egress/EgressProxy.js";
 import { TokenManager } from "../../egress/TokenManager.js";
+import { mcpConsentAll } from "./consent.js";
 import { createMcpAdapters, type McpAdapterBuild } from "./index.js";
 
 const MODEL_KEY = "model-key-fixture-must-never-reach-an-mcp-server";
@@ -115,6 +116,7 @@ async function build(headers: Record<string, string>): Promise<McpAdapterBuild> 
     { mcp_servers: servers },
     {
       profileDir: path.join(root, "profile"),
+      consent: mcpConsentAll(), // [D13] consent is covered in consent-http.test.ts
       env: { MCP_TOKEN },
       egress: { proxyUrl: `http://127.0.0.1:${proxy.getPort()}`, token: brokerToken },
       lookup: async () => [{ address: "203.0.113.7", family: 4 }],

@@ -37,7 +37,8 @@ import { StructuredLogger } from "../../telemetry/logger.js";
 import { createEgressFetch, type EgressClientOptions, type FetchLike } from "../web/proxied-fetch.js";
 import { checkUrlSafety, type LookupFn } from "../web/url-safety.js";
 import { resolveTemplateRecord } from "./config.js";
-import { fileConsentGate, mcpToolDefHash, type McpConsentGate } from "./consent.js";
+import { verifyMcpArtifact } from "./artifact.js";
+import { fileConsentGate, mcpToolDefHash, type McpConsentGate, type McpConsentStatus } from "./consent.js";
 import { createBearerSource, mcpLoginRequired, type McpBearerSource } from "./http-oauth.js";
 import { isMcpOAuthEntry, McpOAuthStore } from "./http-oauth-store.js";
 import type { OAuthFetch } from "./http-oauth-wire.js";
@@ -246,10 +247,13 @@ function resolveConsentGate(deps: McpConnectDeps): McpConsentGate | undefined {
 /**
  * [T-08] Rug-pull defense: when a pinned tool-def hash exists, the server's live tool definitions
  * must still hash to it. A mismatch closes the connection and refuses, rather than let changed
- * descriptions reach the seat as instructions.
+ * descriptions reach the seat as instructions. [D13] A consented server with no pin yet (its consent
+ * step could not reach it) has its hash pinned now, so every later connect is held to it.
  */
-async function enforceToolPin(connection: McpConnection, pinned: string | undefined): Promise<McpConnection> {
-  if (pinned === undefined) return connection;
+async function enforceToolPin(name: string, config: McpServerConfig, connection: McpConnection, status: McpConsentStatus, gate: McpConsentGate | undefined): Promise<McpConnection> {
+  const pinned = status.toolsHash;
+  const pin = status.operator === true ? undefined : gate?.pinTools?.bind(gate);
+  if (pinned === undefined && pin === undefined) return connection;
   let tools;
   try {
     tools = await connection.listTools();
@@ -258,27 +262,45 @@ async function enforceToolPin(connection: McpConnection, pinned: string | undefi
     throw error;
   }
   const actual = mcpToolDefHash(tools);
+  if (pinned === undefined) {
+    pin?.(name, config, actual);
+    return connection;
+  }
   if (actual !== pinned) {
     await connection.close();
-    throw new Error("the server's tool definitions changed since consent (a possible rug pull); re-consent with `trent mcp consent` after reviewing them");
+    throw new Error(`the server's tool definitions changed since consent (a possible rug pull); review them and run \`trent mcp consent ${name}\``);
   }
   return connection;
+}
+
+/** [D13] A stdio consent must carry an artifact pin that still matches what would run; checked before the spawn. */
+function refuseChangedArtifact(name: string, config: Extract<McpServerConfig, { transport: "stdio" }>, status: McpConsentStatus, deps: McpConnectDeps): void {
+  if (status.operator === true) return;
+  if (status.artifact === undefined) {
+    throw new Error(`stdio MCP server "${name}" has a consent that predates the artifact pin, so what it would run is unverified; review it and run \`trent mcp consent ${name}\` (nothing was executed)`);
+  }
+  const check = verifyMcpArtifact(config, status.artifact, { cwd: deps.cwd ?? process.cwd(), env: deps.env });
+  if (!check.ok) throw new Error(`stdio MCP server "${name}": ${check.reason}; review it and run \`trent mcp consent ${name}\` (nothing was executed)`);
 }
 
 /** Connects to one configured server. Throws with a value-free reason on any failure. */
 export async function connectMcpServer(name: string, config: McpServerConfig, deps: McpConnectDeps): Promise<McpConnection> {
   const gate = resolveConsentGate(deps);
+  const status = gate?.status(name, config) ?? { consented: false };
   if (config.transport === "stdio") {
     // [T-08] The spawn gate: an stdio server is host code, so it never spawns without recorded consent.
-    const status = gate?.status(name, config) ?? { consented: false };
     if (!status.consented) {
       throw new Error(`stdio MCP server "${name}" has no recorded consent to spawn; review its launch command and run \`trent mcp consent ${name}\` (nothing was executed)`);
     }
-    return enforceToolPin(await connectStdio(name, config, deps), status.toolsHash);
+    refuseChangedArtifact(name, config, status, deps);
+    return enforceToolPin(name, config, await connectStdio(name, config, deps), status, gate);
   }
-  // http/SSE has no local spawn, so no spawn gate; the tool-def pin still applies when one is recorded.
-  const status = gate?.status(name, config);
-  return enforceToolPin(await connectHttp(name, config, deps), status?.toolsHash);
+  // [D13] Consent-on-first-connect: a remote server's tool descriptions reach the seat as instructions,
+  // so an http server nobody consented to is not sent a single request.
+  if (!status.consented) {
+    throw new Error(`http MCP server "${name}" has no recorded consent to connect; review its URL and run \`trent mcp consent ${name}\` (nothing was sent)`);
+  }
+  return enforceToolPin(name, config, await connectHttp(name, config, deps), status, gate);
 }
 
 /** The message a failed connect is reported with; never a header, an env value or a stack. */

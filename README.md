@@ -287,7 +287,7 @@ Where Trent is ahead:
 
 ## Commands
 
-`trent --help` lists 38 commands, 160 with their subcommands. The ones most people start with:
+`trent --help` lists 38 commands, 161 with their subcommands. The ones most people start with:
 <!-- proof: `npx tsx apps/cli/src/index.ts --help` exit 0; the counts are checked against COMMAND_SPECS by docs-truth.test.ts "states the command counts the registry actually has" -->
 
 ```

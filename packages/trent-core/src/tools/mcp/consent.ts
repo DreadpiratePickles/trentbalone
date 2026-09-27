@@ -14,22 +14,37 @@
  * tool definitions whose hash differs (a rug pull — descriptions the seat reads as instructions,
  * quietly changed after approval), the connect refuses rather than trust them.
  *
- * The file is `<profileDir>/mcp-consent.json`. It holds hashes only, never a command or a header.
+ * [D13] http servers get the same gate: no recorded consent, no connect (nothing is sent). An http
+ * consent is keyed on the normalized URL, origin plus path: a query string (which may carry a
+ * secret), URL credentials and headers are never part of the key and never written. When the consent
+ * step could not reach the server (the CLI runs no egress proxy), the tool-definition hash is pinned
+ * on the first consented connect instead, and every later connect is held to it.
+ *
+ * [D13] A stdio consent also records an artifact pin (`./artifact.ts`): an exact package version, an
+ * image digest, or a content digest of the script or binary. A spawn whose artifact no longer matches
+ * is refused, and a record written before the pin existed (version 1, no `artifact`) is treated as
+ * needing re-consent rather than trusted.
+ *
+ * The file is `<profileDir>/mcp-consent.json`. It holds hashes only, never a command, a URL or a header.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { McpServerConfig } from "../../config/schema.js";
+import type { McpArtifactPin } from "./artifact.js";
 import type { McpToolInfo } from "./client.js";
 
 export const MCP_CONSENT_FILE = "mcp-consent.json";
-export const MCP_CONSENT_VERSION = 1;
+/** 2: stdio entries carry `artifact` [D13]. A version-1 stdio entry has none, so it needs re-consent. */
+export const MCP_CONSENT_VERSION = 2;
 
 export interface McpConsentEntry {
   /** Hash of the launch spec: server name + transport + command/args (stdio) or url (http). */
   readonly spec: string;
   /** Tool-definition hash pinned at consent time; a later mismatch is a rug pull, so a refusal. */
   readonly tools?: string;
+  /** [D13] stdio only: what the consented launch actually runs (a version, an image digest, or content digests). */
+  readonly artifact?: McpArtifactPin;
 }
 
 export interface McpConsentRecord {
@@ -37,9 +52,22 @@ export interface McpConsentRecord {
   readonly consented: readonly McpConsentEntry[];
 }
 
+/**
+ * [D13] The part of an http URL a consent is keyed on: origin plus path. The query string and any
+ * `user:password@` are dropped (either may carry a secret), and the host is lowercased by the parser.
+ */
+export function normalizeMcpUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return url.split(/[?#]/)[0] ?? url;
+  }
+}
+
 /** Canonical launch spec: key order cannot change the hash, but the command, args, url or name can. */
 export function mcpLaunchSpecHash(name: string, config: McpServerConfig): string {
-  const launch = config.transport === "stdio" ? [config.command, [...config.args]] : [config.url];
+  const launch = config.transport === "stdio" ? [config.command, [...config.args]] : [normalizeMcpUrl(config.url)];
   const canonical = JSON.stringify([name, config.transport, ...launch]);
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -83,17 +111,24 @@ export function writeMcpConsent(profileDir: string, entries: readonly McpConsent
   for (const entry of entries) byspec.set(entry.spec, entry);
   const record: McpConsentRecord = { version: MCP_CONSENT_VERSION, consented: [...byspec.values()] };
   const file = mcpConsentPath(profileDir);
-  fs.writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-  // writeFileSync only applies `mode` when it creates the file, so an existing record is re-chmodded.
-  fs.chmodSync(file, 0o600);
+  // Write-then-rename: a reader (a seat pinning tool defs on first connect) never sees half a record.
+  const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temp, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  fs.chmodSync(temp, 0o600);
+  fs.renameSync(temp, file);
   return record;
 }
 
-/** Records consent for one server's launch spec, pinning its tool-def hash when it is known. */
-export function grantMcpConsent(profileDir: string, name: string, config: McpServerConfig, toolsHash?: string): McpConsentRecord {
+/**
+ * Records consent for one server's launch spec, pinning its tool-def hash when it is known and, for
+ * stdio, the artifact it runs (`resolveMcpArtifact`). A stdio consent without an artifact is written
+ * but refused at spawn time, so callers resolve the artifact first.
+ */
+export function grantMcpConsent(profileDir: string, name: string, config: McpServerConfig, toolsHash?: string, artifact?: McpArtifactPin): McpConsentRecord {
   const spec = mcpLaunchSpecHash(name, config);
   const others = readMcpConsent(profileDir).consented.filter((e) => e.spec !== spec);
-  return writeMcpConsent(profileDir, [...others, { spec, ...(toolsHash === undefined ? {} : { tools: toolsHash }) }]);
+  const entry: McpConsentEntry = { spec, ...(toolsHash === undefined ? {} : { tools: toolsHash }), ...(artifact === undefined ? {} : { artifact }) };
+  return writeMcpConsent(profileDir, [...others, entry]);
 }
 
 /** Drops consent for one server's launch spec; returns whether anything was recorded for it. */
@@ -110,11 +145,23 @@ export function revokeMcpConsent(profileDir: string, name: string, config: McpSe
 export interface McpConsentStatus {
   readonly consented: boolean;
   readonly toolsHash?: string;
+  /** [D13] stdio: the artifact pin recorded with the consent; absent on a pre-D13 record. */
+  readonly artifact?: McpArtifactPin;
+  /** [D13] An operator-run connect (`mcp add|test|consent`): no artifact check, nothing pinned. */
+  readonly operator?: boolean;
 }
 
 /** The one thing a connect asks: is this exact launch spec consented, and what tool-def hash was pinned? */
 export interface McpConsentGate {
   status(name: string, config: McpServerConfig): McpConsentStatus;
+  /** [D13] Pins the tool-def hash of a consented server that has none yet (first connect). */
+  pinTools?(name: string, config: McpServerConfig, toolsHash: string): void;
+}
+
+function isArtifactPin(value: unknown): value is McpArtifactPin {
+  if (!value || typeof value !== "object") return false;
+  const pin = value as Record<string, unknown>;
+  return (pin.kind === "package" || pin.kind === "file" || pin.kind === "inline") && typeof pin.digest === "string" && (pin.stat === undefined || typeof pin.stat === "string");
 }
 
 /** The production gate: reads `<profileDir>/mcp-consent.json`. */
@@ -124,7 +171,16 @@ export function fileConsentGate(profileDir: string): McpConsentGate {
       const spec = mcpLaunchSpecHash(name, config);
       const entry = readMcpConsent(profileDir).consented.find((e) => e.spec === spec);
       if (entry === undefined) return { consented: false };
-      return { consented: true, ...(entry.tools === undefined ? {} : { toolsHash: entry.tools }) };
+      // A malformed pin is no pin: the connect then asks for re-consent instead of trusting it.
+      const artifact = isArtifactPin(entry.artifact) ? entry.artifact : undefined;
+      return { consented: true, ...(typeof entry.tools === "string" ? { toolsHash: entry.tools } : {}), ...(artifact === undefined ? {} : { artifact }) };
+    },
+    pinTools(name, config, toolsHash) {
+      const spec = mcpLaunchSpecHash(name, config);
+      const entries = readMcpConsent(profileDir).consented;
+      const entry = entries.find((e) => e.spec === spec);
+      if (entry === undefined || entry.tools !== undefined) return;
+      writeMcpConsent(profileDir, entries.map((e) => (e === entry ? { ...e, tools: toolsHash } : e)));
     },
   };
 }
@@ -135,5 +191,5 @@ export function fileConsentGate(profileDir: string): McpConsentGate {
  * tests use it to connect the fake server without a 0600 file dance.
  */
 export function mcpConsentAll(): McpConsentGate {
-  return { status: () => ({ consented: true }) };
+  return { status: () => ({ consented: true, operator: true }) };
 }

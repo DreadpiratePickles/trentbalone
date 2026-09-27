@@ -1,5 +1,5 @@
 /**
- * The `mcp` group: `trent mcp list|add|remove|test <name>` over the `mcp_servers` config block.
+ * The `mcp` group: `trent mcp list|add|remove|consent|test <name>` over the `mcp_servers` config block.
  *
  * `add` validates through the same zod schema the toolset reads, refuses a name that would shadow
  * a built-in tool, and refuses a literal secret: an env var whose NAME looks secret, or a header
@@ -13,6 +13,13 @@
  * itself as `flagged` (tool and categories, never the matched text) and a warning goes to stderr.
  * The entry also records `scanRan`, so a server that could not be reached at add time is visibly
  * unchecked; the result says so too.
+ *
+ * [D13] `consent <name>` records (or re-records, after a review) consent for a configured server: an
+ * http server pasted into config.yaml, a stdio server whose code changed since consent, or a record
+ * that predates the artifact pin. For stdio, `add` and `consent` first pin the artifact that runs
+ * (`resolveMcpArtifact`): a launcher that names no exact version is refused and nothing is written;
+ * a command not found yet is added without consent. The tool definitions are scanned and pinned
+ * when the server answers; otherwise the first runtime connect pins them.
  *
  * `serve` is the other direction, Trent AS an MCP server; it lives in `mcp-serve.ts` (U5).
  *
@@ -29,7 +36,7 @@ import { EXIT, TrentError } from "@trent/core/errors/index.js";
 import { McpServerConfigSchema, McpServersConfigSchema, MCP_SERVER_NAME_PATTERN, type McpServerConfig, type McpServersConfig } from "@trent/core/config/index.js";
 import { isSecretName } from "@trent/core/terminal/env-scrub.js";
 import { isBuiltinToolName } from "@trent/core/tools/tool-names.js";
-import { connectFailureReason, connectMcpServer, containsTemplate, grantMcpConsent, mcpConsentAll, mcpToolDefHash, revokeMcpConsent, scanMcpTools, mcpToolName, type McpScanFinding } from "@trent/core/tools/mcp/index.js";
+import { connectFailureReason, connectMcpServer, containsTemplate, grantMcpConsent, mcpConsentAll, mcpToolDefHash, resolveMcpArtifact, revokeMcpConsent, scanMcpTools, mcpToolName, type McpArtifactResolution, type McpScanFinding } from "@trent/core/tools/mcp/index.js";
 import type { CommandSpec } from "../registry.js";
 import type { CommandContext } from "../context.js";
 import { mcpServeSpec } from "./mcp-serve.js";
@@ -216,6 +223,22 @@ function describeFindings(findings: readonly McpScanFinding[]): string {
   return findings.map((f) => `${f.tool} [${f.categories.join("; ")}]`).join(", ");
 }
 
+/** [D13] The artifact a stdio consent pins, resolved as the runtime will (this cwd, the host env); undefined for http. */
+function artifactOf(entry: McpServerConfig): McpArtifactResolution | undefined {
+  return entry.transport === "stdio" ? resolveMcpArtifact(entry, { cwd: process.cwd(), env: process.env }) : undefined;
+}
+
+function refuseFindings(operation: string, name: string, scan: ScanOutcome, allowFlagged: boolean): void {
+  if (scan.findings.length === 0 || allowFlagged) return;
+  throw new TrentError({
+    code: EXIT.CONFIG,
+    operation,
+    message: `the security scan flagged tool(s) on this server: ${describeFindings(scan.findings)}; pass --allow-flagged to install it anyway`,
+    target: name,
+    context: { findings: scan.findings },
+  });
+}
+
 export const mcpSpec: CommandSpec = {
   name: "mcp",
   description: "Manage Model Context Protocol servers (config key mcp_servers)",
@@ -276,6 +299,8 @@ export const mcpSpec: CommandSpec = {
           } catch (error) {
             problems.push(error instanceof Error ? error.message : String(error));
           }
+          const artifact = entry === undefined ? undefined : artifactOf(entry);
+          if (artifact?.ok === false && artifact.code === "unpinned") problems.push(artifact.reason);
           return { data: { dryRun: true, command: "mcp add", name, transport: entry?.transport ?? null, target: entry ? target(entry) : null, ...(opts.oauth === true ? { auth: "oauth" } : {}), problems } };
         }
         if (!MCP_SERVER_NAME_PATTERN.test(name)) fail("mcp.add", `server name must match ${MCP_SERVER_NAME_PATTERN}`, name);
@@ -284,28 +309,30 @@ export const mcpSpec: CommandSpec = {
         const manager = ctx.config();
         if (readServers(ctx)[name]) fail("mcp.add", "a server with that name is already configured", name);
         // [H2] The login runs before anything is written: a failed login leaves no entry behind.
+        // [D13] A launcher that names no exact version is refused before anything runs or is written.
+        const artifact = artifactOf(entry);
+        if (artifact?.ok === false && artifact.code === "unpinned") fail("mcp.add", artifact.reason, name);
         const oauth = opts.oauth === true && entry.transport === "http";
         if (oauth) refuseSharedOAuthNames(ctx, name, "mcp.add");
         const login = oauth ? await runLogin(ctx, name, entry.url) : undefined;
-        const scan = await scanAtAdd(name, entry, oauthStore(ctx));
+        // [D13] What cannot be pinned is not run: a command not found yet is added, unscanned and unconsented.
+        const withheld = artifact?.ok === false ? artifact.reason : undefined;
+        const scan: ScanOutcome = withheld === undefined ? await scanAtAdd(name, entry, oauthStore(ctx)) : { scanRan: false, reason: withheld, findings: [] };
         const flagged = scan.findings.length > 0;
-        if (flagged && opts.allowFlagged !== true) {
+        try {
+          refuseFindings("mcp.add", name, scan, opts.allowFlagged === true);
+        } catch (error) {
           if (login !== undefined) oauthStore(ctx).remove(name);
-          throw new TrentError({
-            code: EXIT.CONFIG,
-            operation: "mcp.add",
-            message: `the security scan flagged tool(s) on this server: ${describeFindings(scan.findings)}; pass --allow-flagged to install it anyway`,
-            target: name,
-            context: { findings: scan.findings },
-          });
+          throw error;
         }
         manager.set(`${MCP_CONFIG_KEY}.${name}`, { ...entry, scanRan: scan.scanRan, ...(flagged ? { flagged: scan.findings } : {}) });
         // [T-08] Adding a server is the explicit operator consent to spawn it; pin its tool defs too.
-        grantMcpConsent(manager.getProfileDir(), name, entry, scan.toolsHash);
+        if (withheld === undefined) grantMcpConsent(manager.getProfileDir(), name, entry, scan.toolsHash, artifact?.ok === true ? artifact.pin : undefined);
+        else ctx.err(`warning: ${name} is added without consent (${withheld}); run \`trent mcp consent ${name}\` once it resolves`);
         if (flagged) ctx.err(`warning: ${name} is installed flagged; the scan found ${describeFindings(scan.findings)}`);
         return {
           data: {
-            added: { name, transport: entry.transport, target: target(entry), auto_approve: entry.auto_approve, scanRan: scan.scanRan, ...(scan.reason === undefined ? {} : { scanReason: scan.reason }), flagged, findings: scan.findings, ...(login === undefined ? {} : { auth: "oauth" }) },
+            added: { name, transport: entry.transport, target: target(entry), auto_approve: entry.auto_approve, scanRan: scan.scanRan, ...(scan.reason === undefined ? {} : { scanReason: scan.reason }), flagged, findings: scan.findings, ...(login === undefined ? {} : { auth: "oauth" }), ...(withheld === undefined ? {} : { consent: "withheld" }) },
             ...(login === undefined ? {} : { login }),
             count: Object.keys(readServers(ctx)).length,
           },
@@ -338,6 +365,39 @@ export const mcpSpec: CommandSpec = {
       render(data, ctx) {
         const d = data as { removed: string; oauthRemoved?: string[] };
         return [`  ${ctx.theme.success("removed")} ${ctx.theme.value(d.removed)}${d.oauthRemoved === undefined ? "" : ctx.theme.meta(` and its OAuth state (${d.oauthRemoved.length} secret name(s))`)}`];
+      },
+    },
+    {
+      name: "consent <name>",
+      description: "Record consent for a configured MCP server after reviewing it: pins what it runs (stdio) and its tool definitions",
+      options: [{ flags: "--allow-flagged", description: "Consent even when the security scan flags a tool description" }],
+      async run(ctx, opts, args) {
+        const name = String(args[0]);
+        const entry = readServers(ctx)[name];
+        if (ctx.dryRun) return { data: { dryRun: true, command: "mcp consent", name, configured: entry !== undefined } };
+        if (!entry) fail("mcp.consent", "no server with that name is configured", name);
+        const artifact = artifactOf(entry);
+        if (artifact?.ok === false) fail("mcp.consent", artifact.reason, name);
+        // The operator's deliberate connect, as at add: scan what the seat would read, then pin it.
+        const scan = await scanAtAdd(name, entry, oauthStore(ctx));
+        refuseFindings("mcp.consent", name, scan, opts.allowFlagged === true);
+        grantMcpConsent(ctx.config().getProfileDir(), name, entry, scan.toolsHash, artifact?.ok === true ? artifact.pin : undefined);
+        return {
+          data: {
+            consented: name,
+            transport: entry.transport,
+            ...(artifact?.ok === true ? { artifact: artifact.pin.kind } : {}),
+            toolsPinned: scan.toolsHash !== undefined,
+            ...(scan.reason === undefined ? {} : { scanReason: scan.reason }),
+            findings: scan.findings,
+          },
+        };
+      },
+      render(data, ctx) {
+        const d = data as { consented?: string; dryRun?: boolean; name?: string; artifact?: string; toolsPinned?: boolean; scanReason?: string };
+        if (d.dryRun === true) return [`  ${ctx.theme.meta("would consent to")} ${String(d.name)}`];
+        const tools = d.toolsPinned === true ? "tool definitions pinned" : `tool definitions pinned on first connect (${d.scanReason ?? "unreachable now"})`;
+        return [`  ${ctx.theme.success("consented")} ${ctx.theme.value(String(d.consented))}${d.artifact === undefined ? "" : ctx.theme.meta(` ${d.artifact} pinned,`)} ${ctx.theme.meta(tools)}`];
       },
     },
     {

@@ -300,12 +300,12 @@ export const HARDLINE_RULES: readonly HardlineRule[] = [
     // own protections are the operator's to change, never a tool's, so a command that invokes the Trent
     // CLI to edit config, consent a hook, add an MCP server, approve a held action, connect a credential
     // or loosen the security preset is refused whatever the autonomy level.
-    reason: "a tool may not run the Trent CLI to lower Trent's own guardrails (config set, hooks consent, mcp add, approvals approve, connect, security preset); those are the operator's to change",
+    reason: "a tool may not run the Trent CLI to lower Trent's own guardrails (config set, hooks consent, mcp add, mcp consent, approvals approve, connect, security preset); those are the operator's to change",
     matches(subject) {
       if (subject.kind !== "command") return false;
       return anyMatch(
         viewOf(subject.value).masked,
-        /\btrent\s+(?:config\s+set|hooks\s+(?:consent|add)|mcp\s+add|approvals\s+(?:approve|approve-all|resolve)|connect\b|security\s+preset)\b/i,
+        /\btrent\s+(?:config\s+set|hooks\s+(?:consent|add)|mcp\s+(?:add|consent)|approvals\s+(?:approve|approve-all|resolve)|connect\b|security\s+preset)\b/i,
       );
     },
   },

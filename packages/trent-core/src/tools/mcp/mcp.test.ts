@@ -161,7 +161,7 @@ describe("unavailable servers", () => {
     const fetchImpl: typeof fetch = async () => new Response("unreachable", { status: 503 });
     const inside = await createMcpAdapters(
       { mcp_servers: { inside: { transport: "http", url: "http://127.0.0.1:9/mcp", headers: {}, auto_approve: [], enabled: true } } },
-      { profileDir, env: HOST_ENV, fetchImpl },
+      { profileDir, env: HOST_ENV, fetchImpl, consent: mcpConsentAll() },
     );
     builds.push(inside);
     unavailable.push(...inside.unavailable);

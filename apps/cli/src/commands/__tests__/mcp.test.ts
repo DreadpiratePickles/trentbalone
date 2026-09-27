@@ -285,3 +285,60 @@ describe("trent mcp with OAuth", () => {
     expect(fs.readFileSync(path.join(home, ".env"), "utf8")).not.toContain("MCP_REMOTE_");
   });
 });
+
+/**
+ * [D13] `trent mcp consent <name>` grants (or re-grants) consent for a configured server, http or
+ * stdio; `add` refuses a launcher that names no exact version, since that code can change under a
+ * consent. Nothing here reaches a real host.
+ */
+describe("[D13] trent mcp consent", () => {
+  const configure = (name: string, entry: Record<string, unknown>) => new ConfigManager({ baseDir: home }).set(`mcp_servers.${name}`, entry);
+
+  it("add refuses an npx launcher with no exact version and writes nothing", async () => {
+    const result = await runCli(["mcp", "add", "floating", "--command", "npx", "--args", "some-mcp-server@latest", "--json"]);
+    expect(result.exitCode).toBe(EXIT.CONFIG);
+    expect(result.stdout).toMatch(/exact version/i);
+    expect(fs.existsSync(path.join(home, "config.yaml"))).toBe(false);
+    expect(fs.existsSync(path.join(home, "mcp-consent.json"))).toBe(false);
+  });
+
+  it("an http server written straight into config is refused until `trent mcp consent` grants it", async () => {
+    const { connectMcpServer, fileConsentGate } = await import("@trent/core/tools/mcp/index.js");
+    const { McpServerConfigSchema } = await import("@trent/core/config/index.js");
+    configure("remote", { transport: "http", url: "https://mcp.example.test/mcp", headers: {} });
+    const entry = McpServerConfigSchema.parse({ transport: "http", url: "https://mcp.example.test/mcp" });
+    const unreachable = (async () => new Response("unreachable", { status: 503 })) as typeof fetch;
+    await expect(connectMcpServer("remote", entry, { env: {}, profileDir: home, fetchImpl: unreachable, lookup: async () => [{ address: "203.0.113.7", family: 4 }] })).rejects.toThrow(/trent mcp consent remote/);
+
+    const granted = await runCli(["mcp", "consent", "remote", "--json"]);
+    expect(granted.exitCode).toBe(EXIT.OK);
+    expect(JSON.parse(granted.stdout)).toMatchObject({ consented: "remote", transport: "http", toolsPinned: false });
+    expect(fileConsentGate(home).status("remote", entry).consented).toBe(true);
+  });
+
+  it("a stdio script edited after add is refused; `trent mcp consent` re-pins it and it connects again", async () => {
+    const { connectMcpServer } = await import("@trent/core/tools/mcp/index.js");
+    const { McpServerConfigSchema } = await import("@trent/core/config/index.js");
+    const script = path.join(home, "server.mjs");
+    fs.copyFileSync(FIXTURE, script);
+    expect((await runCli(["mcp", "add", "fake", "--command", process.execPath, "--args", script, "--json"])).exitCode).toBe(EXIT.OK);
+    const entry = McpServerConfigSchema.parse({ transport: "stdio", command: process.execPath, args: [script] });
+    fs.appendFileSync(script, "\n// edited after consent\n");
+    await expect(connectMcpServer("fake", entry, { env: process.env, profileDir: home })).rejects.toThrow(/changed since consent.*trent mcp consent fake/);
+
+    const granted = await runCli(["mcp", "consent", "fake", "--json"]);
+    expect(granted.exitCode).toBe(EXIT.OK);
+    expect(JSON.parse(granted.stdout)).toMatchObject({ consented: "fake", transport: "stdio", artifact: "file", toolsPinned: true });
+    const conn = await connectMcpServer("fake", entry, { env: process.env, profileDir: home });
+    await conn.close();
+  });
+
+  it("consent refuses an unknown server and a floating launcher already in config", async () => {
+    expect((await runCli(["mcp", "consent", "ghost", "--json"])).exitCode).toBe(EXIT.CONFIG);
+    configure("floating", { transport: "stdio", command: "uvx", args: ["mcp-server-git"] });
+    const refused = await runCli(["mcp", "consent", "floating", "--json"]);
+    expect(refused.exitCode).toBe(EXIT.CONFIG);
+    expect(refused.stdout).toMatch(/exact version/i);
+    expect(fs.existsSync(path.join(home, "mcp-consent.json"))).toBe(false);
+  });
+});
