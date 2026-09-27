@@ -21,6 +21,7 @@ import {
   type SecurityFinding,
   type SecuritySection,
 } from "@trent/core/governance/security-audit.js";
+import { gradeSecurity, type SecurityGrade } from "@trent/core/governance/security-grade.js";
 import { proveOffline, type OfflineProof } from "@trent/core/doctor/index.js";
 import type { CommandContext } from "../context.js";
 import type { CommandSpec } from "../registry.js";
@@ -120,6 +121,98 @@ const auditSubSpec: CommandSpec = {
   },
 };
 
+/** One backing check the grade rests on: a section and its worst finding (if any). */
+interface GradeCheck {
+  readonly id: string;
+  readonly title: string;
+  readonly worst: string | null;
+  readonly findingId: string | null;
+  readonly message: string | null;
+  readonly fix: string | null;
+}
+
+/** What `trent security status` returns (JSON) and renders (human). */
+interface GradeRenderData extends SecurityGrade {
+  readonly dryRun?: boolean;
+  readonly command?: string;
+  readonly profile: string;
+  readonly profileDir: string;
+  readonly sections?: readonly string[];
+  readonly checks: readonly GradeCheck[];
+}
+
+/** The findings are already sorted most-severe-first, so the first in a section is its worst. */
+function backingChecks(report: SecurityAuditReport): GradeCheck[] {
+  return report.sections.map((section) => {
+    const worst = report.findings.find((finding) => finding.section === section.id);
+    return {
+      id: section.id,
+      title: section.title,
+      worst: worst?.severity ?? null,
+      findingId: worst?.id ?? null,
+      message: worst?.message ?? null,
+      fix: worst?.fix ?? null,
+    };
+  });
+}
+
+const statusSubSpec: CommandSpec = {
+  name: "status [workspace]",
+  description: "Grade the profile A–F and show the exact checks behind the grade; --json carries every input",
+  async run(ctx, _opts, args) {
+    const manager = ctx.config();
+    const profileDir = manager.getProfileDir();
+    const cwd = path.resolve(process.cwd(), args[0] ?? process.cwd());
+
+    if (ctx.dryRun) {
+      return {
+        data: { dryRun: true, command: "security status", profile: manager.getProfile(), profileDir, cwd, sections: [...SECURITY_SECTION_IDS] },
+      };
+    }
+
+    const report = await auditProfileSecurity({
+      profile: manager.getProfile(),
+      profileDir,
+      configPath: manager.getConfigPath(),
+      secretsPath: manager.getSecretsPath(),
+      config: manager.loadConfig(),
+      cwd,
+      home: manager.getBaseDir(),
+    });
+    const grade = gradeSecurity(report);
+    // The card is a read/observe surface, so it does not gate: it always exits 0. `trent security
+    // audit` is the command that exits 1 on findings for CI.
+    return { data: { ...grade, profile: report.profile, profileDir: report.profileDir, checks: backingChecks(report) } };
+  },
+  render(data, ctx) {
+    const d = data as unknown as GradeRenderData;
+    if (d.dryRun === true) {
+      return [
+        ctx.theme.emphasis("SECURITY GRADE"),
+        `  ${ctx.theme.meta("would grade")} ${ctx.theme.value(d.profileDir)}`,
+        `  ${ctx.theme.meta("sections")}    ${ctx.theme.value((d.sections ?? []).join(", "))}`,
+      ];
+    }
+    const paint = d.grade === "A" || d.grade === "B" ? ctx.theme.success : d.grade === "C" ? ctx.theme.needsApproval : ctx.theme.error;
+    const lines = [
+      ctx.theme.emphasis("SECURITY GRADE"),
+      `  ${paint(d.grade)} ${ctx.theme.meta(`score ${d.score}`)} ${ctx.theme.body(`profile ${d.profile}`)}`,
+      `  ${ctx.theme.meta(d.rationale)}`,
+      "",
+      `  ${ctx.theme.emphasis("CHECKS")} ${ctx.theme.meta("(each section and its worst finding)")}`,
+    ];
+    for (const check of d.checks) {
+      if (check.worst === null) {
+        lines.push(`  ${ctx.theme.success("ok".padEnd(9, " "))} ${ctx.theme.value(check.title)}`);
+        continue;
+      }
+      const mark = check.worst === "critical" || check.worst === "high" ? ctx.theme.error : ctx.theme.needsApproval;
+      lines.push(`  ${mark(check.worst.padEnd(9, " "))} ${ctx.theme.value(check.title)} ${ctx.theme.meta(check.message ?? "")}`);
+    }
+    return lines;
+  },
+};
+
 /** The shape `trent security --offline` returns (JSON) and renders (human). */
 interface OfflineRenderData extends OfflineProof {
   readonly kind: "offline";
@@ -172,7 +265,7 @@ export const securitySpec: CommandSpec = {
   options: [
     { flags: "--offline", description: "Prove the offline egress surface is loopback-only; exit non-zero if any path is OPEN" },
   ],
-  subcommands: [auditSubSpec],
+  subcommands: [statusSubSpec, auditSubSpec],
   async run(ctx, opts) {
     if (opts.offline === true) {
       const manager = ctx.config();

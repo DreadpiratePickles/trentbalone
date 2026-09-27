@@ -118,6 +118,132 @@ describe("a profile that has been weakened", () => {
   });
 });
 
+describe("trent security --offline (the offline egress proof)", () => {
+  const runOffline = async (...extra: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> =>
+    await runCli(["security", "--offline", ...extra]);
+
+  interface OfflineJson {
+    kind: string;
+    offline: boolean;
+    ok: boolean;
+    canary: { target: string; blocked: boolean };
+    config: { ok: boolean; violations: string[] };
+    rows: Array<{ id: string; status: string; layer: string }>;
+  }
+
+  it("passes and exits 0 on a clean local profile, refusing the 192.0.2.1 canary", async () => {
+    writeConfig(["version: 3", "profile: default", "provider: ollama", "model: llama3.1:8b", ""].join("\n"));
+    const result = await runOffline("--json");
+
+    expect(result.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as OfflineJson;
+    expect(data.kind).toBe("offline");
+    expect(data.ok).toBe(true);
+    expect(data.canary.blocked).toBe(true);
+    expect(data.canary.target).toBe("http://192.0.2.1/");
+    expect(data.config.ok).toBe(true);
+    expect(data.rows.some((r) => r.status === "open")).toBe(false);
+    expect(data.rows.length).toBeGreaterThan(10);
+  });
+
+  it("exits non-zero when the profile still names a hosted provider", async () => {
+    // The default CLEAN_CONFIG uses provider openai — hosted, so config-rejected rows go OPEN.
+    const result = await runOffline("--json");
+
+    expect(result.exitCode).toBe(EXIT.RUN_FAILED);
+    const data = JSON.parse(result.stdout) as OfflineJson;
+    expect(data.ok).toBe(false);
+    expect(data.config.ok).toBe(false);
+    expect(data.rows.some((r) => r.status === "open")).toBe(true);
+  });
+
+  it("renders a human report that marks each row and never crashes without --json", async () => {
+    writeConfig(["version: 3", "profile: default", "provider: ollama", "model: llama3.1:8b", ""].join("\n"));
+    const result = await runOffline();
+
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(result.stdout.toLowerCase()).toContain("offline egress proof");
+    expect(result.stdout.toLowerCase()).toContain("loopback-only");
+  });
+});
+
+describe("trent security status (the posture card + letter grade)", () => {
+  interface GradeJson {
+    grade: string;
+    score: number;
+    rationale: string;
+    profile: string;
+    profileDir: string;
+    inputs: {
+      findings: { critical: number; high: number; medium: number; low: number; total: number };
+      posture: {
+        egressFirewall: boolean;
+        sandboxIsolated: boolean;
+        promptRedaction: boolean;
+        mcpResultScrubbing: boolean;
+        autonomyLiftsAnyFloor: boolean;
+        hardlineRuleCount: number | null;
+      };
+    };
+    checks: Array<{ id: string; title: string; worst: string | null; findingId: string | null }>;
+  }
+
+  const runStatus = async (...extra: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> =>
+    await runCli(["security", "status", workspace, ...extra]);
+
+  it("grades a clean profile an A and carries the grade, rationale and every input in --json", async () => {
+    const result = await runStatus("--json");
+
+    expect(result.exitCode, result.stdout).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as GradeJson;
+    expect(data.grade).toBe("A");
+    expect(data.score).toBe(0);
+    expect(typeof data.rationale).toBe("string");
+    expect(data.inputs.findings.total).toBe(0);
+    expect(data.inputs.posture.hardlineRuleCount).toBeGreaterThan(0);
+    // Every backing check the human view lists is in the JSON too, so nothing is invented for display.
+    expect(data.checks.length).toBeGreaterThan(8);
+  });
+
+  it("renders the grade and lists the backing checks (section titles) in the human view", async () => {
+    const result = await runStatus();
+
+    expect(result.exitCode).toBe(EXIT.OK);
+    expect(result.stdout).toContain("SECURITY GRADE");
+    expect(result.stdout).toContain("A");
+    for (const title of ["Autonomy", "Egress", "MCP"]) {
+      expect(result.stdout).toContain(title);
+    }
+  });
+
+  it("drops the grade below A on a weakened profile and counts its findings", async () => {
+    writeConfig(
+      [
+        CLEAN_CONFIG,
+        "autonomy: never",
+        "hooks:",
+        "  pre_tool_call:",
+        "    - command: [/bin/echo, gate]",
+        "",
+      ].join("\n"),
+    );
+    const result = await runStatus("--json");
+
+    const data = JSON.parse(result.stdout) as GradeJson;
+    expect(data.grade).not.toBe("A");
+    expect(data.inputs.findings.total).toBeGreaterThan(0);
+  });
+
+  it("reports what it would read under --dry-run and exits 0", async () => {
+    const result = await runStatus("--json", "--dry-run");
+
+    expect(result.exitCode).toBe(EXIT.OK);
+    const data = JSON.parse(result.stdout) as { dryRun: boolean; command: string };
+    expect(data.dryRun).toBe(true);
+    expect(data.command).toBe("security status");
+  });
+});
+
 describe("the flags every command carries", () => {
   it("reports what it would read under --dry-run and exits 0", async () => {
     fs.chmodSync(path.join(home, ".env"), 0o644);
