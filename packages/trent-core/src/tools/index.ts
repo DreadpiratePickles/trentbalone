@@ -36,9 +36,8 @@ import { createTodoAdapter, type TodoAdapter } from "./todo/index.js";
 import { discloseAdapters, DEFAULT_DISCLOSURE_THRESHOLD, isToolBridge } from "./tool_search/index.js";
 import { createTerminalAdapter } from "./terminal/index.js";
 import { createWebToolsAdapter } from "./web/index.js";
-import { isOffline } from "../egress/offline.js";
-import { browserAttachOptions, createBrowserAdapter } from "./browser/index.js";
-import { askVision, createVisionAdapter, type VisionGateway } from "./vision/index.js";
+import { buildBrowserToolset } from "./browser/build.js";
+import { createVisionAdapter, type VisionGateway } from "./vision/index.js";
 import { createMediaAdapter } from "./media/index.js";
 import { buildBusinessToolset, type BusinessBuildSeams } from "./business/build.js";
 import { buildSocialToolset } from "./social/build.js";
@@ -355,22 +354,9 @@ export function buildTrentTools(config: ToolBuildConfig, deps: ToolBuildDeps): T
       if (toolset === "web") {
         adapters.push(createWebToolsAdapter({ profileDir: deps.profileDir, env: deps.env ?? process.env, egress }));
       } else {
-        // [SEC-2 S2b-2 / O-06] Offline disables the browser toolset: a launched browser is proxied
-        // but attach-mode and UDP (QUIC/WebRTC) egress are not loopback-only.
-        if (isOffline(deps.env ?? process.env)) {
-          skipped.push({ toolset, reason: "offline mode: the browser tool is disabled (attach-mode and UDP egress are not loopback-only)" });
-          continue;
-        }
-        const gateway = deps.gateway;
-        adapters.push(
-          createBrowserAdapter({
-            profileDir: deps.profileDir, egress,
-            env: deps.env ?? process.env,
-            ...(deps.runId ? { runId: deps.runId } : {}),
-            ...(gateway ? { vision: (input) => askVision(gateway, input) } : {}),
-            ...browserAttachOptions(config, deps.seat), // [H5] browser attach: `tools.browser.attach` + `egress.intercept_domains` (tools/browser/attach-config.ts)
-          }),
-        );
+        const browser = buildBrowserToolset(config, { profileDir: deps.profileDir, env: deps.env ?? process.env, egress, ...(deps.runId ? { runId: deps.runId } : {}), ...(deps.gateway ? { gateway: deps.gateway } : {}), ...(deps.seat === undefined ? {} : { seat: deps.seat }) });
+        if (browser.adapter !== undefined) adapters.push(browser.adapter);
+        else skipped.push({ toolset, reason: browser.reason });
       }
     } else {
       skipped.push({ toolset, reason: pending.get(toolset) ?? `"${toolset}" is not a toolset this builder knows` });
