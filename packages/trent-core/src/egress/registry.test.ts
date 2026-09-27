@@ -127,6 +127,8 @@ const KNOWN_NON_EGRESS: ReadonlyArray<readonly [string, string]> = [
   // [D6] Newly surfaced by the widened scan — none open a socket:
   ["packages/trent-core/src/egress/CertificateAuthority.ts", "egress-proxy internal: node:net is `net.isIP` for the intercept CA's SAN encoding, not a connect"],
   ["packages/trent-core/src/egress/host-binding.ts", "node:net is `net.isIP` address classification for the broker's host-binding matcher, not a connect"],
+  // [D3] The resolve-once-and-pin helper shared by the proxy and the offline guard:
+  ["packages/trent-core/src/egress/pinned-lookup.ts", "node:net is `net.isIP`/`isIPv4`/`isIPv6` for the resolve-once pin (D3); it resolves through an injected lookup and never connects"],
   ["packages/trent-core/src/tools/web/url-safety.ts", "node:net is `net.isIP`/`isIPv4`/`isIPv6` for the SSRF address classifier (shared with the offline rule), not a connect"],
   ["packages/trent-core/src/tools/social/publish.ts", "the social publish routes; its bare-`fetch` fetchImpl default is always replaced by the proxied transport in tools/social/build.ts (registered as social-publish), which refuses to build the toolset without one"],
 ];

@@ -8,6 +8,13 @@
  * The policy here is deny by default, enforced twice: at the CONNECT handshake (host must be in
  * `intercept_domains`) and again on the decrypted request (a token must resolve). There is no code
  * path that originates an upstream connection before both checks pass.
+ *
+ * [D3] The allowlist is by hostname, so the upstream address is decided by DNS. The proxy resolves
+ * the host exactly once (`egress/pinned-lookup.ts`), refuses the request if ANY address in that one
+ * answer is outside the host's policy (a DNS name must be public; a `*.localhost` name loopback; an IP
+ * literal someone allowlisted is taken as written, bar cloud metadata), and dials that exact address
+ * as a literal. SNI, certificate verification and the Host header stay the hostname. There is no
+ * second resolution for a rebinding server to answer differently.
  */
 import http from "node:http";
 import https from "node:https";
@@ -18,6 +25,8 @@ import { TokenManager } from "./TokenManager.js";
 import { CertificateAuthority } from "./CertificateAuthority.js";
 import { applyCredentials, extractToken, isHostAllowed, normalizeHost } from "./CredentialBroker.js";
 import type { SecretWithheld } from "./host-binding.js";
+import { PinRefused, isIpLiteral, resolvePinned } from "./pinned-lookup.js";
+import type { LookupFn } from "../tools/web/url-safety.js";
 import type { ProxyTokenRecord } from "./TokenStorePort.js";
 import type { ConfigManager } from "../config/ConfigManager.js";
 import { StructuredLogger } from "../telemetry/logger.js";
@@ -47,6 +56,8 @@ export interface EgressProxyOptions {
   upstreamOverrides?: Record<string, UpstreamOverride>;
   /** Where the proxy's structured log lines go (`egress.secret_withheld`). Defaults to stderr. */
   log?: (line: string) => void;
+  /** [D3] The resolver for the single upstream resolution. Defaults to `dns.promises.lookup`. */
+  lookup?: LookupFn;
 }
 
 /** Bound on the remembered (token, host) pairs a withheld line was written for; cleared when full. */
@@ -71,6 +82,14 @@ const REFUSAL_HOST = {
   message:
     "Trent egress proxy refused this request: the host is not in config.egress.intercept_domains. " +
     "The request was NOT forwarded.",
+};
+
+const REFUSAL_ADDRESS = {
+  error: "egress_refused",
+  reason: "resolved_address_not_permitted",
+  message:
+    "Trent egress proxy refused this request: the allowlisted host resolved to an address it may not " +
+    "reach (private, loopback, link-local or cloud metadata). The request was NOT forwarded.",
 };
 
 const WILDCARD_BIND = new Set(["0.0.0.0", "::", "", "*", "0:0:0:0:0:0:0:0", "[::]"]);
@@ -112,6 +131,7 @@ export class EgressProxy {
   private readonly interceptDomains: readonly string[];
   private readonly upstreamCa?: string[];
   private readonly upstreamOverrides: Record<string, UpstreamOverride>;
+  private readonly lookup?: LookupFn;
   private readonly targets = new WeakMap<net.Socket, Target>();
   private readonly sockets = new Set<net.Socket>();
   private readonly logger: StructuredLogger;
@@ -135,6 +155,7 @@ export class EgressProxy {
       options?.interceptDomains ?? config?.egress?.intercept_domains ?? [];
     this.upstreamCa = options?.upstreamCa;
     this.upstreamOverrides = options?.upstreamOverrides ?? {};
+    this.lookup = options?.lookup;
     this.logger = new StructuredLogger({ runId: "egress", stage: "egress.proxy", ...(options?.log ? { sink: options.log } : {}) });
   }
 
@@ -314,6 +335,30 @@ export class EgressProxy {
   }
 
   /**
+   * [D3] The one resolution: the literal address this request will be dialled at. An upstream override
+   * (tests, staging) is dialled as configured. Otherwise the host is resolved once and every address in
+   * the answer is held to the host's policy; `refused: true` means an address was outside it (403),
+   * `refused: false` that there was no usable answer (502).
+   */
+  private async pinUpstream(target: Target): Promise<Target | { refused: boolean }> {
+    const override = this.upstreamOverrides[target.host];
+    if (override) return override;
+    try {
+      const pin = await resolvePinned(target.host, this.lookup ? { lookup: this.lookup } : {});
+      return { host: pin.address, port: target.port };
+    } catch (err) {
+      if (!(err instanceof PinRefused)) throw err;
+      this.logger.warn("egress.address_refused", {
+        host: err.host,
+        port: target.port,
+        ...(err.address === null ? {} : { address: err.address }),
+        detail: err.detail,
+      });
+      return { refused: err.address !== null };
+    }
+  }
+
+  /**
    * The single forwarding path. Both gates are checked here before anything is dialled, so there is
    * no branch that can reach an upstream with an unauthenticated request.
    */
@@ -337,12 +382,18 @@ export class EgressProxy {
       return;
     }
 
+    const dial = await this.pinUpstream(target);
+    if ("refused" in dial) {
+      writeJson(res, dial.refused ? 403 : 502, dial.refused ? REFUSAL_ADDRESS : { error: "egress_upstream_error", reason: "unresolvable_host" });
+      req.resume();
+      return;
+    }
+
     const headers = applyCredentials(req.headers, target.host, record, {
       port: target.port,
       onWithheld: (event) => this.noteWithheld(record, event),
     });
-    const override = this.upstreamOverrides[target.host];
-    const dial = override ?? target;
+    headers.host ??= target.host;
 
     const options: https.RequestOptions = {
       host: dial.host,
@@ -351,7 +402,11 @@ export class EgressProxy {
       path: req.url,
       headers,
       ...(useTls
-        ? { servername: target.host, ...(this.upstreamCa ? { ca: this.upstreamCa } : {}) }
+        ? {
+            // SNI and certificate verification use the hostname, never the pinned literal.
+            ...(isIpLiteral(target.host) ? {} : { servername: target.host }),
+            ...(this.upstreamCa ? { ca: this.upstreamCa } : {}),
+          }
         : {}),
     };
 
